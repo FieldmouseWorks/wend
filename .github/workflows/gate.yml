@@ -1,5 +1,5 @@
 # The PR gate. Every job runs the same code an agent runs locally with `./wend verify` (AGENTS.md step 6).
-# Not yet exercised on GitHub's runners; the replay itself is tested on an Ubuntu 24.04 host with root.
+# Exercised on GitHub's stock ubuntu-24.04 runners: both seed replays reach trixie in about 12 minutes.
 #
 # Trust model: the PR supplies DATA (fixes, routes, boxes). The tools that judge it (check.py, affected.py, the
 # replay harness, the compiler) always come from the base branch, so a PR cannot loosen its own checks. A PR that
@@ -84,7 +84,9 @@ jobs:
       - name: replay (no model, no network beyond the release mirrors)
         run: |
           sudo -E python3 -B wend replay "${{ matrix.route }}" "${{ matrix.box }}" --out "$GITHUB_WORKSPACE/run.json"
-      - uses: actions/attest-build-provenance@v2
+      # attestations need a public repo (or a paid plan); skipped while the repo is private
+      - if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@v2
         with: { subject-path: run.json }
       - uses: actions/upload-artifact@v4
         with:
