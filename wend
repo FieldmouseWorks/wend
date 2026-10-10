@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+"""wend: the one command for agents and humans working in this repo. Start with AGENTS.md.
+
+  ./wend check                              schema check + the gate's own tests (seconds, no root)
+  ./wend list                               routes, boxes and wanted routes
+  ./wend replay ROUTE BOX                   replay a route on a box with no model, write the run   (root)
+  ./wend discover FAMILY FROM TO BOX        walk FROM->TO on BOX; a model fills in hops that break   (root, WEND_MODEL)
+  ./wend report RUN.json [--redact WORD]    a route broke and you won't fix it yourself: build a scrubbed gap report,
+                                            show it, print a prefilled issue link. Sends nothing.
+  ./wend verify [--base REF | --all]        exactly what CI runs: check, replay what changed on every box, decoys
+                                            writes .wend/pr-evidence.md for the PR body                 (root)
+
+ROUTE is a path like routes/debian/etch-to-trixie.toml; BOX is an id like debian/etch-web.
+Python 3.11+, standard library only. The sandbox needs root, chroot, rsync, and debootstrap for Debian boxes.
+"""
+import glob
+import json
+import os
+import subprocess
+import sys
+import tomllib
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import check  # noqa: E402
+from tomlw import toml  # noqa: E402
+
+
+class Repo:
+    def __init__(self):
+        self.raw = {os.path.relpath(p, ROOT): open(p, "rb").read() for p in
+                    glob.glob(f"{ROOT}/adapters/*.toml") + glob.glob(f"{ROOT}/fixes/*/*/*.toml") +
+                    glob.glob(f"{ROOT}/routes/*/*.toml") + glob.glob(f"{ROOT}/boxes/*/*/box.toml")}
+        load = lambda prefix: {p: tomllib.loads(b.decode()) for p, b in self.raw.items() if p.startswith(prefix)}
+        self.adapters = {os.path.basename(p)[:-5]: d for p, d in load("adapters/").items()}
+        self.fixes = load("fixes/")
+        self.fixes_by_id = {check.content_id(d): d for d in self.fixes.values()}
+        self.fix_path = {check.content_id(d): p for p, d in self.fixes.items()}
+        self.routes = load("routes/")
+        self.boxes = {p[len("boxes/"):-len("/box.toml")]: d for p, d in load("boxes/").items()}
+
+
+def need_root():
+    if os.geteuid() != 0:
+        sys.exit("the sandbox needs root (chroot, mount). Run with sudo, in a throwaway VM or CI runner.")
+    import shutil
+    missing = [t for t in ("chroot", "rsync", "mount", "debootstrap") if not shutil.which(t)]
+    if missing:
+        sys.exit(f"missing on this host: {', '.join(missing)} (Debian/Ubuntu: apt-get install {' '.join(missing)})")
+
+
+def save_run(run, out=None):
+    route_name = next((os.path.basename(p)[:-5] for p, d in Repo().routes.items()
+                       if check.content_id(d) == run["route"]), run["route"][7:19])
+    fam, box = run["box"].split("/")
+    out = out or f"{ROOT}/runs/{fam}/{route_name}/{box}/{run['started']}.json"
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    json.dump(run, open(out, "w"), indent=1)
+    open(out, "a").write("\n")
+    return out
+
+
+def summary(run):
+    fired = sum(len(h["fired"]) for h in run["hops"])
+    s = (f"{run['result'].upper()}: {run['box']} reached {run['final']['release']} "
+         f"({len(run['hops'])} hops, {fired} fixes fired, {run['wall_seconds'] // 60} min")
+    s += f", {run['model_calls']} model calls)" if run.get("model_calls") else ")"
+    if run["final"]["failed"]:
+        s += f"; failing checks: {', '.join(run['final']['failed'])}"
+    return s
+
+
+def cmd_replay(route_path, box, out=None, keep=False):
+    need_root()
+    import walk
+    repo = Repo()
+    w = walk.Walk(repo, repo.routes[route_path], box)
+    try:
+        run = w.walk()
+    finally:
+        w.close(keep)
+    p = save_run(run, out)
+    print(summary(run), "\nrun:", os.path.relpath(p, ROOT))
+    return 0 if run["result"] == "pass" else 1
+
+
+def cmd_discover(family, frm, to, box, max_calls=12):
+    need_root()
+    import discover
+    import models
+    import walk
+    provider = models.from_env()
+    repo = Repo()
+    a = repo.adapters[family]
+    lad = a["ladder"]
+    hops = lad[lad.index(frm) + 1: lad.index(to) + 1]
+    rpath = f"routes/{family}/{frm}-to-{to}.toml"
+    if rpath not in repo.routes:  # a new route starts with every existing fix of the family on its hops pinned
+        repo.routes[rpath] = {"schema": "wend.route/0", "family": family, "arch": repo.boxes[box].get("arch", "amd64"),
+                              "from": frm, "to": to, "hops": hops, "finish": {"prune_obsolete": True},
+                              "fixes": [{"id": i, "name": f["meta"]["name"]} for i, f in repo.fixes_by_id.items()
+                                        if f["family"] == family and f["hop"] in hops],
+                              "meta": {"name": f"{frm}-to-{to}"}}
+    route = repo.routes[rpath]
+    d = discover.Discoverer(provider, max_calls)
+    w = walk.Walk(repo, route, box)
+    try:
+        run = w.walk(d)
+    finally:
+        w.close()
+    # new fixes become files and get pinned; existing fixes that fired here now claim this box (meta only: same id)
+    for f in d.added:
+        p = f"fixes/{family}/{f['hop']}/{f['meta']['name']}.toml"
+        if os.path.exists(f"{ROOT}/{p}"):
+            f["meta"]["name"] += "-" + check.content_id(f)[7:13]
+            p = f"fixes/{family}/{f['hop']}/{f['meta']['name']}.toml"
+        os.makedirs(os.path.dirname(f"{ROOT}/{p}"), exist_ok=True)
+        open(f"{ROOT}/{p}", "w").write(toml(f, f"# Discovered by {f['meta']['author']} on {box}."))
+        route["fixes"].append({"id": check.content_id(f), "name": f["meta"]["name"]})
+        print("new fix:", p)
+    fired = {i for h in run["hops"] for i in h["fired"]}
+    for i in fired & set(repo.fix_path):
+        f = repo.fixes_by_id[i]
+        if box not in f["meta"].get("fires_on", []):
+            f["meta"]["fires_on"] = sorted(f["meta"].get("fires_on", []) + [box])
+            text = open(f"{ROOT}/{repo.fix_path[i]}").read()
+            open(f"{ROOT}/{repo.fix_path[i]}", "w").write(_set_fires_on(text, f["meta"]["fires_on"]))
+            print("now claims", box + ":", repo.fix_path[i])
+    open(f"{ROOT}/{rpath}", "w").write(toml(route, "# Every fix is pinned by content id. ./wend check --repin after editing fixes."))
+    run["route"] = check.content_id(route)
+    p = save_run(run)
+    print(summary(run), "\nroute:", rpath, "\nrun:", os.path.relpath(p, ROOT))
+    if run["result"] == "pass":
+        print("next: ./wend verify, then open a PR (AGENTS.md step 6)")
+    return 0 if run["result"] == "pass" else 1
+
+
+def _set_fires_on(text, boxes):
+    line = f"fires_on = {json.dumps(boxes)}"
+    lines = text.splitlines()
+    for n, l in enumerate(lines):
+        if l.startswith("fires_on ="):
+            lines[n] = line
+            return "\n".join(lines) + "\n"
+    return text.rstrip("\n") + "\n" + line + "\n"  # [meta] is the last table in every fix file
+
+
+def cmd_verify(base=None, all_=False, jobs=2):
+    if subprocess.run([sys.executable, "-B", f"{ROOT}/tools/check.py"]).returncode or \
+            subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_check.py"], stdout=subprocess.DEVNULL).returncode:
+        print("schema check failed; fix that first")
+        return 1
+    need_root()
+    repo = Repo()
+    if all_ or not base:
+        matrix = [{"route": r, "box": b} for r, d in repo.routes.items() for b, x in repo.boxes.items()
+                  if x["family"] == d["family"]]
+    else:
+        matrix = json.loads(subprocess.run([sys.executable, "-B", f"{ROOT}/tools/affected.py", base],
+                                           capture_output=True, text=True, check=True).stdout)["include"]
+    if not matrix:
+        print("nothing to replay: the change touches no route, fix, box or adapter")
+        return 0
+    os.makedirs(f"{ROOT}/.wend/verify", exist_ok=True)
+    print(f"replaying {len(matrix)} route x box pairs, {jobs} at a time (about 15 min each)")
+    results, queue, running = [], list(matrix), []
+    while queue or running:
+        while queue and len(running) < jobs:
+            m = queue.pop(0)
+            out = f"{ROOT}/.wend/verify/{m['route'].replace('/', '_')}--{m['box'].replace('/', '_')}.json"
+            log = open(out[:-5] + ".log", "w")
+            running.append((m, out, subprocess.Popen([sys.executable, "-B", __file__, "replay", m["route"], m["box"],
+                                                      "--out", out], stdout=log, stderr=subprocess.STDOUT)))
+        for item in list(running):
+            if item[2].poll() is not None:
+                running.remove(item)
+                m, out, _ = item
+                run = json.load(open(out)) if os.path.exists(out) else None
+                results.append((m, out, run))
+                print(summary(run) if run else f"CRASHED: {m} (see {out[:-5]}.log)")
+        if running:
+            import time
+            time.sleep(5)
+    for m, out, run in results:
+        if run:
+            save_run(run)
+    rc = subprocess.run([sys.executable, "-B", f"{ROOT}/tools/check.py"]).returncode  # now includes the decoy check
+    ok = rc == 0 and all(r and r["result"] == "pass" for _, _, r in results)
+    lines = ["## Evidence (from `./wend verify`)", "", "| route | box | result | reached | fixes fired | minutes |",
+             "|---|---|---|---|---|---|"]
+    for m, out, r in results:
+        lines.append(f"| {m['route']} | {m['box']} | {r['result'] if r else 'crashed'} | "
+                     f"{r['final']['release'] if r else ''} | {sum(len(h['fired']) for h in r['hops']) if r else ''} | "
+                     f"{r['wall_seconds'] // 60 if r else ''} |")
+    lines += ["", "Decoy check: " + ("passed" if rc == 0 else "FAILED, see `./wend check` output")]
+    open(f"{ROOT}/.wend/pr-evidence.md", "w").write("\n".join(lines) + "\n")
+    print(("VERIFIED" if ok else "NOT VERIFIED") + ": evidence for the PR body is in .wend/pr-evidence.md")
+    return 0 if ok else 1
+
+
+def cmd_list():
+    repo = Repo()
+    print("routes:")
+    for p, d in repo.routes.items():
+        print(f"  {p}  ({len(d['fixes'])} fixes)")
+    print("boxes:")
+    for b, d in repo.boxes.items():
+        print(f"  {b}  {d.get('summary', '')}")
+    if os.path.exists(f"{ROOT}/wanted.toml"):
+        print("wanted (claim one by opening its issue and commenting 'claim'; see AGENTS.md):")
+        for w in tomllib.load(open(f"{ROOT}/wanted.toml", "rb"))["wanted"]:
+            print(f"  [{w['status']}] {w['family']} {w['from']} -> {w['to']}  {w.get('box_idea', '')}")
+    return 0
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        return 0
+    c, rest = argv[0], argv[1:]
+    opt = lambda name, default=None: rest[rest.index(name) + 1] if name in rest else default
+    if c == "check":
+        a = subprocess.run([sys.executable, "-B", f"{ROOT}/tools/check.py", *rest]).returncode
+        b = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_check.py"]).returncode
+        return a or b
+    if c == "list":
+        return cmd_list()
+    if c == "replay":
+        return cmd_replay(rest[0], rest[1], opt("--out"), "--keep" in rest)
+    if c == "discover":
+        return cmd_discover(*rest[:4], max_calls=int(opt("--max-calls", 12)))
+    if c == "report":
+        import report
+        return report.main(rest[0], [rest[i + 1] for i, x in enumerate(rest) if x == "--redact"])
+    if c == "verify":
+        return cmd_verify(opt("--base"), "--all" in rest, int(opt("--jobs", 2)))
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

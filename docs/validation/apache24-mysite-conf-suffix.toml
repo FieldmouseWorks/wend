@@ -1,0 +1,36 @@
+# Discovered by anthropic:claude-opus-5-5 (effort medium) on debian/etch-web.
+schema = "wend.fix/0"
+family = "debian"
+hop = "jessie"
+when = { all = [{ installed = "apache2" }, { file-contains = { path = "/etc/apache2/sites-available/mysite", text = "mysite.local" } }, { not = { file = "/etc/apache2/sites-available/mysite.conf" } }] }
+restores = ["box:web"]
+adds = []
+
+[[post]]
+op = "write-file"
+path = "/etc/apache2/sites-available/mysite.conf"
+content = '''
+<VirtualHost *:80>
+    ServerName mysite.local
+    DocumentRoot /var/www/mysite
+    <Directory /var/www/mysite>
+        Options FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+    ErrorLog ${APACHE_LOG_DIR}/mysite-error.log
+    CustomLog ${APACHE_LOG_DIR}/mysite-access.log combined
+</VirtualHost>
+'''
+
+[[post]]
+op = "apache.enable"
+kind = "site"
+name = "mysite"
+
+[meta]
+name = "apache24-mysite-conf-suffix"
+author = "anthropic:claude-opus-5-5 (effort medium)"
+found_on = "debian/etch-web"
+fires_on = ["debian/etch-web"]
+reason = "Apache 2.4 in jessie only loads sites-enabled/*.conf, so the wheezy vhost file sites-available/mysite (no .conf suffix) is silently ignored and mysite.local disappears from the vhost list. This fix writes the vhost as mysite.conf using 2.4 access syntax and enables it after the upgrade."

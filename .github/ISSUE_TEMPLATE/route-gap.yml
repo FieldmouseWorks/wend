@@ -1,0 +1,36 @@
+name: Route gap
+description: A route broke on your machine. `wend report` fills this in for you.
+title: "gap: <family> <from> -> <hop> [<gap key>]"
+labels: [route-gap]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks. You don't need to fix anything: an agent will pick this up, find the missing fix, and CI will prove it.
+        If you got here without `wend report`, run it on the failed run file. It fills in every field and scrubs
+        hostnames, IPs, users and secrets.
+  - type: input
+    id: gap_key
+    attributes: { label: Gap key, description: "From `wend report`. Repeat reports with the same key are merged." }
+    validations: { required: true }
+  - type: input
+    id: family
+    attributes: { label: Family, placeholder: debian }
+    validations: { required: true }
+  - type: input
+    id: from_release
+    attributes: { label: Release before the hop, placeholder: jessie }
+    validations: { required: true }
+  - type: input
+    id: hop
+    attributes: { label: Release the hop was going to, placeholder: stretch }
+    validations: { required: true }
+  - type: textarea
+    id: details
+    attributes: { label: Report, description: "From `wend report`. Attach wend-gap-<key>.md if it says to." }
+    validations: { required: true }
+  - type: textarea
+    id: server
+    attributes:
+      label: What kind of server is it? (optional)
+      description: Services and local setup that matter. This helps someone build a matching test box.

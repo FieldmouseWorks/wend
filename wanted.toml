@@ -1,0 +1,32 @@
+# Paths people want. Each entry has a GitHub issue labeled `wanted`; claim it there (AGENTS.md step 1).
+# status: open | claimed | done. `./wend list` prints this.
+schema = "wend.wanted/0"
+
+[[wanted]]
+family = "debian"
+from = "etch"
+to = "trixie"
+box_idea = "mail server: postfix + dovecot + spamassassin, real maildirs"
+status = "open"
+
+[[wanted]]
+family = "debian"
+from = "lenny"
+to = "trixie"
+box_idea = "LAMP with WordPress-era PHP and a MySQL database"
+status = "open"
+
+[[wanted]]
+family = "debian"
+from = "squeeze"
+to = "trixie"
+box_idea = "file server: samba + nfs, local users"
+status = "open"
+
+[[wanted]]
+family = "rpm"
+from = "c5"
+to = "a10"
+box_idea = "CentOS 5 LAMP server (needs adapters/rpm.toml first; the dep-lab CentOS run is on it)"
+status = "claimed"
+issue = "dep-lab CentOS 5 time machine"

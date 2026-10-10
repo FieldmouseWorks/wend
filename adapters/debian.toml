@@ -1,0 +1,73 @@
+# The Debian adapter: everything apt/dpkg-specific that fixes may not say for themselves.
+# The harness owns this file's behaviour (setting the release, refreshing indexes, the upgrade transaction itself);
+# fixes only add steps before or after it. See SPEC.md, "Adapters".
+schema = "wend.adapter/0"
+family = "debian"
+release_file = "/etc/debian_version"
+
+# One hop = one step along this list. A fix's `hop` names the release it helps you *arrive at*.
+ladder = ["etch", "lenny", "squeeze", "wheezy", "jessie", "stretch", "buster", "bullseye", "bookworm", "trixie"]
+
+# Paths no fix may write: the harness sets them on every hop.
+harness_owned = ["/etc/apt/sources.list", "/etc/apt/apt.conf.d/00wend"]
+
+# The only places write-file may write. An allowlist, not "anything under /etc": /etc/cron.d, systemd units,
+# /etc/default/*, sudoers, profile.d, logrotate postrotate and apt.conf.d all run code or grant trust, so writing
+# there is arbitrary shell with extra steps. Growing this list is a spec change and needs a human's explicit OK.
+writable = [
+  "/etc/apache2/sites-available/*.conf",
+  "/etc/apache2/conf-available/*.conf",
+  "/etc/mysql/conf.d/*.cnf",
+  "/etc/mysql/mariadb.conf.d/*.cnf",
+]
+
+[releases]
+# Where each release's packages live today. Old ones move to the archive; the harness picks per release.
+archive = "http://archive.debian.org/debian"
+current = "http://deb.debian.org/debian"
+current_from = "bullseye"
+
+[hop]
+# What the harness runs for every hop, around the fixes' pre and post steps. Shown here so reviewers know what a
+# fix's steps are relative to; fixes cannot change it.
+set_release = "printf 'deb {mirror} {release} main\\n' > /etc/apt/sources.list"
+refresh = "apt-get update"
+upgrade = ["apt-get dist-upgrade", "apt-get autoremove --purge"]
+after = ["apt-get clean"]
+obsolete = "apt-get update >/dev/null 2>&1; apt list '?obsolete' 2>/dev/null | grep / | cut -d/ -f1"
+installed_list = "dpkg-query -W -f '${Status} ${Package}\\n' | awk '$3==\"installed\"{print $4}'"
+# Harness apt config, identical for every approach: old archive keys have expired, and local config files are kept.
+apt_conf = """APT::Get::Assume-Yes "true";
+APT::Get::force-yes "true";
+APT::Get::AllowUnauthenticated "true";
+Acquire::Check-Valid-Until "false";
+Acquire::AllowInsecureRepositories "true";
+Dpkg::Options { "--force-confdef"; "--force-confold"; };
+"""
+
+[predicates]
+# How the core predicates evaluate on this family. "installed" means dpkg state "install ok installed" (ii):
+# removed-but-configured (rc) packages do NOT count. That is the round-3 lesson.
+installed = "dpkg-query -W -f '${Status}' {pkg} 2>/dev/null | grep -q 'ok installed'"
+file = "test -f {path}"
+file-contains = "grep -qF '{text}' {path}"
+
+[pm_options.overwrite-conflicting-files]
+# Lets dpkg replace a file that another package owns (the systemd-sysv vs sysvinit halt.8 clash on buster).
+# Scoped to the hop: the harness deletes it after the hop's post steps.
+path = "/etc/apt/apt.conf.d/50overwrite"
+content = "Dpkg::Options { \"--force-overwrite\"; };\n"
+
+[ops."apache.enable"]
+summary = "a2ensite / a2enmod / a2enconf"
+args = { kind = { enum = ["site", "mod", "conf"] }, name = { pattern = "[A-Za-z0-9_.-]+" } }
+
+[ops."apache.disable"]
+summary = "a2dissite / a2dismod / a2disconf"
+args = { kind = { enum = ["site", "mod", "conf"] }, name = { pattern = "[A-Za-z0-9_.-]+" } }
+
+[checks]
+# Universal checks every box gets on this family. Boxes add their own roles (web, db, mail...).
+pkgdb = 'test -z "$(dpkg --audit 2>&1)" && apt-get check >/dev/null'
+current = "every binary a service runs comes from a package the release in sources.list still ships (apt-cache madison); the box lists the binaries"
+services = "no explicitly installed, non-required package that ships an init script or unit belongs to a name family the box did not have at the start"

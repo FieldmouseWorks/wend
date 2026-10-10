@@ -1,0 +1,122 @@
+# The PR gate. Every job runs the same code an agent runs locally with `./wend verify` (AGENTS.md step 6).
+# Not yet exercised on GitHub's runners; the replay itself is tested on an Ubuntu 24.04 host with root.
+#
+# Trust model: the PR supplies DATA (fixes, routes, boxes). The tools that judge it (check.py, affected.py, the
+# replay harness, the compiler) always come from the base branch, so a PR cannot loosen its own checks. A PR that
+# edits tools/, adapters/ or SPEC.md is a spec change: CODEOWNERS makes a human review it, and it is judged by
+# the base branch's tools like everything else.
+name: gate
+
+on:
+  pull_request:
+    paths: ["fixes/**", "routes/**", "boxes/**", "adapters/**", "tools/**", "SPEC.md"]
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    # Every commit in the PR carries a Signed-off-by line (Developer Certificate of Origin).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: |
+          bad=$(git log --format='%H %(trailers:key=Signed-off-by,valueonly,separator=;)' \
+                origin/${{ github.base_ref }}..HEAD | awk 'NF<2{print $1}')
+          [ -z "$bad" ] || { echo "commits without a DCO sign-off (use git commit -s):"; echo "$bad"; exit 1; }
+
+  schema:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: pr }
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.base_ref }}", path: base }
+      - name: base branch tools judge the PR's data
+        run: |
+          rm -rf pr/tools && cp -r base/tools pr/tools
+          python3 -B pr/tools/check.py --ids
+          python3 -B pr/tools/test_check.py
+
+  plan:
+    needs: schema
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.base_ref }}", path: .base }
+      - id: m
+        run: |
+          rm -rf tools && cp -r .base/tools tools && rm -rf .base
+          echo "matrix=$(python3 -B tools/affected.py origin/${{ github.base_ref }})" >> "$GITHUB_OUTPUT"
+
+  replay:
+    needs: plan
+    if: ${{ fromJSON(needs.plan.outputs.matrix).include[0] }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-24.04          # root via sudo is all a chroot needs; no Docker, no KVM
+    timeout-minutes: 120           # dep-lab: 13-15 min per route per box, plus building the box
+    permissions:
+      contents: read
+      id-token: write              # for the run attestation
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.base_ref }}", path: .base }
+      - run: rm -rf tools prompts wend && cp -r .base/tools .base/prompts .base/wend . && rm -rf .base
+      - name: host packages
+        run: sudo apt-get update && sudo apt-get install -y debootstrap rsync
+      - name: box cache (built boxes are keyed by the box file and the adapter)
+        uses: actions/cache@v4
+        with:
+          path: /var/tmp/wend/boxes
+          key: box-${{ matrix.box }}-${{ hashFiles(format('boxes/{0}/box.toml', matrix.box), 'adapters/*.toml') }}
+      # the sandbox follows SPEC.md "Sandbox requirements": a per-chroot tmpfs /dev (never a bind of the host's),
+      # and it unmounts and verifies before deleting anything.
+      - name: replay (no model, no network beyond the release mirrors)
+        run: |
+          sudo -E python3 -B wend replay "${{ matrix.route }}" "${{ matrix.box }}" --out run.json
+      - uses: actions/attest-build-provenance@v2
+        with: { subject-path: run.json }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: run-${{ strategy.job-index }}
+          path: run.json
+
+  decoys:
+    # Every pinned fix fired on exactly the boxes it claims. A passing replay that touched an unclaimed box fails here.
+    needs: [plan, replay]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.base_ref }}", path: .base }
+      - uses: actions/download-artifact@v4
+        with: { path: new-runs }
+      - run: |
+          rm -rf tools && cp -r .base/tools tools && rm -rf .base
+          python3 -B tools/file_runs.py new-runs    # files each run.json under runs/<family>/<route>/<box>/
+          python3 -B tools/check.py                 # includes the fires_on check over the fresh runs
+
+  claude-review:
+    # Asks for the Claude review and waits for its verdict. The verdict is a commit status named "claude-review"
+    # that only the Claude GitHub App can set. Branch protection requires it. Claude can comment and set that
+    # status. It cannot push to main, approve, or merge.
+    needs: decoys
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: write
+    steps:
+      - run: gh pr edit "${{ github.event.pull_request.number }}" --add-label needs-claude-review --repo "${{ github.repository }}"
+        env: { GH_TOKEN: "${{ github.token }}" }
+
+# Not in this file, set in the repo settings:
+#   branch protection on main: require dco, schema, replay, decoys, and the claude-review status; require 1 approving
+#   review from CODEOWNERS; no bypass; nobody can push directly. Merge is a human pressing the button.

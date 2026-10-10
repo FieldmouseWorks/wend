@@ -1,0 +1,140 @@
+{
+ "schema": "wend.run/0",
+ "route": "sha256:a775f33d8278b51d8450abd8e4fd92c4d9741458f28396016997d7d0f51b998e",
+ "box": "debian/etch-web",
+ "result": "pass",
+ "started": "20261010-191954",
+ "wall_seconds": 851,
+ "start_fingerprint": "sha256:02e53278bfd73c326d6dfdc40d3410b5387148b34f0306a8df943699a6891353",
+ "runner": {
+  "kind": "local",
+  "host": "vm",
+  "kernel": "6.18.44-fc-v114"
+ },
+ "hops": [
+  {
+   "to": "lenny",
+   "fired": [],
+   "fired_names": [],
+   "ok": true,
+   "seconds": 44.4
+  },
+  {
+   "to": "squeeze",
+   "fired": [],
+   "fired_names": [],
+   "ok": true,
+   "seconds": 124.7
+  },
+  {
+   "to": "wheezy",
+   "fired": [
+    "sha256:0a151144716a224dbd63d842b6f436a119b07c5436b5712de58d66f66182ead0"
+   ],
+   "fired_names": [
+    "purge-stale-libdb4"
+   ],
+   "ok": true,
+   "seconds": 62.7
+  },
+  {
+   "to": "jessie",
+   "fired": [
+    "sha256:31b3d757e625c34d3b43631677fdb3739e1f06a7cd613aa834081fa21e21ed75"
+   ],
+   "fired_names": [
+    "apache24-mysite-conf-suffix"
+   ],
+   "ok": true,
+   "seconds": 54.5
+  },
+  {
+   "to": "stretch",
+   "fired": [
+    "sha256:ee3e91606f0c6c45cb1c16d496b2a4b27feb70c24ca0b7b9cb5db7a1cbae5f36"
+   ],
+   "fired_names": [
+    "php7.0-module"
+   ],
+   "ok": true,
+   "seconds": 84.1
+  },
+  {
+   "to": "buster",
+   "fired": [
+    "sha256:72ec206a8a41f3114108de4378e27e2244890fee22f2963b3fde8f85dd09def6",
+    "sha256:cd17126244470ea1e9c92b9d9e4185fa2512ae910b85cdbadaf3a0a234b5fcb6"
+   ],
+   "fired_names": [
+    "dpkg-overwrite-sysvinit-clash",
+    "php7.3-module"
+   ],
+   "ok": true,
+   "seconds": 85.9
+  },
+  {
+   "to": "bullseye",
+   "fired": [
+    "sha256:725d5b841aba6d79821c172e02993e5ddda2147220a191753df36f45665f65ab"
+   ],
+   "fired_names": [
+    "php7.4-module"
+   ],
+   "ok": true,
+   "seconds": 89.4
+  },
+  {
+   "to": "bookworm",
+   "fired": [
+    "sha256:522769f3a9fe9fe23a50106a029f8bc40c443d487d0b029ad8849d59a58fa2a5"
+   ],
+   "fired_names": [
+    "php8.2-module"
+   ],
+   "ok": true,
+   "seconds": 94.2
+  },
+  {
+   "to": "trixie",
+   "fired": [
+    "sha256:ab559b09a1ccf147bd8af2ef307886a0a31d8d9233d2bfd6823adc22d11606cb",
+    "sha256:38f05c528370778204f60240321c6d33fb79f8e30478cd1476b5184c3ae53ff1"
+   ],
+   "fired_names": [
+    "drop-sysvinit-for-trixie",
+    "php8.4-module"
+   ],
+   "ok": true,
+   "seconds": 91.2
+  }
+ ],
+ "final": {
+  "release": "13.7",
+  "passed": [
+   "cron",
+   "current",
+   "mail",
+   "php",
+   "pkgdb",
+   "python",
+   "services",
+   "ssh",
+   "tools",
+   "web"
+  ],
+  "failed": [],
+  "failed_logs": {}
+ },
+ "obsolete_before": 58,
+ "obsolete_after": 0,
+ "model": "anthropic:claude-opus-5-5 (effort medium)",
+ "model_calls": 1,
+ "model_usage": {
+  "input_tokens": 3988,
+  "output_tokens": 1241
+ },
+ "discovered": [
+  "apache24-mysite-conf-suffix"
+ ],
+ "log_sha256": "sha256:251b8afd1d53f69369358da4f665b1fe5d00e7997483a32d0a05674870f7ffc7"
+}

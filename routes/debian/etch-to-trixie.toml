@@ -1,0 +1,61 @@
+# Every fix is pinned by content id: editing a fix changes its id, which edits this file,
+# which is how CI knows to replay this route.
+schema = "wend.route/0"
+family = "debian"
+arch = "amd64"
+from = "etch"
+to = "trixie"
+hops = ["lenny", "squeeze", "wheezy", "jessie", "stretch", "buster", "bullseye", "bookworm", "trixie"]
+finish = { prune_obsolete = true }
+
+[[fixes]]
+id = "sha256:0a151144716a224dbd63d842b6f436a119b07c5436b5712de58d66f66182ead0"
+name = "purge-stale-libdb4"
+
+[[fixes]]
+id = "sha256:1f2441873bf8fcd47e6ab8cd32904ac94ee40ff6c6295c6a0fc148259ea49ca0"
+name = "apache24-site-conf"
+
+[[fixes]]
+id = "sha256:ee3e91606f0c6c45cb1c16d496b2a4b27feb70c24ca0b7b9cb5db7a1cbae5f36"
+name = "php7.0-module"
+
+[[fixes]]
+id = "sha256:72ec206a8a41f3114108de4378e27e2244890fee22f2963b3fde8f85dd09def6"
+name = "dpkg-overwrite-sysvinit-clash"
+
+[[fixes]]
+id = "sha256:cd17126244470ea1e9c92b9d9e4185fa2512ae910b85cdbadaf3a0a234b5fcb6"
+name = "php7.3-module"
+
+[[fixes]]
+id = "sha256:725d5b841aba6d79821c172e02993e5ddda2147220a191753df36f45665f65ab"
+name = "php7.4-module"
+
+[[fixes]]
+id = "sha256:522769f3a9fe9fe23a50106a029f8bc40c443d487d0b029ad8849d59a58fa2a5"
+name = "php8.2-module"
+
+[[fixes]]
+id = "sha256:ab559b09a1ccf147bd8af2ef307886a0a31d8d9233d2bfd6823adc22d11606cb"
+name = "drop-sysvinit-for-trixie"
+
+[[fixes]]
+id = "sha256:38f05c528370778204f60240321c6d33fb79f8e30478cd1476b5184c3ae53ff1"
+name = "php8.4-module"
+
+[[fixes]]
+id = "sha256:720c4c94affe2b027de6a7f268dcf5aae9abd15eefcd992e49a144722bf5bc85"
+name = "reinstall-mysql-server-5.1-after-hop"
+
+[[fixes]]
+id = "sha256:35988fca8fe902c95be39365574b25ad3e6a03fdc1116c2056090efe4a7635df"
+name = "restore-mysql-server-5.5-after-hop"
+
+[[fixes]]
+id = "sha256:533c751486f6f0daa2d2ab4b0cc69959ce24b0f56bb02e5aa99af823f3fdf2b8"
+name = "mysql55-to-mariadb"
+
+[meta]
+name = "etch-to-trixie"
+summary = "Debian 4.0 (2007) to Debian 13, one release at a time"

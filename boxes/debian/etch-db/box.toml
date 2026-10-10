@@ -1,0 +1,44 @@
+# CI fixture, ported from dep-lab oldlinux/ol.py (OL_BOX=b).
+# Box files are trusted test code: humans review them, clients never run them.
+schema = "wend.box/0"
+family = "debian"
+release = "etch"
+arch = "amd64"
+summary = "etch database server: MySQL 5.0 with a real table, BIND master zone, Exim"
+packages = ["openssh-server", "mysql-server", "bind9", "exim4", "cron", "rsync", "sudo", "python", "perl", "curl", "logrotate", "less"]
+customize = '''
+set -e
+cat > /etc/bind/db.example.org <<'EOF'
+$TTL 3600
+@   IN SOA ns1.example.org. hostmaster.example.org. ( 2007100901 3600 600 604800 3600 )
+    IN NS  ns1.example.org.
+ns1 IN A   192.0.2.1
+www IN A   192.0.2.10
+EOF
+printf 'zone "example.org" { type master; file "/etc/bind/db.example.org"; };\n' >> /etc/bind/named.conf.local
+echo oldbox.example.org > /etc/mailname
+mkdir -p /var/run/mysqld && chown mysql /var/run/mysqld
+(mysqld --user=mysql --skip-networking --socket=/tmp/b.sock --pid-file=/tmp/b.pid >/tmp/b.log 2>&1 &)
+i=0; while [ $i -lt 60 ] && [ ! -S /tmp/b.sock ]; do sleep 1; i=$((i+1)); done
+mysql -S /tmp/b.sock -uroot -e "create database app; create table app.t (msg varchar(64)); insert into app.t values ('hello from oldbox');"
+mysqladmin -S /tmp/b.sock -uroot shutdown
+sleep 3
+
+useradd -m -s /bin/bash alice
+mkdir -p /home/alice/backup
+sed -i 's/^Port 22$/Port 2222/' /etc/ssh/sshd_config
+echo '0 3 * * * /usr/bin/rsync -a /var/www/ /home/alice/backup/ # nightly-backup' | crontab -u alice -
+apt-get clean
+'''
+start_hook = "dpkg-query -W -f '${Package}\\n' | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 's/^mariadb$/mysql/' -e 's/^ntpsec$/ntp/' | sort -u > /var/lib/ol-expected-families; printf 'dbus\\nsystemd\\nutil\\n' >> /var/lib/ol-expected-families"
+
+[roles]
+ssh = "mkdir -p /var/run/sshd /run/sshd; /usr/sbin/sshd -t && grep -q '^Port 2222' /etc/ssh/sshd_config"
+cron = "test -x /usr/sbin/cron && crontab -l -u alice | grep nightly-backup"
+python = "python3 -c 'print(6*7)' | grep 42 || python -c 'print 6*7' | grep 42"
+tools = "perl -e 1 && curl -s file:///etc/debian_version && rsync --version && sudo -V && id alice"
+services = "for p in $(ls /etc/init.d/* /lib/systemd/system/*.service /usr/lib/systemd/system/*.service 2>/dev/null | while read f; do dpkg -S \"$f\" 2>/dev/null | grep -v ^diversion | cut -d: -f1 | tr ', ' '\\n\\n'; done | sort -u | while read p; do s=$(dpkg-query -W -f '${Status}|${Priority}' \"$p\" 2>/dev/null); echo \"$s\" | grep -q 'ok installed|' && ! echo \"$s\" | grep -qE '[|](required|important)$' && ! awk -v p=\"$p\" '$1==\"Package:\"{x=($2==p)} x&&$1==\"Auto-Installed:\"&&$2==1{f=1} END{exit !f}' /var/lib/apt/extended_states 2>/dev/null && echo $p; done); do f=$(echo $p | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 's/^mariadb$/mysql/' -e 's/^ntpsec$/ntp/'); grep -qx \"$f\" /var/lib/ol-expected-families || { echo \"unexpected new service package: $p\"; exit 1; }; done"
+db = "mkdir -p /run/mysqld /var/run/mysqld; chown mysql /run/mysqld /var/run/mysqld; D=$(command -v mariadbd || command -v mysqld || echo /usr/sbin/mysqld); C=$(command -v mariadb || command -v mysql); A=$(command -v mariadb-admin || command -v mysqladmin); ($D --user=mysql --skip-networking --socket=/tmp/hc.sock --pid-file=/tmp/hc.pid >/tmp/hc.log 2>&1 &); i=0; while [ $i -lt 60 ] && [ ! -S /tmp/hc.sock ]; do sleep 1; i=$((i+1)); done; $C -S /tmp/hc.sock -uroot -N -e 'select msg from app.t' | grep 'hello from oldbox'; rc=$?; $A -S /tmp/hc.sock -uroot shutdown; sleep 2; [ $rc = 0 ] || tail -n 15 /tmp/hc.log; exit $rc"
+dns = "named-checkconf && named-checkzone example.org /etc/bind/db.example.org"
+mail = "exim4 -bV >/dev/null && exim4 -bt alice@localhost | grep -i local_user && grep oldbox /etc/mailname"
+current = "for f in $(command -v mariadbd || command -v mysqld || echo /usr/sbin/mysqld); do f=$(readlink -f \"$f\"); p=$(dpkg -S \"$f\" 2>/dev/null | grep -v ^diversion | head -n1 | cut -d: -f1); test -n \"$p\" && test -n \"$(apt-cache madison \"$p\")\" || { echo \"$f comes from package '$p', which the current release does not ship\"; exit 1; }; done"

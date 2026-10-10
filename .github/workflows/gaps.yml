@@ -1,0 +1,71 @@
+# The gap loop: use -> gap -> `wend report` -> issue -> triage -> wanted.toml -> an agent discovers -> PR merged ->
+# reporter pinged to retry. Uses only the default token. Issue text is untrusted: it never reaches a shell
+# unquoted, and the gap key must match [0-9a-f]{12} before anything uses it.
+name: gaps
+
+on:
+  issues:
+    types: [opened, labeled, closed]
+
+permissions:
+  issues: write
+  contents: write
+  pull-requests: write
+
+jobs:
+  dedupe:
+    # Same gap key as an open issue: +1 the original and close this one as a duplicate.
+    if: github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'route-gap')
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TITLE: ${{ github.event.issue.title }}
+      NUM: ${{ github.event.issue.number }}
+      REPO: ${{ github.repository }}
+    steps:
+      - run: |
+          key=$(printf '%s' "$TITLE" | grep -oE '\[[0-9a-f]{12}\]' | tr -d '[]' | head -n1)
+          [ -n "$key" ] || { gh issue comment "$NUM" -R "$REPO" -b "No gap key in the title. Please run \`wend report\` and use its link."; exit 0; }
+          orig=$(gh issue list -R "$REPO" -l route-gap -s open --search "$key in:title" --json number -q "map(.number) | map(select(. != $NUM)) | min // empty")
+          if [ -n "$orig" ]; then
+            gh issue comment "$orig" -R "$REPO" -b "+1: same gap reported again in #$NUM."
+            gh issue close "$NUM" -R "$REPO" -r "not planned" -c "Same gap as #$orig, so I've added your report there. Subscribe to #$orig to hear when it's fixed."
+          fi
+
+  to-wanted:
+    # A maintainer labels the gap `triaged`: open a PR adding it to wanted.toml (a human merges it).
+    if: github.event.action == 'labeled' && github.event.label.name == 'triaged' && contains(github.event.issue.labels.*.name, 'route-gap')
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NUM: ${{ github.event.issue.number }}
+      TITLE: ${{ github.event.issue.title }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          python3 - <<'PY'
+          import os, re
+          m = re.fullmatch(r"gap: ([a-z0-9]+) ([a-z0-9.]+) -> ([a-z0-9.]+) \[([0-9a-f]{12})\]", os.environ["TITLE"].strip())
+          if not m:
+              raise SystemExit("title is not in the wend report format")
+          fam, frm, hop, key = m.groups()
+          open("wanted.toml", "a").write(
+              f'\n[[wanted]]\nfamily = "{fam}"\nfrom = "{frm}"\nto = "{hop}"\ngap_key = "{key}"\n'
+              f'issue = {os.environ["NUM"]}\nstatus = "open"\n')
+          PY
+          git config user.name "wend-bot"; git config user.email "wend-bot@users.noreply.github.com"
+          git checkout -b "wanted/gap-$NUM" && git commit -qs -am "wanted: gap #$NUM" && git push -u origin "wanted/gap-$NUM"
+          gh pr create --title "wanted: gap #$NUM" --body "Adds the gap from #$NUM to wanted.toml so agents can claim it. Refs #$NUM"
+          gh issue comment "$NUM" -b "This is on the wanted list now. An agent can claim it by commenting \`claim\` here (AGENTS.md step 1)."
+
+  retry-ping:
+    # A PR that says "Closes #N" merged: tell the reporter to retry.
+    if: github.event.action == 'closed' && github.event.issue.state_reason == 'completed' && contains(github.event.issue.labels.*.name, 'route-gap')
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NUM: ${{ github.event.issue.number }}
+      WHO: ${{ github.event.issue.user.login }}
+    steps:
+      - run: |
+          gh issue comment "$NUM" -R "${{ github.repository }}" -b "@$WHO a fix for this gap is merged and verified in CI. Update wend's map and try your upgrade again. If it breaks somewhere else, \`wend report\` starts the next one."

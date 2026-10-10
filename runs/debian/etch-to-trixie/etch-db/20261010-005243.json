@@ -1,0 +1,118 @@
+{
+ "schema": "wend.run/0",
+ "route": "sha256:2b355e1d1143163ee2443ab7e46980c62fe5014f418e33c8f015b3bc6d54a6a2",
+ "box": "debian/etch-db",
+ "result": "pass",
+ "started": "20261010-005243",
+ "wall_seconds": 843,
+ "runner": {
+  "kind": "dep-lab chroot (Ubuntu 24.04 host, kernel 6.18)",
+  "harness": "oldlinux/ol.py map --prune"
+ },
+ "hops": [
+  {
+   "to": "lenny",
+   "fired": [],
+   "fired_names": [],
+   "ok": true,
+   "seconds": 50.9
+  },
+  {
+   "to": "squeeze",
+   "fired": [
+    "sha256:720c4c94affe2b027de6a7f268dcf5aae9abd15eefcd992e49a144722bf5bc85"
+   ],
+   "fired_names": [
+    "reinstall-mysql-server-5.1-after-hop"
+   ],
+   "ok": true,
+   "seconds": 146.1
+  },
+  {
+   "to": "wheezy",
+   "fired": [
+    "sha256:0a151144716a224dbd63d842b6f436a119b07c5436b5712de58d66f66182ead0",
+    "sha256:35988fca8fe902c95be39365574b25ad3e6a03fdc1116c2056090efe4a7635df"
+   ],
+   "fired_names": [
+    "purge-stale-libdb4",
+    "restore-mysql-server-5.5-after-hop"
+   ],
+   "ok": true,
+   "seconds": 73.6
+  },
+  {
+   "to": "jessie",
+   "fired": [],
+   "fired_names": [],
+   "ok": true,
+   "seconds": 68.7
+  },
+  {
+   "to": "stretch",
+   "fired": [
+    "sha256:533c751486f6f0daa2d2ab4b0cc69959ce24b0f56bb02e5aa99af823f3fdf2b8"
+   ],
+   "fired_names": [
+    "mysql55-to-mariadb"
+   ],
+   "ok": true,
+   "seconds": 95.5
+  },
+  {
+   "to": "buster",
+   "fired": [
+    "sha256:72ec206a8a41f3114108de4378e27e2244890fee22f2963b3fde8f85dd09def6"
+   ],
+   "fired_names": [
+    "dpkg-overwrite-sysvinit-clash"
+   ],
+   "ok": true,
+   "seconds": 95.5
+  },
+  {
+   "to": "bullseye",
+   "fired": [],
+   "fired_names": [],
+   "ok": true,
+   "seconds": 88.5
+  },
+  {
+   "to": "bookworm",
+   "fired": [],
+   "fired_names": [],
+   "ok": true,
+   "seconds": 93.6
+  },
+  {
+   "to": "trixie",
+   "fired": [
+    "sha256:ab559b09a1ccf147bd8af2ef307886a0a31d8d9233d2bfd6823adc22d11606cb"
+   ],
+   "fired_names": [
+    "drop-sysvinit-for-trixie"
+   ],
+   "ok": true,
+   "seconds": 93.6
+  }
+ ],
+ "final": {
+  "release": "13.7",
+  "passed": [
+   "cron",
+   "current",
+   "db",
+   "dns",
+   "mail",
+   "pkgdb",
+   "python",
+   "services",
+   "ssh",
+   "tools"
+  ],
+  "failed": []
+ },
+ "obsolete_after": 0,
+ "model_calls": 0,
+ "evidence": "dep-lab oldlinux/results/map-b-20261010-005243.json"
+}
