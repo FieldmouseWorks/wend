@@ -21,9 +21,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      # The PR's own commits, not the synthetic merge commit Actions checks out by default.
+      # The PR's own commits, merge commits included, not the synthetic merge commit Actions checks out by default.
       - run: |
-          bad=$(git log --no-merges --format='%H %(trailers:key=Signed-off-by,valueonly,separator=;)' \
+          bad=$(git log --format='%H %(trailers:key=Signed-off-by,valueonly,separator=;)' \
                 origin/${{ github.base_ref }}..${{ github.event.pull_request.head.sha }} | awk 'NF<2{print $1}')
           [ -z "$bad" ] || { echo "commits without a DCO sign-off (use git commit -s):"; echo "$bad"; exit 1; }
 
