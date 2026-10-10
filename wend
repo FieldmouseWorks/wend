@@ -54,7 +54,7 @@ def save_run(run, out=None):
     route_name = next((os.path.basename(p)[:-5] for p, d in Repo().routes.items()
                        if check.content_id(d) == run["route"]), run["route"][7:19])
     fam, box = run["box"].split("/")
-    out = out or f"{ROOT}/runs/{fam}/{route_name}/{box}/{run['started']}.json"
+    out = os.path.abspath(out) if out else f"{ROOT}/runs/{fam}/{route_name}/{box}/{run['started']}.json"
     os.makedirs(os.path.dirname(out), exist_ok=True)
     json.dump(run, open(out, "w"), indent=1)
     open(out, "a").write("\n")
