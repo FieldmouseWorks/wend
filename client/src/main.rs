@@ -45,10 +45,6 @@ fn opt(args: &mut Vec<String>, name: &str) -> Option<String> {
 }
 
 fn main() -> ExitCode {
-    // SPEC "How a hop runs": everything the client runs or writes in a root gets umask 022, whatever the caller's is
-    // (AlmaLinux 10 root sessions default to 077, and files a fix creates must be readable by daemons).
-    // SAFETY: umask only sets this process's file mode mask; it can't fail and touches no memory.
-    unsafe { libc::umask(0o022) };
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let root = PathBuf::from(opt(&mut args, "--atlas").unwrap_or_else(|| ".".into()));
     let fired = opt(&mut args, "--fired");
@@ -306,6 +302,10 @@ struct WalkOpts {
 }
 
 fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
+    // SPEC "How a hop runs": everything the client runs or writes in a root gets umask 022, whatever the caller's is
+    // (AlmaLinux 10 root sessions default to 077, and files a fix creates must be readable by daemons).
+    // SAFETY: umask only sets this process's file mode mask; it can't fail and touches no memory.
+    unsafe { libc::umask(0o022) };
     let (rpath, r) = atlas.route(route)?;
     let a = adapter_of(atlas, r)?;
     let root = o

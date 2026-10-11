@@ -141,4 +141,19 @@ for name, run, want in (("decoy hit: the MySQL fix fired on the web box", fake, 
 assert check.content_id(good) != check.content_id({**good, "when": {"installed": "x"}})
 assert check.content_id(good) == check.content_id({**good, "meta": {"name": "renamed"}}), "meta must not change ids"
 print("ids: content changes the id, renaming does not")
+# SPEC "How a hop runs": every command that touches a root sets umask 022 first (a 077 caller made the mysqli shim
+# unreadable to php-fpm on AlmaLinux 10, wend#13). Both engines, checked by structure: CI's own umask is 022.
+import ast  # noqa: E402
+tree = ast.parse(open(os.path.join(check.ROOT, "wend")).read())
+for fn in (n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ("cmd_replay", "cmd_discover", "cmd_verify")):
+    first = fn.body[0]
+    ok = isinstance(first, ast.Expr) and isinstance(first.value, ast.Call) and getattr(first.value.func, "id", "") == "root_umask"
+    print(("passed  " if ok else "WRONG   ") + f"wend {fn.name} sets umask 022 first")
+    bad += not ok
+rs = open(os.path.join(check.ROOT, "client", "src", "main.rs")).read()
+walk = rs[rs.index("fn cmd_walk("):]
+body = [ln.strip() for ln in walk.split("\n")[1:] if ln.strip() and not ln.strip().startswith("//")]
+ok = body[0] == "unsafe { libc::umask(0o022) };"
+print(("passed  " if ok else "WRONG   ") + "client cmd_walk sets umask 022 first")
+bad += not ok
 sys.exit(1 if bad else 0)
