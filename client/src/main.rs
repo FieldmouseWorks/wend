@@ -276,6 +276,13 @@ fn cmd_parity(atlas: &Atlas, input: &str) -> Result<bool, String> {
         });
     }
     out.insert("steps".into(), Value::Array(steps));
+    let mut synth = vec![];
+    for s in get(&inp, "synth_hops").and_then(Value::as_array).into_iter().flatten() {
+        let a = atlas.adapters.get(str_of(s, "family")?).ok_or("unknown family")?;
+        let fs: Vec<&Doc> = s["fixes"].as_array().map(|v| v.iter().collect()).unwrap_or_default();
+        synth.push(json!(hop::hop_plan(a, str_of(s, "hop")?, &fs)?.commands));
+    }
+    out.insert("synth_hops".into(), Value::Array(synth));
     let mut preds = vec![];
     for s in get(&inp, "preds").and_then(Value::as_array).into_iter().flatten() {
         let a = atlas.adapters.get(str_of(s, "family")?).ok_or("unknown family")?;

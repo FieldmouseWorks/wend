@@ -253,7 +253,9 @@ def check_fix(doc, adapters, where):
     for c in doc.get("restores", []):
         if c not in checks and not re.fullmatch(r"box:[a-z0-9-]+", c):
             errs.append(f"{where}: restores {c!r}, which is neither an adapter check nor box:<role>")
-    for f in doc.get("adds", []):
+    if not isinstance(doc.get("adds", []), list):
+        errs.append(f"{where}: adds must be a list of name families")
+    for f in doc.get("adds", []) if isinstance(doc.get("adds", []), list) else []:
         if not isinstance(f, str) or not re.fullmatch(FAMILY, f):
             errs.append(f"{where}: adds {f!r}, which is not a name family ({FAMILY})")
     m = doc.get("meta", {})
