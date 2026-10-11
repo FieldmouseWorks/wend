@@ -216,8 +216,9 @@ class Rpm:
             f"set -e; rm -rf {b}; mkdir -p {b}/old {b}/new {b}/pkgs {b}/stage",
             f"printf '{old_repos}' > {b}/old/boot.repo; printf '{new_repos}' > {b}/new/ladder.repo",
             f"yum -y --setopt=reposdir={b}/old install dnf",
-            # rc ignored, as in the lab: what matters is that the new rpm, glibc and dnf were fetched (checked next)
-            f"dnf -y {o} --nobest --setopt=deltarpm=false --downloadonly --destdir={b}/pkgs distro-sync "
+            # EL7's dnf 4.0 has no --nobest. rc ignored, as in the lab: what matters is that the new rpm, glibc and
+            # dnf were fetched (checked next)
+            f"dnf -y {o} --setopt=best=False --setopt=deltarpm=false --downloadonly --destdir={b}/pkgs distro-sync "
             f"> {b}/dl.log 2>&1 || tail -n 20 {b}/dl.log",
             f"cd {b}/pkgs; for n in rpm rpm-libs glibc dnf python3-dnf; do ls | grep -qE \"^$n-[0-9]\" || "
             "{ echo \"not downloaded: $n\"; exit 1; }; done",
@@ -326,8 +327,13 @@ class Rpm:
         return "ssh-keygen -A"
 
     def op_httpd_drop_missing_modules(self, s, adapter, release, v, rel):
-        """Comment out every LoadModule whose module this httpd can't load any more (2.2 -> 2.4 dropped some)."""
-        return ("cd /etc/httpd && for n in $(seq 1 40); do out=$(/usr/sbin/httpd -t 2>&1) && break; "
+        """Comment out every LoadModule whose module this httpd can't load any more (2.2 -> 2.4 dropped some): first
+        the ones whose file is gone (including those inside an <IfModule> httpd -t never reaches, like EL6 php.conf's
+        libphp5-zts.so line), then whatever httpd -t still reports."""
+        return ("cd /etc/httpd && for c in conf/*.conf conf.d/*.conf conf.modules.d/*.conf; do [ -f \"$c\" ] || continue; "
+                "for m in $(grep -E '^[[:space:]]*LoadModule' \"$c\" | awk '{print $3}'); do [ -e \"$m\" ] && continue; "
+                "echo disabling $m; sed -i \"s|^\\([[:space:]]*LoadModule[[:space:]].*[[:space:]]$m[[:space:]]*\\)$|#\\1|\" \"$c\"; "
+                "done; done; for n in $(seq 1 40); do out=$(/usr/sbin/httpd -t 2>&1) && break; "
                 "m=$(echo \"$out\" | grep -o 'Cannot load [^ ]*' | head -n1 | awk '{print $3}'); "
                 "[ -n \"$m\" ] || { echo \"$out\"; break; }; b=$(basename $m); echo disabling $b; "
                 "grep -rl \"LoadModule.*$b\" conf conf.d conf.modules.d 2>/dev/null | "

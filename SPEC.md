@@ -485,9 +485,11 @@ stopping cleanly on the data is the point, and the tool's own complaints are inf
 **`ssh.generate-host-keys`** (no arguments). Creates every host key type this sshd expects that the box lacks
 (`ssh-keygen -A`; `sshd-keygen` does it at boot, which a chroot never has).
 
-**`httpd.drop-missing-modules`** (no arguments). Comments out each `LoadModule` line, in `/etc/httpd/conf`,
-`conf.d` and `conf.modules.d`, whose module `httpd -t` reports it cannot load, repeating until `httpd -t` stops
-reporting one (at most 40 rounds). Fails if `httpd -t` fails afterwards.
+**`httpd.drop-missing-modules`** (no arguments). Comments out each `LoadModule` line, in the `*.conf` files of
+`/etc/httpd/conf`, `conf.d` and `conf.modules.d`, whose module httpd can't load: first every line whose module file
+doesn't exist (relative to `/etc/httpd`), including lines inside an `<IfModule>` that `httpd -t` never evaluates,
+then each one `httpd -t` reports it cannot load, repeating until it stops reporting one (at most 40 rounds). Fails if
+`httpd -t` fails afterwards.
 
 **`php.mysqli-report-off`** (no arguments). PHP 8.1 made mysqli throw exceptions where it used to warn and return
 false. Restores the old default for every script without touching the app: writes
