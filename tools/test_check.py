@@ -62,6 +62,15 @@ EL_CASES = {
     "a Debian op on an EL box": lambda f: f["post"].append({"op": "apache.enable", "kind": "mod", "name": "php"}),
     "write the harness's repo directory": lambda f: f["post"].append(
         {"op": "write-file", "path": "/etc/yum.repos.d/x.repo", "content": "[x]\n"}),
+    "swap-release installing a server instead of a release package": lambda f: f["post"].append(
+        {"op": "rpm.swap-release", "remove": "centos-release", "install": "mysql-server"}),
+    "force-remove that drops only the database entry (fakes pkgdb)": lambda f: f["post"].append(
+        {"op": "force-remove", "packages": ["mysql-server"], "purge": True, "force": ["db-only"]}),
+    "kv.set a key that grants access": lambda f: f["post"][0].update(values={"anon_upload_enable": "YES"}),
+    "kv.set on a file with sections": lambda f: f["post"][0].update(path="/etc/my.cnf", values={"old_passwords": "0"}),
+    "write the box owner's secrets": lambda f: f["post"].append(
+        {"op": "write-file", "path": "/etc/wend/secrets/app-db", "content": "x"}),
+    "a predicate that isn't a string": lambda f: f.update(when={"installed": 123}),
 }
 for name, mutate in EL_CASES.items():
     f = copy.deepcopy(el_good)
@@ -69,6 +78,24 @@ for name, mutate in EL_CASES.items():
     errs = check.check_fix(f, adapters, el_rel)
     print(("refused " if errs else "MISSED  ") + name + (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
     bad += not errs
+# adapters: an adapter can narrow what fixes may do, never widen it past its backend
+for name, mutate in {
+    "an adapter allowing a force flag its backend doesn't have": lambda a: a.update(force=["depends", "all"]),
+    "an adapter op argument that accepts shell": lambda a: a["ops"]["kv.set"]["args"].update(
+        values={"table": ".*"}),
+    "an adapter declaring an op its backend doesn't implement": lambda a: a["ops"].update(
+        {"shell.run": {"summary": "x", "args": {"cmd": {"pattern": "[a-z]+"}}}}),
+    "an adapter without a backend": lambda a: a.pop("backend"),
+}.items():
+    a = copy.deepcopy(adapters["el"])
+    mutate(a)
+    errs = check.check_adapter(a, "adapters/el.toml")
+    print(("refused " if errs else "MISSED  ") + name + (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
+    bad += not errs
+for fam, a in adapters.items():
+    errs = check.check_adapter(a, f"adapters/{fam}.toml")
+    print(("passed  " if not errs else "WRONG   ") + f"adapters/{fam}.toml" + (f" ({errs})" if errs else ""))
+    bad += bool(errs)
 el_route = {"schema": "wend.route/0", "family": "el", "from": "centos5", "to": "alma10", "fixes": []}
 for hops, want in ((["centos6", "centos7", "alma9", "alma10"], True), (["centos6", "alma9", "alma10"], False),
                    (["centos6", "centos7", "alma8", "alma9", "alma10"], True), (["centos7", "centos6", "alma10"], False)):

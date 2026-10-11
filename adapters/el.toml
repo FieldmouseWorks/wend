@@ -16,8 +16,9 @@ may_skip = ["alma8"]
 # release package drops there (they point at mirrors that are gone).
 harness_owned = ["/etc/yum.repos.d/", "/etc/yum.conf", "/etc/yum/", "/etc/dnf/", "/etc/wend/"]
 
-# The only files write-file and kv.* may write. An allowlist; growing it is a spec change (see debian.toml).
-writable = ["/etc/my.cnf", "/etc/vsftpd/vsftpd.conf"]
+# The only files write-file may write (kv.* has its own per-key list at the end). An allowlist; growing it is a spec change (see debian.toml).
+writable = ["/etc/my.cnf"]
+
 # Config files rpm.adopt-rpmnew and rpm.set-aside-unowned may move. They never write content: one takes the file the
 # package itself shipped as .rpmnew, the other moves a file no installed package owns. Both keep the old file under
 # /var/lib/wend/saved.
@@ -32,8 +33,9 @@ managed = [
   "/etc/php-fpm.d/*.conf",
 ]
 
-# force-remove's flags on rpm: --nodeps, --noscripts, --justdb.
-force = ["depends", "scripts", "db-only"]
+# force-remove's flags on rpm: --nodeps, --noscripts. No --justdb: a fix that drops a package from the database
+# and leaves its files would fake the pkgdb check.
+force = ["depends", "scripts"]
 
 [mirror]
 # CentOS 5's yum can't speak today's TLS and the vaults are https-only now. The harness runs tools/mirror.py on the
@@ -144,7 +146,7 @@ args = { release = { enum = ["alma8"] }, remove = { pattern = "[a-z0-9][a-z0-9.+
 
 [ops."rpm.swap-release"]
 summary = "replace the release package by hand (rpm -e --nodeps old, rpm -i new from the hop's repo): epochs and vendor switches block yum"
-args = { remove = { pattern = "[a-z0-9][a-z0-9.+-]*" }, install = { pattern = "[a-z0-9][a-z0-9.+-]*" } }
+args = { remove = { pattern = "[a-z0-9][a-z0-9.+-]*-release" }, install = { pattern = "[a-z0-9][a-z0-9.+-]*-release" } }
 
 [ops."rpm.adopt-rpmnew"]
 summary = "where rpm left the packaged config as FILE.rpmnew, use it; the old file is kept under /var/lib/wend/saved"
@@ -160,11 +162,11 @@ args = { layout = { enum = ["usrmove", "run"] } }
 
 [ops."kv.set"]
 summary = "set key=value lines in a file without sections (replaces the key's lines, commented ones too, and appends)"
-args = { path = { path = "writable" }, values = { table = "[A-Za-z0-9_./:-]+" } }
+args = { path = { path = "kv" }, values = { table = "[A-Za-z0-9_./:-]+" } }
 
 [ops."kv.unset"]
 summary = "delete a key's key=value lines"
-args = { path = { path = "writable" }, keys = { list = "[A-Za-z0-9_]+" } }
+args = { path = { path = "kv" }, keys = { list = "[A-Za-z0-9_]+" } }
 
 [ops."mysql.set-password"]
 summary = "rehash one account's password with the current scheme, reading the plaintext from the box's /etc/wend/secrets/<secret> (never from the fix)"
@@ -192,6 +194,15 @@ args = {}
 
 [checks]
 # Universal checks every EL box gets. Boxes add their own roles.
-pkgdb = "rpm -qa >/dev/null && test -z \"$(rpm -Va --nofiles --nodigest --noscripts 2>&1)\" && test -z \"$(rpm -qa --qf '%{NAME}.%{ARCH}\\n' | grep -v gpg-pubkey | sort | uniq -d)\""
+pkgdb = "rpm -qa >/dev/null && test -z \"$(rpm -Va --nofiles --nodigest --noscripts 2>&1)\" && test -z \"$(rpm -qa --qf '%{NAME}.%{ARCH}\\n' | grep -vE '^(gpg-pubkey|kernel)[.-]' | sort | uniq -d)\""
 current = "every binary a service runs comes from a package built for the running major release (dist tag el$MAJOR); the box lists the binaries"
 services = "no package that ships an init script or unit belongs to a name family the box did not have at the start, unless something installed requires it (EL5/6 rpm has no 'explicitly installed')"
+
+# The keys kv.set and kv.unset may touch, per file. Only files without [sections] take kv.set. Keys that grant access
+# (anonymous uploads, skip-grant-tables, ...) never go on this list.
+[kv."/etc/vsftpd/vsftpd.conf"]
+keys = ["listen", "listen_ipv6", "background", "seccomp_sandbox", "isolate", "isolate_network", "tcp_wrappers"]
+set = true
+[kv."/etc/my.cnf"]
+keys = ["old_passwords"]
+set = false

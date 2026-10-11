@@ -47,9 +47,14 @@ def fetch(url, local, sha256=None):
 class H(http.server.BaseHTTPRequestHandler):
     def _go(self, body):
         parts = self.path.lstrip("/").split("?")[0].split("/", 1)
-        if len(parts) < 2 or parts[0] not in ALLOWED or ".." in parts[1]:
+        # Only <allowed host>/<relative path>: no empty or dot segments, so the path can't leave the cache
+        # (os.path.join would throw CACHE away for "/etc/shadow"; the shim runs as root).
+        if len(parts) < 2 or parts[0] not in ALLOWED or \
+                any(seg in ("", ".", "..") for seg in parts[1].rstrip("/").split("/")):
             return self.send_error(403)
         local = os.path.join(CACHE, parts[0], parts[1])
+        if os.path.commonpath([os.path.realpath(CACHE), os.path.realpath(local)]) != os.path.realpath(CACHE):
+            return self.send_error(403)
         if local.endswith("/"):
             local += ".index"
         # Live mirrors change their metadata; package files never change, and neither do repodata files named by

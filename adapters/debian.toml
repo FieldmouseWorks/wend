@@ -4,6 +4,7 @@
 schema = "wend.adapter/0"
 family = "debian"
 backend = "apt"                      # what carries out the ops: SPEC.md, "Op reference"
+force = ["depends", "remove-essential"]   # the force-remove flags fixes may use
 release_file = "/etc/debian_version"
 
 # One hop = one step along this list. A fix's `hop` names the release it helps you *arrive at*.

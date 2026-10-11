@@ -32,7 +32,7 @@ def arg_doc(s):
 
 
 def ops_doc(adapter):
-    force = json.dumps(adapter.get("force", check.FORCE))[1:-1]
+    force = json.dumps(adapter["force"])[1:-1]
     lines = [f"- {v}".replace("FORCE", force) for k, v in CORE_OPS_DOC.items()
              if k != "pm-option" or adapter.get("pm_options")]
     for name, o in adapter.get("ops", {}).items():

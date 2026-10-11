@@ -26,7 +26,11 @@ PKG = r"[a-z0-9][a-z0-9.+-]*"
 ETC_PATH = r"/etc/[A-Za-z0-9_./-]+"
 ETC_GLOB = r"/etc/[A-Za-z0-9_./*-]+"
 CORE_OPS = {"install", "remove", "repair", "force-remove", "write-file", "pm-option"}
-FORCE = ["depends", "remove-essential"]  # Debian's; an adapter can name its own (`force = [...]`)
+# Characters no adapter argument pattern may accept: values land in root shell commands.
+UNSAFE = ["'", '"', " ", "\t", "\n", "$", "`", ";", "&", "|", "<", ">", "(", ")", "{", "}", "\\", "*", "?", "[", "~"]
+ADAPTER_KEYS = {"schema", "family", "backend", "release_file", "ladder", "may_skip", "harness_owned", "writable",
+                "managed", "force", "releases", "mirror", "hop", "predicates", "pm_options", "box", "ops", "checks",
+                "kv"}
 
 
 def canonical(obj):
@@ -45,6 +49,46 @@ def load_adapters():
 
 # ---------- validation ----------
 
+def check_adapter(a, where):
+    """An adapter can narrow what fixes may do, never widen it past what its backend implements (tools/backends.py
+    holds the lists). CI also takes adapters from the base branch; this is the second lock."""
+    errs = []
+    if a.get("schema") != "wend.adapter/0":
+        return [f"{where}: schema must be 'wend.adapter/0'"]
+    if set(a) - ADAPTER_KEYS:
+        errs.append(f"{where}: unknown keys {sorted(set(a) - ADAPTER_KEYS)}")
+    for k in ("family", "backend", "release_file", "ladder", "force", "hop", "predicates", "checks"):
+        if k not in a:
+            errs.append(f"{where}: missing {k}")
+    b = backends.BACKENDS.get(a.get("backend"))
+    if not b:
+        return errs + [f"{where}: backend must be one of {sorted(backends.BACKENDS)}"]
+    if not set(a.get("force", [])) <= b.FORCE:
+        errs.append(f"{where}: force may only name {sorted(b.FORCE)} on the {b.name} backend")
+    if not set(a.get("pm_options", {})) <= b.PM_OPTIONS:
+        errs.append(f"{where}: pm_options may only name {sorted(b.PM_OPTIONS)} on the {b.name} backend")
+    if not set(a.get("ops", {})) <= b.OPS:
+        errs.append(f"{where}: the {b.name} backend has no ops {sorted(set(a.get('ops', {})) - b.OPS)}")
+    if not set(a.get("may_skip", [])) <= set(a.get("ladder", [])[1:-1]):
+        errs.append(f"{where}: may_skip names releases that aren't inside the ladder")
+    for op, d in a.get("ops", {}).items():
+        for name, spec in d.get("args", {}).items():
+            for kind in ("pattern", "list", "table"):
+                if kind in spec and any(re.fullmatch(spec[kind], f"a{c}b") or re.fullmatch(spec[kind], c)
+                                        for c in UNSAFE):
+                    errs.append(f"{where}: ops.{op}.args.{name}: {spec[kind]!r} accepts shell metacharacters")
+            if not any(k in spec for k in ("enum", "pattern", "list", "path", "paths", "table")):
+                errs.append(f"{where}: ops.{op}.args.{name} has no spec")
+            for k in ("path", "paths"):
+                if k in spec and spec[k] not in ("writable", "managed", "kv"):
+                    errs.append(f"{where}: ops.{op}.args.{name}: {k} must name writable, managed or kv")
+    for p, d in a.get("kv", {}).items():
+        if not re.fullmatch(ETC_PATH, p) or not d.get("keys") or \
+                not all(re.fullmatch(r"[A-Za-z0-9_]+", k) for k in d["keys"]):
+            errs.append(f"{where}: kv.{p!r} needs a path under /etc and plain keys")
+    return errs
+
+
 def check_when(w, adapter, where, errs):
     if not isinstance(w, dict) or len(w) != 1:
         return errs.append(f"{where}: a predicate is a table with exactly one key, got {w!r}")
@@ -57,13 +101,14 @@ def check_when(w, adapter, where, errs):
     elif k == "not":
         check_when(v, adapter, f"{where}.not", errs)
     elif k == "installed":
-        if not re.fullmatch(PKG, str(v)):
+        if not isinstance(v, str) or not re.fullmatch(PKG, v):
             errs.append(f"{where}: bad package name {v!r}")
     elif k == "file":
-        if not re.fullmatch(ETC_PATH, str(v)) or ".." in v:
+        if not isinstance(v, str) or not re.fullmatch(ETC_PATH, v) or ".." in v:
             errs.append(f"{where}: 'file' must be a path under /etc, got {v!r}")
     elif k == "file-contains":
-        if set(v) != {"path", "text"} or not re.fullmatch(ETC_PATH, v["path"]) or "'" in v["text"]:
+        if not isinstance(v, dict) or set(v) != {"path", "text"} or not all(isinstance(x, str) for x in v.values()) \
+                or not re.fullmatch(ETC_PATH, v["path"]) or ".." in v["path"] or "'" in v["text"]:
             errs.append(f"{where}: 'file-contains' needs path (under /etc) and text (no single quotes)")
     else:
         errs.append(f"{where}: unknown predicate {k!r}")
@@ -130,7 +175,7 @@ def check_step(s, adapter, where, errs):
     if "packages" in want:
         if not s["packages"] or not all(re.fullmatch(PKG, p) for p in s["packages"]):
             errs.append(f"{where}: packages must be a non-empty list of package names")
-    force = adapter.get("force", FORCE)
+    force = adapter["force"]
     if op == "force-remove" and not (isinstance(s["force"], list) and set(s["force"]) <= set(force)):
         errs.append(f"{where}: force may only use {sorted(force)}")
     if op == "write-file":
@@ -142,6 +187,16 @@ def check_step(s, adapter, where, errs):
             errs.append(f"{where}: {s['path']} is not on the {adapter['family']} adapter's writable list")
         if "'" in s["content"] or "%" in s["content"]:
             errs.append(f"{where}: write-file content may not contain ' or %")
+    if op in ("kv.set", "kv.unset") and isinstance(s.get("path"), str):
+        kv = adapter.get("kv", {}).get(s["path"])
+        keys = set(s["values"]) if op == "kv.set" and isinstance(s["values"], dict) else set(s.get("keys") or [])
+        if not kv:
+            errs.append(f"{where}: {s['path']} is not on the {adapter['family']} adapter's kv list")
+        else:
+            if op == "kv.set" and not kv.get("set"):
+                errs.append(f"{where}: {s['path']} has sections; kv.set can't write it")
+            if not keys <= set(kv["keys"]):
+                errs.append(f"{where}: {s['path']} only allows keys {kv['keys']}, not {sorted(keys - set(kv['keys']))}")
     if op == "pm-option" and s["option"] not in adapter.get("pm_options", {}):
         errs.append(f"{where}: unknown pm-option {s['option']!r}")
     for a, spec in adapter_ops.get(op, {}).get("args", {}).items():
@@ -205,6 +260,9 @@ def check_route(doc, fixes_by_id, adapters, where):
         errs.append(f"{where}: hops must be every release from {doc['from']} to {doc['to']}: {hops}" +
                     (f" (this adapter lets a route skip {skip})" if skip else ""))
         return errs
+    if doc.get("finish", {}).get("prune_obsolete") and not {"obsolete", "autoremove"} <= set(a.get("hop", {})):
+        errs.append(f"{where}: prune_obsolete needs hop.obsolete and hop.autoremove, which the {a['family']} "
+                    "adapter doesn't have")
     for ref in doc.get("fixes", []):
         f = fixes_by_id.get(ref["id"])
         if not f:
@@ -321,6 +379,8 @@ def main(argv):
             open(p, "w").write(text)
         return 0
     errs = []
+    for fam, a in adapters.items():
+        errs += check_adapter(a, f"adapters/{fam}.toml")
     by_id = {}
     for p, d in fixes.items():
         rel = os.path.relpath(p, ROOT)

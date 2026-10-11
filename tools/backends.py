@@ -44,6 +44,11 @@ def printf(content, path):
 
 class Apt:
     name = "apt"
+    # Everything an adapter may declare for this backend. check.py holds adapters to these lists, so an adapter
+    # can narrow what fixes may do but never widen it past what this file implements.
+    OPS = {"apache.enable", "apache.disable"}
+    FORCE = {"depends", "remove-essential"}
+    PM_OPTIONS = {"overwrite-conflicting-files"}
 
     def hop_vars(self, adapter, release):
         lad, r = adapter["ladder"], adapter["releases"]
@@ -80,7 +85,10 @@ DB_DAEMON = "D=$(ls /usr/libexec/mariadbd /usr/libexec/mysqld /usr/sbin/mariadbd
 DB_DIRS = ("mkdir -p /run/mariadb /run/mysqld /var/log/mariadb; touch /var/log/mariadb/mariadb.log; "
            "chown -R mysql:mysql /run/mariadb /run/mysqld /var/log/mariadb /var/lib/mysql; "
            "rm -f /var/lib/mysql/mysql.sock /var/lib/mysql/*.pid")
-WAIT_SOCK = "i=0; while [ $i -lt 120 ] && [ ! -S /var/lib/mysql/mysql.sock ]; do sleep 1; i=$((i+1)); done"
+WAIT_SOCK = ("[ -n \"$D\" ] || { echo 'no database server installed'; exit 1; }; "
+             "i=0; while [ $i -lt 120 ] && [ ! -S /var/lib/mysql/mysql.sock ]; do sleep 1; i=$((i+1)); done; "
+             "[ -S /var/lib/mysql/mysql.sock ] || { echo 'the database server did not start'; "
+             "tail -n 15 /tmp/wend-db.log; exit 1; }")
 STOP_DB = ("pkill -TERM -x mariadbd; pkill -TERM -x mysqld; i=0; "
            "while pgrep -x 'mariadbd|mysqld' >/dev/null && [ $i -lt 300 ]; do sleep 1; i=$((i+1)); done; "
            "! pgrep -x 'mariadbd|mysqld' >/dev/null")
@@ -102,6 +110,13 @@ def primary_list(base, out):
 
 class Rpm:
     name = "rpm"
+    OPS = {"rpm.swap-release", "rpm.drop-arch", "rpm.bootstrap", "rpm.transit", "rpm.adopt-rpmnew",
+           "rpm.set-aside-unowned", "fs.layout", "kv.set", "kv.unset", "mysql.set-password", "mysql.clean-shutdown",
+           "mysql.upgrade-data", "ssh.generate-host-keys", "httpd.drop-missing-modules", "php.mysqli-report-off"}
+    # no --justdb for fixes: dropping a package from the database while its files stay is how a fix would fake the
+    # pkgdb check. rpm.transit uses it internally, on the previous release's leftovers only.
+    FORCE = {"depends", "scripts"}
+    PM_OPTIONS = set()
 
     def hop_vars(self, adapter, release):
         r = adapter["releases"][release]
@@ -136,7 +151,7 @@ class Rpm:
                     f"grep -v '[.]el{v['major']}' | sort -u); [ -z \"$U\" ] && break; echo removing $U; "
                     "rpm -e --nodeps --noscripts $U; done; test -z \"$(rpm -Va --nofiles --nodigest --noscripts 2>&1)\"")
         if op == "force-remove":
-            flags = {"depends": "--nodeps", "scripts": "--noscripts", "db-only": "--justdb"}
+            flags = {"depends": "--nodeps", "scripts": "--noscripts"}
             return "rpm -e " + "".join(flags[x] + " " for x in s["force"]) + " ".join(s["packages"])
         if op == "write-file":
             return printf(s["content"], s["path"])
@@ -241,20 +256,23 @@ class Rpm:
             f"if [ -d /etc/yum/$d ] && [ ! -L /etc/yum/$d ]; then mv /etc/yum/$d {SAVED}/etc/yum/; fi; done",
             f"dnf -y {o} install yum {reinstall}",
             f"L=$(rpm -qa --qf '%{{NAME}}-%{{VERSION}}-%{{RELEASE}}.%{{ARCH}}\\n' | grep -v '^gpg-pubkey' | grep -v '{tag}' || true); "
-            "[ -z \"$L\" ] || rpm -e --nodeps --noscripts --justdb $L",
+            "[ -z \"$L\" ] || { echo \"dropped from the rpm database (files kept): $L\"; "
+            "rpm -e --nodeps --noscripts --justdb $L; }",
             f"cd /; rm -rf {b}; {CLEAN_REPOS}",
         ])
 
     def op_rpm_adopt_rpmnew(self, s, adapter, release, v, rel):
         """Take the packaged config where rpm left it as .rpmnew; the old file is kept under /var/lib/wend/saved."""
         return (f"for f in {' '.join(s['paths'])}; do [ -f \"$f.rpmnew\" ] || continue; "
-                f"mkdir -p \"{SAVED}$(dirname \"$f\")\"; cp -a \"$f\" \"{SAVED}$f\"; mv -f \"$f.rpmnew\" \"$f\"; "
+                f"mkdir -p \"{SAVED}$(dirname \"$f\")\"; [ -e \"{SAVED}$f\" ] || cp -a \"$f\" \"{SAVED}$f\"; "
+                "mv -f \"$f.rpmnew\" \"$f\"; "
                 "echo adopted $f; done")
 
     def op_rpm_set_aside_unowned(self, s, adapter, release, v, rel):
         """Move config files that no installed package owns (left by packages an older release had) out of the way."""
         return (f"for f in {' '.join(s['paths'])}; do [ -f \"$f\" ] || continue; rpm -qf \"$f\" >/dev/null 2>&1 && "
-                f"continue; mkdir -p \"{SAVED}$(dirname \"$f\")\"; mv -f \"$f\" \"{SAVED}$f\"; echo set aside $f; done")
+                f"continue; mkdir -p \"{SAVED}$(dirname \"$f\")\"; if [ -e \"{SAVED}$f\" ]; then rm -f \"$f\"; "
+                f"else mv -f \"$f\" \"{SAVED}$f\"; fi; echo set aside $f; done")
 
     # ----- fs.* -----
 
@@ -304,20 +322,22 @@ class Rpm:
         the fix, so no password ever lands in a public repo."""
         sql = (f"SET SESSION old_passwords=0; UPDATE mysql.user SET Password=PASSWORD('$P') "
                f"WHERE User='{s['user']}';")
-        return (f"P=$(cat /etc/wend/secrets/{s['secret']}) && printf '%s' \"$P\" | grep -qE '^[A-Za-z0-9_.@%+=-]+$' || "
-                f"{{ echo 'no usable /etc/wend/secrets/{s['secret']}'; exit 1; }}; {STOP_DB}; {DB_DAEMON}; {DB_DIRS}; ($D --user=mysql --skip-grant-tables --skip-networking "
+        return (f"P=$(cat /etc/wend/secrets/{s['secret']} 2>/dev/null); case \"$P\" in ''|*[!A-Za-z0-9_.@%+=-]*) "
+                f"echo 'no usable /etc/wend/secrets/{s['secret']}'; exit 1;; esac; {STOP_DB}; {DB_DAEMON}; {DB_DIRS}; ($D --user=mysql --skip-grant-tables --skip-networking "
                 f">/tmp/wend-db.log 2>&1 &); {WAIT_SOCK}; C=$(command -v mariadb || command -v mysql); "
                 f"$C -uroot -e \"{sql}\"; rc=$?; {STOP_DB} && exit $rc")
 
     def op_mysql_clean_shutdown(self, s, adapter, release, v, rel):
         """Start the server once and stop it with a slow shutdown (innodb_fast_shutdown=0), so the next major
         version finds a clean redo log. MariaDB 10.11 refuses 10.5's redo log otherwise."""
-        return (f"{STOP_DB}; {DB_DAEMON}; {DB_DIRS}; ($D --user=mysql --innodb-fast-shutdown=0 >/tmp/wend-db.log 2>&1 &); "
+        return (f"{STOP_DB}; {DB_DAEMON}; {DB_DIRS}; ($D --user=mysql --skip-networking --innodb-fast-shutdown=0 "
+                ">/tmp/wend-db.log 2>&1 &); "
                 f"{WAIT_SOCK}; sleep 2; {STOP_DB}; rc=$?; tail -n 3 /tmp/wend-db.log; exit $rc")
 
     def op_mysql_upgrade_data(self, s, adapter, release, v, rel):
         """Start the new server on the old data directory once, run its upgrade tool, stop it cleanly."""
-        return (f"{STOP_DB}; {DB_DAEMON}; {DB_DIRS}; ($D --user=mysql >/tmp/wend-db.log 2>&1 &); {WAIT_SOCK}; "
+        return (f"{STOP_DB}; {DB_DAEMON}; {DB_DIRS}; ($D --user=mysql --skip-networking >/tmp/wend-db.log 2>&1 &); "
+                f"{WAIT_SOCK}; "
                 "U=$(command -v mariadb-upgrade || command -v mysql_upgrade); "
                 "if [ -n \"$U\" ]; then $U -uroot --force 2>&1 | tail -n 3; fi; "
                 f"{STOP_DB}; rc=$?; [ $rc = 0 ] || tail -n 15 /tmp/wend-db.log; exit $rc")
