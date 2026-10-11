@@ -174,6 +174,12 @@ try:  # a direct `wend replay` doesn't run check_fix first: the compile refuses 
     bad += 1
 except ValueError:
     print("refused shell in adds at hop compile")
+try:
+    walk.Walk.hop_cmds(w, "alma9", [{**el_good, "adds": "NetworkManager"}])
+    print("WRONG   the hop compile accepted a non-list adds")
+    bad += 1
+except ValueError:
+    print("refused a non-list adds at hop compile")
 el_route = {"schema": "wend.route/0", "family": "el", "from": "centos5", "to": "alma10", "fixes": []}
 for hops, want in ((["centos6", "centos7", "alma9", "alma10"], True), (["centos6", "alma9", "alma10"], False),
                    (["centos6", "centos7", "alma8", "alma9", "alma10"], True), (["centos7", "centos6", "alma10"], False)):

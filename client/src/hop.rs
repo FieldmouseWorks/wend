@@ -130,5 +130,7 @@ mod tests {
         // a direct walk doesn't run the checker first: the compile refuses a non-family itself
         let evil = fix("\"x' ; reboot ; '\"");
         assert!(hop_plan(&a, "alma9", &[&evil]).is_err());
+        let not_list = crate::atlas::parse_toml("hop = \"alma9\"\nadds = \"NetworkManager\"\n").unwrap();
+        assert!(hop_plan(&a, "alma9", &[&not_list]).is_err());
     }
 }
