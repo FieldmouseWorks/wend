@@ -79,6 +79,12 @@ package counts) except timing, the runner line and `log_sha256`, which hashes co
   isn't a list of tables, a `packages` that is a string, an adapter op without an `args` table, floats and dates
   anywhere in a fix or route), several of which Python accepts or crashes on. Parity requires Rust to refuse
   everything Python refuses, and lists what only Rust refuses so tools/check.py can be tightened to match.
+- `walk` refuses a root with filesystems mounted inside it (it can't snapshot them), a work directory that isn't
+  root's alone, and a work directory and root that contain each other. A root that is itself a mount point (a mounted
+  LVM snapshot or disk image) is fine. It never mounts on or writes through a symlink in the root, so a root whose
+  `etc/resolv.conf` is a symlink gets no name service until that's a plain file.
+- Interrupting `walk` mid-hop leaves the root mid-hop. The snapshot of its state before the hop stays in the work
+  directory, and the error says how to restore it. The same goes for any walk that stops on an error.
 - Boxes are CI fixtures the client never sees, so it doesn't check them (or whether a run's box exists).
 - The checker's error messages follow tools/check.py's but aren't identical (Python prints `repr()` of values);
   parity compares verdicts, not wording.

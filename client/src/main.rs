@@ -339,15 +339,23 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
     let checks = walk::Checks::from_doc(&cdoc, a)?;
     let box_id = o.box_id.clone().unwrap_or_else(|| "local".into());
     let root = sandbox::Root::new(std::path::Path::new(root))?;
-    let work = std::path::PathBuf::from(&o.work);
-    std::fs::create_dir_all(&work).map_err(|e| format!("{}: {e}", work.display()))?;
+    let work = sandbox::work_dir(std::path::Path::new(&o.work), &root.dir)?;
     let snap = work.join(format!("snap-{}", std::process::id()));
+    std::fs::create_dir(&snap).map_err(|e| format!("{}: {e}", snap.display()))?;
     eprintln!(
         "walking {rpath} on {} ({} checks); snapshots in {}",
         root.dir.display(),
         checks.checks.len(),
         snap.display()
     );
+    let root_dir = root.dir.clone();
+    if std::fs::symlink_metadata(root_dir.join("etc/resolv.conf")).is_ok_and(|m| m.file_type().is_symlink()) {
+        eprintln!(
+            "note: {}/etc/resolv.conf is a symlink. The client never writes through one, so name lookups inside \
+             the root may fail; replace it with a plain file if they do.",
+            root_dir.display()
+        );
+    }
     let mut w = walk::Walk::new(r, a, atlas.fixes_by_id(), checks, root, snap.clone(), box_id);
     let run = w.walk();
     if let Some(p) = &o.steps {
@@ -356,10 +364,21 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
             serde_json::to_string_pretty(&Value::Array(w.steps().to_vec())).unwrap(),
         );
     }
-    if snap.exists() {
-        sandbox::safe_rm(&snap, &work)?;
-    }
-    let run = run?;
+    let run = match run {
+        Ok(r) => r,
+        // the walk stopped mid-hop: the root may be half-changed, and the snapshot is its last good state
+        Err(e) => {
+            return Err(format!(
+                "{e}\n{} may be mid-hop. Its state before the hop is in {}; restore it with: rsync -aHx \
+                 --delete {}/ {}/",
+                root_dir.display(),
+                snap.display(),
+                snap.display(),
+                root_dir.display()
+            ))
+        }
+    };
+    sandbox::safe_rm(&snap, &work)?;
     let text = serde_json::to_string_pretty(&run).unwrap() + "\n";
     match &o.out {
         Some(p) => std::fs::write(p, &text).map_err(|e| format!("{p}: {e}"))?,

@@ -6,7 +6,8 @@
 //! be snapshotted this way; that needs a snapshot backend (LVM, btrfs, ZFS) and is refused for now.
 
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -41,6 +42,15 @@ pub fn host(cmd: &str) -> (i32, String) {
     }
 }
 
+/// Single-quote a string for sh.
+pub fn q(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// The supplied root itself when it is a mount point (a mounted LVM snapshot or disk image): the client leaves it
+/// mounted. Set once, by Root::new.
+static KEEP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 fn mounts_under(path: &Path) -> Vec<String> {
     let p = path.to_string_lossy().into_owned();
     fs::read_to_string("/proc/mounts")
@@ -48,6 +58,7 @@ fn mounts_under(path: &Path) -> Vec<String> {
         .lines()
         .filter_map(|l| l.split_whitespace().nth(1).map(String::from))
         .filter(|m| *m == p || m.starts_with(&format!("{p}/")))
+        .filter(|m| KEEP.get() != Some(m))
         .collect()
 }
 
@@ -60,7 +71,14 @@ pub fn unmount_all(path: &Path) -> Result<(), String> {
         }
         left.sort_by_key(|m| std::cmp::Reverse(m.len()));
         for m in left {
-            host(&format!("umount '{m}' 2>/dev/null || umount -l '{m}'"));
+            let ok = Command::new("umount")
+                .arg(&m)
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success());
+            if !ok {
+                let _ = Command::new("umount").arg("-l").arg(&m).status();
+            }
         }
     }
     let left = mounts_under(path);
@@ -91,19 +109,68 @@ impl Root {
         if !dir.join("bin/sh").exists() {
             return Err(format!("{} has no bin/sh: not a root filesystem", dir.display()));
         }
-        Ok(Root { dir })
+        let d = dir.to_string_lossy().into_owned();
+        let subs: Vec<String> = mounts_under(&dir).into_iter().filter(|m| *m != d).collect();
+        if !subs.is_empty() {
+            return Err(format!(
+                "{} has filesystems mounted inside it ({}). The client can't snapshot or roll those back: unmount \
+                 them, or copy the machine into one plain directory.",
+                dir.display(),
+                subs.join(", ")
+            ));
+        }
+        if mounts_under(&dir).contains(&d) {
+            let _ = KEEP.set(d);
+        }
+        let r = Root { dir };
+        for m in ["proc", "sys", "dev", "etc"] {
+            r.inside(m)?;
+        }
+        Ok(r)
     }
 
-    fn mount(&self) {
-        let r = self.dir.display();
+    /// A directory inside the root to mount on: it must be a real directory there, not a symlink that would put
+    /// the mount on the host.
+    fn inside(&self, name: &str) -> Result<String, String> {
+        let p = self.dir.join(name);
+        if !p.exists() {
+            fs::create_dir(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+        }
+        let real = fs::canonicalize(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+        let md = fs::symlink_metadata(&p).map_err(|e| e.to_string())?;
+        if real != p || !md.is_dir() {
+            return Err(format!(
+                "{} is not a plain directory inside the root (a symlink?); refusing to mount on it",
+                p.display()
+            ));
+        }
+        Ok(real.to_string_lossy().into_owned())
+    }
+
+    fn mount(&self) -> Result<(), String> {
+        let (proc_, sys, dev) = (self.inside("proc")?, self.inside("sys")?, self.inside("dev")?);
+        let (proc_, sys, dev) = (q(&proc_), q(&sys), q(&dev));
         host(&format!(
-            "mount -t proc proc {r}/proc; mount -t sysfs sys {r}/sys; mount -t tmpfs -o mode=755,size=1m dev {r}/dev; \
-             cd {r}/dev && mknod -m 666 null c 1 3 && mknod -m 666 zero c 1 5 && mknod -m 666 full c 1 7 && \
+            "mount -t proc proc {proc_}; mount -t sysfs sys {sys}; mount -t tmpfs -o mode=755,size=1m dev {dev} && \
+             cd {dev} && mknod -m 666 null c 1 3 && mknod -m 666 zero c 1 5 && mknod -m 666 full c 1 7 && \
              mknod -m 666 random c 1 8 && mknod -m 666 urandom c 1 9 && mknod -m 666 tty c 5 0 && \
-             mkdir pts shm && ln -s /proc/self/fd fd && ln -s fd/0 stdin && ln -s fd/1 stdout && ln -s fd/2 stderr; \
-             mount -t devpts -o newinstance,ptmxmode=0666 devpts {r}/dev/pts && ln -sf pts/ptmx {r}/dev/ptmx; \
-             cp /etc/resolv.conf {r}/etc/resolv.conf 2>/dev/null"
+             mkdir pts shm && ln -s /proc/self/fd fd && ln -s fd/0 stdin && ln -s fd/1 stdout && ln -s fd/2 stderr && \
+             mount -t devpts -o newinstance,ptmxmode=0666 devpts {dev}/pts && ln -sf pts/ptmx {dev}/ptmx"
         ));
+        // the host's resolver for the distro mirrors; never through a symlink (a real machine's resolv.conf often
+        // points into /run, which would be the host's)
+        if let (Ok(src), Ok(etc)) = (fs::read("/etc/resolv.conf"), self.inside("etc")) {
+            let f = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(Path::new(&etc).join("resolv.conf"));
+            if let Ok(mut f) = f {
+                let _ = f.write_all(&src);
+            }
+        }
+        Ok(())
     }
 
     fn umount(&self) -> Result<(), String> {
@@ -126,7 +193,10 @@ impl Root {
     /// Run a shell command inside the root. `isolated`: a network namespace of its own with only loopback, for
     /// checks that start daemons. Exit 124 on timeout, as in tools/sandbox.py.
     pub fn run(&self, cmd: &str, timeout: u64, isolated: bool) -> (i32, String) {
-        self.mount();
+        if let Err(e) = self.mount() {
+            let _ = self.umount();
+            return (125, e);
+        }
         let r = self.run_mounted(cmd, timeout, isolated);
         if let Err(e) = self.umount() {
             return (125, format!("{}\n{e}", r.1));
@@ -183,9 +253,9 @@ impl Root {
         unmount_all(dst)?;
         fs::create_dir_all(dst).map_err(|e| e.to_string())?;
         let (rc, log) = host(&format!(
-            "rsync -aHx --modify-window=-1 --delete '{}/' '{}/'",
-            self.dir.display(),
-            dst.display()
+            "rsync -aHx --modify-window=-1 --delete {} {}",
+            q(&format!("{}/", self.dir.display())),
+            q(&format!("{}/", dst.display()))
         ));
         if rc != 0 {
             return Err(format!(
@@ -215,7 +285,11 @@ fn tempfile() -> Result<(fs::File, PathBuf), String> {
         std::process::id(),
         N.fetch_add(1, Ordering::Relaxed)
     ));
-    fs::File::create(&p)
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&p)
         .map(|f| (f, p.clone()))
         .map_err(|e| format!("{}: {e}", p.display()))
 }
@@ -234,6 +308,33 @@ pub fn safe_rm(path: &Path, work: &Path) -> Result<(), String> {
         ));
     }
     unmount_all(&p)?;
-    host(&format!("rm -rf --one-file-system '{}'", p.display()));
+    let _ = Command::new("rm").arg("-rf").arg("--one-file-system").arg(&p).status();
     Ok(())
+}
+
+/// The work directory holds snapshots of a root, written as root: it must be root's alone (an existing directory
+/// someone else can write to could hold a planted symlink), and it must not be inside the root being walked.
+pub fn work_dir(work: &Path, root: &Path) -> Result<PathBuf, String> {
+    if !work.exists() {
+        fs::create_dir_all(work).map_err(|e| format!("{}: {e}", work.display()))?;
+        fs::set_permissions(work, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .map_err(|e| format!("{}: {e}", work.display()))?;
+    }
+    let md = fs::symlink_metadata(work).map_err(|e| format!("{}: {e}", work.display()))?;
+    if !md.is_dir() || md.uid() != 0 || md.mode() & 0o022 != 0 {
+        return Err(format!(
+            "{} must be a directory owned by root that nobody else can write to",
+            work.display()
+        ));
+    }
+    let w = fs::canonicalize(work).map_err(|e| e.to_string())?;
+    if w.starts_with(root) || root.starts_with(&w) {
+        return Err(format!(
+            "the work directory {} and the root {} must not contain each other (snapshots would copy into \
+             themselves)",
+            w.display(),
+            root.display()
+        ));
+    }
+    Ok(w)
 }

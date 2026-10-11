@@ -19,6 +19,7 @@ pub struct Checks {
     pub checks: Map<String, Value>,
     pub isolate: Vec<String>,
     pub arch: Option<String>,
+    pub release: Option<String>,
 }
 
 impl Checks {
@@ -41,7 +42,13 @@ impl Checks {
             None => vec![],
         };
         let arch = get(doc, "arch").and_then(Value::as_str).map(String::from);
-        Ok(Checks { checks, isolate, arch })
+        let release = get(doc, "release").and_then(Value::as_str).map(String::from);
+        Ok(Checks {
+            checks,
+            isolate,
+            arch,
+            release,
+        })
     }
 }
 
@@ -64,6 +71,7 @@ pub struct Walk<'a> {
     steps: Vec<Value>,
     hops: Vec<Value>,
     t0: Instant,
+    stamp: String,
 }
 
 impl<'a> Walk<'a> {
@@ -93,6 +101,7 @@ impl<'a> Walk<'a> {
             steps: vec![],
             hops: vec![],
             t0: Instant::now(),
+            stamp: host("date +%Y%m%d-%H%M%S").1.trim().to_string(),
         };
         w.health = w.check_health();
         w
@@ -184,6 +193,14 @@ impl<'a> Walk<'a> {
     }
 
     fn installed(&self) -> Vec<String> {
+        let mut v = self.installed_list();
+        v.dedup();
+        v
+    }
+
+    /// The installed list as tools/walk.py fingerprints it: sorted, duplicates kept (multilib rpm lists a name
+    /// once per arch).
+    fn installed_list(&self) -> Vec<String> {
         let cmd = str_of(get(self.adapter, "hop").unwrap_or(&Value::Null), "installed_list").unwrap_or("true");
         let mut v: Vec<String> = self
             .root
@@ -193,7 +210,6 @@ impl<'a> Walk<'a> {
             .map(String::from)
             .collect();
         v.sort();
-        v.dedup();
         v
     }
 
@@ -234,8 +250,8 @@ impl<'a> Walk<'a> {
     pub fn walk(&mut self) -> Result<Value, String> {
         let family = str_of(self.route, "family")?.to_string();
         let start_release = self.health.release.clone();
-        let fp = json!({"family": family, "release": get(self.route, "from").cloned().unwrap_or(Value::Null),
-                        "arch": self.checks.arch.clone().unwrap_or_else(|| "amd64".into()), "installed": self.installed()});
+        let fp = json!({"family": family, "release": self.checks.release.clone().map(Value::String).or_else(|| get(self.route, "from").cloned()),
+                        "arch": self.checks.arch.clone().unwrap_or_else(|| "amd64".into()), "installed": self.installed_list()});
         let fingerprint = format!("sha256:{}", sha256_hex(canonical(&fp).as_bytes()));
         let mut services: Vec<String> = self
             .root
@@ -314,7 +330,7 @@ impl<'a> Walk<'a> {
             "schema": "wend.run/0", "route": content_id(self.route), "box": self.box_id,
             "from": get(self.route, "from"), "to": get(self.route, "to"),
             "result": if complete && failed.is_empty() { "pass" } else { "fail" },
-            "started": host("date +%Y%m%d-%H%M%S").1.trim(), "wall_seconds": self.t0.elapsed().as_secs(),
+            "started": self.stamp, "wall_seconds": self.t0.elapsed().as_secs_f64().round() as u64,
             "start_fingerprint": fingerprint, "runner": runner(), "hops": self.hops, "start_services": services,
             "failed_stage": failed_stage,
             "final": {"release": fin.release, "passed": fin.passed, "failed": failed, "failed_logs": failed_logs},
