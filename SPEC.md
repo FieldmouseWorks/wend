@@ -275,9 +275,12 @@ question 12 says how). One exception: apt 0.9 (wheezy) deletes the `Release` whe
 and keeps only the indexes. Then the hop pins each index it kept, keyed by the path the `Release` lists it under
 (`dists/wheezy/main/binary-amd64/Packages`), with the sha256 of the uncompressed bytes. The `Release` hashes the
 same bytes, so a client fetches whichever compressed form the archive serves and checks it after decompressing.
-An op that fetches through temporary repos the hop then drops (`rpm.transit`) keeps their metadata files under
-`/var/lib/wend/sources/<hop>/`, so the hop pins those too. The harness writes `sources` from the files it refreshed. A run without them proves the route
-against whatever the mirrors held that day and nothing more.
+A hop records only its own release's repos: yum and dnf leave the caches of disabled repos behind, so a cache from
+an earlier hop says nothing about this one. An op that fetches through temporary repos the hop then drops
+(`rpm.transit`) keeps their metadata under `/var/lib/wend/sources/<hop>/`, so the hop pins those too. A file fetched
+outside any repo (`rpm.bootstrap`'s 7-Zip RPMs) is pinned by sha256 in the adapter: the op refuses other bytes, and
+the hop records it by its URL. The harness writes `sources` from the files it refreshed. A run without them proves the
+route against whatever the mirrors held that day and nothing more.
 
 A discovery run records which model was used and how many calls it made. Replays record `model_calls: 0`. CI only
 ever replays.

@@ -492,6 +492,18 @@ fn drop_arch(s: &Value) -> Result<String, String> {
 
 /// EL5 -> EL6: rpm 4.4 can't read xz payloads and yum 3.2.22 can't check sha256 repodata. Unpack EL6's rpm/yum/
 /// python stack over / with 7-Zip, then let the new rpm rebuild its database.
+/// rpm.bootstrap's 7-Zip RPMs for a release, by their origin URL: (url, "sha256:..."), in the adapter's order.
+pub fn bootstrap_pins(adapter: &Doc, release: &str) -> Result<Vec<(String, String)>, String> {
+    let Some(boot) = get(release_of(adapter, release)?, "bootstrap") else {
+        return Ok(vec![]);
+    };
+    let repo = str_of(boot, "p7zip_repo")?;
+    Ok(table(boot, "p7zip")?
+        .iter()
+        .map(|(f, h)| (format!("https://{repo}/{f}"), scalar(h)))
+        .collect())
+}
+
 fn bootstrap(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
     let target = str_of(s, "release")?;
     let trel = release_of(adapter, target)?;
@@ -499,13 +511,32 @@ fn bootstrap(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
     let (shim, b) = (var(v, "shim"), "/var/lib/wend/boot");
     let base = format!("{shim}/{}", first_repo(trel)?);
     let p7 = format!("{shim}/{}", str_of(boot, "p7zip_repo")?);
-    let p7zip = list_of(boot, "p7zip")?.join(" ");
+    let pins = table(boot, "p7zip")?;
+    let p7zip = pins.keys().cloned().collect::<Vec<_>>().join(" ");
     let pkgs = list_of(boot, "packages")?.join(" ");
+    let sources = format!("{SOURCES}/{}", var(v, "release"));
     Ok([
         format!("set -e; rm -rf {b}; mkdir -p {b}/x; cd {b}"),
         primary_list(&base, &format!("{b}/list")),
         format!(
             "for f in {p7zip}; do curl -sf -O {p7}/$f || curl -sf -O {p7}/Packages/$f || curl -sf -O {p7}/Packages/p/$f; done"
+        ),
+        // nothing vouches for these but the adapter's pins: refuse other bytes, and record them (Walk::sources)
+        pins.iter()
+            .map(|(f, h)| {
+                let h = scalar(h);
+                let h = h.strip_prefix("sha256:").unwrap_or(&h);
+                format!("echo '{h}  {f}' | sha256sum -c - >/dev/null || {{ echo 'digest mismatch: {f}'; exit 1; }}")
+            })
+            .collect::<Vec<_>>()
+            .join("; "),
+        format!(
+            "mkdir -p {sources}; printf '%s %s\\n' {} > {sources}/fetched",
+            bootstrap_pins(adapter, target)?
+                .iter()
+                .map(|(u, h)| format!("{u} {h}"))
+                .collect::<Vec<_>>()
+                .join(" ")
         ),
         format!("rpm -Uvh --nosignature {p7zip}"),
         format!(

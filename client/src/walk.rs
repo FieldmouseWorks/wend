@@ -4,7 +4,7 @@
 //! stops there. The run it writes has the same shape as the Python harness's (tools/walk.py).
 
 use crate::atlas::{get, list_of, str_of, Doc};
-use crate::backend::{backend_of, fill, hop_vars, pred_sh, step, SOURCES};
+use crate::backend::{backend_of, bootstrap_pins, fill, hop_vars, pred_sh, step, SOURCES};
 use crate::canon::{canonical, content_id, sha256_hex};
 use crate::hop::{hop_plan, pinned};
 use crate::sandbox::{host, tail, Root};
@@ -433,6 +433,26 @@ impl<'a> Walk<'a> {
                     }
                 }
                 let kept = root.join(SOURCES.trim_start_matches('/')).join(hop);
+                // a fetched line counts only if it is one of the adapter's own pins
+                let mut pins = BTreeMap::new();
+                for rel in get(self.adapter, "releases")
+                    .and_then(Value::as_object)
+                    .into_iter()
+                    .flatten()
+                    .map(|(k, _)| k)
+                {
+                    pins.extend(bootstrap_pins(self.adapter, rel)?);
+                }
+                let fetched = kept.join("fetched");
+                if file_sha256(root, &fetched).is_some() {
+                    let text = std::fs::read_to_string(&fetched).map_err(|e| format!("{}: {e}", fetched.display()))?;
+                    for line in text.lines() {
+                        let (u, h) = line.trim().split_once(' ').unwrap_or((line.trim(), ""));
+                        if pins.get(u).is_some_and(|p| p == h) {
+                            out.insert(u.to_string(), h.to_string());
+                        }
+                    }
+                }
                 if dirs_under(root, &kept).first() == Some(&kept) {
                     for e in std::fs::read_dir(&kept)
                         .map_err(|e| format!("{}: {e}", kept.display()))?
@@ -462,7 +482,11 @@ impl<'a> Walk<'a> {
                         } else {
                             d.join("repodata/repomd.xml")
                         };
-                        if let Some(url) = ids.get(&rid).filter(|_| yum || rid != name) {
+                        // only this hop's repos: yum and dnf "clean all" skip disabled repos, so older caches stay
+                        if let Some(url) = ids
+                            .get(&rid)
+                            .filter(|_| rid.starts_with(&format!("{hop}-")) && (yum || rid != name))
+                        {
                             if let Some(h) = file_sha256(root, &p) {
                                 out.insert(url.clone(), h);
                             }

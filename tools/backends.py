@@ -146,6 +146,12 @@ def primary_list(base, out):
             f"rm -f {out}.gz && test -s {out} || {{ echo 'no package list from {base}'; exit 1; }}")
 
 
+def bootstrap_pins(adapter, release):
+    """rpm.bootstrap's 7-Zip RPMs for a release, by their origin URL: {url: "sha256:..."}."""
+    boot = adapter["releases"][release].get("bootstrap")
+    return {f"https://{boot['p7zip_repo']}/{f}": h for f, h in boot["p7zip"].items()} if boot else {}
+
+
 class Rpm:
     name = "rpm"
     OPS = {"rpm.swap-release", "rpm.drop-arch", "rpm.bootstrap", "rpm.transit", "rpm.adopt-rpmnew",
@@ -171,6 +177,13 @@ class Rpm:
                     ids[f"boot-{n}"] = f"https://{u}/repodata/repomd.xml"
         out = {}
         kept = f"{root}{SOURCES}/{release}"
+        pins = {u: h for r in adapter["releases"] for u, h in bootstrap_pins(adapter, r).items()}
+        f = f"{kept}/fetched"
+        if file_sha256(root, f):  # a line counts only if it is one of the adapter's own pins
+            with open(f) as fh:
+                for u, _, h in (line.strip().partition(" ") for line in fh):
+                    if pins.get(u) == h:
+                        out[u] = h
         if plain_dir(root, kept):
             for n in os.listdir(kept):
                 h = file_sha256(root, f"{kept}/{n}") if n.endswith(".repomd.xml") else None
@@ -181,7 +194,8 @@ class Rpm:
                 name = os.path.basename(d)
                 rid = name if layout == "yum" else re.sub(r"-[0-9a-f]{16}$", "", name)
                 p = f"{d}/repomd.xml" if layout == "yum" else f"{d}/repodata/repomd.xml"
-                if rid in ids and (layout == "yum" or rid != name):
+                # only this hop's repos: yum and dnf "clean all" skip disabled repos, so older caches stay behind
+                if rid in ids and rid.startswith(f"{release}-") and (layout == "yum" or rid != name):
                     h = file_sha256(root, p)
                     if h:
                         out[ids[rid]] = h
@@ -270,6 +284,12 @@ class Rpm:
             primary_list(base, f"{b}/list"),
             f"for f in {' '.join(boot['p7zip'])}; do curl -sf -O {p7}/$f || curl -sf -O {p7}/Packages/$f || "
             f"curl -sf -O {p7}/Packages/p/$f; done",
+            # nothing vouches for these but the adapter's pins: refuse other bytes, and record them (Rpm.sources)
+            "; ".join(f"echo '{h.removeprefix('sha256:')}  {f}' | sha256sum -c - >/dev/null || "
+                      f"{{ echo 'digest mismatch: {f}'; exit 1; }}" for f, h in boot["p7zip"].items()),
+            f"mkdir -p {SOURCES}/{v['release']}; printf '%s %s\\n' "
+            + " ".join(f"{u} {h}" for u, h in bootstrap_pins(adapter, target).items())
+            + f" > {SOURCES}/{v['release']}/fetched",
             f"rpm -Uvh --nosignature {' '.join(boot['p7zip'])}",
             f"for n in {pkgs}; do f=$(grep -E \"^$n-[0-9][^-]*-[^-]*\\.(x86_64|noarch)\\.rpm$\" {b}/list | head -n1); "
             f"[ -n \"$f\" ] || {{ echo MISSING $n; continue; }}; curl -sf -O {base}/Packages/$f; done",
