@@ -24,6 +24,10 @@ id = "sha256:0c7ee7437e09c8f1175fd2ec9d74aa7f260575a3daf2107699e59f8e8bca1248"
 name = "httpd22-drop-missing-modules"
 
 [[fixes]]
+id = "sha256:397a077d5ce43514ebee2d4c21a0237c9cf4278ca621c4c7bc7bcdd05ea980a6"
+name = "el7-carry-boot-services"
+
+[[fixes]]
 id = "sha256:cfcc9948ba7c45b32e6b5deaae2d48b742000cd06db1f17a33c0f7b4f4ea3401"
 name = "el7-usrmove"
 
@@ -92,6 +96,14 @@ id = "sha256:e8702cb424e0a946035342b9f09dd72dd3bebec98a8fe865b01818086ef02e6f"
 name = "vsftpd-drop-tcp-wrappers"
 
 [[fixes]]
+id = "sha256:645af92e570ed65e10a8d48297fcc9012a6a2e7723cceb4eac2084a73a27522d"
+name = "el9-carry-boot-services"
+
+[[fixes]]
+id = "sha256:556ad7e8b1bfbbabb4c90f12396901dee97680bbb101e0854b1a31e628c1783d"
+name = "el9-enable-php-fpm"
+
+[[fixes]]
 id = "sha256:78137ec7ec6f5a60306d6a0e9fc96233b3c27300458e41ff1e13ca6e00ddd207"
 name = "mariadb-slow-shutdown-alma10"
 
@@ -110,4 +122,4 @@ name = "php81-mysqli-report-off"
 [meta]
 name = "centos5-to-alma10"
 summary = "CentOS 5.11 (2007 lineage) to AlmaLinux 10, through EL8 in one hop, proven on a web/database box and a DNS/FTP box"
-note = "Proven in chroots, userland only: services are not enabled at boot. CentOS 5's chkconfig settings don't carry over to systemd units, so after a real reboot httpd, php-fpm, mariadb, named and vsftpd stay down until enabled by hand (systemctl enable)."
+note = "Proven in chroots, userland only. Boot-time enablement is carried for httpd, mariadb, php-fpm, named, vsftpd, sshd, postfix and crond wherever they started in runlevel 3 on CentOS 5 (el7-carry-boot-services, el9-carry-boot-services, el9-enable-php-fpm), and checked offline. Not carried and not checked: networking (EL9 has no network-scripts; whether NetworkManager comes up is untested), the iptables firewall and other base services. No kernel, bootloader or real reboot is tested (#13)."
