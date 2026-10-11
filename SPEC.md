@@ -258,9 +258,21 @@ Written by CI. JSON, because no human edits it.
 }
 ```
 
-`sources` is reserved: a table of repo URL to the sha256 of the repo metadata the run used (`Release` on Debian,
-`repomd.xml` on EL), so a later replay can tell whether the mirror it sees is the one the run proved. Nothing writes
-it yet. Live EL mirrors change under a route, so this is likely the next field a run gains.
+**Pinned sources.** Each hop records the repo metadata it ran against:
+
+```json
+"hops": [{"to": "alma9", "...": "...",
+          "sources": {"https://repo.almalinux.org/almalinux/9.8/BaseOS/x86_64/os/repodata/repomd.xml": "sha256:9f2c...",
+                      "https://repo.almalinux.org/almalinux/9.8/AppStream/x86_64/os/repodata/repomd.xml": "sha256:41ab..."}}]
+```
+
+A key is the origin URL of the repo's top metadata file (`dists/<suite>/Release` on apt, `repodata/repomd.xml` on
+rpm), with any harness shim prefix stripped. A value is the sha256 of the bytes the hop's refresh read. That one hash
+pins everything under it: `Release` lists the hash of every `Packages` index and `repomd.xml` the hash of
+`primary.xml`, and those list a checksum for every package. So a run pins the exact package set its route proved
+without listing thousands of packages, and a client can verify any package from any source against it (open
+question 12 says how). The harness writes `sources` from the files it refreshed. A run without them proves the route
+against whatever the mirrors held that day and nothing more.
 
 A discovery run records which model was used and how many calls it made. Replays record `model_calls: 0`. CI only
 ever replays.
@@ -653,10 +665,25 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
 11. **The family map.** Move it from box checks into the adapter (a `[families]` table of renames), so a client can
     compute name families for its fingerprint hint and services check without a box? Probably yes; nothing reads it
     outside boxes yet.
-12. **Pinning what a route installs.** A run proves a route against the mirror state it saw, and live EL mirrors
-    move under it (AlmaLinux 9 and 10 keep publishing updates). Runs reserve `sources` for repo-metadata hashes; the next step
-    is recording the sha256 of every package a run installed, so a client can fetch and verify a whole route before
-    the first hop and fall back across mirrors and archives for exactly those files. Not written yet: the harness
-    would need to record downloads per run, which the shared mirror cache doesn't do today. Until then integrity
-    rests on TLS to the mirrors and the shim's cache: EL repos run with `gpgcheck=0` (CentOS 5's keys can't check
-    what comes later), and the shim keeps only complete downloads and checks hash-named metadata against its name.
+12. **Pinning what a route installs.** Proposed answer: pin repo metadata, not package lists. Each hop's run record
+    carries `sources` (see Run), the sha256 of every repo's top metadata file. Packages are verified through the
+    chain under it: `Release` (or `repomd.xml`) → index → the package's own checksum. The chain uses the strongest
+    hash each level carries. Etch's indexes already carry SHA256. CentOS 5's `primary.xml` carries only SHA-1, which
+    still resists a forged package (that takes a second preimage, not a collision), and the top of every chain is
+    our own sha256.
+    - **Archive.** CI keeps, keyed by sha256, every metadata file a passing run pinned and every package it
+      downloaded. That's the pinned tier of the vision doc: never evicted while a proven route references it. The
+      download list is a CI artifact, not part of the run file.
+    - **Fallback chain.** A client fetches each file by its expected hash from a list of sources in order: local
+      cache, an org cache, the wend archive, the origin, then mirrors. The first bytes that hash right win. A source
+      that serves wrong bytes is skipped, not trusted.
+    - **Before the first hop.** The client walks a copy of the machine first (what `wend walk --root` does today).
+      That walk fetches through the chain into a local cache, verifying everything. The walk on the machine itself
+      then installs only from that cache, offline, so a mirror going down mid-upgrade can't strand it.
+    - **Moved mirrors.** When the pinned metadata isn't available from any source (a live mirror moved on and no
+      archive holds that snapshot), the client stops before touching anything. It walks against today's mirrors only
+      when asked to (`--live`), and its run then records the new `sources`, so the mismatch is visible.
+    - **Order of work.** The harness records `sources` and CI uploads the download list. Then the archive. Then the
+      client's verifying cache. Until the harness records `sources`, integrity rests on TLS to the mirrors and the
+      shim's cache: EL repos run with `gpgcheck=0` (CentOS 5's keys can't check what comes later), and the shim
+      keeps only complete downloads and checks hash-named metadata against its name.
