@@ -41,14 +41,9 @@ op = "service.enable"
 unit = "crond"
 like = ["crond"]
 
-[[post]]
-op = "service.enable"
-unit = "php-fpm"
-like = ["httpd"]
-
 [meta]
 name = "el9-carry-boot-services"
 author = "claude (wend#6)"
 source = "wend#6"
-note = "EL9 brings php-fpm (new, preset disabled; the site needs it whenever httpd runs), and the EL8 transit and the reinstalls on this hop drop enablement links. Enables each unit again whose service started on the original box (the record from el7-carry-boot-services) or is enabled now."
+note = "Enables each unit again whose service started on the original box (the record from el7-carry-boot-services) or is enabled now: the reinstalls on this hop (el9-php-fpm-stack, el9-mariadb-server) drop their enablement links. php-fpm is el9-enable-php-fpm."
 fires_on = ["el/centos5-dns", "el/centos5-web"]
