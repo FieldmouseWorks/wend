@@ -675,8 +675,8 @@ start, or when a check that passed before it fails after the reboot. Its disk an
 The VM box differs from the chroot box in ways a replay can show: it has what the installer adds (`@core`, a kernel, a
 bootloader, a 200 MB `/boot`), SELinux is permissive and the firewall off (kickstart `selinux --permissive`,
 `firewall --disabled`), and `customize` runs before the release's last updates, not after. The kickstart is EL5's
-format for now. Its static address is not the one QEMU's DHCP hands out, so a box that falls back to DHCP shows up
-as a changed network.
+format for now. Its static address is not the one QEMU's DHCP hands out and the forwards point at it, so a box that
+falls back to DHCP is unreachable and fails the hop.
 
 The rules:
 

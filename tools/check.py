@@ -308,9 +308,10 @@ def check_box(doc, adapters, where):
     vm = doc.get("vm", {})  # tools/vm.py (SPEC "VM tier")
     if not isinstance(vm, dict) or set(vm) - {"ssh_port", "skip", "live"}:
         errs.append(f"{where}: [vm] takes only ssh_port, skip and live")
-    elif not isinstance(vm.get("ssh_port", 22), int) or \
-            not isinstance(vm.get("skip", []), list) or not set(vm.get("skip", [])) <= set(doc.get("roles", {})) or \
-            not isinstance(vm.get("live", {}), dict) or not all(isinstance(c, str) for c in vm.get("live", {}).values()):
+    elif type(vm.get("ssh_port", 22)) is not int or not 0 < vm.get("ssh_port", 22) < 65536 or \
+            not isinstance(vm.get("skip", []), list) or not all(isinstance(r, str) for r in vm.get("skip", [])) or \
+            not set(vm.get("skip", [])) <= set(doc.get("roles", {})) or not isinstance(vm.get("live", {}), dict) or \
+            not all(isinstance(c, str) and c.strip() for c in vm.get("live", {}).values()):
         errs.append(f"{where}: [vm] needs an integer ssh_port, skip naming roles the box has, and live as shell strings")
     return errs
 

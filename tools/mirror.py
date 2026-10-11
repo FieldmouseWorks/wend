@@ -10,6 +10,7 @@ Started by tools/sandbox.py when an adapter has a [mirror] table. Standard libra
 import hashlib
 import http.server
 import os
+import re
 import shutil
 import sys
 import threading
@@ -50,7 +51,7 @@ def byte_range(header, size):
     if not header.startswith("bytes=") or "," in header:
         return None
     a, dash, b = header[6:].strip().partition("-")
-    if not dash or not (a or b) or not (a + b).isdigit():
+    if not dash or not (a or b) or not re.fullmatch(r"[0-9]+", a + b):
         return None
     if a:
         start, end = int(a), min(int(b), size - 1) if b else size - 1

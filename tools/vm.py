@@ -21,6 +21,7 @@ import hashlib
 import http.server
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -39,8 +40,8 @@ import walk  # noqa: E402
 WORK = os.path.join(sandbox.WORK, "vm")
 GUEST_HOST = "10.0.2.2"  # the host, as QEMU user-mode networking shows it to the guest
 MAC = "52:54:00:12:34:56"
-# The box's static address. Not 10.0.2.15, which slirp's DHCP hands out: a box that falls back to DHCP must show up
-# as a changed network, not pass because DHCP happened to give the same address.
+# The box's static address. Not 10.0.2.15, which slirp's DHCP hands out: the forwards point here, so a box that falls
+# back to DHCP is unreachable and fails the hop, instead of passing because DHCP happened to give the same address.
 ADDR = "10.0.2.20"
 SSH_FWD, HTTP_FWD = 10022, 10080
 ENV = "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C HOME=/root TERM=dumb; umask 022; "
@@ -125,14 +126,15 @@ class Guest:
         if before is None:  # can't prove a reboot without the boot we started from
             return False, False
         self.ssh("sync; (sleep 2; reboot) >/dev/null 2>&1 &", timeout=30)
-        forced, t = False, time.time()
+        forced, t, last = False, time.time(), before
         while time.time() - t < 120:
             time.sleep(10)
-            if self.boot_id() not in (None, before):
+            last = self.boot_id()
+            if last not in (None, before):
                 break
             if not self.running():
                 return False, False
-        else:
+        if last == before:  # the old boot still answers after two minutes: `reboot` did nothing
             forced = True
             self.ssh("sync; echo 1 > /proc/sys/kernel/sysrq; echo s > /proc/sysrq-trigger; sleep 2; "
                      "echo u > /proc/sysrq-trigger; sleep 2; (sleep 1; echo b > /proc/sysrq-trigger) >/dev/null 2>&1 &",
@@ -326,7 +328,7 @@ def replay(route_path, box_id):
         matched = []
         for f in (f for f in pinned if f["hop"] == hop):
             rc = g.ssh(f"{backends.pred_sh(f['when'], a)} >/dev/null 2>&1")[0]
-            if rc == 255:  # ssh itself failed: not an answer about the precondition
+            if rc in (124, 255):  # ssh itself failed or timed out: not an answer about the precondition
                 raise RuntimeError(f"couldn't evaluate {f['meta']['name']}'s precondition: ssh failed")
             if rc == 0:
                 matched.append(f)
@@ -379,6 +381,8 @@ def main(args):
 
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # through the finally below, like Ctrl-C
+    signal.signal(signal.SIGHUP, lambda *_: sys.exit(129))
     try:
         sys.exit(main(sys.argv[1:]))
     finally:

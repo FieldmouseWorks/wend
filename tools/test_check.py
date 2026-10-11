@@ -201,4 +201,16 @@ ok = (body[0] == "let mask = RootUmask::set();" and "drop(mask);" in code
       and code.index("drop(mask);") < code.index("&o.steps") < code.index("&o.out"))
 print(("passed  " if ok else "WRONG   ") + "client cmd_walk walks under RootUmask, drops it before --steps and --out")
 bad += not ok
+# a box's [vm] table (tools/vm.py): only ssh_port, skip and live, each well formed
+web = check.load_all()[3]["el/centos5-web"]
+for name, vm, want in (("the web box's own [vm]", web.get("vm", {}), False),
+                       ("[vm] skip names a role the box doesn't have", {**web["vm"], "skip": ["dbb"]}, True),
+                       ("[vm] skip holds a list", {**web["vm"], "skip": [["db"]]}, True),
+                       ("[vm] ssh_port as a bool", {**web["vm"], "ssh_port": True}, True),
+                       ("[vm] ssh_port out of range", {**web["vm"], "ssh_port": 70000}, True),
+                       ("[vm] an empty live check", {**web["vm"], "live": {"x": ""}}, True),
+                       ("[vm] an unknown key", {**web["vm"], "hostname": "x"}, True)):
+    errs = check.check_box({**web, "vm": vm}, adapters, "boxes/el/centos5-web/box.toml")
+    print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
+    bad += bool(errs) != want
 sys.exit(1 if bad else 0)
