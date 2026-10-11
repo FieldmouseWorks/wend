@@ -51,6 +51,7 @@ def installed_families(doc):
     return {family(p) for s in steps for p in (s.get("packages", []) if s.get("op") == "install" else
                                                s.get("reinstall") or []) if isinstance(p, str)}
 
+
 def canonical(obj):
     """Canonical JSON: sorted keys, no whitespace, UTF-8. TOML is the authoring format; ids hash this."""
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()

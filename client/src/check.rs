@@ -16,10 +16,9 @@ use std::sync::Mutex;
 /// a name family: no digits or dots, nothing from the first "-" on (SPEC "restores and adds")
 pub const FAMILY: &str = r"[A-Za-z_+]+";
 
-/// A package's name family (SPEC "restores and adds"): digits and dots removed, nothing from the first "-" on.
+/// The families of the packages a fix's own steps install (install, or a transit's reinstall): what its adds may
+/// name. The checker and the hop compiler both use it, so a direct walk holds a fix to the same rule.
 pub fn installed_families(doc: &Value) -> BTreeSet<String> {
-    // the families of the packages a fix's own steps install (install, or a transit's reinstall): what its adds may
-    // name. The checker and the hop compiler both use it, so a direct walk holds a fix to the same rule
     ["pre", "post"]
         .iter()
         .flat_map(|ph| get(doc, ph).and_then(Value::as_array).cloned().unwrap_or_default())
@@ -35,6 +34,7 @@ pub fn installed_families(doc: &Value) -> BTreeSet<String> {
         .collect()
 }
 
+/// A package's name family (SPEC "restores and adds"): digits and dots removed, nothing from the first "-" on.
 pub fn name_family(pkg: &str) -> String {
     let s: String = pkg.chars().filter(|c| !c.is_ascii_digit() && *c != '.').collect();
     s.split('-').next().unwrap_or_default().to_string()
