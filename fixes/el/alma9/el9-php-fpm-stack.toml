@@ -15,5 +15,5 @@ name = "el9-php-fpm-stack"
 author = "claude-opus-5-5 medium (dep-lab guided run A)"
 curated_by = "claude (wend port to typed ops)"
 source = "dep-lab centos/fixes-v3.json: a9-install-web-php"
-note = "EL9 has no mod_php: PHP runs as php-fpm behind httpd. php-fpm is installed but not enabled at boot (the route proves userland only): run systemctl enable php-fpm httpd after a real upgrade."
+note = "EL9 has no mod_php: PHP runs as php-fpm behind httpd. el9-enable-php-fpm enables php-fpm at boot wherever httpd starts."
 fires_on = ["el/centos5-web"]
