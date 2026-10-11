@@ -8,6 +8,8 @@ base branch. A PR can't change what an op does; it can only propose a new op, wh
   apt  (adapters/debian.toml)  compiles byte-for-byte to the commands dep-lab's ol.py ran (tools/port_oldlinux.py)
   rpm  (adapters/el.toml)      the CentOS 5 -> AlmaLinux 10 work from dep-lab's co.py, recut into typed ops
 """
+import hashlib
+import os
 import re
 
 
@@ -15,6 +17,14 @@ def fill(template, values):
     """{name} placeholders only. Not str.format: templates are shell and contain ${...} and %{...}."""
     return re.sub(r"\{([a-z_]+)\}", lambda m: str(values[m.group(1)]) if m.group(1) in values else m.group(0),
                   template)
+
+
+def file_sha256(path):
+    """sha256 of a regular file inside a root (never through a symlink), or None."""
+    if os.path.islink(path) or not os.path.isfile(path):
+        return None
+    with open(path, "rb") as f:
+        return "sha256:" + hashlib.sha256(f.read()).hexdigest()
 
 
 def pred_sh(w, adapter):
@@ -52,6 +62,13 @@ class Apt:
     OPS = {"apache.enable", "apache.disable"}
     FORCE = {"depends", "remove-essential"}
     PM_OPTIONS = {"overwrite-conflicting-files"}
+
+    def sources(self, root, adapter, release):
+        """SPEC.md "Pinned sources": the Release/InRelease file apt read for this hop, by its origin URL."""
+        url = f"{self.hop_vars(adapter, release)['mirror']}/dists/{release}"
+        stem = re.sub(r"^[a-z]+://", "", url).replace("/", "_")
+        found = {f"{url}/{n}": file_sha256(f"{root}/var/lib/apt/lists/{stem}_{n}") for n in ("InRelease", "Release")}
+        return {u: h for u, h in found.items() if h}
 
     def hop_vars(self, adapter, release):
         lad, r = adapter["ladder"], adapter["releases"]
@@ -122,6 +139,23 @@ class Rpm:
     # pkgdb check. rpm.transit uses it internally, on the previous release's leftovers only.
     FORCE = {"depends", "scripts"}
     PM_OPTIONS = set()
+
+    def sources(self, root, adapter, release):
+        """SPEC.md "Pinned sources": every repomd.xml yum or dnf cached this hop, by its origin URL. The harness's
+        repo ids are <release>-<name> (repo_file), so a cache directory names the repo it came from."""
+        ids = {f"{rel}-{n}": f"https://{u}/repodata/repomd.xml"
+               for rel, r in adapter["releases"].items() for n, u in r.get("repos", {}).items()}
+        out = {}
+        for top, layout in ((f"{root}/var/cache/yum", "yum"), (f"{root}/var/cache/dnf", "dnf")):
+            for d, dirs, files in os.walk(top):  # never follows symlinks
+                name = os.path.basename(d)
+                rid = name if layout == "yum" else re.sub(r"-[0-9a-f]{16}$", "", name)
+                p = f"{d}/repomd.xml" if layout == "yum" else f"{d}/repodata/repomd.xml"
+                if rid in ids and (layout == "yum" or rid != name):
+                    h = file_sha256(p)
+                    if h:
+                        out[ids[rid]] = h
+        return dict(sorted(out.items()))
 
     def hop_vars(self, adapter, release):
         r = adapter["releases"][release]

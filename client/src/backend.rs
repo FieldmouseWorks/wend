@@ -86,7 +86,7 @@ fn printf(content: &str, path: &str) -> String {
     )
 }
 
-fn backend_of(adapter: &Doc) -> &str {
+pub fn backend_of(adapter: &Doc) -> &str {
     get(adapter, "backend").and_then(Value::as_str).unwrap_or("apt")
 }
 
