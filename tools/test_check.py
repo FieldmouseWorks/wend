@@ -138,7 +138,8 @@ for name, fix, want in (("NetworkManager install and enable", nm, False),
 # adds: a family, never shell; the harness records the fired fixes' families after the post steps (SPEC "restores and adds").
 # The same command string is asserted in client/src/hop.rs's tests, so both engines write it byte for byte.
 for name, adds, want in (("adds a name family", ["NetworkManager"], False), ("shell in adds", ["x' >> /etc/passwd; '"], True),
-                         ("digits in adds (not a family)", ["php5"], True)):
+                         ("digits in adds (not a family)", ["php5"], True),
+                         ("adds not a list", "NetworkManager", True)):
     errs = check.check_fix({**el_good, "adds": adds}, adapters, "fixes/el/alma9/t.toml")
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
