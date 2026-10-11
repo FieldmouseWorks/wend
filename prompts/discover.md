@@ -24,6 +24,7 @@ Precondition (`when`): one JSON object with exactly one key:
 - `{{"installed": "pkg"}}`: the package is installed right now
 - `{{"file": "/etc/..."}}`: the file exists
 - `{{"file-contains": {{"path": "/etc/...", "text": "literal"}}}}`
+- `{{"mysql-option": {{"path": "/etc/my.cnf", "key": "datadir", "value": "/var/lib/mysql"}}}}`: the server's effective option, exactly (omit `value` for "is set")
 - `{{"not": {{...}}}}`, `{{"all": [...]}}`, `{{"any": [...]}}`
 
 Steps (`pre` and `post`), each one object with `op` and exactly these keys:

@@ -24,6 +24,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 PKG = r"[a-z0-9][a-z0-9.+-]*"
 ETC_PATH = r"/etc/[A-Za-z0-9_./-]+"
+MYSQL_KEY = r"[a-z][a-z0-9-]*"
+MYSQL_VALUE = r"[A-Za-z0-9_./:,@+-]*"
 ETC_GLOB = r"/etc/[A-Za-z0-9_./*-]+"
 CORE_OPS = {"install", "remove", "repair", "force-remove", "write-file", "pm-option"}
 # Characters no adapter argument pattern may accept: values land in root shell commands.
@@ -113,6 +115,13 @@ def check_when(w, adapter, where, errs):
         if not isinstance(v, dict) or set(v) != {"path", "text"} or not all(isinstance(x, str) for x in v.values()) \
                 or not re.fullmatch(ETC_PATH, v["path"]) or ".." in v["path"] or "'" in v["text"]:
             errs.append(f"{where}: 'file-contains' needs path (under /etc) and text (no single quotes)")
+    elif k == "mysql-option":
+        if not isinstance(v, dict) or not {"path", "key"} <= set(v) <= {"path", "key", "value"} \
+                or not all(isinstance(x, str) for x in v.values()) \
+                or not re.fullmatch(ETC_PATH, v["path"]) or ".." in v["path"] \
+                or not re.fullmatch(MYSQL_KEY, v["key"]) or not re.fullmatch(MYSQL_VALUE, v.get("value", "")):
+            errs.append(f"{where}: 'mysql-option' needs path (under /etc), key (lowercase, dashed) and optionally "
+                        "value (no quotes, backslashes or spaces)")
     else:
         errs.append(f"{where}: unknown predicate {k!r}")
 
@@ -353,7 +362,10 @@ def compile_fix(doc, adapter):
            "post": [compile_step(s, adapter, doc["hop"]) for s in doc.get("post", [])]}
     if adapter.get("backend", "apt") != "apt":
         return {"when": backends.pred_sh(doc["when"], adapter), **out}
-    return {"when": compile_when(doc["when"]), **out}
+    try:
+        return {"when": compile_when(doc["when"]), **out}  # ol.py's form, for the port's round-trip proof
+    except ValueError:  # all/any, mysql-option: no ol.py form, so the adapter's template
+        return {"when": backends.pred_sh(doc["when"], adapter), **out}
 
 
 # ---------- main ----------

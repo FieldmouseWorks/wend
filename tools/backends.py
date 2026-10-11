@@ -27,6 +27,9 @@ def pred_sh(w, adapter):
         return p["file"].replace("{path}", v)
     if k == "file-contains":
         return p["file-contains"].replace("{path}", v["path"]).replace("{text}", v["text"])
+    if k == "mysql-option":
+        return fill(p["mysql-option"], {"path": v["path"], "key": v["key"], "value": v.get("value", ""),
+                                        "any": 0 if "value" in v else 1})
     if k == "not":
         return f"! ( {pred_sh(v, adapter)} )"
     j = " && " if k == "all" else " || "
