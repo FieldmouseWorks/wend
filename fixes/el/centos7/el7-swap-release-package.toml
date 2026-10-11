@@ -1,0 +1,19 @@
+# Ported from dep-lab's CentOS fix library: same steps, now typed ops (SPEC.md, Op reference).
+schema = "wend.fix/0"
+family = "el"
+hop = "centos7"
+when = { installed = "centos-release" }
+restores = ["pkgdb"]
+adds = []
+
+[[pre]]
+op = "rpm.swap-release"
+remove = "centos-release"
+install = "centos-release"
+
+[meta]
+name = "el7-swap-release-package"
+author = "claude-opus-5-5 medium (dep-lab guided run A)"
+curated_by = "claude (wend port to typed ops)"
+source = "dep-lab centos/fixes-v3.json: c7-swap-release-distro-sync"
+fires_on = ["el/centos5-dns", "el/centos5-web"]

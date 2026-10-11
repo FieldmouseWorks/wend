@@ -1,0 +1,19 @@
+# Ported from dep-lab's CentOS fix library: same steps, now typed ops (SPEC.md, Op reference).
+schema = "wend.fix/0"
+family = "el"
+hop = "alma9"
+when = { installed = "php-mysql" }
+restores = ["box:site"]
+adds = []
+
+[[post]]
+op = "install"
+packages = ["php-mysqlnd"]
+
+[meta]
+name = "el9-php-mysqlnd"
+author = "claude-opus-5-5 medium (dep-lab guided run A)"
+curated_by = "claude (wend port to typed ops)"
+source = "dep-lab centos/fixes-v3.json: a9-install-web-php (php-mysql part)"
+note = "php-mysqlnd replaces php-mysql (mysqli for the site)."
+fires_on = ["el/centos5-web"]
