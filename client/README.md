@@ -86,6 +86,9 @@ package counts) except timing, the runner line and `log_sha256`, which hashes co
   `etc/resolv.conf` is a symlink gets no name service until that's a plain file. A plain one is lent the host's
   resolver for each command and gets its own contents back afterwards, unless the command replaced it.
 - Snapshots keep hard links, ACLs and extended attributes (SELinux labels, file capabilities): `rsync -aHAXx`.
+  The work directory needs a filesystem with xattrs (ext4, xfs, btrfs, tmpfs). On an SELinux-enforcing host, labels
+  the host policy doesn't know (an old EL root on a new RHEL host) can make the snapshot fail; the walk then stops
+  before touching the root.
   Root and work paths can't contain whitespace or backslashes (the kernel escapes those in its mount table, and
   the client must read its own mounts back exactly). A root missing `proc`, `sys`, `dev` or `etc` gets them created
   as empty directories.

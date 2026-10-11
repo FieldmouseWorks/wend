@@ -210,6 +210,10 @@ impl Root {
     /// Put the root's own resolv.conf back, unless the command itself replaced it.
     fn return_resolver(&self, lent: Option<Lent>) {
         let Some(l) = lent else { return };
+        // a command may have swapped etc for a symlink out of the root
+        if self.inside("etc").is_err() {
+            return;
+        }
         let ours = fs::symlink_metadata(&l.path).is_ok_and(|m| m.is_file())
             && fs::read(&l.path).is_ok_and(|now| now == l.host);
         if !ours {
