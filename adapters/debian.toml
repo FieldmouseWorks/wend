@@ -54,9 +54,10 @@ Dpkg::Options { "--force-confdef"; "--force-confold"; };
 installed = "dpkg-query -W -f '${Status}' {pkg} 2>/dev/null | grep -q 'ok installed'"
 file = "test -f {path}"
 file-contains = "grep -qF '{text}' {path}"
-# The server's own view: the options mysqld would read from {path} and everything it includes, last one winning,
-# comments and spacing already resolved. Keys match with - and _ alike. Without a value, true when the key is set.
-mysql-option = '''my_print_defaults --defaults-file={path} --mysqld 2>/dev/null | awk -v k='--{key}' -v v='{value}' -v any={any} '{ n = $0; sub(/=.*/, "", n); gsub(/_/, "-", n); if (n == k) { f = 1; x = $0; sub(/^[^=]*=?/, "", x) } } END { exit !(f && (any || x == v)) }''''
+# The server's own view: the server-group options in {path} and everything it includes, last one winning, comments and
+# spacing already resolved. Groups by name, not --mysqld: MySQL's my_print_defaults lacks that flag. Keys match with -
+# and _ alike. Without a value, true when the key is set.
+mysql-option = '''my_print_defaults --defaults-file={path} mysqld server mariadb mariadb-server client-server 2>/dev/null | awk -v k='--{key}' -v v='{value}' -v any={any} '{ n = $0; sub(/=.*/, "", n); gsub(/_/, "-", n); if (n == k) { f = 1; x = $0; sub(/^[^=]*=?/, "", x) } } END { exit !(f && (any || x == v)) }''''
 
 [pm_options.overwrite-conflicting-files]
 # Lets dpkg replace a file that another package owns (the systemd-sysv vs sysvinit halt.8 clash on buster).

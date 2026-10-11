@@ -362,7 +362,10 @@ def compile_fix(doc, adapter):
            "post": [compile_step(s, adapter, doc["hop"]) for s in doc.get("post", [])]}
     if adapter.get("backend", "apt") != "apt":
         return {"when": backends.pred_sh(doc["when"], adapter), **out}
-    return {"when": compile_when(doc["when"]), **out}
+    try:
+        return {"when": compile_when(doc["when"]), **out}  # ol.py's form, for the port's round-trip proof
+    except ValueError:  # all/any, mysql-option: no ol.py form, so the adapter's template
+        return {"when": backends.pred_sh(doc["when"], adapter), **out}
 
 
 # ---------- main ----------

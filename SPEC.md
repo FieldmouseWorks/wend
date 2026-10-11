@@ -88,17 +88,19 @@ A precondition is a table with exactly one key:
 | `installed = "P"` | P is installed **now** | dpkg state `ii`; `rc` does not count | `rpm -q P` (any version or arch) |
 | `file = "/etc/..."` | that file exists | `test -f` | same |
 | `file-contains = { path, text }` | the file contains the literal text | `grep -qF` | same |
-| `mysql-option = { path, key, value? }` | the MySQL/MariaDB server's effective option `key`, read from `path` and its includes, is exactly `value` (no `value`: is set at all) | `my_print_defaults --defaults-file --mysqld` | same |
+| `mysql-option = { path, key, value? }` | the MySQL/MariaDB server's effective option `key`, read from `path` and its includes, is exactly `value` (no `value`: is set at all) | `my_print_defaults --defaults-file` (server groups) | same |
 | `not = {...}` | negation | | |
 | `all = [...]`, `any = [...]` | and, or | | |
 
 Paths match `/etc/[A-Za-z0-9_./-]+` and contain no `..`. `text` contains no `'`. `mysql-option` keys are lowercase and
-dashed (`-` and `_` match alike); values match `[A-Za-z0-9_./:,@+-]*`. It asks the server's own option reader, so
-comments, spacing, repeated keys (the last one wins) and `!include` files resolve exactly as mysqld would see them; a
-substring test can't say "datadir is exactly the default". Where no server tools are installed it is false, so its `not`
-is true there: pair a negated one with a positive one. Package names match `[a-z0-9][a-z0-9.+-]*`. There is no shell
-predicate. An adapter gives each predicate's command as a template in `[predicates]` (`{pkg}`, `{path}`, `{text}`,
-`{key}`, `{value}`, `{any}`); `not`, `all` and `any` are the shell's `!`, `&&` and `||` over those.
+dashed (`-` and `_` match alike); values match `[A-Za-z0-9_./:,@+-]*`. It asks the server's own option reader for the
+server groups (`mysqld`, `server`, `mariadb`, `mariadb-server`, `client-server`) of `path`, so comments, spacing,
+repeated keys (the last one wins) and `!include` files resolve as the server reads that file; `loose-` and `skip-`
+prefixes are not folded into the key; a substring test can't say "datadir is exactly the default". Where no server tools
+are installed it is false, so its `not` is true there: pair a negated one with a positive one. Package names match
+`[a-z0-9][a-z0-9.+-]*`. There is no shell predicate. An adapter gives each predicate's command as a template in
+`[predicates]` (`{pkg}`, `{path}`, `{text}`, `{key}`, `{value}`, `{any}`); `not`, `all` and `any` are the shell's `!`,
+`&&` and `||` over those.
 
 **The install rule.** A fix that has an `install` step must be gated, positively, on `installed` of the package it
 replaces. This is the stray-MySQL lesson from dep-lab round 2. A fix gated on `/etc/mysql/my.cnf` installed a MySQL
@@ -565,7 +567,7 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`). rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit` |
 | `[mirror]` | rpm: `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts) |
 | `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `autoremove`, `obsolete`, `installed_list`; apt also `apt_conf`, the harness's apt config |
-| `[predicates]` | `installed`, `file`, `file-contains` command templates |
+| `[predicates]` | `installed`, `file`, `file-contains`, `mysql-option` command templates |
 | `[pm_options.<name>]` | `path`, `content`. apt: only `overwrite-conflicting-files`; rpm: none |
 | `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear. Whatever a `pattern`, `list` or `table` says, every value a fix passes through one must also match `[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*`: no quote, whitespace, backslash, glob character, `%`, any of `` $`;&|<>(){}~ ``, or leading `-` |
 | `[checks]` | universal health checks: `pkgdb` is a command; `current` and `services` are described in words and built by the harness from the box |
