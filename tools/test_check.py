@@ -147,6 +147,19 @@ for name, adds, want in (("adds the family of a package the fix installs", ["Net
     errs = check.check_fix({**nm, "adds": adds}, adapters, "fixes/el/alma9/t.toml")
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
+# how a package's family is derived: digits and dots go, nothing from the first "-" on; pre and post steps and a
+# transit's reinstall all count
+_inst = lambda ph, pkgs, adds: {**nm, "adds": adds, "post": [], "pre": [], ph: [{"op": "install", "packages": pkgs}]}  # noqa: E731
+_tr = {**nm, "adds": ["mariadb"], "post": [], "pre": [{"op": "rpm.transit", "release": "alma8", "remove": "centos-release",
+                                                       "reinstall": ["mariadb-server"]}]}
+for name, fix, want in (("adds php for php-fpm", _inst("post", ["php-fpm"], ["php"]), False),
+                        ("adds mysql for mysql55", _inst("post", ["mysql55"], ["mysql"]), False),
+                        ("adds php-fpm (not a family)", _inst("post", ["php-fpm"], ["php-fpm"]), True),
+                        ("adds for an install in a pre step", _inst("pre", ["NetworkManager"], ["NetworkManager"]), False),
+                        ("adds for a transit's reinstall", _tr, False)):
+    errs = check.check_fix(fix, adapters, "fixes/el/alma9/t.toml")
+    print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
+    bad += bool(errs) != want
 import walk  # noqa: E402
 w = type("W", (), {})()
 w.adapter = adapters["el"]

@@ -65,6 +65,8 @@ class Walk:
         upgrade = rel["upgrade"] if isinstance(rel, dict) and "upgrade" in rel else h["upgrade"]
         verify = [fill(h["verify"], v)] if "verify" in h else []  # the release file says we arrived
         # SPEC "restores and adds": the families the fired fixes may introduce, for the services check
+        if not all(isinstance(f.get("adds", []), list) for f in fixes):
+            raise ValueError("adds must be a list of name families")
         adds = sorted({x for f in fixes for x in f.get("adds", [])})
         if not all(isinstance(x, str) and re.fullmatch(check.FAMILY, x) for x in adds):  # never shell, on any path
             raise ValueError(f"adds must be name families ({check.FAMILY}), not {adds!r}")

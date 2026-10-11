@@ -60,10 +60,12 @@ pub fn hop_plan(adapter: &Doc, hop: &str, fixes: &[&Doc]) -> Result<HopPlan, Str
     commands.extend(upgrade.iter().map(|c| fill(c, &v)));
     commands.extend(comp("post")?);
     // SPEC "restores and adds": the families the fired fixes may introduce, for the services check
-    let adds: BTreeSet<String> = fixes
-        .iter()
-        .flat_map(|f| list_of(f, "adds").unwrap_or_default())
-        .collect();
+    let mut adds = BTreeSet::new();
+    for f in fixes {
+        if get(f, "adds").is_some() {
+            adds.extend(list_of(f, "adds").map_err(|_| "adds must be a list of name families".to_string())?);
+        }
+    }
     if let Some(bad) = adds.iter().find(|x| !crate::check::full(crate::check::FAMILY, x)) {
         return Err(format!("adds must be name families, not {bad:?}")); // never shell, on any path
     }

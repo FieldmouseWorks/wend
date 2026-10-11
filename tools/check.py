@@ -25,8 +25,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PKG = r"[A-Za-z0-9][A-Za-z0-9._+-]*"  # rpm names have capitals (NetworkManager) and underscores
 ETC_PATH = r"/etc/[A-Za-z0-9_./-]+"
 MYSQL_KEY = r"[a-z][a-z0-9-]*"
-FAMILY = r"[A-Za-z_+]+"
-_FAMILY_NOTE = None  # a name family: no digits or dots, nothing from the first "-" on (SPEC "restores and adds")
+FAMILY = r"[A-Za-z_+]+"  # a name family: no digits or dots, nothing from the first "-" on (SPEC "restores and adds")
 MYSQL_VALUE = r"[A-Za-z0-9_./:,@+-]*"
 ETC_GLOB = r"/etc/[A-Za-z0-9_./*-]+"
 CORE_OPS = {"install", "remove", "repair", "force-remove", "write-file", "pm-option"}
@@ -38,7 +37,6 @@ SAFE_VALUE = r"[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*"
 ADAPTER_KEYS = {"schema", "family", "backend", "release_file", "ladder", "may_skip", "harness_owned", "writable",
                 "managed", "force", "releases", "mirror", "hop", "predicates", "pm_options", "box", "ops", "checks",
                 "kv"}
-
 
 
 def family(pkg):
