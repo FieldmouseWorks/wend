@@ -8,7 +8,7 @@
 //! Fetching shells out to curl (proxies, CA bundles and TLS are the host's). Indexes are parsed in memory.
 
 use crate::canon::sha256_hex;
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 use serde_json::Value;
 use sha1::{Digest as _, Sha1};
 use std::collections::HashMap;
@@ -238,13 +238,11 @@ fn answer(s: &State, path: &str) -> Result<PathBuf, (u16, String)> {
         }
     }
     // by-hash names its own digest: trusted when a trusted index lists it
-    if let Some((_, hex)) = key.rsplit_once("/by-hash/SHA256/") {
-        let found = s
-            .pins
-            .lock()
-            .unwrap()
+    if let Some((dir, hex)) = key.rsplit_once("/by-hash/SHA256/") {
+        // only beside the index that lists it, so the host and path stay the pinned ones
+        let found = lock(&s.pins)
             .iter()
-            .find(|(_, p)| p.digest.hex == hex && !p.plain)
+            .find(|(k, p)| p.digest.hex == hex && !p.plain && k.rsplit_once('/').is_some_and(|(d, _)| d == dir))
             .map(|(k, p)| (k.clone(), p.clone()));
         if let Some((name, p)) = found {
             let origin = format!("{}://{key}", p.origin.split_once("://").map_or("http", |x| x.0));
@@ -281,19 +279,27 @@ fn answer(s: &State, path: &str) -> Result<PathBuf, (u16, String)> {
         return Err((404, format!("not pinned: {key}")));
     }
     // the package manager may have read its indexes from its own cache: learn every pinned index once, then look again
-    let first = !std::mem::replace(&mut *lock(&s.learned_all), true);
-    if first {
-        for (k, p) in &s.tops {
-            if p.plain {
-                let _ = fetch_plain(s, k, p, false);
-            } else if let Ok(f) = fetch(s, k, p) {
-                learn(s, k, p, &f);
+    // (held for the whole pass, so a parallel request waits for it instead of being refused; tried again until every
+    // pinned index was had)
+    {
+        let mut done = lock(&s.learned_all);
+        if !*done {
+            let mut all = true;
+            for (k, p) in &s.tops {
+                if p.plain {
+                    all &= fetch_plain(s, k, p, false).is_ok();
+                } else if let Ok(f) = fetch(s, k, p) {
+                    learn(s, k, p, &f);
+                } else {
+                    all = false;
+                }
             }
+            *done = all;
         }
-        let pin = lock(&s.pins).get(key).cloned();
-        if let Some(p) = pin {
-            return fetch(s, key, &p);
-        }
+    }
+    let pin = lock(&s.pins).get(key).cloned();
+    if let Some(p) = pin {
+        return fetch(s, key, &p);
     }
     Err((403, format!("refused {key}: no pinned index lists it")))
 }
@@ -361,6 +367,11 @@ fn candidates(s: &State, key: &str, origin: &str) -> Vec<String> {
 
 fn download(src: &str) -> Result<Vec<u8>, String> {
     if !src.contains("://") {
+        // a plain file only: not a FIFO that never ends, nor a device that never stops
+        let md = std::fs::metadata(src).map_err(|e| format!("{src}: {e}"))?;
+        if !md.is_file() {
+            return Err(format!("{src}: not a plain file"));
+        }
         return std::fs::read(src).map_err(|e| format!("{src}: {e}"));
     }
     // straight into memory: nothing on disk until the bytes hash right
@@ -455,36 +466,25 @@ fn fetch(s: &State, key: &str, p: &Pin) -> Result<PathBuf, (u16, String)> {
 }
 
 /// An index pinned by its uncompressed bytes (the archive may only serve it gzipped). The plain bytes are cached
-/// under the pinned digest, and the archive's own .gz by name; `gz` serves the .gz, which is checked again after
-/// gunzip every time it is used.
+/// under the pinned digest; `gz` serves a gzip made here from those verified bytes, never the archive's own .gz
+/// (a .gz can carry members after the one that hashes right, and apt would read them too).
 fn fetch_plain(s: &State, key: &str, p: &Pin, gz: bool) -> Result<PathBuf, (u16, String)> {
     let gz_key = format!("{key}.gz");
     let ok = |x: &[u8]| Digest::of(p.digest.alg, x) == p.digest;
-    if gz {
-        let kept = named(s, &gz_key);
-        if let Some(x) = std::fs::read(&kept).ok().and_then(|b| gunzip(&b)).filter(|x| ok(x)) {
-            learn_index(s, key, &x);
-            return Ok(kept);
-        }
-    }
     let mut plain = std::fs::read(cached(s, &p.digest)).ok().filter(|b| ok(b));
-    let mut gz_file = None;
     let mut tried = vec![];
     let forms = [
         (gz_key.clone(), format!("{}.gz", p.origin), true),
         (key.to_string(), p.origin.clone(), false),
     ];
     'found: for (k, origin, zipped) in forms {
-        if plain.is_some() && !(gz && zipped) {
-            continue;
+        if plain.is_some() {
+            break;
         }
         for src in candidates(s, &k, &origin) {
             match download(&src) {
-                Ok(b) => match if zipped { gunzip(&b) } else { Some(b.clone()) } {
+                Ok(b) => match if zipped { gunzip(&b) } else { Some(b) } {
                     Some(x) if ok(&x) => {
-                        if zipped {
-                            gz_file = Some(keep_named(s, &gz_key, &b)?);
-                        }
                         plain = Some(x);
                         break 'found;
                     }
@@ -510,10 +510,15 @@ fn fetch_plain(s: &State, key: &str, p: &Pin, gz: bool) -> Result<PathBuf, (u16,
     if !gz {
         return Ok(f);
     }
-    if let Some(g) = gz_file {
-        return Ok(g);
+    // apt of this age checks the uncompressed hash, so any gzip of the verified bytes will do
+    let kept = named(s, &gz_key);
+    if std::fs::read(&kept)
+        .ok()
+        .and_then(|b| gunzip(&b))
+        .is_some_and(|y| y == x)
+    {
+        return Ok(kept);
     }
-    // only the plain form was to be had: serve it gzipped (apt of this age checks the uncompressed hash)
     let mut z = flate2::write::GzEncoder::new(vec![], flate2::Compression::default());
     z.write_all(&x).map_err(|e| (500, e.to_string()))?;
     let z = z.finish().map_err(|e| (500, e.to_string()))?;
@@ -549,7 +554,8 @@ fn why(tried: &[String]) -> String {
 
 fn gunzip(b: &[u8]) -> Option<Vec<u8>> {
     let mut out = vec![];
-    GzDecoder::new(b).read_to_end(&mut out).ok()?;
+    // every member, as zlib's gzread (apt) and zcat read it
+    MultiGzDecoder::new(b).read_to_end(&mut out).ok()?;
     Some(out)
 }
 
@@ -800,6 +806,51 @@ mod tests {
         assert_eq!(get(px.port, "POST", "/h.test/el/Packages/a.rpm").0, 405);
         assert_eq!(get(px.port, "HEAD", "/h.test/el/repodata/repomd.xml").0, 200);
         assert_eq!(px.take_refused().len(), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn plain_index_serves_only_the_verified_member() {
+        let dir = std::env::temp_dir().join(format!("wend-plain-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let base = dir.join("src/h.test/debian");
+        let idx = base.join("dists/wheezy/main/binary-amd64");
+        std::fs::create_dir_all(&idx).unwrap();
+        std::fs::create_dir_all(base.join("pool")).unwrap();
+        let (a, b) = (b"deb a".to_vec(), b"deb b".to_vec());
+        std::fs::write(base.join("pool/a.deb"), &a).unwrap();
+        std::fs::write(base.join("pool/b.deb"), &b).unwrap();
+        let stanza = |n: &str, d: &[u8]| format!("Package: {n}\nFilename: pool/{n}.deb\nSHA256: {}\n\n", sha256_hex(d));
+        let pinned = stanza("a", &a);
+        let gz = |t: &str| {
+            let mut z = flate2::write::GzEncoder::new(vec![], flate2::Compression::default());
+            z.write_all(t.as_bytes()).unwrap();
+            z.finish().unwrap()
+        };
+        // a second gzip member smuggling in a stanza the run never pinned
+        let mut two = gz(&pinned);
+        two.extend(gz(&stanza("b", &b)));
+        std::fs::write(idx.join("Packages.gz"), &two).unwrap();
+        let run = serde_json::json!({"hops": [{"sources": {
+            "http://h.test/debian/dists/wheezy/main/binary-amd64/Packages":
+                format!("sha256:{}", sha256_hex(pinned.as_bytes()))}}]});
+        let px = Proxy::start(
+            &run,
+            &dir.join("cache"),
+            vec![dir.join("src").display().to_string()],
+            true,
+        )
+        .unwrap();
+        let path = "/h.test/debian/dists/wheezy/main/binary-amd64/Packages.gz";
+        // read whole (as apt reads it) the .gz doesn't hash right: refused
+        assert_eq!(get(px.port, "GET", path).0, 502);
+        // the plain index from another source: served as a gzip of exactly the pinned bytes
+        std::fs::write(idx.join("Packages"), &pinned).unwrap();
+        let (code, body) = get(px.port, "GET", path);
+        assert_eq!(code, 200);
+        assert_eq!(gunzip(&body).unwrap(), pinned.as_bytes());
+        assert_eq!(get(px.port, "GET", "/h.test/debian/pool/a.deb"), (200, a));
+        assert_eq!(get(px.port, "GET", "/h.test/debian/pool/b.deb").0, 403);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

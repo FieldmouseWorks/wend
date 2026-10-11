@@ -57,8 +57,10 @@ lists at the hash the index gives. Anything else is refused (403, logged at the 
 metadata (`InRelease` when the run pinned `Release`, signatures) gets a 404 so the package manager falls back to what
 was pinned. One exception: a suite whose hop pinned its indexes directly (wheezy, whose apt deletes the `Release`)
 gets its `Release` served unverified, kept by name for offline walks. It vouches for nothing there, since each index
-is checked against its own pin. When a package turns up that no index has taught the proxy yet (the package manager
-read its indexes from its own cache), the proxy learns every index the run pins, once, and looks again.
+is checked against its own pin, and its `.gz` is a gzip the proxy makes from the verified bytes, never the archive's
+own (a `.gz` can carry a second member that apt would read too). When a package turns up that no index has taught the proxy yet (the package manager
+read its indexes from its own cache), the proxy learns every index the run pins and looks again; a request that comes
+in meanwhile waits for it.
 
 Bytes come from `--cache DIR` (default `<work>/cache`, files named by their hash; held to the work directory's rules:
 owned by root, nobody else can write it, outside the root), then each `--source` in order (a
@@ -69,7 +71,13 @@ proxies and CA bundles are the host's.
 
 Proven on centos5-to-alma10 (el/centos5-web): a cold walk through the proxy passed with nothing refused and filled
 1.5 GB of cache. A second walk on a fresh copy `--offline` passed in 9 minutes. With one cached RPM corrupted, the
-offline walk refused it and rolled the hop back.
+offline walk refused it and rolled the hop back. On etch-to-trixie (debian/etch-web), a cold walk recorded the same
+sources as the harness run, and an `--offline` walk from its cache passed in 12 minutes.
+
+After a walk the root's repo config still points at the proxy, which is gone: point it back at a mirror before using
+its package manager. Not done yet: downloads are held in memory whole and unbounded (a source or origin is trusted not
+to send endless bytes, only to send right ones), nothing reaches the package manager until a file is in and hashed, and
+two requests for one file download it twice.
 
 The repo's `./wend` is the Python tool for contributors (discover, verify, report). This binary is the client a
 machine's owner runs. They share a name because the client is the product; the Python tool is how the map gets made.

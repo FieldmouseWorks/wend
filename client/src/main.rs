@@ -475,6 +475,11 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
                 eprintln!("  {r}");
             }
         }
+        eprintln!(
+            "note: the root's repo config still points at the proxy ({}), which is gone now. Point it back at a \
+             mirror before using its package manager.",
+            p.base()
+        );
     }
     let returned: Vec<String> = lent.iter().filter_map(|l| guard.give_back(l).err()).collect();
     let run = match (run, returned.is_empty()) {
