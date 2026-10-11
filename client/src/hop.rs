@@ -69,6 +69,13 @@ pub fn hop_plan(adapter: &Doc, hop: &str, fixes: &[&Doc]) -> Result<HopPlan, Str
     if let Some(bad) = adds.iter().find(|x| !crate::check::full(crate::check::FAMILY, x)) {
         return Err(format!("adds must be name families, not {bad:?}")); // never shell, on any path
     }
+    for f in fixes {
+        // the checker's rule again: a direct walk doesn't run check_fix first
+        let own = crate::check::installed_families(f);
+        if get(f, "adds").is_some() && list_of(f, "adds")?.iter().any(|x| !own.contains(x)) {
+            return Err("adds names a family the fix's own install steps don't install".into());
+        }
+    }
     if !adds.is_empty() {
         let lines: String = adds.iter().map(|x| format!("{x}\\n")).collect();
         commands.push(format!("mkdir -p /var/lib/wend && printf '{lines}' >> {ADDED}"));
@@ -117,7 +124,7 @@ mod tests {
             crate::atlas::parse_toml(&std::fs::read_to_string(root.join("adapters/el.toml")).unwrap()).unwrap();
         let fix = |adds: &str| -> Doc {
             crate::atlas::parse_toml(&format!(
-                "hop = \"alma9\"\nadds = [{adds}]\n[[post]]\nop = \"kv.set\"\npath = \"/etc/vsftpd/vsftpd.conf\"\nvalues = {{ tcp_wrappers = \"NO\" }}\n"
+                "hop = \"alma9\"\nadds = [{adds}]\n[[post]]\nop = \"install\"\npackages = [{adds}]\n[[post]]\nop = \"kv.set\"\npath = \"/etc/vsftpd/vsftpd.conf\"\nvalues = {{ tcp_wrappers = \"NO\" }}\n"
             ))
             .unwrap()
         };
@@ -130,6 +137,11 @@ mod tests {
         // a direct walk doesn't run the checker first: the compile refuses a non-family itself
         let evil = fix("\"x' ; reboot ; '\"");
         assert!(hop_plan(&a, "alma9", &[&evil]).is_err());
+        let not_installed = crate::atlas::parse_toml(
+            "hop = \"alma9\"\nadds = [\"vsftpd\"]\n[[post]]\nop = \"install\"\npackages = [\"NetworkManager\"]\n",
+        )
+        .unwrap();
+        assert!(hop_plan(&a, "alma9", &[&not_installed]).is_err());
         let not_list = crate::atlas::parse_toml("hop = \"alma9\"\nadds = \"NetworkManager\"\n").unwrap();
         assert!(hop_plan(&a, "alma9", &[&not_list]).is_err());
     }

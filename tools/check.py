@@ -43,6 +43,14 @@ def family(pkg):
     """A package's name family (SPEC "restores and adds"): digits and dots removed, nothing from the first "-" on."""
     return re.sub(r"[0-9.]", "", pkg).split("-")[0]
 
+
+def installed_families(doc):
+    """The families of the packages a fix's own steps install (install, or a transit's reinstall): what its adds may
+    name. The checker and both hop compilers use this, so a direct `wend replay` holds a fix to the same rule."""
+    steps = [s for ph in ("pre", "post") for s in (doc.get(ph) or []) if isinstance(s, dict)]
+    return {family(p) for s in steps for p in (s.get("packages", []) if s.get("op") == "install" else
+                                               s.get("reinstall") or []) if isinstance(p, str)}
+
 def canonical(obj):
     """Canonical JSON: sorted keys, no whitespace, UTF-8. TOML is the authoring format; ids hash this."""
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
@@ -259,9 +267,7 @@ def check_fix(doc, adapters, where):
             errs.append(f"{where}: restores {c!r}, which is neither an adapter check nor box:<role>")
     if not isinstance(doc.get("adds", []), list):
         errs.append(f"{where}: adds must be a list of name families")
-    installs = {family(p) for s in steps if isinstance(s, dict)
-                for p in (s.get("packages", []) if s.get("op") == "install" else s.get("reinstall") or [])
-                if isinstance(p, str)}
+    installs = installed_families(doc)
     for f in doc.get("adds", []) if isinstance(doc.get("adds", []), list) else []:
         if not isinstance(f, str) or not re.fullmatch(FAMILY, f):
             errs.append(f"{where}: adds {f!r}, which is not a name family ({FAMILY})")

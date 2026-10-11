@@ -35,7 +35,8 @@ rel = lambda p: os.path.relpath(p, ROOT)  # noqa: E731
 _kv = {"op": "kv.set", "path": "/etc/vsftpd/vsftpd.conf", "values": {"tcp_wrappers": "NO"}}
 _po = {"op": "pm-option", "option": "overwrite-conflicting-files"}
 _fx = lambda fam, hop, adds, step: {"schema": "wend.fix/0", "family": fam, "hop": hop, "when": {"installed": "x"},
-                                    "restores": [], "adds": adds, "post": [step], "meta": {"name": "t"}}  # noqa: E731
+                                    "restores": [], "adds": adds, "meta": {"name": "t"},
+                                    "post": [{"op": "install", "packages": adds or ["x"]}, step]}  # noqa: E731
 SYNTH_HOPS = [
     ("el", "alma9", [_fx("el", "alma9", ["polkit", "NetworkManager"], _kv), _fx("el", "alma9", ["polkit"], _kv),
                      _fx("el", "alma9", [], _kv)]),

@@ -163,17 +163,24 @@ for name, fix, want in (("adds php for php-fpm", _inst("post", ["php-fpm"], ["ph
 import walk  # noqa: E402
 w = type("W", (), {})()
 w.adapter = adapters["el"]
-cmds = walk.Walk.hop_cmds(w, "alma9", [{**el_good, "adds": ["polkit", "NetworkManager"]}, {**el_good, "adds": ["polkit"]}])
+_ins = lambda adds: {**el_good, "adds": adds, "post": [{"op": "install", "packages": adds}] + el_good["post"]}  # noqa: E731
+cmds = walk.Walk.hop_cmds(w, "alma9", [_ins(["polkit", "NetworkManager"]), _ins(["polkit"])])
 want = "mkdir -p /var/lib/wend && printf 'NetworkManager\\npolkit\\n' >> /var/lib/wend/added-families"
 ok = want in cmds and cmds.index(want) > max(i for i, c in enumerate(cmds) if "kv" in c or "vsftpd" in c)
 print(("passed  " if ok else "WRONG   ") + "the hop records the fired fixes' adds after their post steps")
 bad += not ok
 try:  # a direct `wend replay` doesn't run check_fix first: the compile refuses a non-family itself
-    walk.Walk.hop_cmds(w, "alma9", [{**el_good, "adds": ["x' ; reboot ; '"]}])
+    walk.Walk.hop_cmds(w, "alma9", [_ins(["x' ; reboot ; '"])])
     print("WRONG   the hop compile accepted shell in adds")
     bad += 1
 except ValueError:
     print("refused shell in adds at hop compile")
+try:  # nor a family the fix doesn't install
+    walk.Walk.hop_cmds(w, "alma9", [{**el_good, "adds": ["vsftpd"]}])
+    print("WRONG   the hop compile accepted adds for a family the fix doesn't install")
+    bad += 1
+except ValueError:
+    print("refused adds the fix doesn't install, at hop compile")
 try:
     walk.Walk.hop_cmds(w, "alma9", [{**el_good, "adds": "NetworkManager"}])
     print("WRONG   the hop compile accepted a non-list adds")

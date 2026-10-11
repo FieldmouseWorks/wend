@@ -17,6 +17,24 @@ use std::sync::Mutex;
 pub const FAMILY: &str = r"[A-Za-z_+]+";
 
 /// A package's name family (SPEC "restores and adds"): digits and dots removed, nothing from the first "-" on.
+pub fn installed_families(doc: &Value) -> BTreeSet<String> {
+    // the families of the packages a fix's own steps install (install, or a transit's reinstall): what its adds may
+    // name. The checker and the hop compiler both use it, so a direct walk holds a fix to the same rule
+    ["pre", "post"]
+        .iter()
+        .flat_map(|ph| get(doc, ph).and_then(Value::as_array).cloned().unwrap_or_default())
+        .flat_map(|s| {
+            let key = if get(&s, "op").and_then(Value::as_str) == Some("install") {
+                "packages"
+            } else {
+                "reinstall"
+            };
+            str_list(get(&s, key))
+        })
+        .map(|p| name_family(&p))
+        .collect()
+}
+
 pub fn name_family(pkg: &str) -> String {
     let s: String = pkg.chars().filter(|c| !c.is_ascii_digit() && *c != '.').collect();
     s.split('-').next().unwrap_or_default().to_string()
@@ -671,18 +689,7 @@ pub fn check_fix(doc: &Doc, adapters: &BTreeMap<String, Doc>, wh: &str) -> Vec<S
         }
     }
     // a fix may only declare what it installs itself, so review sees both together
-    let installs: BTreeSet<String> = steps
-        .iter()
-        .flat_map(|s| {
-            let key = if get(s, "op").and_then(Value::as_str) == Some("install") {
-                "packages"
-            } else {
-                "reinstall"
-            };
-            str_list(get(s, key))
-        })
-        .map(|p| name_family(&p))
-        .collect();
+    let installs = installed_families(doc);
     for f in get(doc, "adds").and_then(Value::as_array).into_iter().flatten() {
         match f.as_str() {
             Some(s) if full(FAMILY, s) => {

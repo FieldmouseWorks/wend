@@ -70,6 +70,10 @@ class Walk:
         adds = sorted({x for f in fixes for x in f.get("adds", [])})
         if not all(isinstance(x, str) and re.fullmatch(check.FAMILY, x) for x in adds):  # never shell, on any path
             raise ValueError(f"adds must be name families ({check.FAMILY}), not {adds!r}")
+        for f in fixes:  # the checker's rule again: a direct `wend replay` doesn't run check_fix first
+            if set(f.get("adds", [])) - check.installed_families(f):
+                raise ValueError(f"{f.get('meta', {}).get('name')}: adds names a family its own install steps "
+                                 "don't install")
         declare = [f"mkdir -p /var/lib/wend && printf '{''.join(x + chr(92) + 'n' for x in adds)}' >> {ADDED}"] if adds else []
         return ([fill(h["set_release"], v), fill(h["refresh"], v)] + comp("pre") + [fill(c, v) for c in upgrade] +
                 comp("post") + declare + cleanup + verify)
