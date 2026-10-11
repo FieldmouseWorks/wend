@@ -81,7 +81,8 @@ class Box:
     def run(self, cmd, timeout=1800, isolated=False):
         """isolated: a network namespace of its own with only loopback, for checks that start daemons."""
         self._mount()
-        argv = ["chroot", self.root, "/bin/sh", "-c", cmd]
+        # umask 022 whatever ours is (SPEC "How a hop runs"): op references create files other users must read
+        argv = ["chroot", self.root, "/bin/sh", "-c", "umask 022\n" + cmd]
         if isolated:
             argv = ["unshare", "-n", "sh", "-c", 'ip link set lo up && exec "$@"', "x"] + argv
         try:
