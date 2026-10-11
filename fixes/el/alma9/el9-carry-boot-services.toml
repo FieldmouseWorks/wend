@@ -1,0 +1,54 @@
+# Carries boot-time service enablement from SysV runlevels onto systemd (issue #6).
+schema = "wend.fix/0"
+family = "el"
+hop = "alma9"
+when = { installed = "systemd" }
+restores = ["box:boot"]
+adds = []
+
+[[post]]
+op = "service.enable"
+unit = "httpd"
+like = ["httpd"]
+
+[[post]]
+op = "service.enable"
+unit = "mariadb"
+like = ["mysqld", "mariadb"]
+
+[[post]]
+op = "service.enable"
+unit = "named"
+like = ["named"]
+
+[[post]]
+op = "service.enable"
+unit = "vsftpd"
+like = ["vsftpd"]
+
+[[post]]
+op = "service.enable"
+unit = "sshd"
+like = ["sshd"]
+
+[[post]]
+op = "service.enable"
+unit = "postfix"
+like = ["postfix"]
+
+[[post]]
+op = "service.enable"
+unit = "crond"
+like = ["crond"]
+
+[[post]]
+op = "service.enable"
+unit = "php-fpm"
+like = ["httpd"]
+
+[meta]
+name = "el9-carry-boot-services"
+author = "claude (wend#6)"
+source = "wend#6"
+note = "EL9 brings php-fpm (new, preset disabled; the site needs it whenever httpd runs), and the EL8 transit and the reinstalls on this hop drop enablement links. Enables each unit again whose service started on the original box (the record from el7-carry-boot-services) or is enabled now."
+fires_on = ["el/centos5-dns", "el/centos5-web"]
