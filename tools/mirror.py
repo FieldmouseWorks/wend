@@ -12,11 +12,36 @@ import http.server
 import os
 import shutil
 import sys
+import threading
 import urllib.error
 import urllib.request
 
 ALLOWED = {"vault.centos.org", "repo.almalinux.org", "vault.almalinux.org", "archives.fedoraproject.org"}
 CACHE = sys.argv[2] if len(sys.argv) > 2 else "/var/tmp/wend/mirror"
+
+
+def fetch(url, local, sha256=None):
+    """Download url to local, atomically. Never keep a cut-off download: a hash-named file is served from disk
+    forever after, so a short read (or, for those, a wrong sha256) raises and leaves nothing behind."""
+    os.makedirs(os.path.dirname(local), exist_ok=True)
+    tmp = f"{local}.tmp{os.getpid()}-{threading.get_ident()}"
+    try:
+        with urllib.request.urlopen(url, timeout=300) as r:
+            size, h = 0, hashlib.sha256()
+            with open(tmp, "wb") as f:
+                while chunk := r.read(1 << 20):
+                    f.write(chunk)
+                    h.update(chunk)
+                    size += len(chunk)
+            want = r.headers.get("Content-Length")
+        if want is not None and int(want) != size:
+            raise OSError(f"short read: {size} of {want} bytes")
+        if sha256 and h.hexdigest() != sha256:
+            raise OSError("sha256 does not match the file name")
+        os.replace(tmp, local)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 class H(http.server.BaseHTTPRequestHandler):
@@ -34,30 +59,18 @@ class H(http.server.BaseHTTPRequestHandler):
         hashed = len(head) >= 40 and all(c in "0123456789abcdef" for c in head)
         volatile = ("/repodata/" in parts[1] and "vault" not in parts[0] and not hashed) or local.endswith(".index")
         if not os.path.exists(local) or volatile:
-            try:
-                with urllib.request.urlopen(f"https://{parts[0]}/{parts[1]}", timeout=300) as r:
-                    os.makedirs(os.path.dirname(local), exist_ok=True)
-                    tmp = f"{local}.tmp{os.getpid()}-{id(self)}"
-                    try:
-                        size, h = 0, hashlib.sha256()
-                        with open(tmp, "wb") as f:
-                            while chunk := r.read(1 << 20):
-                                f.write(chunk)
-                                h.update(chunk)
-                                size += len(chunk)
-                        # Never cache a cut-off download: a hash-named file is served from disk forever after.
-                        want = r.headers.get("Content-Length")
-                        if want is not None and int(want) != size:
-                            raise OSError(f"short read: {size} of {want} bytes")
-                        if hashed and len(head) == 64 and h.hexdigest() != head:
-                            raise OSError("sha256 does not match the file name")
-                        os.replace(tmp, local)
-                    finally:
-                        if os.path.exists(tmp):
-                            os.remove(tmp)
-            except Exception as e:
-                if not os.path.exists(local):  # a live mirror hiccup: serve the last good copy if there is one
-                    return self.send_error(e.code if isinstance(e, urllib.error.HTTPError) else 502, str(e)[:100])
+            err = None
+            for attempt in range(3):  # transfers through a busy proxy get cut off now and then
+                try:
+                    fetch(f"https://{parts[0]}/{parts[1]}", local, head if hashed and len(head) == 64 else None)
+                    err = None
+                    break
+                except Exception as e:
+                    err = e
+                    if isinstance(e, urllib.error.HTTPError) and e.code < 500:
+                        break
+            if err and not os.path.exists(local):  # a live mirror hiccup: serve the last good copy if there is one
+                return self.send_error(err.code if isinstance(err, urllib.error.HTTPError) else 502, str(err)[:100])
         self.send_response(200)
         self.send_header("Content-Length", str(os.path.getsize(local)))
         self.end_headers()
