@@ -27,7 +27,10 @@ ETC_PATH = r"/etc/[A-Za-z0-9_./-]+"
 ETC_GLOB = r"/etc/[A-Za-z0-9_./*-]+"
 CORE_OPS = {"install", "remove", "repair", "force-remove", "write-file", "pm-option"}
 # Characters no adapter argument pattern may accept: values land in root shell commands.
-UNSAFE = ["'", '"', " ", "\t", "\n", "$", "`", ";", "&", "|", "<", ">", "(", ")", "{", "}", "\\", "*", "?", "[", "~"]
+UNSAFE = ["%", "'", '"', " ", "\t", "\n", "$", "`", ";", "&", "|", "<", ">", "(", ")", "{", "}", "\\", "*", "?", "[", "~"]
+# Whatever an adapter's patterns say, a value a fix passes to an adapter op is held to this too: no shell
+# metacharacters, no printf %, and no leading - (it would read as an option).
+SAFE_VALUE = r"[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*"
 ADAPTER_KEYS = {"schema", "family", "backend", "release_file", "ladder", "may_skip", "harness_owned", "writable",
                 "managed", "force", "releases", "mirror", "hop", "predicates", "pm_options", "box", "ops", "checks",
                 "kv"}
@@ -139,6 +142,10 @@ def writable(path, adapter, allow="writable"):
 def check_arg(name, spec, val, adapter, where, errs):
     """An adapter op's argument, by its spec: enum, pattern, list (of a pattern), path or paths (on one of the
     adapter's allowlists, named by the spec), table (string keys and values, each matching a pattern)."""
+    vals = val.values() if isinstance(val, dict) else val if isinstance(val, list) else [val]
+    if any(k in spec for k in ("pattern", "list", "table")) and not all(
+            isinstance(x, str) and re.fullmatch(SAFE_VALUE, x) for x in vals):
+        errs.append(f"{where}: {name} may only hold plain values ({SAFE_VALUE})")
     if "enum" in spec and val not in spec["enum"]:
         errs.append(f"{where}: {name} must be one of {spec['enum']}")
     if "pattern" in spec and not (isinstance(val, str) and re.fullmatch(spec["pattern"], val)):

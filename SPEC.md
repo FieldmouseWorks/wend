@@ -461,7 +461,8 @@ repos kept in private `reposdir`s so `/etc/yum.repos.d` stays the harness's:
 left alone. Never writes content of its own.
 
 **`rpm.set-aside-unowned`** `paths` (on `managed`). Moves each existing file that no installed package owns
-(`rpm -qf` fails) to `SAVED`. Never writes content of its own.
+(`rpm -qf` fails) to `SAVED`. If `SAVED` already holds that path (an earlier hop set aside the owner's original), the
+current file, which a package or the harness made since, is deleted instead. Never writes content of its own.
 
 **`fs.layout`** `layout` (`usrmove` or `run`).
 - `usrmove`: `/bin`, `/sbin`, `/lib` and `/lib64` become symlinks to `usr/bin`, `usr/sbin`, `usr/lib`, `usr/lib64`
@@ -555,9 +556,12 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `autoremove`, `obsolete`, `installed_list`; apt also `apt_conf`, the harness's apt config |
 | `[predicates]` | `installed`, `file`, `file-contains` command templates |
 | `[pm_options.<name>]` | `path`, `content`. apt: only `overwrite-conflicting-files`; rpm: none |
-| `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear, and no `pattern`, `list` or `table` may accept a quote, whitespace, a backslash, a glob character or any of `` $`;&|<>(){}~ `` |
+| `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear. Whatever a `pattern`, `list` or `table` says, every value a fix passes through one must also match `[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*`: no quote, whitespace, backslash, glob character, `%`, any of `` $`;&|<>(){}~ ``, or leading `-` |
 | `[checks]` | universal health checks: `pkgdb` is a command; `current` and `services` are described in words and built by the harness from the box |
 | `[box]` | how to build a fresh box of this family (rpm: `seeds`, the packages to bootstrap a root from) |
+
+These checks narrow what an adapter lets fixes do (ops, force flags, argument values). They don't judge an adapter's
+allowlists, hop commands or package lists: those are reviewed as spec changes, and CI never takes them from a PR.
 
 Templates in `[hop]`, `releases.*.upgrade` and `[predicates]` use `{name}` placeholders, replaced literally (no
 other brace syntax is touched, so `${...}` and `%{...}` pass through). Values for a hop:

@@ -88,7 +88,7 @@ DB_DIRS = ("mkdir -p /run/mariadb /run/mysqld /var/log/mariadb; touch /var/log/m
 WAIT_SOCK = ("[ -n \"$D\" ] || { echo 'no database server installed'; exit 1; }; "
              "i=0; while [ $i -lt 120 ] && [ ! -S /var/lib/mysql/mysql.sock ]; do sleep 1; i=$((i+1)); done; "
              "[ -S /var/lib/mysql/mysql.sock ] || { echo 'the database server did not start'; "
-             "tail -n 15 /tmp/wend-db.log; exit 1; }")
+             "tail -n 15 /tmp/wend-db.log; pkill -KILL -x mariadbd; pkill -KILL -x mysqld; exit 1; }")
 STOP_DB = ("pkill -TERM -x mariadbd; pkill -TERM -x mysqld; i=0; "
            "while pgrep -x 'mariadbd|mysqld' >/dev/null && [ $i -lt 300 ]; do sleep 1; i=$((i+1)); done; "
            "! pgrep -x 'mariadbd|mysqld' >/dev/null")

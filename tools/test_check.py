@@ -71,6 +71,7 @@ EL_CASES = {
     "write the box owner's secrets": lambda f: f["post"].append(
         {"op": "write-file", "path": "/etc/wend/secrets/app-db", "content": "x"}),
     "a predicate that isn't a string": lambda f: f.update(when={"installed": 123}),
+    "a value that would read as an option": lambda f: f["post"][0].update(values={"listen": "-x"}),
 }
 for name, mutate in EL_CASES.items():
     f = copy.deepcopy(el_good)
@@ -92,6 +93,15 @@ for name, mutate in {
     errs = check.check_adapter(a, "adapters/el.toml")
     print(("refused " if errs else "MISSED  ") + name + (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
     bad += not errs
+# a pattern can dodge any finite probe, so values are also held to a fixed safe set, whatever the adapter says
+loose = copy.deepcopy(adapters)
+loose["el"]["ops"]["kv.set"]["args"]["values"] = {"table": "x[a-z;|&$ ]*"}
+f = copy.deepcopy(el_good)
+f["post"][0]["values"] = {"listen": "x;rm"}
+errs = check.check_fix(f, loose, el_rel)
+print(("refused " if errs else "MISSED  ") + "shell through a loose adapter pattern" +
+      (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
+bad += not errs
 for fam, a in adapters.items():
     errs = check.check_adapter(a, f"adapters/{fam}.toml")
     print(("passed  " if not errs else "WRONG   ") + f"adapters/{fam}.toml" + (f" ({errs})" if errs else ""))

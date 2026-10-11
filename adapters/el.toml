@@ -199,7 +199,8 @@ current = "every binary a service runs comes from a package built for the runnin
 services = "no package that ships an init script or unit belongs to a name family the box did not have at the start, unless something installed requires it (EL5/6 rpm has no 'explicitly installed')"
 
 # The keys kv.set and kv.unset may touch, per file. Only files without [sections] take kv.set. Keys that grant access
-# (anonymous uploads, skip-grant-tables, ...) never go on this list.
+# (anonymous uploads, skip-grant-tables, ...) never go on this list. vsftpd's seccomp_sandbox and isolate* are here
+# because vsftpd 3 can't start inside a chroot with them on; they turn off vsftpd's own hardening, not access control.
 [kv."/etc/vsftpd/vsftpd.conf"]
 keys = ["listen", "listen_ipv6", "background", "seccomp_sandbox", "isolate", "isolate_network", "tcp_wrappers"]
 set = true
