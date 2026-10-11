@@ -7,6 +7,7 @@ Started by tools/sandbox.py when an adapter has a [mirror] table. Standard libra
 
   python3 tools/mirror.py PORT CACHE_DIR
 """
+import hashlib
 import http.server
 import os
 import shutil
@@ -37,9 +38,23 @@ class H(http.server.BaseHTTPRequestHandler):
                 with urllib.request.urlopen(f"https://{parts[0]}/{parts[1]}", timeout=300) as r:
                     os.makedirs(os.path.dirname(local), exist_ok=True)
                     tmp = f"{local}.tmp{os.getpid()}-{id(self)}"
-                    with open(tmp, "wb") as f:
-                        shutil.copyfileobj(r, f)
-                    os.replace(tmp, local)
+                    try:
+                        size, h = 0, hashlib.sha256()
+                        with open(tmp, "wb") as f:
+                            while chunk := r.read(1 << 20):
+                                f.write(chunk)
+                                h.update(chunk)
+                                size += len(chunk)
+                        # Never cache a cut-off download: a hash-named file is served from disk forever after.
+                        want = r.headers.get("Content-Length")
+                        if want is not None and int(want) != size:
+                            raise OSError(f"short read: {size} of {want} bytes")
+                        if hashed and len(head) == 64 and h.hexdigest() != head:
+                            raise OSError("sha256 does not match the file name")
+                        os.replace(tmp, local)
+                    finally:
+                        if os.path.exists(tmp):
+                            os.remove(tmp)
             except Exception as e:
                 if not os.path.exists(local):  # a live mirror hiccup: serve the last good copy if there is one
                     return self.send_error(e.code if isinstance(e, urllib.error.HTTPError) else 502, str(e)[:100])
