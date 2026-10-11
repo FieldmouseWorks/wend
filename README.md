@@ -13,14 +13,6 @@ Seed content: the dep-lab Debian results. 12 fixes take Debian 4.0 etch (2007) t
 different boxes, a PHP web server and a MySQL/BIND server, each made it with no model and no rollbacks in 13–15
 minutes, and ended with zero obsolete packages.
 
-Second route: CentOS 5.11 (2014) to AlmaLinux 10.2, crossing yum to dnf, the /usr merge, two package-manager
-bootstraps and a vendor switch. 25 fixes take a web/MySQL box and a DNS/FTP box all the way, with no model, in about
-10 minutes each (run files in `runs/el/`). Opus 5.5 found the path in all 5 of its dep-lab runs; replays are free.
-Both routes are proven in chroots: userland only. Kernels, bootloaders and reboots are not covered yet. On the EL
-route that includes boot-time services: CentOS 5's chkconfig settings don't carry over to systemd units, so after a
-real reboot the services stay down until enabled by hand (the route's note lists them). Debian's packages enable
-their own units on install.
-
 **Agents and contributors: start with [AGENTS.md](AGENTS.md).** Clone, plug in any model, discover a path, prove it
 with the same command CI runs, and open a PR.
 
@@ -63,13 +55,10 @@ adapters/
   el.toml                    Enterprise Linux: CentOS 5 to AlmaLinux 10, the rpm backend, the mirror shim
 fixes/<family>/<hop>/<name>.toml
   debian/wheezy/purge-stale-libdb4.toml   ...12 seed fixes
-  el/alma9/el8-transit.toml               ...22 fixes for CentOS 5 -> AlmaLinux 10
 routes/<family>/<from>-to-<to>.toml
   debian/etch-to-trixie.toml
-  el/centos5-to-alma10.toml
 boxes/<family>/<name>/box.toml            CI fixtures, trusted test code, never shipped
   debian/etch-web/  debian/etch-db/
-  el/centos5-web/   el/centos5-dns/
 runs/<family>/<route>/<box>/<stamp>.json  written by CI only
 tools/
   check.py           schema check, content ids, decoy check, --repin, --compile
