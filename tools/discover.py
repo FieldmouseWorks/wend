@@ -62,7 +62,7 @@ class Discoverer:
             if f.get(ph):
                 d[ph] = f[ph]
         d["restores"] = [c if c in walk.adapter["checks"] else f"box:{c}" for c in f.get("restores", [])]
-        d["adds"] = f.get("adds", [])
+        d["adds"] = []  # SPEC "restores and adds": a human writes adds, never a model
         d["meta"] = {"name": name, "author": self.p.label, "found_on": walk.box_id, "fires_on": [walk.box_id]}
         return d
 

@@ -8,6 +8,7 @@ With a model, a hop that fails asks it for the missing fix. Proposals go through
 import hashlib
 import json
 import os
+import re
 import time
 
 import backends
@@ -15,6 +16,8 @@ import check
 import sandbox
 from backends import fill, pred_sh
 from sandbox import Box, safe_rm, tail
+
+ADDED = "/var/lib/wend/added-families"  # SPEC "restores and adds"
 
 
 class Walk:
@@ -61,8 +64,19 @@ class Walk:
         rel = a["releases"].get(hop)
         upgrade = rel["upgrade"] if isinstance(rel, dict) and "upgrade" in rel else h["upgrade"]
         verify = [fill(h["verify"], v)] if "verify" in h else []  # the release file says we arrived
+        # SPEC "restores and adds": the families the fired fixes may introduce, for the services check
+        if not all(isinstance(f.get("adds", []), list) for f in fixes):
+            raise ValueError("adds must be a list of name families")
+        adds = sorted({x for f in fixes for x in f.get("adds", [])})
+        if not all(isinstance(x, str) and re.fullmatch(check.FAMILY, x) for x in adds):  # never shell, on any path
+            raise ValueError(f"adds must be name families ({check.FAMILY}), not {adds!r}")
+        for f in fixes:  # the checker's rule again: a direct `wend replay` doesn't run check_fix first
+            if set(f.get("adds", [])) - check.installed_families(f):
+                raise ValueError(f"{f.get('meta', {}).get('name')}: adds names a family its own install steps "
+                                 "don't install")
+        declare = [f"mkdir -p /var/lib/wend && printf '{''.join(x + chr(92) + 'n' for x in adds)}' >> {ADDED}"] if adds else []
         return ([fill(h["set_release"], v), fill(h["refresh"], v)] + comp("pre") + [fill(c, v) for c in upgrade] +
-                comp("post") + cleanup + verify)
+                comp("post") + declare + cleanup + verify)
 
     def execute(self, commands, why):
         """Run commands in order; keep the step only if all succeed and no passing check is lost."""

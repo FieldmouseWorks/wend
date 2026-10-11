@@ -25,6 +25,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PKG = r"[A-Za-z0-9][A-Za-z0-9._+-]*"  # rpm names have capitals (NetworkManager) and underscores
 ETC_PATH = r"/etc/[A-Za-z0-9_./-]+"
 MYSQL_KEY = r"[a-z][a-z0-9-]*"
+FAMILY = r"[A-Za-z_+]+"  # a name family: no digits or dots, nothing from the first "-" on (SPEC "restores and adds")
 MYSQL_VALUE = r"[A-Za-z0-9_./:,@+-]*"
 ETC_GLOB = r"/etc/[A-Za-z0-9_./*-]+"
 CORE_OPS = {"install", "remove", "repair", "force-remove", "write-file", "pm-option"}
@@ -36,6 +37,19 @@ SAFE_VALUE = r"[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*"
 ADAPTER_KEYS = {"schema", "family", "backend", "release_file", "ladder", "may_skip", "harness_owned", "writable",
                 "managed", "force", "releases", "mirror", "hop", "predicates", "pm_options", "box", "ops", "checks",
                 "kv"}
+
+
+def family(pkg):
+    """A package's name family (SPEC "restores and adds"): digits and dots removed, nothing from the first "-" on."""
+    return re.sub(r"[0-9.]", "", pkg).split("-")[0]
+
+
+def installed_families(doc):
+    """The families of the packages a fix's own steps install (install, or a transit's reinstall): what its adds may
+    name. The checker and both hop compilers use this, so a direct `wend replay` holds a fix to the same rule."""
+    steps = [s for ph in ("pre", "post") for s in (doc.get(ph) or []) if isinstance(s, dict)]
+    return {family(p) for s in steps for p in (s.get("packages", []) if s.get("op") == "install" else
+                                               s.get("reinstall") or []) if isinstance(p, str)}
 
 
 def canonical(obj):
@@ -252,6 +266,14 @@ def check_fix(doc, adapters, where):
     for c in doc.get("restores", []):
         if c not in checks and not re.fullmatch(r"box:[a-z0-9-]+", c):
             errs.append(f"{where}: restores {c!r}, which is neither an adapter check nor box:<role>")
+    if not isinstance(doc.get("adds", []), list):
+        errs.append(f"{where}: adds must be a list of name families")
+    installs = installed_families(doc)
+    for f in doc.get("adds", []) if isinstance(doc.get("adds", []), list) else []:
+        if not isinstance(f, str) or not re.fullmatch(FAMILY, f):
+            errs.append(f"{where}: adds {f!r}, which is not a name family ({FAMILY})")
+        elif f not in installs:  # a fix may only declare what it installs itself, so review sees both together
+            errs.append(f"{where}: adds {f!r}, but none of the fix's own install steps installs a package of that family")
     m = doc.get("meta", {})
     if not m.get("name") or not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", m["name"]):
         errs.append(f"{where}: meta.name must be a lowercase slug")
