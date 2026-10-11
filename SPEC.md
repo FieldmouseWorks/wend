@@ -406,8 +406,10 @@ Reference: find it in `PKGLIST(BASE)`, download it, `rpm -e --nodeps --noscripts
 
 **`rpm.drop-arch`** `arches` (list of `i[3-6]86`, at least one). Removes every installed package built for one of
 these architectures, files and database entries, with no dependency checks and no scriptlets. EL5 x86_64 installs
-carry i386 copies of libraries (curl, glibc, ...) that conflict with EL6's x86_64 packages. Fails if any such
-package is still installed afterwards. Reference: `rpm -e --nodeps --noscripts` every
+carry i386 copies of libraries (curl, glibc, ...) that conflict with EL6's x86_64 packages. Refuses, before
+removing anything, if a package of these arches has no installed twin of another arch (a 32-bit-only app or compat
+library is not a multilib copy). 32-bit software not installed by rpm (a tarball in /opt) still loses its libraries.
+Fails if any such package is still installed afterwards. Reference: `rpm -e --nodeps --noscripts` every
 `NAME-VERSION-RELEASE.ARCH` that `rpm -qa` lists with one of the arches, then check `rpm -qa --qf '%{ARCH}\n'` has
 none of them.
 
@@ -431,7 +433,11 @@ installs them properly. Reference:
 reach: rpm 4.11 (EL7) can't install packages with rich dependencies. Effect: every installed package is replaced by
 `release`'s version of it, installed by `release`'s own rpm; `reinstall` is installed again (the release's first
 distro-sync erases some packages the box needs); the package manager is `release`'s dnf with a `yum` front end;
-nothing from older releases is left in the rpm database. Fails if the box doesn't say it is `release` afterwards.
+nothing from older releases is left in the rpm database (their files stay, unowned). So it refuses, before
+touching anything, if any installed package (gpg-pubkey aside) has a vendor other than `remove`'s, or is one of that
+vendor's add-on repos (EL: names starting `rh-`, `devtoolset-` or `centos-release-`, except the base
+`centos-release-notes`; that is, Software Collections and SIGs). EPEL, vendor, SIG and locally built RPMs would
+otherwise lose their package records. Fails if the box doesn't say it is `release` afterwards.
 A fix with a non-empty `reinstall` must pass the install rule. Reference, with work dir `/var/lib/wend/boot`, and
 repos kept in private `reposdir`s so `/etc/yum.repos.d` stays the harness's:
 1. Write a repo file for `transit.from`'s repos plus `transit.extra_repos` (`old`), and one for `release`'s repos
