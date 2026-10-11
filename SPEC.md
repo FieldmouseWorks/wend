@@ -699,7 +699,8 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
       when asked to (`--live`), and its run then records the new `sources`, so the mismatch is visible. Decided:
       refuse by default. The follow-up is making a vanished snapshot rare (the archive and the fallback chain), not
       making the client looser.
-    - **Order of work.** The harness and the client record `sources` (done). Next CI uploads the download list. Then
-      the archive. Then the client's verifying cache. Until runs carry `sources`, integrity rests on TLS to the
+    - **Order of work.** Done: the harness and the client record `sources`, and the client walks through a verifying
+      cache (`wend walk --run`, with `--source` and `--offline`). Next: CI uploads the download list, then the archive
+      (wend#19). Until runs carry `sources`, integrity rests on TLS to the
       mirrors and the shim's cache: EL repos run with `gpgcheck=0` (CentOS 5's keys can't check what comes later), and the shim
       keeps only complete downloads and checks hash-named metadata against its name.

@@ -8,18 +8,19 @@ reference implementation:
 
 1. **Read, check, compile.** Load the atlas, compute content ids, run the gate's schema rules, and
    compile fixes and hops into the exact commands CI proved.
-2. **Walk a route on a root** (this slice). Evaluate preconditions on the box, run each hop, run the checks, roll
+2. **Walk a route on a root.** Evaluate preconditions on the box, run each hop, run the checks, roll
    back on red, prune obsolete packages, write the run. Proven by replaying the CI boxes and matching the Python
    harness's runs (see below). It walks a root filesystem (a chroot), not the running system: walking `/` needs a
    snapshot backend first, and `wend walk --root /` refuses.
-3. **Fetch and verify the route before touching the box**: packages pinned by digest, a source fallback chain.
-   Blocked on SPEC open question 12 (runs don't record package digests yet).
+3. **Fetch and verify by digest** (this slice). With a run that pins its sources (SPEC "Pinned sources"), the
+   walk's package traffic goes through a verifying proxy: only bytes the run's pins vouch for, from a cache, a list of
+   sources, then the origin. Walk a copy once to fill the cache; walk the machine `--offline` from it.
 
 ## Build
 
 ```
 cargo build --release --manifest-path client/Cargo.toml                                    # for this machine
-cargo build --release --manifest-path client/Cargo.toml --target x86_64-unknown-linux-musl # static, ~2.5 MB
+cargo build --release --manifest-path client/Cargo.toml --target x86_64-unknown-linux-musl # static, ~3 MB
 ```
 
 ## Use
@@ -39,6 +40,32 @@ sudo wend walk etch-to-trixie --root /srv/etch --checks boxes/debian/etch-web/bo
 `/var/tmp/wend-client`), and restores it when a hop fails or loses a check. It mounts a private tmpfs `/dev` and fresh
 `/proc` and `/sys` inside the root, never the host's. EL routes fetch through `tools/mirror.py` on port 8085 (old yum
 can't speak the vault's TLS), as the Python harness does; `walk` checks it is up before it starts.
+
+### Verified fetching (`--run`)
+
+```
+sudo wend walk centos5-to-alma10 --root /srv/copy --checks boxes/el/centos5-web/box.toml \
+     --run runs/<the CI run>.json --cache /var/cache/wend          # fills the cache, checking every byte
+sudo wend walk centos5-to-alma10 --root /srv/real --checks ... --run ... --cache /var/cache/wend --offline
+```
+
+`--run` names a passing run of this route. Its `hops[].sources` pin each hop's top metadata file (apt's
+`Release`/`InRelease`, rpm's `repomd.xml`) by sha256. The client starts an HTTP proxy on 127.0.0.1 and points the box's
+repos at it (apt's mirror, or the rpm shim, which it replaces: no `tools/mirror.py` needed). The proxy trusts a file
+only through that chain: a pinned top file, then each index it lists at the hash it lists, then each package an index
+lists at the hash the index gives. Anything else is refused (403, logged at the end of the walk), and unpinned
+metadata (`InRelease` when the run pinned `Release`, signatures) gets a 404 so the package manager falls back to what
+was pinned.
+
+Bytes come from `--cache DIR` (default `<work>/cache`, files named by their hash), then each `--source` in order (a
+directory or URL laid out `host/path`, like the shim's cache or an org mirror), then the origin unless `--offline`.
+The first bytes that hash right win and go into the cache. When no source has them, the request is refused and the
+hop rolls back: SPEC's default for a vanished snapshot (`--live` is wend#19). Fetching shells out to `curl`, so
+proxies and CA bundles are the host's.
+
+Proven on centos5-to-alma10 (el/centos5-web): a cold walk through the proxy passed with nothing refused and filled
+1.5 GB of cache. A second walk on a fresh copy `--offline` passed in 9 minutes. With one cached RPM corrupted, the
+offline walk refused it and rolled the hop back.
 
 The repo's `./wend` is the Python tool for contributors (discover, verify, report). This binary is the client a
 machine's owner runs. They share a name because the client is the product; the Python tool is how the map gets made.
@@ -97,6 +124,9 @@ package counts) except timing, the runner line and `log_sha256`, which hashes co
   as empty directories.
 - Interrupting `walk` mid-hop leaves the root mid-hop. The snapshot of its state before the hop stays in the work
   directory, and the error says how to restore it. The same goes for any walk that stops on an error.
+- The verifying proxy parses gzip and plain indexes only. apt's `.xz`/`.bz2` indexes are served verified, and their
+  packages are learned from the `.gz` form the same `Release` lists. yum's `primary.sqlite` is served verified, and
+  packages come from `primary.xml.gz`, which the proxy fetches itself.
 - Boxes are CI fixtures the client never sees, so it doesn't check them (or whether a run's box exists).
 - The checker's error messages follow tools/check.py's but aren't identical (Python prints `repr()` of values);
   parity compares verdicts, not wording.

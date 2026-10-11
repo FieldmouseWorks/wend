@@ -9,9 +9,11 @@ repository = "https://github.com/FieldmouseWorks/wend"
 publish = false
 
 [dependencies]
+flate2 = "1"
 libc = "0.2.190"
 regex = "1"
 serde_json = { version = "1", features = ["preserve_order"] }
+sha1 = "0.10"
 sha2 = "0.10"
 toml = { version = "0.8", features = ["preserve_order"] }
 
