@@ -673,7 +673,7 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
 11. **The family map.** Move it from box checks into the adapter (a `[families]` table of renames), so a client can
     compute name families for its fingerprint hint and services check without a box? Probably yes; nothing reads it
     outside boxes yet.
-12. **Pinning what a route installs.** Proposed answer: pin repo metadata, not package lists. Each hop's run record
+12. **Pinning what a route installs.** Answered (2026-10-11): pin repo metadata, not package lists. Each hop's run record
     carries `sources` (see Run), the sha256 of every repo's top metadata file. Packages are verified through the
     chain under it: `Release` (or `repomd.xml`) → index → the package's own checksum. The chain uses the strongest
     hash each level carries. Etch's indexes already carry SHA256. CentOS 5's `primary.xml` carries only SHA-1, which
@@ -690,8 +690,10 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
       then installs only from that cache, offline, so a mirror going down mid-upgrade can't strand it.
     - **Moved mirrors.** When the pinned metadata isn't available from any source (a live mirror moved on and no
       archive holds that snapshot), the client stops before touching anything. It walks against today's mirrors only
-      when asked to (`--live`), and its run then records the new `sources`, so the mismatch is visible.
-    - **Order of work.** The harness records `sources` and CI uploads the download list. Then the archive. Then the
-      client's verifying cache. Until the harness records `sources`, integrity rests on TLS to the mirrors and the
-      shim's cache: EL repos run with `gpgcheck=0` (CentOS 5's keys can't check what comes later), and the shim
+      when asked to (`--live`), and its run then records the new `sources`, so the mismatch is visible. Decided:
+      refuse by default. The follow-up is making a vanished snapshot rare (the archive and the fallback chain), not
+      making the client looser.
+    - **Order of work.** The harness and the client record `sources` (done). Next CI uploads the download list. Then
+      the archive. Then the client's verifying cache. Until runs carry `sources`, integrity rests on TLS to the
+      mirrors and the shim's cache: EL repos run with `gpgcheck=0` (CentOS 5's keys can't check what comes later), and the shim
       keeps only complete downloads and checks hash-named metadata against its name.
