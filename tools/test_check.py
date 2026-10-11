@@ -145,10 +145,16 @@ print("ids: content changes the id, renaming does not")
 # unreadable to php-fpm on AlmaLinux 10, wend#13). Both engines, checked by structure: CI's own umask is 022.
 import ast  # noqa: E402
 tree = ast.parse(open(os.path.join(check.ROOT, "wend")).read())
-for fn in (n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ("cmd_replay", "cmd_discover", "cmd_verify")):
-    first = fn.body[0]
+fns = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+helper = [b for b in fns["root_umask"].body if not (isinstance(b, ast.Expr) and isinstance(b.value, ast.Constant))] \
+    if "root_umask" in fns else []
+ok = len(helper) == 1 and ast.unparse(helper[0]) == "os.umask(18)"  # 18 == 0o022
+print(("passed  " if ok else "WRONG   ") + "wend root_umask() is exactly os.umask(0o022)")
+bad += not ok
+for name in ("cmd_replay", "cmd_discover", "cmd_verify"):  # every command that touches a root; a missing one fails
+    first = fns[name].body[0] if name in fns else None
     ok = isinstance(first, ast.Expr) and isinstance(first.value, ast.Call) and getattr(first.value.func, "id", "") == "root_umask"
-    print(("passed  " if ok else "WRONG   ") + f"wend {fn.name} sets umask 022 first")
+    print(("passed  " if ok else "WRONG   ") + f"wend {name} sets umask 022 first")
     bad += not ok
 rs = open(os.path.join(check.ROOT, "client", "src", "main.rs")).read()
 walk = rs[rs.index("fn cmd_walk("):]
