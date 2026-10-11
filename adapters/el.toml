@@ -87,9 +87,11 @@ major = 9
 pm = "dnf"
 repos = { baseos = "repo.almalinux.org/almalinux/9/BaseOS/x86_64/os", appstream = "repo.almalinux.org/almalinux/9/AppStream/x86_64/os" }
 # EL8 module streams don't exist on EL9: reset them, and tell dnf which platform it is on (a chroot has no os-release
-# it trusts yet)
+# it trusts yet). EL9's rpm only reads EL8's Berkeley DB read-only, so the database is rebuilt (as sqlite) before any
+# fix installs anything.
 upgrade = ["rm -f /etc/dnf/modules.d/*.module",
-           "{clean_repos}; dnf -y {dnf_opts} --nobest --setopt=module_platform_id=platform:el9 distro-sync"]
+           "{clean_repos}; dnf -y {dnf_opts} --nobest --setopt=module_platform_id=platform:el9 distro-sync",
+           "/usr/sbin/ldconfig; rm -f /var/lib/rpm/__db.*; rpmdb --rebuilddb && rpm -q rpm"]
 
 [releases.alma10]
 major = 10
