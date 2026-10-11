@@ -99,7 +99,7 @@ on MySQL 5.0; MariaDB adds `mariadb`, `mariadbd`, `galera` and their versioned f
 keys (the last one wins) and `!include` files resolve as the server reads that file; `loose-` and `skip-` prefixes are
 not folded into the key; a substring test can't say "datadir is exactly the default". Where no server tools are
 installed it is false, so its `not` is true there: pair a negated one with a positive one. Package names match
-`[a-z0-9][a-z0-9.+-]*`. There is no shell predicate. An adapter gives each predicate's command as a template in
+`[A-Za-z0-9][A-Za-z0-9._+-]*`. There is no shell predicate. An adapter gives each predicate's command as a template in
 `[predicates]` (`{pkg}`, `{path}`, `{text}`, `{key}`, `{value}`, `{any}`); `not`, `all` and `any` are the shell's `!`,
 `&&` and `||` over those.
 
@@ -147,7 +147,8 @@ fix that needs it says only `{ op = "rpm.transit", release = "alma8", ... }`.
 Rules that keep this from being shell with extra steps:
 
 - An op takes exactly its listed args. Extra keys are refused.
-- Package names match `[a-z0-9][a-z0-9.+-]*`.
+- Package names match `[A-Za-z0-9][A-Za-z0-9._+-]*`: rpm names carry capitals and underscores (`NetworkManager`,
+  `PolicyKit`), dpkg names never do.
 - `write-file` content has no `'` or `%`. The path must match the adapter's `writable` globs, one directory level
   only (`*` never matches `/`). The globs are an allowlist, not "anything under /etc". Cron, systemd units, `/etc/default`, sudoers,
   profile.d, logrotate and apt.conf.d all execute code or grant trust. Growing the list is a spec change.
@@ -574,7 +575,7 @@ is only allowed in `pre` (after the upgrade the links are gone), and it stays on
 that uses `service.enable` reads the same record, which is what the box ran under SysV, not what it runs today. That
 is why `service.enable` also accepts a `like` service that is enabled now. Fails if `/etc/rc.d/rc<L>.d` doesn't exist. Reference: `ls /etc/rc.d/rc$L.d | sed -n 's/^S[0-9][0-9]//p' | sort -u`.
 
-**`service.enable`** `unit` (`[a-z0-9][a-z0-9_.-]*`), `like` (a list of the same, at least one). Enables `unit` at
+**`service.enable`** `unit` (`[A-Za-z0-9][A-Za-z0-9_.-]*`, so `NetworkManager`), `like` (a list of the same, at least one). Enables `unit` at
 boot if any service in `like` started at boot: it is in the SysV record, or `systemctl is-enabled` says `enabled`
 now. `like` names what the unit replaces (`mysqld` for `mariadb`) or follows (`httpd` for `php-fpm`, new on EL9, which
 the site needs). Never disables anything, and a unit whose `like` services were all off is left as it is. Fails if

@@ -74,7 +74,7 @@ pub fn pred_sh(w: &Value, adapter: &Doc) -> Result<String, String> {
     })
 }
 
-/// A package name (already `[a-z0-9][a-z0-9.+-]*`) as a literal in an extended regex.
+/// A package name (already `check::PKG`) as a literal in an extended regex.
 fn ere(name: &str) -> String {
     name.replace('.', "[.]").replace('+', "[+]")
 }

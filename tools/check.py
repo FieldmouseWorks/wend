@@ -22,7 +22,7 @@ import backends  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-PKG = r"[a-z0-9][a-z0-9.+-]*"
+PKG = r"[A-Za-z0-9][A-Za-z0-9._+-]*"  # rpm names have capitals (NetworkManager) and underscores
 ETC_PATH = r"/etc/[A-Za-z0-9_./-]+"
 MYSQL_KEY = r"[a-z][a-z0-9-]*"
 MYSQL_VALUE = r"[A-Za-z0-9_./:,@+-]*"

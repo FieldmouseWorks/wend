@@ -13,7 +13,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Mutex;
 
-pub const PKG: &str = r"[a-z0-9][a-z0-9.+-]*";
+/// rpm names have capitals (NetworkManager) and underscores
+pub const PKG: &str = r"[A-Za-z0-9][A-Za-z0-9._+-]*";
 const ETC_PATH: &str = r"/etc/[A-Za-z0-9_./-]+";
 const MYSQL_KEY: &str = r"[a-z][a-z0-9-]*";
 const MYSQL_VALUE: &str = r"[A-Za-z0-9_./:,@+-]*";

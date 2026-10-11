@@ -118,6 +118,19 @@ for fam, a in adapters.items():
     errs = check.check_adapter(a, f"adapters/{fam}.toml")
     print(("passed  " if not errs else "WRONG   ") + f"adapters/{fam}.toml" + (f" ({errs})" if errs else ""))
     bad += bool(errs)
+# rpm names carry capitals: installing NetworkManager and enabling its unit must pass, a capitalized name with shell in
+# it must not
+nm = {**el_good, "when": {"installed": "initscripts"}, "adds": ["NetworkManager"], "post": [
+    {"op": "install", "packages": ["NetworkManager"]},
+    {"op": "service.enable", "unit": "NetworkManager", "like": ["network"]}]}
+for name, fix, want in (("NetworkManager install and enable", nm, False),
+                        ("shell in a capitalized package name", {**nm, "post": [
+                            {"op": "install", "packages": ["NetworkManager;reboot"]}]}, True),
+                        ("shell in a capitalized unit", {**nm, "post": [
+                            {"op": "service.enable", "unit": "NetworkManager$(id)", "like": ["network"]}]}, True)):
+    errs = check.check_fix(fix, adapters, "fixes/el/alma9/t.toml")
+    print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
+    bad += bool(errs) != want
 el_route = {"schema": "wend.route/0", "family": "el", "from": "centos5", "to": "alma10", "fixes": []}
 for hops, want in ((["centos6", "centos7", "alma9", "alma10"], True), (["centos6", "alma9", "alma10"], False),
                    (["centos6", "centos7", "alma8", "alma9", "alma10"], True), (["centos7", "centos6", "alma10"], False)):
