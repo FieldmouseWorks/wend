@@ -30,9 +30,6 @@ postconf -e myhostname=oldbox.example.org
 useradd -m -s /bin/bash alice
 mkdir -p /home/alice/backup
 echo '0 3 * * * /usr/bin/rsync -a /var/ftp/ /home/alice/backup/ # nightly-backup' | crontab -u alice -
-# the owner runs these at boot (stock CentOS 5 installs httpd, mysqld, named and vsftpd switched off)
-chkconfig named on
-chkconfig vsftpd on
 yum clean all >/dev/null
 '''
 # The services role flags service packages whose family wasn't on the box at the start. It skips EL7+'s own
@@ -44,8 +41,6 @@ start_hook = "rpm -qa --qf '%{NAME}\\n' | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 
 isolate = ["ftp"]
 
 [roles]
-# offline, as a chroot allows: SysV runlevel 3 before EL7, systemd unit enablement after (wend#6)
-boot = "M=$(grep -o '[0-9][0-9]*' /etc/redhat-release | head -n1); if [ $M -lt 7 ]; then for s in named vsftpd sshd postfix crond; do chkconfig --list $s 2>/dev/null | grep -q '3:on' || { echo \"$s does not start at boot\"; exit 1; }; done; else for u in named vsftpd sshd postfix crond; do [ \"$(systemctl is-enabled $u 2>/dev/null)\" = enabled ] || { echo \"$u does not start at boot\"; exit 1; }; done; fi"
 ssh = "mkdir -p /var/run/sshd /run/sshd; /usr/sbin/sshd -t && grep -q '^Port 2222' /etc/ssh/sshd_config"
 cron = "test -x /usr/sbin/crond && crontab -l -u alice | grep nightly-backup"
 python = "python3 -c 'print(6*7)' | grep 42 || python -c 'print 6*7' | grep 42"

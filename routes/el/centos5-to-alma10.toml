@@ -52,10 +52,6 @@ id = "sha256:60d1c0bac8fa3943cc9deffb6566143acc02937f3d711125221fa42755c453aa"
 name = "vsftpd3-standalone-ipv4"
 
 [[fixes]]
-id = "sha256:397a077d5ce43514ebee2d4c21a0237c9cf4278ca621c4c7bc7bcdd05ea980a6"
-name = "el7-carry-boot-services"
-
-[[fixes]]
 id = "sha256:279d163af02ab241345b5aa6b4678185637716b75c68394472d569ec1179f10d"
 name = "mariadb55-rehash-app-password"
 
@@ -96,10 +92,6 @@ id = "sha256:e8702cb424e0a946035342b9f09dd72dd3bebec98a8fe865b01818086ef02e6f"
 name = "vsftpd-drop-tcp-wrappers"
 
 [[fixes]]
-id = "sha256:3d05dd3cab5af3d456e93a7f0a8749d49225d00257c340e69c4990240b3f52a7"
-name = "el9-carry-boot-services"
-
-[[fixes]]
 id = "sha256:78137ec7ec6f5a60306d6a0e9fc96233b3c27300458e41ff1e13ca6e00ddd207"
 name = "mariadb-slow-shutdown-alma10"
 
@@ -118,4 +110,4 @@ name = "php81-mysqli-report-off"
 [meta]
 name = "centos5-to-alma10"
 summary = "CentOS 5.11 (2007 lineage) to AlmaLinux 10, through EL8 in one hop, proven on a web/database box and a DNS/FTP box"
-note = "Proven in chroots, userland only. Boot-time enablement is carried over (el7-carry-boot-services, el9-carry-boot-services: what runlevel 3 started on CentOS 5 is enabled under systemd) and checked offline, but no kernel, bootloader or real reboot is tested."
+note = "Proven in chroots, userland only: services are not enabled at boot. CentOS 5's chkconfig settings don't carry over to systemd units, so after a real reboot httpd, php-fpm, mariadb, named and vsftpd stay down until enabled by hand (systemctl enable)."
