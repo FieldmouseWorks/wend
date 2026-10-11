@@ -448,6 +448,25 @@ pub fn safe_rm(path: &Path, work: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// An access or default ACL: either can let another user into what the client creates there.
+fn has_acl(p: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c) = std::ffi::CString::new(p.as_os_str().as_bytes()) else {
+        return true;
+    };
+    ["system.posix_acl_access", "system.posix_acl_default"].iter().any(|n| {
+        let name = std::ffi::CString::new(*n).unwrap();
+        if unsafe { libc::lgetxattr(c.as_ptr(), name.as_ptr(), std::ptr::null_mut(), 0) } >= 0 {
+            return true;
+        }
+        // no such attribute, or a filesystem without ACLs; any other error means "can't tell", so refuse
+        !matches!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ENODATA) | Some(libc::EOPNOTSUPP)
+        )
+    })
+}
+
 /// The work directory holds snapshots of a root, written as root: it must be root's alone (an existing directory
 /// someone else can write to could hold a planted symlink), and it must not be inside the root being walked.
 pub fn work_dir(work: &Path, root: &Path) -> Result<PathBuf, String> {
@@ -458,9 +477,9 @@ pub fn work_dir(work: &Path, root: &Path) -> Result<PathBuf, String> {
             .map_err(|e| format!("{}: {e}", work.display()))?;
     }
     let md = fs::symlink_metadata(work).map_err(|e| format!("{}: {e}", work.display()))?;
-    if !md.is_dir() || md.uid() != 0 || md.mode() & 0o022 != 0 {
+    if !md.is_dir() || md.uid() != 0 || md.mode() & 0o022 != 0 || has_acl(work) {
         return Err(format!(
-            "{} must be a directory owned by root that nobody else can write to",
+            "{} must be a directory owned by root that nobody else can write to (and without ACLs)",
             work.display()
         ));
     }

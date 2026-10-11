@@ -337,6 +337,14 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
     }
     let cdoc = atlas::parse_toml(&std::fs::read_to_string(checks_path).map_err(|e| format!("{checks_path}: {e}"))?)?;
     let checks = walk::Checks::from_doc(&cdoc, a)?;
+    if let Some(rel) = &checks.release {
+        let from = str_of(r, "from")?;
+        if rel != from {
+            return Err(format!(
+                "{checks_path} is for a {rel} machine, and this route starts at {from}: wrong route or wrong checks"
+            ));
+        }
+    }
     let box_id = o.box_id.clone().unwrap_or_else(|| "local".into());
     let root = sandbox::Root::new(std::path::Path::new(root))?;
     let work = sandbox::work_dir(std::path::Path::new(&o.work), &root.dir)?;
