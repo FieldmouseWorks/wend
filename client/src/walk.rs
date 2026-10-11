@@ -61,6 +61,9 @@ pub struct Health {
 pub struct Walk<'a> {
     pub route: &'a Doc,
     pub adapter: &'a Doc,
+    /// the adapter as the atlas has it, for recording sources by their origin URLs (`adapter` may point the box's
+    /// repos at the verifying proxy)
+    pub sources_adapter: &'a Doc,
     pub fixes_by_id: BTreeMap<String, &'a Doc>,
     pub checks: Checks,
     pub root: Root,
@@ -89,6 +92,7 @@ impl<'a> Walk<'a> {
         let mut w = Walk {
             route,
             adapter,
+            sources_adapter: adapter,
             fixes_by_id,
             checks,
             root,
@@ -357,20 +361,33 @@ impl<'a> Walk<'a> {
     fn sources(&self, hop: &str) -> Result<Map<String, Value>, String> {
         let root = &self.root.dir;
         let mut out = BTreeMap::new();
-        match backend_of(self.adapter) {
+        match backend_of(self.sources_adapter) {
             "apt" => {
-                let vars = hop_vars(self.adapter, hop)?;
-                let mirror = vars
-                    .iter()
-                    .find(|(k, _)| k == "mirror")
-                    .map(|(_, v)| v.as_str())
-                    .unwrap_or("");
-                let url = format!("{mirror}/dists/{hop}");
-                let stem = url.split_once("://").map_or(url.as_str(), |(_, r)| r).replace('/', "_");
+                // keys name the origin mirror; apt named its files after the mirror it used (the proxy's, with --run)
+                let mirror = |a: &Doc| -> Result<String, String> {
+                    Ok(hop_vars(a, hop)?
+                        .into_iter()
+                        .find(|(k, _)| k == "mirror")
+                        .map(|(_, v)| v)
+                        .unwrap_or_default())
+                };
+                let url = format!("{}/dists/{hop}", mirror(self.sources_adapter)?);
+                let used = format!("{}/dists/{hop}", mirror(self.adapter)?);
+                let bare = used
+                    .split_once("://")
+                    .map_or(used.as_str(), |(_, r)| r)
+                    .replace('/', "_");
+                // newer apt writes a port's colon as %3a
+                let mut stems = vec![bare.clone()];
+                if bare.contains(':') {
+                    stems.push(bare.replace(':', "%3a"));
+                }
                 let lists = root.join("var/lib/apt/lists");
-                for n in ["InRelease", "Release"] {
-                    if let Some(h) = file_sha256(root, &lists.join(format!("{stem}_{n}"))) {
-                        out.insert(format!("{url}/{n}"), h);
+                for stem in &stems {
+                    for n in ["InRelease", "Release"] {
+                        if let Some(h) = file_sha256(root, &lists.join(format!("{stem}_{n}"))) {
+                            out.insert(format!("{url}/{n}"), h);
+                        }
                     }
                 }
                 if out.is_empty() && dirs_under(root, &lists).first() == Some(&lists) {
@@ -383,7 +400,7 @@ impl<'a> Walk<'a> {
                         .collect();
                     names.sort();
                     for n in names {
-                        let Some(rest) = n.strip_prefix(&format!("{stem}_")) else {
+                        let Some(rest) = stems.iter().find_map(|st| n.strip_prefix(&format!("{st}_"))) else {
                             continue;
                         };
                         if n.ends_with(".gpg") {
@@ -398,7 +415,7 @@ impl<'a> Walk<'a> {
             "rpm" => {
                 // the harness's repo ids are <release>-<name> (backend::repo_file), so a cache directory names its repo
                 let mut ids = BTreeMap::new();
-                for (rel, r) in get(self.adapter, "releases")
+                for (rel, r) in get(self.sources_adapter, "releases")
                     .and_then(Value::as_object)
                     .into_iter()
                     .flatten()
@@ -410,7 +427,7 @@ impl<'a> Walk<'a> {
                     }
                 }
                 // rpm.transit's boot-<name> repos: the release it comes from, then its extra repos
-                for r in get(self.adapter, "releases")
+                for r in get(self.sources_adapter, "releases")
                     .and_then(Value::as_object)
                     .into_iter()
                     .flatten()
@@ -419,7 +436,7 @@ impl<'a> Walk<'a> {
                     let Some(t) = get(r, "transit") else { continue };
                     let from = get(t, "from")
                         .and_then(Value::as_str)
-                        .and_then(|f| get(self.adapter, "releases").and_then(|rs| get(rs, f)));
+                        .and_then(|f| get(self.sources_adapter, "releases").and_then(|rs| get(rs, f)));
                     let repos = from
                         .and_then(|f| get(f, "repos"))
                         .and_then(Value::as_object)
@@ -435,13 +452,13 @@ impl<'a> Walk<'a> {
                 let kept = root.join(SOURCES.trim_start_matches('/')).join(hop);
                 // a fetched line counts only if it is one of the adapter's own pins
                 let mut pins = BTreeMap::new();
-                for rel in get(self.adapter, "releases")
+                for rel in get(self.sources_adapter, "releases")
                     .and_then(Value::as_object)
                     .into_iter()
                     .flatten()
                     .map(|(k, _)| k)
                 {
-                    pins.extend(bootstrap_pins(self.adapter, rel)?);
+                    pins.extend(bootstrap_pins(self.sources_adapter, rel)?);
                 }
                 let fetched = kept.join("fetched");
                 if file_sha256(root, &fetched).is_some() {
@@ -466,7 +483,7 @@ impl<'a> Walk<'a> {
                             .filter(|rid| {
                                 rid.starts_with("boot-")
                                     || rid.split('-').next().is_some_and(|r| {
-                                        get(self.adapter, "releases")
+                                        get(self.sources_adapter, "releases")
                                             .and_then(|rs| get(rs, r))
                                             .is_some_and(|x| get(x, "transit").is_some())
                                     })

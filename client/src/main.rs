@@ -7,6 +7,7 @@ mod atlas;
 mod backend;
 mod canon;
 mod check;
+mod fetch;
 mod hop;
 mod sandbox;
 mod walk;
@@ -26,9 +27,12 @@ wend: walk a proven upgrade route on a machine. No model, no network beyond your
   wend hop ROUTE HOP [--fired N,..] the commands one hop of a route runs, with the named fixes (default: every
                                     fix the route pins on that hop)
   wend walk ROUTE --root DIR --checks FILE [--box NAME] [--out RUN.json] [--work DIR]
+            [--run RUN.json [--cache DIR] [--source URL|DIR]... [--offline]]
                                     walk a route on a root filesystem, in place (root needed): each hop's
                                     fixes, the upgrade, the checks; a hop that breaks anything is rolled back
-                                    and the walk stops. FILE has [roles] (shell checks), like a CI box file
+                                    and the walk stops. FILE has [roles] (shell checks), like a CI box file.
+                                    --run: the repos only serve what that run's pinned sources vouch for,
+                                    from the cache, each --source (laid out host/path), then the origin
   wend parity INPUT.json            machine output for client/parity.py (the Python engine must agree)
 
 Options: --atlas DIR (default: the current directory, laid out like the wend repo).
@@ -55,6 +59,16 @@ fn main() -> ExitCode {
         out: opt(&mut args, "--out"),
         work: opt(&mut args, "--work").unwrap_or_else(|| "/var/tmp/wend-client".into()),
         steps: opt(&mut args, "--steps"),
+        run: opt(&mut args, "--run"),
+        cache: opt(&mut args, "--cache"),
+        sources: std::iter::from_fn(|| opt(&mut args, "--source")).collect(),
+        offline: match args.iter().position(|a| a == "--offline") {
+            Some(i) => {
+                args.remove(i);
+                true
+            }
+            None => false,
+        },
     };
     let Some(cmd) = args.first().cloned() else {
         println!("{USAGE}");
@@ -299,6 +313,35 @@ struct WalkOpts {
     out: Option<String>,
     work: String,
     steps: Option<String>,
+    run: Option<String>,
+    cache: Option<String>,
+    sources: Vec<String>,
+    offline: bool,
+}
+
+/// The adapter with its repos pointed at the proxy: apt's mirrors become <proxy>/<host>/<path>, and the rpm shim is
+/// the proxy itself (it speaks plain http to the box and fetches https, as the shim does).
+fn proxied_adapter(a: &Doc, base: &str) -> Result<Doc, String> {
+    let mut a = a.clone();
+    if let Some(m) = a.get_mut("mirror").and_then(Value::as_object_mut) {
+        m.insert("shim".into(), Value::String(base.into()));
+    }
+    if backend::backend_of(&a) == "apt" {
+        let r = a
+            .get_mut("releases")
+            .and_then(Value::as_object_mut)
+            .ok_or("the adapter has no [releases]")?;
+        for k in ["archive", "current"] {
+            if let Some(Value::String(u)) = r.get(k) {
+                let rest = u
+                    .split_once("://")
+                    .map(|x| x.1)
+                    .ok_or(format!("releases.{k} isn't a URL"))?;
+                r.insert(k.into(), Value::String(format!("{base}/{rest}")));
+            }
+        }
+    }
+    Ok(a)
 }
 
 fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
@@ -325,7 +368,37 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
             return Err(format!("missing on this host: {t}"));
         }
     }
-    if let Some(m) = get(a, "mirror") {
+    let root = sandbox::Root::new(std::path::Path::new(root))?;
+    let work = sandbox::work_dir(std::path::Path::new(&o.work), &root.dir)?;
+    // --run: the box's repos go through the verifying proxy, which serves only what the run's pinned sources vouch
+    // for (SPEC "Pinned sources")
+    let proxy = match &o.run {
+        Some(p) => {
+            let run: Value = serde_json::from_str(&std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?)
+                .map_err(|e| format!("{p}: {e}"))?;
+            if run["route"].as_str() != Some(content_id(r).as_str()) {
+                return Err(format!(
+                    "{p} is a run of another route (or another version of this one)"
+                ));
+            }
+            if run["result"] != "pass" {
+                return Err(format!("{p} didn't pass: its sources prove nothing"));
+            }
+            // the cache feeds the root: held to the work directory's rules (root's, nobody else can write)
+            let cache = PathBuf::from(o.cache.clone().unwrap_or_else(|| format!("{}/cache", work.display())));
+            let cache = sandbox::work_dir(&cache, &root.dir)?;
+            Some(fetch::Proxy::start(&run, &cache, o.sources.clone(), o.offline)?)
+        }
+        None if o.offline || o.cache.is_some() || !o.sources.is_empty() => {
+            return Err(
+                "--cache, --source and --offline need --run RUN.json: its pinned sources are what gets verified".into(),
+            )
+        }
+        None => None,
+    };
+    let proxied = proxy.as_ref().map(|p| proxied_adapter(a, &p.base())).transpose()?;
+    let compile_with = proxied.as_ref().unwrap_or(a);
+    if let (Some(m), None) = (get(a, "mirror"), &proxy) {
         let probe = format!("{}/{}", str_of(m, "shim")?, str_of(m, "probe")?);
         if sandbox::host(&format!("curl -sf -o /dev/null --max-time 60 '{probe}'")).0 != 0 {
             return Err(format!(
@@ -346,8 +419,6 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
         }
     }
     let box_id = o.box_id.clone().unwrap_or_else(|| "local".into());
-    let root = sandbox::Root::new(std::path::Path::new(root))?;
-    let work = sandbox::work_dir(std::path::Path::new(&o.work), &root.dir)?;
     let snap = work.join(format!("snap-{}", std::process::id()));
     std::fs::create_dir(&snap).map_err(|e| format!("{}: {e}", snap.display()))?;
     eprintln!(
@@ -385,8 +456,31 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
         }
     }
     let guard = sandbox::Root { dir: root_dir.clone() };
-    let mut w = walk::Walk::new(r, a, atlas.fixes_by_id(), checks, root, snap.clone(), box_id);
+    let mut w = walk::Walk::new(r, compile_with, atlas.fixes_by_id(), checks, root, snap.clone(), box_id);
+    w.sources_adapter = a;
+    if let Some(p) = &proxy {
+        eprintln!(
+            "repos go through the verifying proxy at {} (cache {}{})",
+            p.base(),
+            p.cache().display(),
+            if o.offline { ", offline" } else { "" }
+        );
+    }
     let run = w.walk();
+    if let Some(p) = &proxy {
+        let refused = p.take_refused();
+        if !refused.is_empty() {
+            eprintln!("the proxy refused {} request(s):", refused.len());
+            for r in refused.iter().take(20) {
+                eprintln!("  {r}");
+            }
+        }
+        eprintln!(
+            "note: the root's repo config still points at the proxy ({}), which is gone now. Point it back at a \
+             mirror before using its package manager.",
+            p.base()
+        );
+    }
     let returned: Vec<String> = lent.iter().filter_map(|l| guard.give_back(l).err()).collect();
     let run = match (run, returned.is_empty()) {
         (Ok(_), false) => Err(format!(
