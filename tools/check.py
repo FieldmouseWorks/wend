@@ -241,6 +241,9 @@ def check_fix(doc, adapters, where):
     for ph in ("pre", "post"):
         for i, s in enumerate(doc.get(ph, [])):
             check_step(s, a, f"{where}.{ph}[{i}]", errs)
+            if ph == "post" and s.get("op") == "service.record":
+                # after the upgrade the SysV links are already gone, and the first record is the one that is kept
+                errs.append(f"{where}.post[{i}]: service.record must run before the upgrade (pre)")
     # The stray-MySQL rule: whatever a fix installs, it installs in place of something that is installed now.
     if any(s.get("op") == "install" or s.get("reinstall") for s in steps) and not errs and \
             not installed_names(doc["when"]):

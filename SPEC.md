@@ -534,16 +534,19 @@ false. Restores the old default for every script without touching the app: write
 `/usr/share/wend/php-mysqli-report-off.php` (calls `mysqli_report(MYSQLI_REPORT_OFF)` if the function exists) and
 `/etc/php.d/99-wend-mysqli-report-off.ini` with `auto_prepend_file` pointing at it. `auto_prepend_file` holds one
 file and this ini sorts last, so it never replaces the owner's: if `/etc/php.ini` or another `/etc/php.d/*.ini`
-already sets it (the last setting in PHP's load order, anything but empty or `none`), the op removes its own ini if
-an earlier hop left one, says so, and changes nothing. That box keeps PHP 8.1's exceptions. A per-pool or per-vhost
+already sets it, the op removes its own ini if an earlier hop left one, says so, and changes nothing. "Sets it" is
+read the way PHP reads it: files in byte order, the last setting outside `[PATH=...]` and `[HOST=...]` sections
+wins, and an empty value or `none`, `off`, `no`, `false`, `null` (any case) means not set. That box keeps PHP 8.1's exceptions. A per-pool or per-vhost
 `php_value` beats php.d anyway, so the op can't override those either.
 
 **`service.record`** (no arguments). Writes down which SysV services start at boot, before the hop that brings
 systemd: the old packages' scriptlets delete their runlevel links when the new ones replace them, and systemd's
 presets leave most units disabled (on EL, every one but a few base services). Effect: `/var/lib/wend/sysv-enabled`
 lists, one per line, every service with an `S` link in the default runlevel (`initdefault` in `/etc/inittab`, else 3).
-Only the first record is kept: if the file exists, it is left as it is, so it always holds the box's own state.
-Fails if `/etc/rc.d/rc<L>.d` doesn't exist. Reference: `ls /etc/rc.d/rc$L.d | sed -n 's/^S[0-9][0-9]//p' | sort -u`.
+Only the first record is kept: if the file exists, it is left as it is, so it always holds the box's own state. It
+is only allowed in `pre` (after the upgrade the links are gone), and it stays on the box afterwards: a later route
+that uses `service.enable` reads the same record, which is what the box ran under SysV, not what it runs today. That
+is why `service.enable` also accepts a `like` service that is enabled now. Fails if `/etc/rc.d/rc<L>.d` doesn't exist. Reference: `ls /etc/rc.d/rc$L.d | sed -n 's/^S[0-9][0-9]//p' | sort -u`.
 
 **`service.enable`** `unit` (`[a-z0-9][a-z0-9_.-]*`), `like` (a list of the same, at least one). Enables `unit` at
 boot if any service in `like` started at boot: it is in the SysV record, or `systemctl is-enabled` says `enabled`

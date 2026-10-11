@@ -387,11 +387,15 @@ class Rpm:
         does nothing (and says so): ours would sort last and silently replace it."""
         php = "<?php if (function_exists(\"mysqli_report\")) { mysqli_report(MYSQLI_REPORT_OFF); }\\n"
         ini = "/etc/php.d/99-wend-mysqli-report-off.ini"
-        return ("V=$(cat /etc/php.ini $(ls /etc/php.d/*.ini 2>/dev/null | grep -vx " + ini + ") 2>/dev/null | "
-                "sed -n 's/^[[:space:]]*auto_prepend_file[[:space:]]*=[[:space:]]*//p' | tail -n 1 | sed 's/;.*//' | "
-                "tr -d \"\\\"' \\t\\r\"); "
-                "if [ -n \"$V\" ] && [ \"$V\" != none ]; then rm -f " + ini + "; "
-                "echo \"auto_prepend_file is already $V: left as is, mysqli_report not changed\"; exit 0; fi; "
+        # PHP's own reading: files in byte order (php.ini, then php.d), each line on its own even without a final
+        # newline, the last global setting wins, [PATH=...] and [HOST=...] sections only apply there, and the
+        # keywords none/off/no/false/null (any case) mean empty
+        return ("V=$(awk 'FNR == 1 { s = 0 } /^[[:space:]]*\\[/ { s = tolower($0) ~ /^[[:space:]]*\\[(path|host)=/ } "
+                "!s && sub(/^[[:space:]]*auto_prepend_file[[:space:]]*=[[:space:]]*/, \"\") { v = $0 } END { print v }' "
+                "/etc/php.ini $(LC_ALL=C ls /etc/php.d/*.ini 2>/dev/null | grep -vx " + ini + ") 2>/dev/null | "
+                "sed 's/;.*//' | tr -d \"\\\"' \\t\\r\"); "
+                "case $(echo \"$V\" | tr A-Z a-z) in ''|none|off|no|false|null) ;; *) rm -f " + ini + "; "
+                "echo \"auto_prepend_file is already $V: left as is, mysqli_report not changed\"; exit 0;; esac; "
                 f"mkdir -p /usr/share/wend && printf '{php}' > /usr/share/wend/php-mysqli-report-off.php && "
                 "printf 'auto_prepend_file=/usr/share/wend/php-mysqli-report-off.php\\n' > " + ini)
 
@@ -412,10 +416,11 @@ class Rpm:
         """Enable a systemd unit at boot if the service it replaces or follows was: one of `like` is in the SysV
         record, or is an enabled unit now. Never disables anything; a unit nothing it follows started is left as is."""
         like, u = " ".join(s["like"]), s["unit"]
-        return (f"W=''; for n in {like}; do if grep -qx \"$n\" {SYSV_RECORD} 2>/dev/null || "
+        return (f"W=''; for n in {like}; do if grep -Fqx \"$n\" {SYSV_RECORD} 2>/dev/null || "
                 "[ \"$(systemctl is-enabled \"$n\" 2>/dev/null)\" = enabled ]; then W=$n; break; fi; done; "
                 f"[ -n \"$W\" ] || {{ echo 'none of {like} starts at boot: {u} left as is'; exit 0; }}; "
-                f"systemctl enable {u} && [ \"$(systemctl is-enabled {u} 2>/dev/null)\" = enabled ] && "
+                f"systemctl enable {u} || exit 1; S=$(systemctl is-enabled {u} 2>&1); "
+                f"[ \"$S\" = enabled ] || {{ echo \"{u} is $S after systemctl enable, not enabled\"; exit 1; }}; "
                 f"echo \"{u} enabled, like $W\"")
 
 BACKENDS = {"apt": Apt(), "rpm": Rpm()}

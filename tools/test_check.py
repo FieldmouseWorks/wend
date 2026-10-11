@@ -53,6 +53,8 @@ assert check.check_fix(el_good, adapters, el_rel) == [], check.check_fix(el_good
 EL_CASES = {
     "shell in a service.enable unit": lambda f: f["post"].append(
         {"op": "service.enable", "unit": "httpd;reboot", "like": ["httpd"]}),
+    "service.record after the upgrade (the links are gone by then)": lambda f: f["post"].append(
+        {"op": "service.record"}),
     "service.enable with nothing to follow": lambda f: f["post"].append(
         {"op": "service.enable", "unit": "httpd", "like": []}),
     "service.enable unit with a leading dash (an option)": lambda f: f["post"].append(
