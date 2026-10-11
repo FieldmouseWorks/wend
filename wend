@@ -13,7 +13,7 @@
 
 ROUTE is a path like routes/debian/etch-to-trixie.toml; BOX is an id like debian/etch-web.
 Python 3.11+, standard library only. The sandbox needs root, chroot and rsync, plus debootstrap for Debian boxes or
-rpm2cpio, cpio, unshare and ip (iproute2) for EL boxes.
+rpm2cpio, cpio, curl, unshare and ip (iproute2) for EL boxes.
 """
 import glob
 import json
@@ -43,7 +43,7 @@ class Repo:
         self.boxes = {p[len("boxes/"):-len("/box.toml")]: d for p, d in load("boxes/").items()}
 
 
-HOST_TOOLS = {"debian": ["debootstrap"], "el": ["rpm2cpio", "cpio", "unshare", "ip"]}
+HOST_TOOLS = {"debian": ["debootstrap"], "el": ["rpm2cpio", "cpio", "curl", "unshare", "ip"]}
 APT_NAMES = {"ip": "iproute2", "unshare": "util-linux"}
 
 
