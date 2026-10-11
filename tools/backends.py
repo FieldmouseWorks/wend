@@ -53,7 +53,7 @@ def pred_sh(w, adapter):
 
 
 def ere(name):
-    """A package name (already [a-z0-9][a-z0-9.+-]*) as a literal in an extended regex."""
+    """A package name (already held to a name pattern and SAFE_VALUE) as a literal in an extended regex."""
     return name.replace(".", "[.]").replace("+", "[+]")
 
 

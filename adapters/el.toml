@@ -150,7 +150,7 @@ args = { arches = { list = "i[3-6]86", min = 1 } }
 
 [ops."rpm.transit"]
 summary = "pass through a release the old rpm can't reach (EL7 -> EL8: rich dependencies): run its rpm from a staging dir over everything, distro-sync, reinstall what the sync erased, drop the old release's leftovers from the rpm database"
-args = { release = { enum = ["alma8"] }, remove = { pattern = "[a-z0-9][a-z0-9.+-]*" }, reinstall = { list = "[a-z0-9][a-z0-9.+-]*", min = 0 } }
+args = { release = { enum = ["alma8"] }, remove = { pattern = "[A-Za-z0-9][A-Za-z0-9._+-]*" }, reinstall = { list = "[A-Za-z0-9][A-Za-z0-9._+-]*", min = 0 } }
 
 [ops."rpm.swap-release"]
 summary = "replace the release package by hand (rpm -e --nodeps old, rpm -i new from the hop's repo): epochs and vendor switches block yum"
@@ -206,7 +206,7 @@ args = {}
 
 [ops."service.enable"]
 summary = "enable a systemd unit at boot if a service it replaces or follows (like) is in the SysV record or is an enabled unit now; never disables"
-args = { unit = { pattern = "[a-z0-9][a-z0-9_.-]*" }, like = { list = "[a-z0-9][a-z0-9_.-]*" } }
+args = { unit = { pattern = "[A-Za-z0-9][A-Za-z0-9_.-]*" }, like = { list = "[A-Za-z0-9][A-Za-z0-9_.-]*" } }
 
 [checks]
 # Universal checks every EL box gets. Boxes add their own roles.
