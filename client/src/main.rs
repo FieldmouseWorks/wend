@@ -1,0 +1,245 @@
+//! wend, the client: walk a proven upgrade route on a machine. No model, no network beyond the mirrors.
+//!
+//! This is the first slice: it reads and checks the atlas, computes content ids, and compiles fixes and hops into
+//! the exact commands CI proved. Walking a route on a root (snapshot, apply, check, roll back) comes next.
+
+mod atlas;
+mod backend;
+mod canon;
+mod check;
+mod hop;
+
+use atlas::{get, str_of, Atlas, Doc};
+use canon::content_id;
+use serde_json::{json, Map, Value};
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+const USAGE: &str = "\
+wend: walk a proven upgrade route on a machine. No model, no network beyond your distro's mirrors.
+
+  wend check                        check every adapter, fix, route and run in the atlas (the gate's rules)
+  wend ids                          every fix's and route's content id
+  wend compile FIX.toml             the commands a fix's steps run, and its precondition as a test
+  wend hop ROUTE HOP [--fired N,..] the commands one hop of a route runs, with the named fixes (default: every
+                                    fix the route pins on that hop)
+  wend parity INPUT.json            machine output for client/parity.py (the Python engine must agree)
+
+Options: --atlas DIR (default: the current directory, laid out like the wend repo).
+ROUTE is routes/<family>/<from>-to-<to>.toml or just <from>-to-<to>.";
+
+fn opt(args: &mut Vec<String>, name: &str) -> Option<String> {
+    let i = args.iter().position(|a| a == name)?;
+    if i + 1 >= args.len() {
+        return None;
+    }
+    let v = args.remove(i + 1);
+    args.remove(i);
+    Some(v)
+}
+
+fn main() -> ExitCode {
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let root = PathBuf::from(opt(&mut args, "--atlas").unwrap_or_else(|| ".".into()));
+    let fired = opt(&mut args, "--fired");
+    let Some(cmd) = args.first().cloned() else {
+        println!("{USAGE}");
+        return ExitCode::from(2);
+    };
+    if matches!(cmd.as_str(), "-h" | "--help" | "help") {
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
+    let atlas = match Atlas::load(&root) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("wend: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let r = match (cmd.as_str(), &args[1..]) {
+        ("check", []) => cmd_check(&atlas),
+        ("ids", []) => cmd_ids(&atlas),
+        ("compile", [fix]) => cmd_compile(&atlas, fix),
+        ("hop", [route, hop]) => cmd_hop(&atlas, route, hop, fired.as_deref()),
+        ("parity", [input]) => cmd_parity(&atlas, input),
+        _ => Err(format!(
+            "unknown command or wrong arguments: {}\n\n{USAGE}",
+            args.join(" ")
+        )),
+    };
+    match r {
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
+        Err(e) => {
+            eprintln!("wend: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_check(atlas: &Atlas) -> Result<bool, String> {
+    let errs = check::check_atlas(atlas);
+    for e in &errs {
+        println!("ERROR {e}");
+    }
+    println!(
+        "{} adapters, {} fixes, {} routes, {} runs: {}",
+        atlas.adapters.len(),
+        atlas.fixes.len(),
+        atlas.routes.len(),
+        atlas.runs.len(),
+        if errs.is_empty() {
+            "ok".to_string()
+        } else {
+            format!("{} errors", errs.len())
+        }
+    );
+    Ok(errs.is_empty())
+}
+
+fn cmd_ids(atlas: &Atlas) -> Result<bool, String> {
+    for (p, d) in atlas.fixes.iter().chain(atlas.routes.iter()) {
+        println!("{} {p}", content_id(d));
+    }
+    Ok(true)
+}
+
+fn adapter_of<'a>(atlas: &'a Atlas, doc: &Doc) -> Result<&'a Doc, String> {
+    let fam = str_of(doc, "family")?;
+    atlas.adapters.get(fam).ok_or(format!("no adapter for family {fam:?}"))
+}
+
+fn compile_fix(atlas: &Atlas, f: &Doc) -> Result<Value, String> {
+    let a = adapter_of(atlas, f)?;
+    let hop = str_of(f, "hop")?;
+    let phase = |ph: &str| -> Result<Vec<String>, String> {
+        get(f, ph)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|s| backend::step(s, a, hop))
+            .collect()
+    };
+    Ok(
+        json!({"when": backend::pred_sh(get(f, "when").ok_or("no when")?, a)?, "pre": phase("pre")?, "post": phase("post")?}),
+    )
+}
+
+fn cmd_compile(atlas: &Atlas, path: &str) -> Result<bool, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    let f = atlas::parse_toml(&text)?;
+    let errs = check::check_fix(&f, &atlas.adapters, path.trim_start_matches("./"));
+    for e in &errs {
+        eprintln!("ERROR {e}");
+    }
+    if !errs.is_empty() {
+        return Ok(false);
+    }
+    println!("{}", serde_json::to_string_pretty(&compile_fix(atlas, &f)?).unwrap());
+    Ok(true)
+}
+
+fn hop_dump(atlas: &Atlas, route: &Doc, hop: &str, only: Option<&[String]>) -> Result<Value, String> {
+    let a = adapter_of(atlas, route)?;
+    let by_id = atlas.fixes_by_id();
+    let fixes: Vec<&Doc> = hop::pinned(route, &by_id)?
+        .into_iter()
+        .map(|(_, f)| f)
+        .filter(|f| get(f, "hop").and_then(Value::as_str) == Some(hop))
+        .filter(|f| {
+            only.is_none_or(|o| {
+                o.iter()
+                    .any(|n| Some(n.as_str()) == get(f, "meta").and_then(|m| get(m, "name")).and_then(Value::as_str))
+            })
+        })
+        .collect();
+    let p = hop::hop_plan(a, hop, &fixes)?;
+    let names: Vec<Value> = fixes
+        .iter()
+        .map(|f| {
+            get(f, "meta")
+                .and_then(|m| get(m, "name"))
+                .cloned()
+                .unwrap_or(Value::Null)
+        })
+        .collect();
+    Ok(json!({"fixes": names, "commands": p.commands, "after": p.after}))
+}
+
+fn cmd_hop(atlas: &Atlas, route: &str, hop: &str, fired: Option<&str>) -> Result<bool, String> {
+    let (_, r) = atlas.route(route)?;
+    let only: Option<Vec<String>> = fired.map(|f| f.split(',').filter(|s| !s.is_empty()).map(String::from).collect());
+    let d = hop_dump(atlas, r, hop, only.as_deref())?;
+    println!("{}", serde_json::to_string_pretty(&d).unwrap());
+    Ok(true)
+}
+
+/// Everything client/parity.py compares with the Python engine: ids, every fix compiled, every hop of every route
+/// (with all of its pinned fixes and with none), the prune step, extra steps and checker cases from INPUT.
+fn cmd_parity(atlas: &Atlas, input: &str) -> Result<bool, String> {
+    let inp: Value = serde_json::from_str(&std::fs::read_to_string(input).map_err(|e| format!("{input}: {e}"))?)
+        .map_err(|e| e.to_string())?;
+    let mut out = Map::new();
+    let ids: Map<String, Value> = atlas
+        .fixes
+        .iter()
+        .chain(atlas.routes.iter())
+        .map(|(p, d)| (p.clone(), json!(content_id(d))))
+        .collect();
+    out.insert("ids".into(), Value::Object(ids));
+    let mut fixes = Map::new();
+    for (p, f) in &atlas.fixes {
+        fixes.insert(p.clone(), compile_fix(atlas, f).unwrap_or_else(|e| json!({"error": e})));
+    }
+    out.insert("fixes".into(), Value::Object(fixes));
+    let mut hops = Map::new();
+    let mut prune = Map::new();
+    for (p, r) in &atlas.routes {
+        let mut m = Map::new();
+        for h in atlas::list_of(r, "hops")? {
+            let all = hop_dump(atlas, r, &h, None)?;
+            let none = hop_dump(atlas, r, &h, Some(&[]))?;
+            m.insert(h, json!({"all": all, "none": none}));
+        }
+        hops.insert(p.clone(), Value::Object(m));
+        let a = adapter_of(atlas, r)?;
+        let rm = json!({"op": "remove", "packages": ["foo", "bar.baz"], "purge": true});
+        prune.insert(p.clone(), json!(backend::step(&rm, a, str_of(r, "to")?)?));
+    }
+    out.insert("hops".into(), Value::Object(hops));
+    out.insert("prune".into(), Value::Object(prune));
+    let mut steps = vec![];
+    for s in get(&inp, "steps").and_then(Value::as_array).into_iter().flatten() {
+        let a = atlas.adapters.get(str_of(s, "family")?).ok_or("unknown family")?;
+        steps.push(match backend::step(&s["step"], a, str_of(s, "release")?) {
+            Ok(c) => json!(c),
+            Err(e) => json!({"error": e}),
+        });
+    }
+    out.insert("steps".into(), Value::Array(steps));
+    let mut preds = vec![];
+    for s in get(&inp, "preds").and_then(Value::as_array).into_iter().flatten() {
+        let a = atlas.adapters.get(str_of(s, "family")?).ok_or("unknown family")?;
+        preds.push(json!(backend::pred_sh(&s["when"], a)?));
+    }
+    out.insert("preds".into(), Value::Array(preds));
+    let mut cases = vec![];
+    for c in get(&inp, "cases").and_then(Value::as_array).into_iter().flatten() {
+        let adapters: std::collections::BTreeMap<String, Doc> = c["adapters"]
+            .as_object()
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default();
+        let wh = str_of(c, "where")?;
+        let errs = match str_of(c, "kind")? {
+            "fix" => check::check_fix(&c["doc"], &adapters, wh),
+            "adapter" => check::check_adapter(&c["doc"], wh),
+            "route" => check::check_route(&c["doc"], &Default::default(), &adapters, wh),
+            k => return Err(format!("unknown case kind {k}")),
+        };
+        cases.push(json!(errs));
+    }
+    out.insert("cases".into(), Value::Array(cases));
+    println!("{}", serde_json::to_string(&Value::Object(out)).unwrap());
+    Ok(true)
+}
