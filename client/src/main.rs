@@ -1,13 +1,15 @@
 //! wend, the client: walk a proven upgrade route on a machine. No model, no network beyond the mirrors.
 //!
-//! This is the first slice: it reads and checks the atlas, computes content ids, and compiles fixes and hops into
-//! the exact commands CI proved. Walking a route on a root (snapshot, apply, check, roll back) comes next.
+//! It reads and checks the atlas, compiles fixes and hops into the exact commands CI proved, and walks a route on
+//! a root filesystem: snapshot, apply, check, roll back on red.
 
 mod atlas;
 mod backend;
 mod canon;
 mod check;
 mod hop;
+mod sandbox;
+mod walk;
 
 use atlas::{get, str_of, Atlas, Doc};
 use canon::content_id;
@@ -23,6 +25,10 @@ wend: walk a proven upgrade route on a machine. No model, no network beyond your
   wend compile FIX.toml             the commands a fix's steps run, and its precondition as a test
   wend hop ROUTE HOP [--fired N,..] the commands one hop of a route runs, with the named fixes (default: every
                                     fix the route pins on that hop)
+  wend walk ROUTE --root DIR --checks FILE [--box NAME] [--out RUN.json] [--work DIR]
+                                    walk a route on a root filesystem, in place (root needed): each hop's
+                                    fixes, the upgrade, the checks; a hop that breaks anything is rolled back
+                                    and the walk stops. FILE has [roles] (shell checks), like a CI box file
   wend parity INPUT.json            machine output for client/parity.py (the Python engine must agree)
 
 Options: --atlas DIR (default: the current directory, laid out like the wend repo).
@@ -42,6 +48,14 @@ fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let root = PathBuf::from(opt(&mut args, "--atlas").unwrap_or_else(|| ".".into()));
     let fired = opt(&mut args, "--fired");
+    let walk_opts = WalkOpts {
+        root: opt(&mut args, "--root"),
+        checks: opt(&mut args, "--checks"),
+        box_id: opt(&mut args, "--box"),
+        out: opt(&mut args, "--out"),
+        work: opt(&mut args, "--work").unwrap_or_else(|| "/var/tmp/wend-client".into()),
+        steps: opt(&mut args, "--steps"),
+    };
     let Some(cmd) = args.first().cloned() else {
         println!("{USAGE}");
         return ExitCode::from(2);
@@ -63,6 +77,7 @@ fn main() -> ExitCode {
         ("compile", [fix]) => cmd_compile(&atlas, &root, fix),
         ("hop", [route, hop]) => cmd_hop(&atlas, route, hop, fired.as_deref()),
         ("parity", [input]) => cmd_parity(&atlas, input),
+        ("walk", [route]) => cmd_walk(&atlas, route, &walk_opts),
         _ => Err(format!(
             "unknown command or wrong arguments: {}\n\n{USAGE}",
             args.join(" ")
@@ -275,4 +290,98 @@ fn cmd_parity(atlas: &Atlas, input: &str) -> Result<bool, String> {
     out.insert("cases".into(), Value::Array(cases));
     println!("{}", serde_json::to_string(&Value::Object(out)).unwrap());
     Ok(true)
+}
+
+struct WalkOpts {
+    root: Option<String>,
+    checks: Option<String>,
+    box_id: Option<String>,
+    out: Option<String>,
+    work: String,
+    steps: Option<String>,
+}
+
+fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
+    let (rpath, r) = atlas.route(route)?;
+    let a = adapter_of(atlas, r)?;
+    let root = o
+        .root
+        .as_deref()
+        .ok_or("walk needs --root DIR (a copy of the machine's root filesystem)")?;
+    let checks_path = o
+        .checks
+        .as_deref()
+        .ok_or("walk needs --checks FILE: the health checks a hop must keep green")?;
+    if unsafe { libc::geteuid() } != 0 {
+        return Err("walking a root needs root (chroot, mount). Use a throwaway VM or a copy of the machine.".into());
+    }
+    // the gate's rules, before anything runs as root: a fix CI's gate would refuse never runs here
+    let errs = check::check_atlas(atlas);
+    if !errs.is_empty() {
+        return Err(format!("the atlas doesn't pass its own check:\n{}", errs.join("\n")));
+    }
+    for t in ["chroot", "rsync", "mount", "unshare"] {
+        if sandbox::host(&format!("command -v {t}")).0 != 0 {
+            return Err(format!("missing on this host: {t}"));
+        }
+    }
+    if let Some(m) = get(a, "mirror") {
+        let probe = format!("{}/{}", str_of(m, "shim")?, str_of(m, "probe")?);
+        if sandbox::host(&format!("curl -sf -o /dev/null --max-time 60 '{probe}'")).0 != 0 {
+            return Err(format!(
+                "this family's repos go through a mirror shim, and {probe} isn't answering. \
+                 Start it from a wend checkout: python3 tools/mirror.py {} /var/tmp/wend/mirror",
+                str_of(m, "shim")?.rsplit(':').next().unwrap_or("8085")
+            ));
+        }
+    }
+    let cdoc = atlas::parse_toml(&std::fs::read_to_string(checks_path).map_err(|e| format!("{checks_path}: {e}"))?)?;
+    let checks = walk::Checks::from_doc(&cdoc, a)?;
+    let box_id = o.box_id.clone().unwrap_or_else(|| "local".into());
+    let root = sandbox::Root::new(std::path::Path::new(root))?;
+    let work = std::path::PathBuf::from(&o.work);
+    std::fs::create_dir_all(&work).map_err(|e| format!("{}: {e}", work.display()))?;
+    let snap = work.join(format!("snap-{}", std::process::id()));
+    eprintln!(
+        "walking {rpath} on {} ({} checks); snapshots in {}",
+        root.dir.display(),
+        checks.checks.len(),
+        snap.display()
+    );
+    let mut w = walk::Walk::new(r, a, atlas.fixes_by_id(), checks, root, snap.clone(), box_id);
+    let run = w.walk();
+    if let Some(p) = &o.steps {
+        let _ = std::fs::write(
+            p,
+            serde_json::to_string_pretty(&Value::Array(w.steps().to_vec())).unwrap(),
+        );
+    }
+    if snap.exists() {
+        sandbox::safe_rm(&snap, &work)?;
+    }
+    let run = run?;
+    let text = serde_json::to_string_pretty(&run).unwrap() + "\n";
+    match &o.out {
+        Some(p) => std::fs::write(p, &text).map_err(|e| format!("{p}: {e}"))?,
+        None => print!("{text}"),
+    }
+    let fired: usize = run["hops"]
+        .as_array()
+        .map(|h| h.iter().map(|x| x["fired"].as_array().map_or(0, Vec::len)).sum())
+        .unwrap_or(0);
+    eprintln!(
+        "{}: reached {} ({} hops, {fired} fixes fired, {} min){}",
+        run["result"].as_str().unwrap_or("?").to_uppercase(),
+        run["final"]["release"].as_str().unwrap_or("?"),
+        run["hops"].as_array().map_or(0, Vec::len),
+        run["wall_seconds"].as_u64().unwrap_or(0) / 60,
+        match run["final"]["failed"].as_array() {
+            Some(f) if !f.is_empty() => format!(
+                "; failing checks: {}",
+                f.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")
+            ),
+            _ => String::new(),
+        }
+    );
+    Ok(run["result"] == "pass")
 }

@@ -6,11 +6,12 @@ runs), finds the route for the box, and walks it. No model, no network beyond th
 It is built in slices, each one proven against the Python engine in `tools/`, which stays CI's judge and SPEC.md's
 reference implementation:
 
-1. **Read, check, compile** (this slice). Load the atlas, compute content ids, run the gate's schema rules, and
+1. **Read, check, compile.** Load the atlas, compute content ids, run the gate's schema rules, and
    compile fixes and hops into the exact commands CI proved.
-2. **Walk a route on a root.** Evaluate preconditions on the box, run each hop, run the checks, roll back on red,
-   write the run. Proven by replaying the CI boxes (Debian etch to trixie, CentOS 5 to AlmaLinux 10) and matching
-   the Python harness's runs.
+2. **Walk a route on a root** (this slice). Evaluate preconditions on the box, run each hop, run the checks, roll
+   back on red, prune obsolete packages, write the run. Proven by replaying the CI boxes and matching the Python
+   harness's runs (see below). It walks a root filesystem (a chroot), not the running system: walking `/` needs a
+   snapshot backend first, and `wend walk --root /` refuses.
 3. **Fetch and verify the route before touching the box**: packages pinned by digest, a source fallback chain.
    Blocked on SPEC open question 12 (runs don't record package digests yet).
 
@@ -31,7 +32,13 @@ wend ids                                         # every fix's and route's conte
 wend compile fixes/el/alma9/el8-transit.toml     # what a fix runs, and its precondition as a test
 wend hop centos5-to-alma10 alma9                 # every command of one hop, with the fixes the route pins there
 wend hop etch-to-trixie wheezy --fired purge-stale-libdb4
+sudo wend walk etch-to-trixie --root /srv/etch --checks boxes/debian/etch-web/box.toml --out run.json
 ```
+
+`walk` runs as root, copies the root to a snapshot before each hop (rsync, under `--work`, default
+`/var/tmp/wend-client`), and restores it when a hop fails or loses a check. It mounts a private tmpfs `/dev` and fresh
+`/proc` and `/sys` inside the root, never the host's. EL routes fetch through `tools/mirror.py` on port 8085 (old yum
+can't speak the vault's TLS), as the Python harness does; `walk` checks it is up before it starts.
 
 The repo's `./wend` is the Python tool for contributors (discover, verify, report). This binary is the client a
 machine's owner runs. They share a name because the client is the product; the Python tool is how the map gets made.
@@ -51,6 +58,17 @@ none), one example of every op on every backend, every predicate shape, and the 
 runs it on every PR that touches the client, the tools, the adapters or the atlas, so a spec change (a new op, a
 changed reference command) that the client hasn't caught up with shows up as a red `client` check, not as a client
 that silently runs something CI never proved.
+
+## Replays
+
+The same CI box, built by `./wend replay`, walked by both engines on one machine:
+
+| Box | Route | Python | Rust |
+| --- | --- | --- | --- |
+| debian/etch-web | etch-to-trixie | 13.7, 9 hops, 9 fixes, 10/10 checks, 58 pruned, 14.7 min | identical, 13.5 min |
+
+"Identical" means the run JSON matches field for field (every hop's fired fix ids, the final checks, the obsolete
+package counts) except timing, the runner line and `log_sha256`, which hashes command output.
 
 ## Known limits
 
