@@ -191,7 +191,14 @@ impl Root {
             Ok(_) => return Err(format!("{} is not a plain file; refusing to replace it", p.display())),
             Err(_) => None,
         };
-        write_mode(&p, bytes, mode).map_err(|e| format!("{}: {e}", p.display()))?;
+        if let Err(e) = write_mode(&p, bytes, mode) {
+            // put back what was there (a disk that filled up mid-write) before giving up
+            let _ = match &before {
+                Some((b, m)) => write_mode(&p, b, *m),
+                None => fs::remove_file(&p),
+            };
+            return Err(format!("{}: {e}", p.display()));
+        }
         Ok(Lent {
             path: p,
             before: before.as_ref().map(|b| b.0.clone()),
