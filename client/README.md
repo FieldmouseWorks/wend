@@ -85,6 +85,9 @@ package counts) except timing, the runner line and `log_sha256`, which hashes co
   LVM snapshot or disk image) is fine. It never mounts on or writes through a symlink in the root, so a root whose
   `etc/resolv.conf` is a symlink gets no name service until that's a plain file. A plain one is lent the host's
   resolver for each command and gets its own contents back afterwards, unless the command replaced it.
+- On apt systems `walk` puts the harness's `usr/sbin/policy-rc.d` (daemons never start) and
+  `etc/apt/apt.conf.d/00wend` into the root for the length of the walk, as a CI box has them, and restores the
+  root's own (or none) at the end.
 - Snapshots keep hard links, ACLs and extended attributes (SELinux labels, file capabilities): `rsync -aHAXx`.
   The work directory needs a filesystem with xattrs (ext4, xfs, btrfs, tmpfs). On an SELinux-enforcing host, labels
   the host policy doesn't know (an old EL root on a new RHEL host) can make the snapshot fail; the walk then stops

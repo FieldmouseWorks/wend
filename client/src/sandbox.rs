@@ -172,11 +172,58 @@ impl Root {
         let md = fs::symlink_metadata(&p).map_err(|e| e.to_string())?;
         if real != p || !md.is_dir() {
             return Err(format!(
-                "{} is not a plain directory inside the root (a symlink?); refusing to mount on it",
+                "{} is not a plain directory inside the root (a symlink?); refusing to use it",
                 p.display()
             ));
         }
         Ok(real.to_string_lossy().into_owned())
+    }
+
+    /// Put a file the harness owns into the root for the length of a walk (on a CI box the box builder puts it
+    /// there for good), remembering what was there so `give_back` can restore it.
+    pub fn lend(&self, rel: &str, bytes: &[u8], mode: u32) -> Result<Lent, String> {
+        let p = self.file_inside(rel)?;
+        let before = match fs::symlink_metadata(&p) {
+            Ok(m) if m.is_file() => Some((
+                fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?,
+                m.mode() & 0o7777,
+            )),
+            Ok(_) => return Err(format!("{} is not a plain file; refusing to replace it", p.display())),
+            Err(_) => None,
+        };
+        write_mode(&p, bytes, mode).map_err(|e| format!("{}: {e}", p.display()))?;
+        Ok(Lent {
+            path: p,
+            before: before.as_ref().map(|b| b.0.clone()),
+            host: bytes.to_vec(),
+            mode: before.map(|b| b.1),
+        })
+    }
+
+    /// Restore what `lend` replaced: the root's own file, or no file.
+    pub fn give_back(&self, l: &Lent) -> Result<(), String> {
+        let rel = l.path.strip_prefix(&self.dir).map_err(|e| e.to_string())?;
+        let p = self.file_inside(&rel.to_string_lossy())?;
+        if fs::symlink_metadata(&p).is_ok_and(|m| !m.is_file()) {
+            return Err(format!("{} is no longer a plain file; left as it is", p.display()));
+        }
+        match (&l.before, l.mode) {
+            (Some(b), Some(m)) => write_mode(&p, b, m),
+            _ => fs::remove_file(&p).or_else(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => Ok(()),
+                _ => Err(e),
+            }),
+        }
+        .map_err(|e| format!("{}: {e}", p.display()))
+    }
+
+    /// A file's path inside the root, its directory checked to be a plain one there.
+    fn file_inside(&self, rel: &str) -> Result<PathBuf, String> {
+        let (d, name) = rel
+            .trim_start_matches('/')
+            .rsplit_once('/')
+            .ok_or("a path with a directory")?;
+        Ok(Path::new(&self.inside(d)?).join(name))
     }
 
     fn mount(&self) -> Result<(), String> {
@@ -210,7 +257,12 @@ impl Root {
             Err(_) => None,
         };
         write_nofollow(&path, &host).ok()?;
-        Some(Lent { path, before, host })
+        Some(Lent {
+            path,
+            before,
+            host,
+            mode: None,
+        })
     }
 
     /// Put the root's own resolv.conf back, unless the command itself replaced it.
@@ -333,10 +385,16 @@ impl Root {
     }
 }
 
-struct Lent {
+pub struct Lent {
     path: PathBuf,
     before: Option<Vec<u8>>,
     host: Vec<u8>,
+    mode: Option<u32>,
+}
+
+fn write_mode(p: &Path, b: &[u8], mode: u32) -> std::io::Result<()> {
+    write_nofollow(p, b)?;
+    fs::set_permissions(p, std::os::unix::fs::PermissionsExt::from_mode(mode))
 }
 
 fn write_nofollow(p: &Path, b: &[u8]) -> std::io::Result<()> {

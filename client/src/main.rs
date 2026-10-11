@@ -356,8 +356,24 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
             root_dir.display()
         );
     }
+    // what a CI box's builder leaves in place for good: daemons never start (SPEC "Sandbox requirements") and apt
+    // runs with the harness's config. Lent for the walk only, and given back after.
+    let mut lent = vec![];
+    if let Some(conf) = get(a, "hop").and_then(|h| get(h, "apt_conf")).and_then(Value::as_str) {
+        lent.push(root.lend("usr/sbin/policy-rc.d", b"#!/bin/sh\nexit 101\n", 0o755)?);
+        lent.push(root.lend("etc/apt/apt.conf.d/00wend", conf.as_bytes(), 0o644)?);
+    }
+    let guard = sandbox::Root { dir: root_dir.clone() };
     let mut w = walk::Walk::new(r, a, atlas.fixes_by_id(), checks, root, snap.clone(), box_id);
     let run = w.walk();
+    let returned: Vec<String> = lent.iter().filter_map(|l| guard.give_back(l).err()).collect();
+    let run = match (run, returned.is_empty()) {
+        (Ok(_), false) => Err(format!(
+            "restoring the root's own files failed: {}",
+            returned.join("; ")
+        )),
+        (r, _) => r,
+    };
     if let Some(p) = &o.steps {
         let _ = std::fs::write(
             p,
@@ -370,7 +386,8 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
         Err(e) if w.mid_step => {
             return Err(format!(
                 "{e}\n{} may be mid-step. Its state before the step is in {}; restore it with: rsync -aHAXx \
-                 --modify-window=-1 --delete {}/ {}/",
+                 --modify-window=-1 --delete {}/ {}/ (on apt systems the snapshot has wend's \
+                 usr/sbin/policy-rc.d and etc/apt/apt.conf.d/00wend; put the root's own back, or delete them)",
                 root_dir.display(),
                 snap.display(),
                 snap.display(),
