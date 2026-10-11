@@ -182,13 +182,19 @@ impl Root {
     fn mount(&self) -> Result<(), String> {
         let (proc_, sys, dev) = (self.inside("proc")?, self.inside("sys")?, self.inside("dev")?);
         let (proc_, sys, dev) = (q(&proc_), q(&sys), q(&dev));
-        host(&format!(
-            "mount -t proc proc {proc_}; mount -t sysfs sys {sys}; mount -t tmpfs -o mode=755,size=1m dev {dev} && \
+        let (rc, log) = host(&format!(
+            "mount -t proc proc {proc_} && mount -t sysfs sys {sys} && mount -t tmpfs -o mode=755,size=1m dev {dev} && \
              cd {dev} && mknod -m 666 null c 1 3 && mknod -m 666 zero c 1 5 && mknod -m 666 full c 1 7 && \
              mknod -m 666 random c 1 8 && mknod -m 666 urandom c 1 9 && mknod -m 666 tty c 5 0 && \
              mkdir pts shm && ln -s /proc/self/fd fd && ln -s fd/0 stdin && ln -s fd/1 stdout && ln -s fd/2 stderr && \
-             mount -t devpts -o newinstance,ptmxmode=0666 devpts {dev}/pts && ln -sf pts/ptmx {dev}/ptmx"
+             mount -t devpts -o newinstance,ptmxmode=0666 devpts {dev}/pts && ln -sf pts/ptmx {dev}/ptmx 2>&1"
         ));
+        if rc != 0 {
+            return Err(format!(
+                "setting up proc, sys and a private dev in the root failed (the client needs CAP_SYS_ADMIN):\n{}",
+                tail(&log, 800)
+            ));
+        }
         Ok(())
     }
 
