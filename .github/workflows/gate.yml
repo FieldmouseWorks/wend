@@ -1,5 +1,5 @@
 # The PR gate. Every job runs the same code an agent runs locally with `./wend verify` (AGENTS.md step 6).
-# Not yet exercised on GitHub's runners; the replay itself is tested on an Ubuntu 24.04 host with root.
+# Exercised on GitHub's stock ubuntu-24.04 runners: both seed replays reach trixie in about 12 minutes.
 #
 # Trust model: the PR supplies DATA (fixes, routes, boxes). The tools that judge it (check.py, affected.py, the
 # replay harness, the compiler) always come from the base branch, so a PR cannot loosen its own checks. A PR that
@@ -7,9 +7,10 @@
 # the base branch's tools like everything else.
 name: gate
 
+# Runs on every PR, not only ones touching fixes/routes/boxes: branch protection requires these checks, and a
+# filtered-out workflow would leave a required check pending forever. `plan` replays nothing when nothing changed.
 on:
   pull_request:
-    paths: ["fixes/**", "routes/**", "boxes/**", "adapters/**", "tools/**", "SPEC.md"]
 
 permissions:
   contents: read
@@ -21,9 +22,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
+      # The PR's own commits, merge commits included, not the synthetic merge commit Actions checks out by default.
       - run: |
           bad=$(git log --format='%H %(trailers:key=Signed-off-by,valueonly,separator=;)' \
-                origin/${{ github.base_ref }}..HEAD | awk 'NF<2{print $1}')
+                origin/${{ github.base_ref }}..${{ github.event.pull_request.head.sha }} | awk 'NF<2{print $1}')
           [ -z "$bad" ] || { echo "commits without a DCO sign-off (use git commit -s):"; echo "$bad"; exit 1; }
 
   schema:
@@ -82,8 +84,10 @@ jobs:
       # and it unmounts and verifies before deleting anything.
       - name: replay (no model, no network beyond the release mirrors)
         run: |
-          sudo -E python3 -B wend replay "${{ matrix.route }}" "${{ matrix.box }}" --out run.json
-      - uses: actions/attest-build-provenance@v2
+          sudo -E python3 -B wend replay "${{ matrix.route }}" "${{ matrix.box }}" --out "$GITHUB_WORKSPACE/run.json"
+      # attestations need a public repo (or a paid plan); skipped while the repo is private
+      - if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@v2
         with: { subject-path: run.json }
       - uses: actions/upload-artifact@v4
         with:
@@ -92,9 +96,15 @@ jobs:
 
   decoys:
     # Every pinned fix fired on exactly the boxes it claims. A passing replay that touched an unclaimed box fails here.
+    # Runs even when replay was skipped (nothing to replay) so it can be a required check; fails if any replay failed.
     needs: [plan, replay]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     steps:
+      - if: ${{ needs.plan.result != 'success' || (needs.replay.result != 'success' && needs.replay.result != 'skipped') }}
+        run: |
+          echo "plan or a replay did not pass: plan=${{ needs.plan.result }} replay=${{ needs.replay.result }}"
+          exit 1
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with: { ref: "${{ github.base_ref }}", path: .base }
@@ -110,13 +120,20 @@ jobs:
     # that only the Claude GitHub App can set. Branch protection requires it. Claude can comment and set that
     # status. It cannot push to main, approve, or merge.
     needs: decoys
+    if: ${{ needs.decoys.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       pull-requests: write
+      issues: write
     steps:
-      - run: gh pr edit "${{ github.event.pull_request.number }}" --add-label needs-claude-review --repo "${{ github.repository }}"
-        env: { GH_TOKEN: "${{ github.token }}" }
+      - run: |
+          gh label create needs-claude-review -R "$REPO" -c 5319e7 -d "Waiting on the Claude review layer" 2>/dev/null || true
+          gh pr edit "$PR" --add-label needs-claude-review -R "$REPO"
+        env: { GH_TOKEN: "${{ github.token }}", PR: "${{ github.event.pull_request.number }}", REPO: "${{ github.repository }}" }
 
-# Not in this file, set in the repo settings:
-#   branch protection on main: require dco, schema, replay, decoys, and the claude-review status; require 1 approving
-#   review from CODEOWNERS; no bypass; nobody can push directly. Merge is a human pressing the button.
+# Not in this file, set in the repo settings (done 2026-10-10):
+#   branch protection on main: PRs only, no force pushes or deletion; required checks dco, schema, plan, decoys
+#   (decoys fails if any replay failed; matrix replay names vary per route, so they aren't listed one by one);
+#   1 approving review from CODEOWNERS. Admins can bypass, because PRs opened by the maintainer's own Claude
+#   sessions carry the maintainer's account and GitHub won't let you approve your own PR.
+#   Later: require the claude-review commit status once a reviewer sets it.

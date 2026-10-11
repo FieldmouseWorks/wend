@@ -58,4 +58,4 @@ name = "mysql55-to-mariadb"
 
 [meta]
 name = "etch-to-trixie"
-summary = "Debian 4.0 (2007) to Debian 13, one release at a time"
+summary = "Debian 4.0 etch (2007) to Debian 13 trixie, one release at a time, proven on a web box and a database box"
