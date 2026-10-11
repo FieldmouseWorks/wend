@@ -65,6 +65,14 @@ struct State {
     sources: Vec<String>,
     offline: bool,
     refused: Mutex<Vec<String>>,
+    /// the run's own pins, for learning every index once when a package turns up unknown
+    tops: Vec<(String, Pin)>,
+    learned_all: Mutex<bool>,
+}
+
+/// A lock that survives a panicked holder (one bad connection mustn't take the proxy down).
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 fn key_of(url: &str) -> Option<&str> {
@@ -80,7 +88,8 @@ impl Proxy {
                 let d = d
                     .as_str()
                     .and_then(|d| d.split_once(':'))
-                    .and_then(|(a, x)| Digest::parse(a, x));
+                    .and_then(|(a, x)| Digest::parse(a, x))
+                    .filter(|d| d.alg == "sha256");
                 let (Some(k), Some(digest)) = (key_of(url), d) else {
                     return Err(format!("the run pins {url} with something that isn't a sha256"));
                 };
@@ -104,7 +113,10 @@ impl Proxy {
         std::fs::create_dir_all(cache).map_err(|e| format!("{}: {e}", cache.display()))?;
         let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("proxy: {e}"))?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        let tops = pins.iter().map(|(k, p)| (k.clone(), p.clone())).collect();
         let state = Arc::new(State {
+            tops,
+            learned_all: Mutex::new(false),
             pins: Mutex::new(pins),
             cache: cache.to_path_buf(),
             sources,
@@ -123,13 +135,17 @@ impl Proxy {
         Ok(Proxy { port, state })
     }
 
+    pub fn cache(&self) -> &Path {
+        &self.state.cache
+    }
+
     pub fn base(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
     }
 
     /// What the proxy refused since the last call (each once), for the walk's log.
     pub fn take_refused(&self) -> Vec<String> {
-        std::mem::take(&mut *self.state.refused.lock().unwrap())
+        std::mem::take(&mut *lock(&self.state.refused))
     }
 }
 
@@ -156,8 +172,13 @@ fn serve(s: &State, c: TcpStream) -> std::io::Result<()> {
         let mut parts = line.split_whitespace();
         let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
         let conn = if close { "close" } else { "keep-alive" };
-        match answer(s, path) {
-            Ok(file) if method == "GET" || method == "HEAD" => {
+        let r = if method == "GET" || method == "HEAD" {
+            answer(s, path)
+        } else {
+            Err((405, format!("{method} not allowed")))
+        };
+        match r {
+            Ok(file) => {
                 let len = std::fs::metadata(&file)?.len();
                 write!(
                     out,
@@ -167,19 +188,19 @@ fn serve(s: &State, c: TcpStream) -> std::io::Result<()> {
                     std::io::copy(&mut std::fs::File::open(&file)?, &mut out)?;
                 }
             }
-            Ok(_) => write!(
-                out,
-                "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: {conn}\r\n\r\n"
-            )?,
             Err((code, why)) => {
-                if code != 404 {
-                    s.refused.lock().unwrap().push(why.clone());
+                if code == 403 || code == 502 {
+                    lock(&s.refused).push(why.clone());
                 }
                 let body = format!("{why}\n");
                 write!(
                     out,
                     "HTTP/1.1 {code} {}\r\nContent-Length: {}\r\nConnection: {conn}\r\n\r\n{}",
-                    if code == 404 { "Not Found" } else { "Refused" },
+                    match code {
+                        404 => "Not Found",
+                        405 => "Method Not Allowed",
+                        _ => "Refused",
+                    },
                     if method == "HEAD" { 0 } else { body.len() },
                     if method == "HEAD" { "" } else { body.as_str() }
                 )?;
@@ -197,10 +218,10 @@ fn answer(s: &State, path: &str) -> Result<PathBuf, (u16, String)> {
     let key = unescape(path.split('?').next().unwrap_or("").trim_start_matches('/'));
     let key = key.as_str();
     let (host, rest) = key.split_once('/').unwrap_or((key, ""));
-    if host.is_empty() || rest.split('/').any(|seg| seg.is_empty() || seg == "." || seg == "..") {
+    if matches!(host, "" | "." | "..") || rest.split('/').any(|seg| seg.is_empty() || seg == "." || seg == "..") {
         return Err((403, format!("refused {key}: not a host/path")));
     }
-    let pin = s.pins.lock().unwrap().get(key).cloned();
+    let pin = lock(&s.pins).get(key).cloned();
     if let Some(p) = pin {
         if p.plain {
             return fetch_plain(s, key, &p, false);
@@ -211,7 +232,7 @@ fn answer(s: &State, path: &str) -> Result<PathBuf, (u16, String)> {
     }
     // a compressed form of an index pinned uncompressed (wheezy: the Release is gone, only Packages is pinned)
     if let Some(plain) = key.strip_suffix(".gz") {
-        let p = s.pins.lock().unwrap().get(plain).cloned();
+        let p = lock(&s.pins).get(plain).cloned();
         if let Some(p) = p.filter(|p| p.plain) {
             return fetch_plain(s, plain, &p, true);
         }
@@ -236,13 +257,12 @@ fn answer(s: &State, path: &str) -> Result<PathBuf, (u16, String)> {
     // indexes (it vouches for nothing here; the indexes are checked against their own pins)
     if let Some((dir, name)) = key.rsplit_once('/') {
         if matches!(name, "Release" | "Release.gpg") {
-            let prefix = format!("{dir}/");
             let p = s
                 .pins
                 .lock()
                 .unwrap()
                 .iter()
-                .find(|(k, p)| p.plain && k.starts_with(&prefix))
+                .find(|(k, p)| p.plain && suite_dir(k).as_deref() == Some(dir))
                 .map(|(_, p)| p.clone());
             if let Some(p) = p {
                 let origin = format!("{}://{key}", p.origin.split_once("://").map_or("http", |x| x.0));
@@ -259,6 +279,21 @@ fn answer(s: &State, path: &str) -> Result<PathBuf, (u16, String)> {
     if meta {
         // metadata the run didn't pin: the package manager falls back to what it did pin
         return Err((404, format!("not pinned: {key}")));
+    }
+    // the package manager may have read its indexes from its own cache: learn every pinned index once, then look again
+    let first = !std::mem::replace(&mut *lock(&s.learned_all), true);
+    if first {
+        for (k, p) in &s.tops {
+            if p.plain {
+                let _ = fetch_plain(s, k, p, false);
+            } else if let Ok(f) = fetch(s, k, p) {
+                learn(s, k, p, &f);
+            }
+        }
+        let pin = lock(&s.pins).get(key).cloned();
+        if let Some(p) = pin {
+            return fetch(s, key, &p);
+        }
     }
     Err((403, format!("refused {key}: no pinned index lists it")))
 }
@@ -283,6 +318,28 @@ fn unescape(p: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// ".../dists/<suite>" of an index key.
+fn suite_dir(k: &str) -> Option<String> {
+    let (pre, post) = k.split_once("/dists/")?;
+    Some(format!("{pre}/dists/{}", post.split('/').next()?))
+}
+
+/// Where bytes nothing can verify by hash are kept, by the name they were asked for: an unverified Release
+/// (passthrough) and an index's original .gz (fetch_plain checks it again on every use).
+fn named(s: &State, key: &str) -> PathBuf {
+    s.cache.join("named").join(sha256_hex(key.as_bytes()))
+}
+
+fn keep_named(s: &State, key: &str, bytes: &[u8]) -> Result<PathBuf, (u16, String)> {
+    let dst = named(s, key);
+    let io = |e: std::io::Error| (500, format!("cache: {e}"));
+    std::fs::create_dir_all(dst.parent().unwrap()).map_err(io)?;
+    let tmp = tmp_in(s);
+    write_new(&tmp, bytes).map_err(io)?;
+    std::fs::rename(&tmp, &dst).map_err(io)?;
+    Ok(dst)
+}
+
 /// Cache path for a digest.
 fn cached(s: &State, d: &Digest) -> PathBuf {
     s.cache.join(d.alg).join(&d.hex)
@@ -302,23 +359,53 @@ fn candidates(s: &State, key: &str, origin: &str) -> Vec<String> {
     v
 }
 
-fn download(src: &str, tmp: &Path) -> Result<Vec<u8>, String> {
+fn download(src: &str) -> Result<Vec<u8>, String> {
     if !src.contains("://") {
         return std::fs::read(src).map_err(|e| format!("{src}: {e}"));
     }
-    let st = std::process::Command::new("curl")
-        .args(["-sfL", "--retry", "2", "--max-time", "900", "-o"])
-        .arg(tmp)
+    // straight into memory: nothing on disk until the bytes hash right
+    let out = std::process::Command::new("curl")
+        .args([
+            "-sfL",
+            "--globoff",
+            "--proto",
+            "=http,https",
+            "--proto-redir",
+            "=http,https",
+        ])
+        .args([
+            "--retry",
+            "2",
+            "--connect-timeout",
+            "60",
+            "--speed-limit",
+            "1024",
+            "--speed-time",
+            "120",
+            "--",
+        ])
         .arg(src)
-        .status()
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
         .map_err(|e| format!("curl: {e}"))?;
-    if !st.success() {
-        let _ = std::fs::remove_file(tmp);
-        return Err(format!("{src}: curl exit {}", st.code().unwrap_or(-1)));
+    if !out.status.success() {
+        return Err(format!("{src}: curl exit {}", out.status.code().unwrap_or(-1)));
     }
-    let b = std::fs::read(tmp).map_err(|e| e.to_string());
-    let _ = std::fs::remove_file(tmp);
-    b
+    Ok(out.stdout)
+}
+
+/// A fresh file, never through a link or over something already there.
+fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
+    f.write_all(bytes)
 }
 
 fn tmp_in(s: &State) -> PathBuf {
@@ -337,7 +424,7 @@ fn keep(s: &State, d: &Digest, bytes: &[u8]) -> Result<PathBuf, (u16, String)> {
     let io = |e: std::io::Error| (500, format!("cache: {e}"));
     std::fs::create_dir_all(dst.parent().unwrap()).map_err(io)?;
     let tmp = tmp_in(s);
-    std::fs::write(&tmp, bytes).map_err(io)?;
+    write_new(&tmp, bytes).map_err(io)?;
     std::fs::rename(&tmp, &dst).map_err(io)?;
     Ok(dst)
 }
@@ -350,7 +437,7 @@ fn fetch(s: &State, key: &str, p: &Pin) -> Result<PathBuf, (u16, String)> {
     }
     let mut tried = vec![];
     for src in candidates(s, key, &p.origin) {
-        match download(&src, &tmp_in(s)) {
+        match download(&src) {
             Ok(b) if Digest::of(p.digest.alg, &b) == p.digest => return keep(s, &p.digest, &b),
             Ok(_) => tried.push(format!("{src}: wrong bytes")),
             Err(e) => tried.push(e),
@@ -368,29 +455,42 @@ fn fetch(s: &State, key: &str, p: &Pin) -> Result<PathBuf, (u16, String)> {
 }
 
 /// An index pinned by its uncompressed bytes (the archive may only serve it gzipped). The plain bytes are cached
-/// under the pinned digest; `gz` serves them gzipped, as asked.
+/// under the pinned digest, and the archive's own .gz by name; `gz` serves the .gz, which is checked again after
+/// gunzip every time it is used.
 fn fetch_plain(s: &State, key: &str, p: &Pin, gz: bool) -> Result<PathBuf, (u16, String)> {
-    let mut plain = std::fs::read(cached(s, &p.digest))
-        .ok()
-        .filter(|b| Digest::of(p.digest.alg, b) == p.digest);
+    let gz_key = format!("{key}.gz");
+    let ok = |x: &[u8]| Digest::of(p.digest.alg, x) == p.digest;
+    if gz {
+        let kept = named(s, &gz_key);
+        if let Some(x) = std::fs::read(&kept).ok().and_then(|b| gunzip(&b)).filter(|x| ok(x)) {
+            learn_index(s, key, &x);
+            return Ok(kept);
+        }
+    }
+    let mut plain = std::fs::read(cached(s, &p.digest)).ok().filter(|b| ok(b));
+    let mut gz_file = None;
     let mut tried = vec![];
-    if plain.is_none() {
-        let forms = [
-            (key.to_string(), p.origin.clone(), false),
-            (format!("{key}.gz"), format!("{}.gz", p.origin), true),
-        ];
-        'found: for (k, origin, zipped) in forms {
-            for src in candidates(s, &k, &origin) {
-                match download(&src, &tmp_in(s)) {
-                    Ok(b) => match if zipped { gunzip(&b) } else { Some(b) } {
-                        Some(x) if Digest::of(p.digest.alg, &x) == p.digest => {
-                            plain = Some(x);
-                            break 'found;
+    let forms = [
+        (gz_key.clone(), format!("{}.gz", p.origin), true),
+        (key.to_string(), p.origin.clone(), false),
+    ];
+    'found: for (k, origin, zipped) in forms {
+        if plain.is_some() && !(gz && zipped) {
+            continue;
+        }
+        for src in candidates(s, &k, &origin) {
+            match download(&src) {
+                Ok(b) => match if zipped { gunzip(&b) } else { Some(b.clone()) } {
+                    Some(x) if ok(&x) => {
+                        if zipped {
+                            gz_file = Some(keep_named(s, &gz_key, &b)?);
                         }
-                        _ => tried.push(format!("{src}: wrong bytes")),
-                    },
-                    Err(e) => tried.push(e),
-                }
+                        plain = Some(x);
+                        break 'found;
+                    }
+                    _ => tried.push(format!("{src}: wrong bytes")),
+                },
+                Err(e) => tried.push(e),
             }
         }
     }
@@ -410,24 +510,30 @@ fn fetch_plain(s: &State, key: &str, p: &Pin, gz: bool) -> Result<PathBuf, (u16,
     if !gz {
         return Ok(f);
     }
+    if let Some(g) = gz_file {
+        return Ok(g);
+    }
+    // only the plain form was to be had: serve it gzipped (apt of this age checks the uncompressed hash)
     let mut z = flate2::write::GzEncoder::new(vec![], flate2::Compression::default());
     z.write_all(&x).map_err(|e| (500, e.to_string()))?;
     let z = z.finish().map_err(|e| (500, e.to_string()))?;
-    keep(s, &Digest::of("sha256", &z), &z)
+    keep_named(s, &gz_key, &z)
 }
 
-/// Unverified bytes, never cached: only a Release that vouches for nothing (see answer()).
+/// Unverified bytes: only a Release that vouches for nothing (see answer()). Kept by name, so an offline walk gets
+/// the same file the online one did.
 fn passthrough(s: &State, origin: &str) -> Result<PathBuf, (u16, String)> {
     let key = key_of(origin).unwrap_or(origin);
     let mut tried = vec![];
     for src in candidates(s, key, origin) {
-        match download(&src, &tmp_in(s)) {
-            Ok(b) => {
-                let d = Digest::of("sha256", &b);
-                return keep(s, &d, &b);
-            }
+        match download(&src) {
+            Ok(b) => return keep_named(s, key, &b),
             Err(e) => tried.push(e),
         }
+    }
+    let kept = named(s, key);
+    if kept.is_file() {
+        return Ok(kept);
     }
     Err((404, format!("{key}: {}", why(&tried))))
 }
@@ -449,7 +555,7 @@ fn gunzip(b: &[u8]) -> Option<Vec<u8>> {
 
 fn pin_more(s: &State, key: String, digest: Digest, scheme: &str) {
     let origin = format!("{scheme}://{key}");
-    s.pins.lock().unwrap().entry(key).or_insert(Pin {
+    lock(&s.pins).entry(key).or_insert(Pin {
         digest,
         origin,
         plain: false,
@@ -476,7 +582,7 @@ fn learn(s: &State, key: &str, p: &Pin, file: &Path) {
         // yum and dnf may read primary.sqlite instead, which this can't parse: learn the packages from the XML
         for (href, _) in entries.iter().filter(|(h, _)| h.ends_with("primary.xml.gz")) {
             let k = format!("{base}{href}");
-            let pin = s.pins.lock().unwrap().get(&k).cloned();
+            let pin = lock(&s.pins).get(&k).cloned();
             if let Some(pp) = pin {
                 if let Ok(f) = fetch(s, &k, &pp) {
                     learn(s, &k, &pp, &f);
@@ -486,7 +592,7 @@ fn learn(s: &State, key: &str, p: &Pin, file: &Path) {
     } else if let Some(stem) = [".xz", ".bz2", ".lzma"].iter().find_map(|z| key.strip_suffix(z)) {
         // no decoder here for these: learn the packages from the gzip (or plain) form the same Release lists
         for k in [format!("{stem}.gz"), stem.to_string()] {
-            let sib = s.pins.lock().unwrap().get(&k).cloned();
+            let sib = lock(&s.pins).get(&k).cloned();
             if let Some(sp) = sib {
                 if let Ok(f) = fetch(s, &k, &sp) {
                     learn(s, &k, &sp, &f);
@@ -509,7 +615,7 @@ fn learn(s: &State, key: &str, p: &Pin, file: &Path) {
 /// Packages and primary.xml: every package they list, at the hash they give.
 fn learn_index(s: &State, key: &str, plain: &[u8]) {
     let scheme = {
-        let pins = s.pins.lock().unwrap();
+        let pins = lock(&s.pins);
         pins.get(key)
             .or_else(|| pins.get(key.trim_end_matches(".gz")))
             .map(|p| p.origin.split_once("://").map_or("http", |x| x.0).to_string())
@@ -639,6 +745,76 @@ mod tests {
 
         let prim = r#"<package type="rpm"><name>p7zip</name><checksum type="sha" pkgid="YES">b3fd14ec513523cc8410171ad236c689536f23c8</checksum><location href="p7zip-9.20.1-2.el5.x86_64.rpm"/></package>"#;
         assert_eq!(primary_entries(prim)[0].0, "p7zip-9.20.1-2.el5.x86_64.rpm");
+    }
+
+    fn get(port: u16, method: &str, path: &str) -> (u16, Vec<u8>) {
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(c, "{method} {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").unwrap();
+        let mut b = vec![];
+        c.read_to_end(&mut b).unwrap();
+        let head_end = b.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+        let code = String::from_utf8_lossy(&b[9..12]).parse().unwrap();
+        (code, b[head_end..].to_vec())
+    }
+
+    #[test]
+    fn proxy_serves_only_the_chain() {
+        let dir = std::env::temp_dir().join(format!("wend-proxy-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let src = dir.join("src/h.test/el");
+        std::fs::create_dir_all(src.join("repodata")).unwrap();
+        std::fs::create_dir_all(src.join("Packages")).unwrap();
+        let rpm = b"an rpm".to_vec();
+        std::fs::write(src.join("Packages/a.rpm"), &rpm).unwrap();
+        std::fs::write(src.join("Packages/b.rpm"), b"tampered").unwrap();
+        let primary = format!(
+            r#"<package type="rpm"><checksum type="sha256" pkgid="YES">{}</checksum><location href="Packages/a.rpm"/></package>
+<package type="rpm"><checksum type="sha256" pkgid="YES">{}</checksum><location href="Packages/b.rpm"/></package>"#,
+            sha256_hex(&rpm),
+            sha256_hex(b"the real b")
+        );
+        let mut z = flate2::write::GzEncoder::new(vec![], flate2::Compression::default());
+        z.write_all(primary.as_bytes()).unwrap();
+        let pz = z.finish().unwrap();
+        std::fs::write(src.join("repodata/primary.xml.gz"), &pz).unwrap();
+        let repomd = format!(
+            r#"<repomd><data type="primary"><checksum type="sha256">{}</checksum><location href="repodata/primary.xml.gz"/></data></repomd>"#,
+            sha256_hex(&pz)
+        );
+        std::fs::write(src.join("repodata/repomd.xml"), &repomd).unwrap();
+        let run = serde_json::json!({"hops": [{"sources": {
+            "https://h.test/el/repodata/repomd.xml": format!("sha256:{}", sha256_hex(repomd.as_bytes()))}}]});
+        let px = Proxy::start(
+            &run,
+            &dir.join("cache"),
+            vec![dir.join("src").display().to_string()],
+            true,
+        )
+        .unwrap();
+        // cold: nothing learned yet, the miss learns every pinned index once
+        assert_eq!(get(px.port, "GET", "/h.test/el/Packages/a.rpm"), (200, rpm));
+        assert_eq!(get(px.port, "GET", "/h.test/el/Packages/b.rpm").0, 502);
+        assert_eq!(get(px.port, "GET", "/h.test/el/Packages/c.rpm").0, 403);
+        assert_eq!(get(px.port, "GET", "/h.test/el/repodata/repomd.xml.asc").0, 404);
+        assert_eq!(get(px.port, "GET", "/../etc/passwd").0, 403);
+        assert_eq!(get(px.port, "POST", "/h.test/el/Packages/a.rpm").0, 405);
+        assert_eq!(get(px.port, "HEAD", "/h.test/el/repodata/repomd.xml").0, 200);
+        assert_eq!(px.take_refused().len(), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn temp_files_never_follow_links() {
+        let d = std::env::temp_dir().join(format!("wend-wn-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let target = d.join("target");
+        std::fs::write(&target, b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, d.join("planted")).unwrap();
+        assert!(write_new(&d.join("planted"), b"evil").is_err());
+        assert!(write_new(&target, b"evil").is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
+        write_new(&d.join("fresh"), b"ok").unwrap();
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

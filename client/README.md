@@ -55,9 +55,13 @@ repos at it (apt's mirror, or the rpm shim, which it replaces: no `tools/mirror.
 only through that chain: a pinned top file, then each index it lists at the hash it lists, then each package an index
 lists at the hash the index gives. Anything else is refused (403, logged at the end of the walk), and unpinned
 metadata (`InRelease` when the run pinned `Release`, signatures) gets a 404 so the package manager falls back to what
-was pinned.
+was pinned. One exception: a suite whose hop pinned its indexes directly (wheezy, whose apt deletes the `Release`)
+gets its `Release` served unverified, kept by name for offline walks. It vouches for nothing there, since each index
+is checked against its own pin. When a package turns up that no index has taught the proxy yet (the package manager
+read its indexes from its own cache), the proxy learns every index the run pins, once, and looks again.
 
-Bytes come from `--cache DIR` (default `<work>/cache`, files named by their hash), then each `--source` in order (a
+Bytes come from `--cache DIR` (default `<work>/cache`, files named by their hash; held to the work directory's rules:
+owned by root, nobody else can write it, outside the root), then each `--source` in order (a
 directory or URL laid out `host/path`, like the shim's cache or an org mirror), then the origin unless `--offline`.
 The first bytes that hash right win and go into the cache. When no source has them, the request is refused and the
 hop rolls back: SPEC's default for a vanished snapshot (`--live` is wend#19). Fetching shells out to `curl`, so

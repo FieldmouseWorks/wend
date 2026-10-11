@@ -368,6 +368,8 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
             return Err(format!("missing on this host: {t}"));
         }
     }
+    let root = sandbox::Root::new(std::path::Path::new(root))?;
+    let work = sandbox::work_dir(std::path::Path::new(&o.work), &root.dir)?;
     // --run: the box's repos go through the verifying proxy, which serves only what the run's pinned sources vouch
     // for (SPEC "Pinned sources")
     let proxy = match &o.run {
@@ -382,7 +384,9 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
             if run["result"] != "pass" {
                 return Err(format!("{p} didn't pass: its sources prove nothing"));
             }
-            let cache = PathBuf::from(o.cache.clone().unwrap_or_else(|| format!("{}/cache", o.work)));
+            // the cache feeds the root: held to the work directory's rules (root's, nobody else can write)
+            let cache = PathBuf::from(o.cache.clone().unwrap_or_else(|| format!("{}/cache", work.display())));
+            let cache = sandbox::work_dir(&cache, &root.dir)?;
             Some(fetch::Proxy::start(&run, &cache, o.sources.clone(), o.offline)?)
         }
         None if o.offline || o.cache.is_some() || !o.sources.is_empty() => {
@@ -415,8 +419,6 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
         }
     }
     let box_id = o.box_id.clone().unwrap_or_else(|| "local".into());
-    let root = sandbox::Root::new(std::path::Path::new(root))?;
-    let work = sandbox::work_dir(std::path::Path::new(&o.work), &root.dir)?;
     let snap = work.join(format!("snap-{}", std::process::id()));
     std::fs::create_dir(&snap).map_err(|e| format!("{}: {e}", snap.display()))?;
     eprintln!(
@@ -460,7 +462,7 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
         eprintln!(
             "repos go through the verifying proxy at {} (cache {}{})",
             p.base(),
-            o.cache.clone().unwrap_or_else(|| format!("{}/cache", o.work)),
+            p.cache().display(),
             if o.offline { ", offline" } else { "" }
         );
     }

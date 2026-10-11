@@ -363,18 +363,31 @@ impl<'a> Walk<'a> {
         let mut out = BTreeMap::new();
         match backend_of(self.sources_adapter) {
             "apt" => {
-                let vars = hop_vars(self.sources_adapter, hop)?;
-                let mirror = vars
-                    .iter()
-                    .find(|(k, _)| k == "mirror")
-                    .map(|(_, v)| v.as_str())
-                    .unwrap_or("");
-                let url = format!("{mirror}/dists/{hop}");
-                let stem = url.split_once("://").map_or(url.as_str(), |(_, r)| r).replace('/', "_");
+                // keys name the origin mirror; apt named its files after the mirror it used (the proxy's, with --run)
+                let mirror = |a: &Doc| -> Result<String, String> {
+                    Ok(hop_vars(a, hop)?
+                        .into_iter()
+                        .find(|(k, _)| k == "mirror")
+                        .map(|(_, v)| v)
+                        .unwrap_or_default())
+                };
+                let url = format!("{}/dists/{hop}", mirror(self.sources_adapter)?);
+                let used = format!("{}/dists/{hop}", mirror(self.adapter)?);
+                let bare = used
+                    .split_once("://")
+                    .map_or(used.as_str(), |(_, r)| r)
+                    .replace('/', "_");
+                // newer apt writes a port's colon as %3a
+                let mut stems = vec![bare.clone()];
+                if bare.contains(':') {
+                    stems.push(bare.replace(':', "%3a"));
+                }
                 let lists = root.join("var/lib/apt/lists");
-                for n in ["InRelease", "Release"] {
-                    if let Some(h) = file_sha256(root, &lists.join(format!("{stem}_{n}"))) {
-                        out.insert(format!("{url}/{n}"), h);
+                for stem in &stems {
+                    for n in ["InRelease", "Release"] {
+                        if let Some(h) = file_sha256(root, &lists.join(format!("{stem}_{n}"))) {
+                            out.insert(format!("{url}/{n}"), h);
+                        }
                     }
                 }
                 if out.is_empty() && dirs_under(root, &lists).first() == Some(&lists) {
@@ -387,7 +400,7 @@ impl<'a> Walk<'a> {
                         .collect();
                     names.sort();
                     for n in names {
-                        let Some(rest) = n.strip_prefix(&format!("{stem}_")) else {
+                        let Some(rest) = stems.iter().find_map(|st| n.strip_prefix(&format!("{st}_"))) else {
                             continue;
                         };
                         if n.ends_with(".gpg") {
