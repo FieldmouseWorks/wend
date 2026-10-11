@@ -274,7 +274,9 @@ without listing thousands of packages, and a client can verify any package from 
 question 12 says how). One exception: apt 0.9 (wheezy) deletes the `Release` when the archive's signing key fails
 and keeps only the indexes. Then the hop pins each index it kept, keyed by the path the `Release` lists it under
 (`dists/wheezy/main/binary-amd64/Packages`), with the sha256 of the uncompressed bytes. The `Release` hashes the
-same bytes, so a client fetches whichever compressed form the archive serves and checks it after decompressing. The harness writes `sources` from the files it refreshed. A run without them proves the route
+same bytes, so a client fetches whichever compressed form the archive serves and checks it after decompressing.
+An op that fetches through temporary repos the hop then drops (`rpm.transit`) keeps their metadata files under
+`/var/lib/wend/sources/<hop>/`, so the hop pins those too. The harness writes `sources` from the files it refreshed. A run without them proves the route
 against whatever the mirrors held that day and nothing more.
 
 A discovery run records which model was used and how many calls it made. Replays record `model_calls: 0`. CI only

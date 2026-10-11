@@ -271,6 +271,8 @@ const STOP_DB: &str = concat!(
 const SAVED: &str = "/var/lib/wend/saved";
 /// service.record: the SysV services the box started at boot, one per line
 const SYSV_RECORD: &str = "/var/lib/wend/sysv-enabled";
+/// <hop>/<repo id>.repomd.xml: metadata an op fetched through repos the hop then drops
+pub const SOURCES: &str = "/var/lib/wend/sources";
 
 fn release_of<'a>(adapter: &'a Doc, release: &str) -> Result<&'a Value, String> {
     get(adapter, "releases")
@@ -622,6 +624,13 @@ fn transit(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
             "rpm -e --nodeps --noscripts --justdb $L; }",
         ]
         .concat(),
+        // the hop's refresh cleans every cache: keep the transit repos' metadata so the hop pins it (Walk::sources)
+        format!(
+            "S={SOURCES}/{}; mkdir -p $S; for f in /var/cache/dnf/*/repodata/repomd.xml \
+             /var/cache/yum/*/*/*/repomd.xml; do [ -f \"$f\" ] || continue; d=${{f%/repomd.xml}}; d=${{d%/repodata}}; \
+             d=${{d##*/}}; case $f in /var/cache/dnf/*) d=${{d%-*}};; esac; cp \"$f\" \"$S/$d.repomd.xml\"; done",
+            var(v, "release")
+        ),
         format!("cd /; rm -rf {b}; {CLEAN_REPOS}"),
     ]
     .join("\n"))

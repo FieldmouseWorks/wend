@@ -4,7 +4,7 @@
 //! stops there. The run it writes has the same shape as the Python harness's (tools/walk.py).
 
 use crate::atlas::{get, list_of, str_of, Doc};
-use crate::backend::{backend_of, fill, hop_vars, pred_sh, step};
+use crate::backend::{backend_of, fill, hop_vars, pred_sh, step, SOURCES};
 use crate::canon::{canonical, content_id, sha256_hex};
 use crate::hop::{hop_plan, pinned};
 use crate::sandbox::{host, tail, Root};
@@ -406,6 +406,42 @@ impl<'a> Walk<'a> {
                     for (n, u) in get(r, "repos").and_then(Value::as_object).into_iter().flatten() {
                         if let Some(u) = u.as_str() {
                             ids.insert(format!("{rel}-{n}"), format!("https://{u}/repodata/repomd.xml"));
+                        }
+                    }
+                }
+                // rpm.transit's boot-<name> repos: the release it comes from, then its extra repos
+                for r in get(self.adapter, "releases")
+                    .and_then(Value::as_object)
+                    .into_iter()
+                    .flatten()
+                    .map(|(_, r)| r)
+                {
+                    let Some(t) = get(r, "transit") else { continue };
+                    let from = get(t, "from")
+                        .and_then(Value::as_str)
+                        .and_then(|f| get(self.adapter, "releases").and_then(|rs| get(rs, f)));
+                    let repos = from
+                        .and_then(|f| get(f, "repos"))
+                        .and_then(Value::as_object)
+                        .into_iter()
+                        .flatten();
+                    let extra = get(t, "extra_repos").and_then(Value::as_object).into_iter().flatten();
+                    for (n, u) in repos.chain(extra) {
+                        if let Some(u) = u.as_str() {
+                            ids.insert(format!("boot-{n}"), format!("https://{u}/repodata/repomd.xml"));
+                        }
+                    }
+                }
+                let kept = root.join(SOURCES.trim_start_matches('/')).join(hop);
+                if dirs_under(root, &kept).first() == Some(&kept) {
+                    for e in std::fs::read_dir(&kept)
+                        .map_err(|e| format!("{}: {e}", kept.display()))?
+                        .flatten()
+                    {
+                        let n = e.file_name().to_string_lossy().into_owned();
+                        let url = n.strip_suffix(".repomd.xml").and_then(|rid| ids.get(rid));
+                        if let Some(h) = url.and_then(|_| file_sha256(root, &e.path())) {
+                            out.insert(url.unwrap().clone(), h);
                         }
                     }
                 }

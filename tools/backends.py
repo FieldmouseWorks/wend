@@ -19,9 +19,15 @@ def fill(template, values):
                   template)
 
 
-def file_sha256(path):
-    """sha256 of a regular file inside a root (never through a symlink), or None."""
-    if os.path.islink(path) or not os.path.isfile(path):
+def plain_dir(root, d):
+    """d is a directory inside root (a resolved path) and nothing on the way to it is a symlink."""
+    return os.path.isdir(d) and os.path.realpath(d) == d and d.startswith(f"{root}/")
+
+
+def file_sha256(root, path):
+    """sha256 of a regular file inside root (a resolved path), never through a symlink; else None. A box's
+    package scripts can plant symlinks, and this runs on the host."""
+    if not plain_dir(root, os.path.dirname(path)) or os.path.islink(path) or not os.path.isfile(path):
         return None
     with open(path, "rb") as f:
         return "sha256:" + hashlib.sha256(f.read()).hexdigest()
@@ -65,16 +71,17 @@ class Apt:
 
     def sources(self, root, adapter, release):
         """SPEC.md "Pinned sources": the Release/InRelease file apt read for this hop, by its origin URL."""
+        root = os.path.realpath(root)
         url = f"{self.hop_vars(adapter, release)['mirror']}/dists/{release}"
         stem = re.sub(r"^[a-z]+://", "", url).replace("/", "_")
         lists = f"{root}/var/lib/apt/lists"
-        found = {f"{url}/{n}": file_sha256(f"{lists}/{stem}_{n}") for n in ("InRelease", "Release")}
+        found = {f"{url}/{n}": file_sha256(root, f"{lists}/{stem}_{n}") for n in ("InRelease", "Release")}
         found = {u: h for u, h in found.items() if h}
-        if not found and os.path.isdir(lists) and not os.path.islink(lists):
+        if not found and plain_dir(root, lists):
             # apt 0.9 throws the Release away when its signing key fails: pin the indexes it kept, by the path the
             # Release lists them under (their bytes are the uncompressed ones the Release hashes)
             for n in sorted(os.listdir(lists)):
-                h = file_sha256(f"{lists}/{n}") if n.startswith(f"{stem}_") and not n.endswith(".gpg") else None
+                h = file_sha256(root, f"{lists}/{n}") if n.startswith(f"{stem}_") and not n.endswith(".gpg") else None
                 if h:
                     found[f"{url}/{n[len(stem) + 1:].replace('_', '/')}"] = h
         return found
@@ -123,6 +130,7 @@ STOP_DB = ("pkill -TERM -x mariadbd; pkill -TERM -x mysqld; i=0; "
            "! pgrep -x 'mariadbd|mysqld' >/dev/null")
 SAVED = "/var/lib/wend/saved"  # what adopt-rpmnew replaced and set-aside-unowned moved, kept for the admin
 SYSV_RECORD = "/var/lib/wend/sysv-enabled"  # service.record: the SysV services the box started at boot, one per line
+SOURCES = "/var/lib/wend/sources"  # <hop>/<repo id>.repomd.xml: metadata an op fetched through repos the hop then drops
 
 
 def repo_file(adapter, release, shim):
@@ -150,18 +158,31 @@ class Rpm:
     PM_OPTIONS = set()
 
     def sources(self, root, adapter, release):
-        """SPEC.md "Pinned sources": every repomd.xml yum or dnf cached this hop, by its origin URL. The harness's
-        repo ids are <release>-<name> (repo_file), so a cache directory names the repo it came from."""
+        """SPEC.md "Pinned sources": every repomd.xml yum or dnf cached this hop, and those rpm.transit kept under
+        SOURCES, by its origin URL. The harness's repo ids are <release>-<name> (repo_file) and transit's boot-<name>,
+        so a cache directory names the repo it came from."""
+        root = os.path.realpath(root)
         ids = {f"{rel}-{n}": f"https://{u}/repodata/repomd.xml"
                for rel, r in adapter["releases"].items() for n, u in r.get("repos", {}).items()}
+        for r in adapter["releases"].values():  # rpm.transit's boot-<name> repos
+            if "transit" in r:
+                t = r["transit"]
+                for n, u in {**adapter["releases"][t["from"]]["repos"], **t["extra_repos"]}.items():
+                    ids[f"boot-{n}"] = f"https://{u}/repodata/repomd.xml"
         out = {}
+        kept = f"{root}{SOURCES}/{release}"
+        if plain_dir(root, kept):
+            for n in os.listdir(kept):
+                h = file_sha256(root, f"{kept}/{n}") if n.endswith(".repomd.xml") else None
+                if h and n[:-len(".repomd.xml")] in ids:
+                    out[ids[n[:-len(".repomd.xml")]]] = h
         for top, layout in ((f"{root}/var/cache/yum", "yum"), (f"{root}/var/cache/dnf", "dnf")):
-            for d, dirs, files in os.walk(top):  # never follows symlinks
+            for d, dirs, files in os.walk(top) if plain_dir(root, top) else ():  # never follows symlinks below top
                 name = os.path.basename(d)
                 rid = name if layout == "yum" else re.sub(r"-[0-9a-f]{16}$", "", name)
                 p = f"{d}/repomd.xml" if layout == "yum" else f"{d}/repodata/repomd.xml"
                 if rid in ids and (layout == "yum" or rid != name):
-                    h = file_sha256(p)
+                    h = file_sha256(root, p)
                     if h:
                         out[ids[rid]] = h
         return dict(sorted(out.items()))
@@ -320,6 +341,10 @@ class Rpm:
             f"L=$(rpm -qa --qf '%{{NAME}}-%{{VERSION}}-%{{RELEASE}}.%{{ARCH}}\\n' | grep -v '^gpg-pubkey' | grep -v '{tag}' || true); "
             "[ -z \"$L\" ] || { echo \"dropped from the rpm database (files kept): $L\"; "
             "rpm -e --nodeps --noscripts --justdb $L; }",
+            # the hop's refresh cleans every cache: keep the transit repos' metadata so the hop pins it (Rpm.sources)
+            f"S={SOURCES}/{v['release']}; mkdir -p $S; for f in /var/cache/dnf/*/repodata/repomd.xml "
+            "/var/cache/yum/*/*/*/repomd.xml; do [ -f \"$f\" ] || continue; d=${f%/repomd.xml}; d=${d%/repodata}; "
+            "d=${d##*/}; case $f in /var/cache/dnf/*) d=${d%-*};; esac; cp \"$f\" \"$S/$d.repomd.xml\"; done",
             f"cd /; rm -rf {b}; {CLEAN_REPOS}",
         ])
 
