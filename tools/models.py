@@ -95,7 +95,7 @@ class Agent:
     def ask(self, prompt):
         self.n += 1
         q, a = f"{self.dir}/ask-{self.n}.md", f"{self.dir}/answer-{self.n}.json"
-        with os.fdopen(os.open(q, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666 & ~self.mask), "w") as f:
+        with os.fdopen(os.open(q, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o666 & ~self.mask), "w") as f:
             f.write(prompt)
         print(f"WEND AGENT QUESTION: read {q} and write your JSON answer to {a}", flush=True)
         deadline = time.time() + float(os.environ.get("WEND_AGENT_TIMEOUT", "3600"))
