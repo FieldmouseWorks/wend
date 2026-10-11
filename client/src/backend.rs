@@ -86,7 +86,7 @@ fn printf(content: &str, path: &str) -> String {
     )
 }
 
-fn backend_of(adapter: &Doc) -> &str {
+pub fn backend_of(adapter: &Doc) -> &str {
     get(adapter, "backend").and_then(Value::as_str).unwrap_or("apt")
 }
 
@@ -271,6 +271,8 @@ const STOP_DB: &str = concat!(
 const SAVED: &str = "/var/lib/wend/saved";
 /// service.record: the SysV services the box started at boot, one per line
 const SYSV_RECORD: &str = "/var/lib/wend/sysv-enabled";
+/// <hop>/<repo id>.repomd.xml: metadata an op fetched through repos the hop then drops
+pub const SOURCES: &str = "/var/lib/wend/sources";
 
 fn release_of<'a>(adapter: &'a Doc, release: &str) -> Result<&'a Value, String> {
     get(adapter, "releases")
@@ -490,6 +492,18 @@ fn drop_arch(s: &Value) -> Result<String, String> {
 
 /// EL5 -> EL6: rpm 4.4 can't read xz payloads and yum 3.2.22 can't check sha256 repodata. Unpack EL6's rpm/yum/
 /// python stack over / with 7-Zip, then let the new rpm rebuild its database.
+/// rpm.bootstrap's 7-Zip RPMs for a release, by their origin URL: (url, "sha256:..."), in the adapter's order.
+pub fn bootstrap_pins(adapter: &Doc, release: &str) -> Result<Vec<(String, String)>, String> {
+    let Some(boot) = get(release_of(adapter, release)?, "bootstrap") else {
+        return Ok(vec![]);
+    };
+    let repo = str_of(boot, "p7zip_repo")?;
+    Ok(table(boot, "p7zip")?
+        .iter()
+        .map(|(f, h)| (format!("https://{repo}/{f}"), scalar(h)))
+        .collect())
+}
+
 fn bootstrap(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
     let target = str_of(s, "release")?;
     let trel = release_of(adapter, target)?;
@@ -497,13 +511,32 @@ fn bootstrap(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
     let (shim, b) = (var(v, "shim"), "/var/lib/wend/boot");
     let base = format!("{shim}/{}", first_repo(trel)?);
     let p7 = format!("{shim}/{}", str_of(boot, "p7zip_repo")?);
-    let p7zip = list_of(boot, "p7zip")?.join(" ");
+    let pins = table(boot, "p7zip")?;
+    let p7zip = pins.keys().cloned().collect::<Vec<_>>().join(" ");
     let pkgs = list_of(boot, "packages")?.join(" ");
+    let sources = format!("{SOURCES}/{}", var(v, "release"));
     Ok([
         format!("set -e; rm -rf {b}; mkdir -p {b}/x; cd {b}"),
         primary_list(&base, &format!("{b}/list")),
         format!(
             "for f in {p7zip}; do curl -sf -O {p7}/$f || curl -sf -O {p7}/Packages/$f || curl -sf -O {p7}/Packages/p/$f; done"
+        ),
+        // nothing vouches for these but the adapter's pins: refuse other bytes, and record them (Walk::sources)
+        pins.iter()
+            .map(|(f, h)| {
+                let h = scalar(h);
+                let h = h.strip_prefix("sha256:").unwrap_or(&h);
+                format!("echo '{h}  {f}' | sha256sum -c - >/dev/null || {{ echo 'digest mismatch: {f}'; exit 1; }}")
+            })
+            .collect::<Vec<_>>()
+            .join("; "),
+        format!(
+            "mkdir -p {sources}; printf '%s %s\\n' {} > {sources}/fetched",
+            bootstrap_pins(adapter, target)?
+                .iter()
+                .map(|(u, h)| format!("{u} {h}"))
+                .collect::<Vec<_>>()
+                .join(" ")
         ),
         format!("rpm -Uvh --nosignature {p7zip}"),
         format!(
@@ -622,6 +655,15 @@ fn transit(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
             "rpm -e --nodeps --noscripts --justdb $L; }",
         ]
         .concat(),
+        // the hop's refresh cleans every cache: keep the transit repos' metadata so the hop pins it (Walk::sources)
+        // (only its own repos: older releases' caches outlive their hops)
+        format!(
+            "S={SOURCES}/{}; rm -rf $S; mkdir -p $S; for f in /var/cache/dnf/*/repodata/repomd.xml \
+             /var/cache/yum/*/*/*/repomd.xml; do [ -f \"$f\" ] || continue; d=${{f%/repomd.xml}}; d=${{d%/repodata}}; \
+             d=${{d##*/}}; case $f in /var/cache/dnf/*) d=${{d%-*}};; esac; \
+             case $d in boot-*|{target}-*) cp \"$f\" \"$S/$d.repomd.xml\";; esac; done",
+            var(v, "release")
+        ),
         format!("cd /; rm -rf {b}; {CLEAN_REPOS}"),
     ]
     .join("\n"))

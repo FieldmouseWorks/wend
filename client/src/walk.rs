@@ -4,7 +4,7 @@
 //! stops there. The run it writes has the same shape as the Python harness's (tools/walk.py).
 
 use crate::atlas::{get, list_of, str_of, Doc};
-use crate::backend::{fill, pred_sh, step};
+use crate::backend::{backend_of, bootstrap_pins, fill, hop_vars, pred_sh, step, SOURCES};
 use crate::canon::{canonical, content_id, sha256_hex};
 use crate::hop::{hop_plan, pinned};
 use crate::sandbox::{host, tail, Root};
@@ -299,6 +299,10 @@ impl<'a> Walk<'a> {
                 json!({"to": hop, "fired": matched.iter().map(|(i, _)| i).collect::<Vec<_>>(),
                                   "fired_names": names, "ok": ok, "seconds": secs}),
             );
+            if ok {
+                let s = self.sources(hop)?;
+                self.hops.last_mut().unwrap()["sources"] = Value::Object(s);
+            }
             if !ok {
                 break;
             }
@@ -348,6 +352,165 @@ impl<'a> Walk<'a> {
         Ok(run)
     }
 
+    /// SPEC.md "Pinned sources": the repo metadata this hop's refresh read, by origin URL, as tools/backends.py's
+    /// `sources` records it.
+    fn sources(&self, hop: &str) -> Result<Map<String, Value>, String> {
+        let root = &self.root.dir;
+        let mut out = BTreeMap::new();
+        match backend_of(self.adapter) {
+            "apt" => {
+                let vars = hop_vars(self.adapter, hop)?;
+                let mirror = vars
+                    .iter()
+                    .find(|(k, _)| k == "mirror")
+                    .map(|(_, v)| v.as_str())
+                    .unwrap_or("");
+                let url = format!("{mirror}/dists/{hop}");
+                let stem = url.split_once("://").map_or(url.as_str(), |(_, r)| r).replace('/', "_");
+                let lists = root.join("var/lib/apt/lists");
+                for n in ["InRelease", "Release"] {
+                    if let Some(h) = file_sha256(root, &lists.join(format!("{stem}_{n}"))) {
+                        out.insert(format!("{url}/{n}"), h);
+                    }
+                }
+                if out.is_empty() && dirs_under(root, &lists).first() == Some(&lists) {
+                    // apt 0.9 throws the Release away when its signing key fails: pin the indexes it kept, by the
+                    // path the Release lists them under (their bytes are the uncompressed ones the Release hashes)
+                    let mut names: Vec<String> = std::fs::read_dir(&lists)
+                        .map_err(|e| format!("{}: {e}", lists.display()))?
+                        .flatten()
+                        .filter_map(|e| e.file_name().into_string().ok())
+                        .collect();
+                    names.sort();
+                    for n in names {
+                        let Some(rest) = n.strip_prefix(&format!("{stem}_")) else {
+                            continue;
+                        };
+                        if n.ends_with(".gpg") {
+                            continue;
+                        }
+                        if let Some(h) = file_sha256(root, &lists.join(&n)) {
+                            out.insert(format!("{url}/{}", rest.replace('_', "/")), h);
+                        }
+                    }
+                }
+            }
+            "rpm" => {
+                // the harness's repo ids are <release>-<name> (backend::repo_file), so a cache directory names its repo
+                let mut ids = BTreeMap::new();
+                for (rel, r) in get(self.adapter, "releases")
+                    .and_then(Value::as_object)
+                    .into_iter()
+                    .flatten()
+                {
+                    for (n, u) in get(r, "repos").and_then(Value::as_object).into_iter().flatten() {
+                        if let Some(u) = u.as_str() {
+                            ids.insert(format!("{rel}-{n}"), format!("https://{u}/repodata/repomd.xml"));
+                        }
+                    }
+                }
+                // rpm.transit's boot-<name> repos: the release it comes from, then its extra repos
+                for r in get(self.adapter, "releases")
+                    .and_then(Value::as_object)
+                    .into_iter()
+                    .flatten()
+                    .map(|(_, r)| r)
+                {
+                    let Some(t) = get(r, "transit") else { continue };
+                    let from = get(t, "from")
+                        .and_then(Value::as_str)
+                        .and_then(|f| get(self.adapter, "releases").and_then(|rs| get(rs, f)));
+                    let repos = from
+                        .and_then(|f| get(f, "repos"))
+                        .and_then(Value::as_object)
+                        .into_iter()
+                        .flatten();
+                    let extra = get(t, "extra_repos").and_then(Value::as_object).into_iter().flatten();
+                    for (n, u) in repos.chain(extra) {
+                        if let Some(u) = u.as_str() {
+                            ids.insert(format!("boot-{n}"), format!("https://{u}/repodata/repomd.xml"));
+                        }
+                    }
+                }
+                let kept = root.join(SOURCES.trim_start_matches('/')).join(hop);
+                // a fetched line counts only if it is one of the adapter's own pins
+                let mut pins = BTreeMap::new();
+                for rel in get(self.adapter, "releases")
+                    .and_then(Value::as_object)
+                    .into_iter()
+                    .flatten()
+                    .map(|(k, _)| k)
+                {
+                    pins.extend(bootstrap_pins(self.adapter, rel)?);
+                }
+                let fetched = kept.join("fetched");
+                if file_sha256(root, &fetched).is_some() {
+                    let bytes = std::fs::read(&fetched).map_err(|e| format!("{}: {e}", fetched.display()))?;
+                    let text = String::from_utf8_lossy(&bytes);
+                    for line in text.lines() {
+                        let (u, h) = line.trim().split_once(' ').unwrap_or((line.trim(), ""));
+                        if pins.get(u).is_some_and(|p| p == h) {
+                            out.insert(u.to_string(), h.to_string());
+                        }
+                    }
+                }
+                if dirs_under(root, &kept).first() == Some(&kept) {
+                    for e in std::fs::read_dir(&kept)
+                        .map_err(|e| format!("{}: {e}", kept.display()))?
+                        .flatten()
+                    {
+                        let n = e.file_name().to_string_lossy().into_owned();
+                        // only the transit's own repos: boot-<name> and the release it passes through
+                        let url = n
+                            .strip_suffix(".repomd.xml")
+                            .filter(|rid| {
+                                rid.starts_with("boot-")
+                                    || rid.split('-').next().is_some_and(|r| {
+                                        get(self.adapter, "releases")
+                                            .and_then(|rs| get(rs, r))
+                                            .is_some_and(|x| get(x, "transit").is_some())
+                                    })
+                            })
+                            .and_then(|rid| ids.get(rid));
+                        if let Some(h) = url.and_then(|_| file_sha256(root, &e.path())) {
+                            out.insert(url.unwrap().clone(), h);
+                        }
+                    }
+                }
+                let hexsuffix = regex::Regex::new(r"-[0-9a-f]{16}$").unwrap();
+                for (top, yum) in [("var/cache/yum", true), ("var/cache/dnf", false)] {
+                    for d in dirs_under(root, &root.join(top)) {
+                        let name = d
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        let rid = if yum {
+                            name.clone()
+                        } else {
+                            hexsuffix.replace(&name, "").into_owned()
+                        };
+                        let p = if yum {
+                            d.join("repomd.xml")
+                        } else {
+                            d.join("repodata/repomd.xml")
+                        };
+                        // only this hop's repos: yum and dnf "clean all" skip disabled repos, so older caches stay
+                        if let Some(url) = ids
+                            .get(&rid)
+                            .filter(|_| rid.starts_with(&format!("{hop}-")) && (yum || rid != name))
+                        {
+                            if let Some(h) = file_sha256(root, &p) {
+                                out.insert(url.clone(), h);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(out.into_iter().map(|(k, v)| (k, Value::String(v))).collect())
+    }
+
     pub fn steps(&self) -> &[Value] {
         &self.steps
     }
@@ -370,4 +533,39 @@ fn runner() -> Value {
     let rd = |p: &str| std::fs::read_to_string(p).unwrap_or_default().trim().to_string();
     json!({"kind": "local", "host": rd("/proc/sys/kernel/hostname"), "kernel": rd("/proc/sys/kernel/osrelease"),
            "client": format!("wend {} (rust)", env!("CARGO_PKG_VERSION"))})
+}
+
+/// sha256 of a regular file inside the root, never through a symlink (anywhere on its path).
+fn file_sha256(root: &std::path::Path, p: &std::path::Path) -> Option<String> {
+    let md = std::fs::symlink_metadata(p).ok()?;
+    let parent = std::fs::canonicalize(p.parent()?).ok()?;
+    if !md.is_file() || !parent.starts_with(root) || Some(parent.as_path()) != p.parent() {
+        return None;
+    }
+    Some(format!("sha256:{}", sha256_hex(&std::fs::read(p).ok()?)))
+}
+
+/// Every directory under top (top included), without following symlinks; nothing if top itself isn't a plain
+/// directory inside the root.
+fn dirs_under(root: &std::path::Path, top: &std::path::Path) -> Vec<PathBuf> {
+    let plain = |p: &std::path::Path| {
+        std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir())
+            && std::fs::canonicalize(p).is_ok_and(|c| c == p && c.starts_with(root))
+    };
+    if !plain(top) {
+        return vec![];
+    }
+    let mut out = vec![];
+    let mut todo = vec![top.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        if let Ok(rd) = std::fs::read_dir(&d) {
+            for e in rd.flatten() {
+                if e.file_type().is_ok_and(|t| t.is_dir()) {
+                    todo.push(e.path());
+                }
+            }
+        }
+        out.push(d);
+    }
+    out
 }

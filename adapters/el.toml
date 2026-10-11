@@ -57,7 +57,9 @@ upgrade = ["yum -y upgrade"]
 [releases.centos6.bootstrap]
 # rpm.bootstrap: EL6's rpm, yum and python stack, unpacked over / with 7-Zip from archived EPEL 5
 p7zip_repo = "archives.fedoraproject.org/pub/archive/epel/5/x86_64"
-p7zip = ["p7zip-9.20.1-2.el5.x86_64.rpm", "p7zip-plugins-9.20.1-2.el5.x86_64.rpm"]
+# pinned by digest (EPEL 5's primary.xml lists their SHA-1; these are the sha256 of those same files): the hop
+# refuses anything else, and its sources record them
+p7zip = { "p7zip-9.20.1-2.el5.x86_64.rpm" = "sha256:8f5feea09ccbd75e7972c00aa04269ec2ef3db3f7c08875aef8806bae4b173da", "p7zip-plugins-9.20.1-2.el5.x86_64.rpm" = "sha256:49ed9ca05f0da717b3d18b80f8d1b1e132c439d1b25c902629a8f7abee9a2476" }
 packages = ["glibc", "glibc-common", "libgcc", "nss-softokn-freebl", "nss-softokn", "nss", "nss-util", "nspr",
             "nss-sysinit", "rpm", "rpm-libs", "rpm-python", "popt", "xz-libs", "xz", "lua", "file-libs", "sqlite",
             "db4", "libselinux", "libcap", "libacl", "libattr", "elfutils-libelf", "bzip2-libs", "zlib", "python",

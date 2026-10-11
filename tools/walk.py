@@ -123,6 +123,8 @@ class Walk:
             self.hops.append({"to": hop, "fired": [check.content_id(f) for f in matched + new],
                               "fired_names": names + [f["meta"]["name"] for f in new], "ok": ok,
                               "seconds": round(sum(s["seconds"] for s in self.steps[-1:]), 1)})
+            if ok:  # SPEC.md "Pinned sources"
+                self.hops[-1]["sources"] = backends.of(self.adapter).sources(self.box.root, self.adapter, hop)
             if not ok:
                 break
         extra = self.prune() if self.route.get("finish", {}).get("prune_obsolete") and all(

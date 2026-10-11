@@ -258,9 +258,29 @@ Written by CI. JSON, because no human edits it.
 }
 ```
 
-`sources` is reserved: a table of repo URL to the sha256 of the repo metadata the run used (`Release` on Debian,
-`repomd.xml` on EL), so a later replay can tell whether the mirror it sees is the one the run proved. Nothing writes
-it yet. Live EL mirrors change under a route, so this is likely the next field a run gains.
+**Pinned sources.** Each hop records the repo metadata it ran against:
+
+```json
+"hops": [{"to": "alma9", "...": "...",
+          "sources": {"https://repo.almalinux.org/almalinux/9/BaseOS/x86_64/os/repodata/repomd.xml": "sha256:9f2c...",
+                      "https://repo.almalinux.org/almalinux/9/AppStream/x86_64/os/repodata/repomd.xml": "sha256:41ab..."}}]
+```
+
+A key is the origin URL of the repo's top metadata file (`dists/<suite>/Release` on apt, `repodata/repomd.xml` on
+rpm), with any harness shim prefix stripped. A value is the sha256 of the bytes the hop's refresh read. That one hash
+pins everything under it: `Release` lists the hash of every `Packages` index and `repomd.xml` the hash of
+`primary.xml`, and those list a checksum for every package. So a run pins the exact package set its route proved
+without listing thousands of packages, and a client can verify any package from any source against it (open
+question 12 says how). One exception: apt 0.9 (wheezy) deletes the `Release` when the archive's signing key fails
+and keeps only the indexes. Then the hop pins each index it kept, keyed by its URL
+(`<mirror>/dists/wheezy/main/binary-amd64/Packages`), with the sha256 of the uncompressed bytes. The `Release` hashes the
+same bytes, so a client fetches whichever compressed form the archive serves and checks it after decompressing.
+A hop records only its own release's repos: yum and dnf leave the caches of disabled repos behind, so a cache from
+an earlier hop says nothing about this one. An op that fetches through temporary repos the hop then drops
+(`rpm.transit`) keeps their metadata under `/var/lib/wend/sources/<hop>/`, so the hop pins those too. A file fetched
+outside any repo (`rpm.bootstrap`'s 7-Zip RPMs) is pinned by sha256 in the adapter: the op refuses other bytes, and
+the hop records it by its URL. The harness writes `sources` from the files it refreshed. A run without them proves the
+route against whatever the mirrors held that day and nothing more.
 
 A discovery run records which model was used and how many calls it made. Replays record `model_calls: 0`. CI only
 ever replays.
@@ -428,7 +448,10 @@ payloads, and yum 3.2.22 can't check EL6's sha256 repodata. Effect: the files of
 rpm has rebuilt the database. The packages stay recorded at their old versions; the hop's own transaction then
 installs them properly. Reference:
 1. In a fresh `/var/lib/wend/boot`, take `PKGLIST` of `release`'s first repo.
-2. Download `bootstrap.p7zip` from `bootstrap.p7zip_repo` and install it with `rpm -Uvh --nosignature`.
+2. Download each file in `bootstrap.p7zip` (a table of file name → `sha256:` digest) from `bootstrap.p7zip_repo`.
+   Fail unless each one's sha256 is its pin: nothing else vouches for them. Write the pins to
+   `/var/lib/wend/sources/<hop>/fetched`, one `https://<p7zip_repo>/<file> sha256:<hex>` per line (the hop's
+   `sources` take a line only if it is one of the adapter's pins), then install them with `rpm -Uvh --nosignature`.
 3. For each name in `bootstrap.packages`, download the first `name-<digit>...` x86_64 or noarch file in the list.
    A name with no file is reported and skipped.
 4. For each downloaded file, unpack its payload with `7z` and extract it over `/` with
@@ -465,6 +488,9 @@ repos kept in private `reposdir`s so `/etc/yum.repos.d` stays the harness's:
    directories trip it once).
 8. Remove the EL7 `yum*` packages without scriptlets; move `/etc/yum/{pluginconf.d,protected.d,vars}` to `SAVED`.
 9. `dnf install yum {reinstall}` (fatal on failure).
+   Then, before the cleanup wipes them, copy the `repomd.xml` of the `old` repos (`boot-<name>`) and of `release`'s
+   repos (`<release>-<name>`) from the yum and dnf caches to a fresh `/var/lib/wend/sources/<hop>/<repo id>.repomd.xml`,
+   and nothing else: the hop's `sources` pin them.
 10. `rpm -e --nodeps --noscripts --justdb` every package (but `gpg-pubkey`) without the `el{major}` tag, listing them
     in the output; delete the work dir; `CLEAN_REPOS`. That drops the old release's leftovers from the database and
     keeps their files. It would also drop a third-party package the owner installed, which is why the list is printed
@@ -653,10 +679,27 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
 11. **The family map.** Move it from box checks into the adapter (a `[families]` table of renames), so a client can
     compute name families for its fingerprint hint and services check without a box? Probably yes; nothing reads it
     outside boxes yet.
-12. **Pinning what a route installs.** A run proves a route against the mirror state it saw, and live EL mirrors
-    move under it (AlmaLinux 9 and 10 keep publishing updates). Runs reserve `sources` for repo-metadata hashes; the next step
-    is recording the sha256 of every package a run installed, so a client can fetch and verify a whole route before
-    the first hop and fall back across mirrors and archives for exactly those files. Not written yet: the harness
-    would need to record downloads per run, which the shared mirror cache doesn't do today. Until then integrity
-    rests on TLS to the mirrors and the shim's cache: EL repos run with `gpgcheck=0` (CentOS 5's keys can't check
-    what comes later), and the shim keeps only complete downloads and checks hash-named metadata against its name.
+12. **Pinning what a route installs.** Answered (2026-10-11): pin repo metadata, not package lists. Each hop's run record
+    carries `sources` (see Run), the sha256 of every repo's top metadata file. Packages are verified through the
+    chain under it: `Release` (or `repomd.xml`) → index → the package's own checksum. The chain uses the strongest
+    hash each level carries. Etch's indexes already carry SHA256. CentOS 5's `primary.xml` carries only SHA-1, which
+    still resists a forged package (that takes a second preimage, not a collision), and the top of every chain is
+    our own sha256.
+    - **Archive.** CI keeps, keyed by sha256, every metadata file a passing run pinned and every package it
+      downloaded. That's the pinned tier of the vision doc: never evicted while a proven route references it. The
+      download list is a CI artifact, not part of the run file.
+    - **Fallback chain.** A client fetches each file by its expected hash from a list of sources in order: local
+      cache, an org cache, the wend archive, the origin, then mirrors. The first bytes that hash right win. A source
+      that serves wrong bytes is skipped, not trusted.
+    - **Before the first hop.** The client walks a copy of the machine first (what `wend walk --root` does today).
+      That walk fetches through the chain into a local cache, verifying everything. The walk on the machine itself
+      then installs only from that cache, offline, so a mirror going down mid-upgrade can't strand it.
+    - **Moved mirrors.** When the pinned metadata isn't available from any source (a live mirror moved on and no
+      archive holds that snapshot), the client stops before touching anything. It walks against today's mirrors only
+      when asked to (`--live`), and its run then records the new `sources`, so the mismatch is visible. Decided:
+      refuse by default. The follow-up is making a vanished snapshot rare (the archive and the fallback chain), not
+      making the client looser.
+    - **Order of work.** The harness and the client record `sources` (done). Next CI uploads the download list. Then
+      the archive. Then the client's verifying cache. Until runs carry `sources`, integrity rests on TLS to the
+      mirrors and the shim's cache: EL repos run with `gpgcheck=0` (CentOS 5's keys can't check what comes later), and the shim
+      keeps only complete downloads and checks hash-named metadata against its name.
