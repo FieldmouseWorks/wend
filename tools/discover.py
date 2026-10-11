@@ -3,7 +3,9 @@ import json
 import os
 import re
 
+import backends
 import check
+from backends import fill
 from sandbox import tail
 
 PROMPT = open(os.path.join(check.ROOT, "prompts", "discover.md")).read()
@@ -11,17 +13,31 @@ CORE_OPS_DOC = {
     "install": '{"op": "install", "packages": ["pkg", ...]}',
     "remove": '{"op": "remove", "packages": [...], "purge": true}',
     "repair": '{"op": "repair"}  (fix broken dependencies)',
-    "force-remove": '{"op": "force-remove", "packages": [...], "purge": true, "force": ["depends", "remove-essential"]}',
+    "force-remove": '{"op": "force-remove", "packages": [...], "purge": true, "force": [FORCE]}',
     "write-file": '{"op": "write-file", "path": "/etc/...", "content": "whole file"}',
     "pm-option": '{"op": "pm-option", "option": "overwrite-conflicting-files"}  (this hop only)',
 }
 
 
+def arg_doc(s):
+    if "enum" in s:
+        return json.dumps(s["enum"])
+    if "list" in s:
+        return f'["pkg", ...]  (each matching {s["list"]}, at least {s.get("min", 1)})'
+    if "paths" in s:
+        return '["/etc/...", ...]  (on the writable list; a * stays a glob)'
+    if "table" in s:
+        return f'{{"key": "value", ...}}  (values matching {s["table"]})'
+    return json.dumps(s.get("pattern"))
+
+
 def ops_doc(adapter):
-    lines = [f"- {v}" for v in CORE_OPS_DOC.values()]
+    force = json.dumps(adapter.get("force", check.FORCE))[1:-1]
+    lines = [f"- {v}".replace("FORCE", force) for k, v in CORE_OPS_DOC.items()
+             if k != "pm-option" or adapter.get("pm_options")]
     for name, o in adapter.get("ops", {}).items():
-        args = ", ".join(f'"{a}": {json.dumps(s.get("enum", s.get("pattern")))}' for a, s in o["args"].items())
-        lines.append(f'- {{"op": "{name}", {args}}}  ({o["summary"]})')
+        args = "".join(f', "{a}": {arg_doc(s)}' for a, s in o["args"].items())
+        lines.append(f'- {{"op": "{name}"{args}}}  ({o["summary"]})')
     return "\n".join(lines)
 
 
@@ -54,10 +70,13 @@ class Discoverer:
         s = walk.steps[-1]
         lost = [c for c in walk.checks if c in s["stage"]]
         a = walk.adapter["hop"]
+        v = {**backends.of(walk.adapter).hop_vars(walk.adapter, hop), "mirror": "<mirror>"}
+        rel = walk.adapter["releases"].get(hop)
+        upgrade = rel["upgrade"] if isinstance(rel, dict) and "upgrade" in rel else a["upgrade"]
         return PROMPT.format(
             family=walk.family, release_now=walk.health["release"], hop=hop,
-            set_release=a["set_release"].format(mirror="<mirror>", release=hop), refresh=a["refresh"],
-            upgrade=", then ".join(f"`{c}`" for c in a["upgrade"]),
+            set_release=fill(a["set_release"], v), refresh=fill(a["refresh"], v),
+            upgrade=", then ".join(f"`{fill(c, v)}`" for c in upgrade),
             matched=json.dumps([{k: f[k] for k in ("when", "pre", "post") if k in f} | {"name": f["meta"]["name"]}
                                 for f in matched], indent=1) if matched else "none",
             ops=ops_doc(walk.adapter), writable=", ".join(walk.adapter.get("writable", [])),

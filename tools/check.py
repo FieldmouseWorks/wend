@@ -17,13 +17,16 @@ import re
 import sys
 import tomllib
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import backends  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 PKG = r"[a-z0-9][a-z0-9.+-]*"
 ETC_PATH = r"/etc/[A-Za-z0-9_./-]+"
+ETC_GLOB = r"/etc/[A-Za-z0-9_./*-]+"
 CORE_OPS = {"install", "remove", "repair", "force-remove", "write-file", "pm-option"}
-FORCE = {"depends", "remove-essential"}
-PM_OPTIONS = {"overwrite-conflicting-files"}
+FORCE = ["depends", "remove-essential"]  # Debian's; an adapter can name its own (`force = [...]`)
 
 
 def canonical(obj):
@@ -79,6 +82,37 @@ def installed_names(w):
     return set()
 
 
+def writable(path, adapter, allow="writable"):
+    """On one of the adapter's allowlists: matches one of its globs, one directory level only. A glob in `path` (the
+    paths of rpm.adopt-rpmnew) must name a subset of an allowed glob, so '*' only matches '*' there."""
+    return not any(path.startswith(p) for p in adapter.get("harness_owned", [])) and any(
+        fnmatch.fnmatchcase(path, g) and "/" not in path[len(g.rsplit("/", 1)[0]) + 1:]
+        for g in adapter.get(allow, []))
+
+
+def check_arg(name, spec, val, adapter, where, errs):
+    """An adapter op's argument, by its spec: enum, pattern, list (of a pattern), path or paths (on one of the
+    adapter's allowlists, named by the spec), table (string keys and values, each matching a pattern)."""
+    if "enum" in spec and val not in spec["enum"]:
+        errs.append(f"{where}: {name} must be one of {spec['enum']}")
+    if "pattern" in spec and not (isinstance(val, str) and re.fullmatch(spec["pattern"], val)):
+        errs.append(f"{where}: {name}={val!r} does not match {spec['pattern']}")
+    if "list" in spec and not (isinstance(val, list) and len(val) >= spec.get("min", 1) and
+                               all(isinstance(x, str) and re.fullmatch(spec["list"], x) for x in val)):
+        errs.append(f"{where}: {name} must be a list of at least {spec.get('min', 1)} strings matching {spec['list']}")
+    if "path" in spec and not (isinstance(val, str) and re.fullmatch(ETC_PATH, val) and ".." not in val and
+                               writable(val, adapter, spec["path"])):
+        errs.append(f"{where}: {name}={val!r} is not on the {adapter['family']} adapter's {spec['path']} list")
+    if "paths" in spec and not (isinstance(val, list) and val and all(
+            isinstance(x, str) and re.fullmatch(ETC_GLOB, x) and ".." not in x and writable(x, adapter, spec["paths"])
+            for x in val)):
+        errs.append(f"{where}: {name} must be a list of paths on the {adapter['family']} adapter's {spec['paths']} list")
+    if "table" in spec and not (isinstance(val, dict) and val and all(
+            re.fullmatch(r"[A-Za-z0-9_]+", k) and isinstance(v, str) and re.fullmatch(spec["table"], v)
+            for k, v in val.items())):
+        errs.append(f"{where}: {name} must be a table of key = \"value\" with values matching {spec['table']}")
+
+
 def check_step(s, adapter, where, errs):
     op = s.get("op")
     adapter_ops = adapter.get("ops", {})
@@ -95,25 +129,22 @@ def check_step(s, adapter, where, errs):
     if "packages" in want:
         if not s["packages"] or not all(re.fullmatch(PKG, p) for p in s["packages"]):
             errs.append(f"{where}: packages must be a non-empty list of package names")
-    if op == "force-remove" and not set(s["force"]) <= FORCE:
-        errs.append(f"{where}: force may only use {sorted(FORCE)}")
+    force = adapter.get("force", FORCE)
+    if op == "force-remove" and not (isinstance(s["force"], list) and set(s["force"]) <= set(force)):
+        errs.append(f"{where}: force may only use {sorted(force)}")
     if op == "write-file":
         if not re.fullmatch(ETC_PATH, s["path"]) or ".." in s["path"]:
             errs.append(f"{where}: write-file only writes under /etc")
         if any(s["path"].startswith(p) for p in adapter.get("harness_owned", [])):
             errs.append(f"{where}: {s['path']} is owned by the harness")
-        elif not any(fnmatch.fnmatchcase(s["path"], g) and "/" not in s["path"][len(g.rsplit("/", 1)[0]) + 1:]
-                     for g in adapter.get("writable", [])):
+        elif not writable(s["path"], adapter):
             errs.append(f"{where}: {s['path']} is not on the {adapter['family']} adapter's writable list")
         if "'" in s["content"] or "%" in s["content"]:
             errs.append(f"{where}: write-file content may not contain ' or %")
-    if op == "pm-option" and s["option"] not in PM_OPTIONS:
+    if op == "pm-option" and s["option"] not in adapter.get("pm_options", {}):
         errs.append(f"{where}: unknown pm-option {s['option']!r}")
     for a, spec in adapter_ops.get(op, {}).get("args", {}).items():
-        if "enum" in spec and s[a] not in spec["enum"]:
-            errs.append(f"{where}: {a} must be one of {spec['enum']}")
-        if "pattern" in spec and not re.fullmatch(spec["pattern"], str(s[a])):
-            errs.append(f"{where}: {a}={s[a]!r} does not match {spec['pattern']}")
+        check_arg(a, spec, s[a], adapter, where, errs)
 
 
 def check_fix(doc, adapters, where):
@@ -139,7 +170,8 @@ def check_fix(doc, adapters, where):
         for i, s in enumerate(doc.get(ph, [])):
             check_step(s, a, f"{where}.{ph}[{i}]", errs)
     # The stray-MySQL rule: whatever a fix installs, it installs in place of something that is installed now.
-    if any(s.get("op") == "install" for s in steps) and not errs and not installed_names(doc["when"]):
+    if any(s.get("op") == "install" or s.get("reinstall") for s in steps) and not errs and \
+            not installed_names(doc["when"]):
         errs.append(f"{where}: a fix that installs packages must be gated on 'installed' of the package it replaces")
     checks = set(a.get("checks", {}))
     for c in doc.get("restores", []):
@@ -164,15 +196,21 @@ def check_route(doc, fixes_by_id, adapters, where):
     if doc["from"] not in lad or doc["to"] not in lad or lad.index(doc["from"]) >= lad.index(doc["to"]):
         return [f"{where}: from/to must be releases on the ladder, in order"]
     hops = lad[lad.index(doc["from"]) + 1: lad.index(doc["to"]) + 1]
-    if doc.get("hops") != hops:
-        errs.append(f"{where}: hops must be every release from {doc['from']} to {doc['to']}: {hops}")
+    # every release in between, in order. The adapter may let a route pass through a release in one hop
+    # (`may_skip`): EL8 is only ever a bootstrap step between EL7 and EL9.
+    skip, got = a.get("may_skip", []), doc.get("hops")
+    if not isinstance(got, list) or not got or got[-1] != doc["to"] or \
+            [h for h in hops if h in got] != got or any(h not in got and h not in skip for h in hops):
+        errs.append(f"{where}: hops must be every release from {doc['from']} to {doc['to']}: {hops}" +
+                    (f" (this adapter lets a route skip {skip})" if skip else ""))
+        return errs
     for ref in doc.get("fixes", []):
         f = fixes_by_id.get(ref["id"])
         if not f:
             errs.append(f"{where}: no fix with id {ref['id']} (named {ref.get('name')}); edited fixes get new ids")
         elif f["meta"]["name"] != ref.get("name"):
             errs.append(f"{where}: {ref['id'][:19]} is {f['meta']['name']}, not {ref.get('name')}")
-        elif f["hop"] not in hops:
+        elif f["hop"] not in got:
             errs.append(f"{where}: {ref['name']} applies on {f['hop']}, outside this route")
     return errs
 
@@ -187,6 +225,8 @@ def check_box(doc, adapters, where):
     for k in ("packages", "customize", "roles"):
         if k not in doc:
             errs.append(f"{where}: missing {k}")
+    if not set(doc.get("isolate", [])) <= set(doc.get("roles", {})):
+        errs.append(f"{where}: isolate names roles the box does not have")
     return errs
 
 
@@ -221,9 +261,10 @@ def decoy_errors(runs, routes_by_id, fixes_by_id):
     return errs
 
 
-# ---------- the Debian adapter compiler (what a client runs; the lab's ol.py is the reference) ----------
+# ---------- compiling: the backends in backends.py; the lab's ol.py/co.py are the references ----------
 
 def compile_when(w, family="debian"):
+    """ol.py's precondition language (for tools/port_oldlinux.py). The harness uses the adapter's [predicates]."""
     k, v = next(iter(w.items()))
     if k == "installed":
         return f"dpkg -s {v}"
@@ -236,35 +277,17 @@ def compile_when(w, family="debian"):
     raise ValueError(f"'{k}' has no single-command form in ol.py's precondition language")
 
 
-def printf(content, path):
-    return "printf '" + content.replace("\\", "\\\\").replace("\n", "\\n") + f"' > {path}"
-
-
-def compile_step(s, adapter):
-    op = s["op"]
-    if op == "install":
-        return "apt-get install " + " ".join(s["packages"])
-    if op == "remove":
-        return ("apt-get purge " if s["purge"] else "apt-get remove ") + " ".join(s["packages"])
-    if op == "repair":
-        return "apt-get -f install"
-    if op == "force-remove":
-        return (f"dpkg --{'purge' if s['purge'] else 'remove'} " + "".join(f"--force-{x} " for x in s["force"]) +
-                " ".join(s["packages"]))
-    if op == "write-file":
-        return printf(s["content"], s["path"])
-    if op == "pm-option":
-        o = adapter["pm_options"][s["option"]]
-        return printf(o["content"], o["path"])
-    if op in ("apache.enable", "apache.disable"):
-        return f"a2{'en' if op == 'apache.enable' else 'dis'}{s['kind']} {s['name']}"
-    raise ValueError(op)
+def compile_step(s, adapter, release=None):
+    """The shell one step runs on the hop that arrives at `release` (the apt backend doesn't need it)."""
+    return backends.of(adapter).step(s, adapter, release)
 
 
 def compile_fix(doc, adapter):
-    return {"when": compile_when(doc["when"]),
-            "pre": [compile_step(s, adapter) for s in doc.get("pre", [])],
-            "post": [compile_step(s, adapter) for s in doc.get("post", [])]}
+    out = {"pre": [compile_step(s, adapter, doc["hop"]) for s in doc.get("pre", [])],
+           "post": [compile_step(s, adapter, doc["hop"]) for s in doc.get("post", [])]}
+    if adapter.get("backend", "apt") != "apt":
+        return {"when": backends.pred_sh(doc["when"], adapter), **out}
+    return {"when": compile_when(doc["when"]), **out}
 
 
 # ---------- main ----------

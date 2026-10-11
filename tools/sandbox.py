@@ -1,12 +1,20 @@
 """The sandbox: a box is a whole root filesystem in a chroot, snapshotted with rsync, rolled back by copying back.
-Generalized from dep-lab's oldlinux/ol.py. Needs root, chroot and rsync on the host, plus debootstrap for Debian boxes.
+Generalized from dep-lab's oldlinux/ol.py and centos/co.py. Needs root, chroot and rsync on the host, plus debootstrap
+for Debian boxes, or rpm2cpio, cpio, unshare and ip for EL boxes.
 
 Follows SPEC.md "Sandbox requirements": a private tmpfs /dev per box (never a bind of the host's), fresh proc/sys,
 daemons never start, and nothing is deleted until every mount under it is gone.
 """
+import gzip
 import hashlib
 import os
 import subprocess
+import sys
+import time
+import urllib.request
+import xml.etree.ElementTree as ET
+
+import backends
 
 WORK = os.environ.get("WEND_WORK", "/var/tmp/wend")
 ENV = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "HOME": "/root",
@@ -70,11 +78,14 @@ class Box:
                 pass
         unmount_all(r)
 
-    def run(self, cmd, timeout=1800):
+    def run(self, cmd, timeout=1800, isolated=False):
+        """isolated: a network namespace of its own with only loopback, for checks that start daemons."""
         self._mount()
+        argv = ["chroot", self.root, "/bin/sh", "-c", cmd]
+        if isolated:
+            argv = ["unshare", "-n", "sh", "-c", 'ip link set lo up && exec "$@"', "x"] + argv
         try:
-            p = subprocess.run(["chroot", self.root, "/bin/sh", "-c", cmd], env=ENV, capture_output=True, text=True,
-                               timeout=timeout, errors="replace")
+            p = subprocess.run(argv, env=ENV, capture_output=True, text=True, timeout=timeout, errors="replace")
             return p.returncode, p.stdout + p.stderr
         except subprocess.TimeoutExpired as e:
             return 124, f"TIMEOUT after {timeout}s\n" + (e.stdout or b"").decode(errors="replace")[-3000:]
@@ -82,16 +93,20 @@ class Box:
             self._umount()
 
     def copy_to(self, dst):
+        # --modify-window=-1: compare mtimes to the nanosecond. EL6's rpm --rebuilddb rewrites some index files with
+        # the same size and the old mtime truncated to the second, and the default quick check then skipped them on
+        # rollback, leaving EL5's rpm with a database it can't read.
         unmount_all(self.root)
-        rc, log = host(f"mkdir -p {dst} && rsync -aHx --delete {self.root}/ {dst}/")
+        rc, log = host(f"mkdir -p {dst} && rsync -aHx --modify-window=-1 --delete {self.root}/ {dst}/")
         if rc:
             raise RuntimeError(f"copying {self.root} to {dst} failed (is rsync installed?):\n{tail(log, 800)}")
         return Box(dst)
 
-    def health(self, checks, release_file):
+    def health(self, checks, release_file, isolate=()):
         out = {}
         for name, test in checks.items():
-            rc, log = self.run(f"( set -x; {test} ) >/tmp/.h 2>&1; rc=$?; tail -c 1200 /tmp/.h; exit $rc", timeout=180)
+            rc, log = self.run(f"( set -x; {test} ) >/tmp/.h 2>&1; rc=$?; tail -c 1200 /tmp/.h; exit $rc", timeout=180,
+                               isolated=name in isolate)
             out[name] = {"ok": rc == 0, "log": "" if rc == 0 else log}
         v = self.run(f"cat {release_file}")[1].strip()
         return {"release": v, "checks": out, "passed": sorted(c for c in out if out[c]["ok"])}
@@ -104,8 +119,28 @@ def checks_for(box_doc, adapter):
 
 
 def mirror(adapter, release):
-    lad, r = adapter["ladder"], adapter["releases"]
-    return r["current"] if lad.index(release) >= lad.index(r["current_from"]) else r["archive"]
+    return backends.Apt().hop_vars(adapter, release)["mirror"]
+
+
+def ensure_mirror(adapter):
+    """Adapters with a [mirror] shim (EL: CentOS 5's yum can't speak today's TLS) get tools/mirror.py on the host."""
+    if "mirror" not in adapter:
+        return
+    shim = adapter["mirror"]["shim"]
+    probe = f"{shim}/{adapter['mirror']['probe']}"
+    for i in range(30):
+        try:
+            urllib.request.urlopen(probe, timeout=60).read()
+            return
+        except Exception:
+            if i == 0:
+                os.makedirs(WORK, exist_ok=True)
+                subprocess.Popen([sys.executable, "-B", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                                     "mirror.py"), shim.rsplit(":", 1)[1],
+                                  f"{WORK}/mirror"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
+            time.sleep(2)
+    raise RuntimeError(f"the mirror shim at {shim} isn't answering {probe}")
 
 
 def build_debian(root, box_doc, adapter):
@@ -131,7 +166,61 @@ def build_debian(root, box_doc, adapter):
         raise RuntimeError("customize failed:\n" + tail(log, 2000))
 
 
-BUILDERS = {"debian": build_debian}
+def resolve(base_url, seeds):
+    """Close a seed set over Requires using the repo's primary metadata: a tiny depsolver, just for the bootstrap."""
+    ns = {"c": "http://linux.duke.edu/metadata/common", "r": "http://linux.duke.edu/metadata/rpm"}
+    repomd = urllib.request.urlopen(base_url + "repodata/repomd.xml", timeout=300).read().decode()
+    href = next(x.split('"')[1] for x in repomd.split("<location ")[1:] if "primary.xml.gz" in x.split('"')[1])
+    root = ET.fromstring(gzip.decompress(urllib.request.urlopen(base_url + href, timeout=300).read()))
+    pk, prov = {}, {}
+    for p in root.findall("c:package", ns):
+        if p.find("c:arch", ns).text not in ("x86_64", "noarch"):
+            continue
+        n, f = p.find("c:name", ns).text, p.find("c:format", ns)
+        pk[n] = {"href": p.find("c:location", ns).get("href"),
+                 "req": [e.get("name") for e in f.findall("r:requires/r:entry", ns) if not e.get("name").startswith("rpmlib(")]}
+        for name in [n] + [e.get("name") for e in f.findall("r:provides/r:entry", ns)] + [e.text for e in f.findall("c:file", ns)]:
+            prov.setdefault(name, []).append(n)
+    want, todo = set(), list(seeds)
+    while todo:
+        n = todo.pop()
+        if n in want:
+            continue
+        want.add(n)
+        for r in pk[n]["req"]:
+            c = prov.get(r, [])
+            if c and not any(x in want for x in c):
+                todo.append(sorted(c, key=lambda x: (len(x), x))[0])
+    return [base_url + pk[n]["href"] for n in sorted(want)]
+
+
+def build_el(root, box_doc, adapter):
+    """Nothing builds CentOS 5 roots any more. Resolve a seed set from the release's own metadata, unpack it with the
+    host's rpm2cpio, then let the box's own rpm install the same packages properly so its database knows them."""
+    rel = box_doc["release"]
+    v = backends.Rpm().hop_vars(adapter, rel)
+    base = f"{v['shim']}/{next(iter(adapter['releases'][rel]['repos'].values()))}/"
+    urls = resolve(base, adapter["box"]["seeds"])
+    os.makedirs(f"{root}/tmp/boot", exist_ok=True)
+    rc, log = host(f"cd {root}/tmp/boot && printf '%s\\n' {' '.join(urls)} | xargs -P8 -n1 curl -sfO")
+    if rc:
+        raise RuntimeError("downloading the seed packages failed:\n" + tail(log, 2000))
+    rc, log = host(f"cd {root} && for f in tmp/boot/*.rpm; do rpm2cpio $f | cpio -idm --quiet 2>/dev/null; done; "
+                   f"ln -sf /proc/mounts {root}/etc/mtab")
+    if rc:
+        raise RuntimeError("unpacking the seed packages failed:\n" + tail(log, 2000))
+    b = Box(root)
+    steps = [("rpm database", "rpm --initdb && rpm -i --nodeps --force /tmp/boot/*.rpm && rm -rf /tmp/boot"),
+             ("package install", backends.fill(adapter["hop"]["set_release"], v) + " && yum -y install " +
+              " ".join(box_doc["packages"]) + " && yum -y update && yum clean all"),
+             ("customize", box_doc["customize"] + "\n" + box_doc.get("start_hook", ""))]
+    for what, cmd in steps:
+        rc, log = b.run(cmd)
+        if rc:
+            raise RuntimeError(f"{what} failed:\n" + tail(log, 3000))
+
+
+BUILDERS = {"debian": build_debian, "el": build_el}
 
 
 def build_box(box_id, box_doc, adapter, box_toml_bytes, adapter_bytes, log=print):
@@ -144,8 +233,9 @@ def build_box(box_id, box_doc, adapter, box_toml_bytes, adapter_bytes, log=print
         safe_rm(root)
     os.makedirs(root)
     log(f"building box {box_id} ({box_doc['release']}); this takes a minute or two")
+    ensure_mirror(adapter)
     BUILDERS[box_doc["family"]](root, box_doc, adapter)
-    h = Box(root).health(checks_for(box_doc, adapter), adapter["release_file"])
+    h = Box(root).health(checks_for(box_doc, adapter), adapter["release_file"], set(box_doc.get("isolate", [])))
     failed = sorted(set(h["checks"]) - set(h["passed"]))
     if failed:
         raise RuntimeError(f"box {box_id} fails its own checks at the start: {failed}\n" +

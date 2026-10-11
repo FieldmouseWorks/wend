@@ -10,25 +10,11 @@ import json
 import os
 import time
 
+import backends
 import check
 import sandbox
+from backends import fill, pred_sh
 from sandbox import Box, safe_rm, tail
-
-
-def pred_sh(w, adapter):
-    """A precondition as a shell test, using the adapter's predicate templates. Harness code, not fix code."""
-    k, v = next(iter(w.items()))
-    p = adapter["predicates"]
-    if k == "installed":
-        return p["installed"].replace("{pkg}", v)  # not str.format: templates contain ${Status}
-    if k == "file":
-        return p["file"].replace("{path}", v)
-    if k == "file-contains":
-        return p["file-contains"].replace("{path}", v["path"]).replace("{text}", v["text"])
-    if k == "not":
-        return f"! ( {pred_sh(v, adapter)} )"
-    j = " && " if k == "all" else " || "
-    return "( " + j.join(f"( {pred_sh(x, adapter)} )" for x in v) + " )"
 
 
 class Walk:
@@ -38,20 +24,26 @@ class Walk:
         self.adapter = repo.adapters[self.family]
         self.box_doc = repo.boxes[box_id]
         self.checks = sandbox.checks_for(self.box_doc, self.adapter)
+        self.isolate = set(self.box_doc.get("isolate", []))
+        self.vars = {}
         self.t0 = time.time()
+        sandbox.ensure_mirror(self.adapter)
         self.stamp = time.strftime("%Y%m%d-%H%M%S")
         base = sandbox.build_box(box_id, self.box_doc, self.adapter, repo.raw[f"boxes/{box_id}/box.toml"],
                                  repo.raw[f"adapters/{self.family}.toml"], log=self.log)
         self.dir = f"{sandbox.WORK}/runs/{self.stamp}-{box_id.replace('/', '_')}-{os.getpid()}"
         self.box = base.copy_to(f"{self.dir}/root")
         self.snap = f"{self.dir}/snap"
-        self.health = self.box.health(self.checks, self.adapter["release_file"])
+        self.health = self.check_health()
         rc, pk = self.box.run(self.adapter["hop"]["installed_list"])
         self.fingerprint = "sha256:" + hashlib.sha256(check.canonical(
             {"family": self.family, "release": self.box_doc["release"], "arch": self.box_doc.get("arch", "amd64"),
              "installed": sorted(pk.split())})).hexdigest()
         self.services = sorted(self.box.run("ls /etc/init.d 2>/dev/null")[1].split())
         self.steps, self.hops = [], []
+
+    def check_health(self):
+        return self.box.health(self.checks, self.adapter["release_file"], self.isolate)
 
     def log(self, msg):
         self.log_(f"[{self.box_id} {time.time() - self.t0:5.0f}s] {msg}")
@@ -60,12 +52,17 @@ class Walk:
         return self.box.run(f"{pred_sh(fix['when'], self.adapter)} >/dev/null 2>&1")[0] == 0
 
     def hop_cmds(self, hop, fixes):
+        """SPEC.md "How a hop runs": set the release, refresh, pre steps, the upgrade, post steps (then checks)."""
         a, h = self.adapter, self.adapter["hop"]
-        comp = lambda ph: [check.compile_step(s, a) for f in fixes for s in f.get(ph, [])]
+        self.vars = v = backends.of(a).hop_vars(a, hop)
+        comp = lambda ph: [check.compile_step(s, a, hop) for f in fixes for s in f.get(ph, [])]
         opts = {s["option"] for f in fixes for s in f.get("pre", []) + f.get("post", []) if s["op"] == "pm-option"}
         cleanup = [f"rm -f {a['pm_options'][o]['path']}" for o in sorted(opts)]  # pm-options are hop-scoped
-        return ([h["set_release"].format(mirror=sandbox.mirror(a, hop), release=hop), h["refresh"]] + comp("pre") +
-                h["upgrade"] + comp("post") + cleanup)
+        rel = a["releases"].get(hop)
+        upgrade = rel["upgrade"] if isinstance(rel, dict) and "upgrade" in rel else h["upgrade"]
+        verify = [fill(h["verify"], v)] if "verify" in h else []  # the release file says we arrived
+        return ([fill(h["set_release"], v), fill(h["refresh"], v)] + comp("pre") + [fill(c, v) for c in upgrade] +
+                comp("post") + cleanup + verify)
 
     def execute(self, commands, why):
         """Run commands in order; keep the step only if all succeed and no passing check is lost."""
@@ -78,8 +75,8 @@ class Walk:
             if rc != 0:
                 break
         for c in self.adapter["hop"].get("after", []):
-            self.box.run(c)
-        before, h = self.health, self.box.health(self.checks, self.adapter["release_file"])
+            self.box.run(fill(c, self.vars))
+        before, h = self.health, self.check_health()
         lost = sorted(set(before["passed"]) - set(h["passed"]))
         ok = rc == 0 and not lost
         stage = "ok" if ok else (f"command failed: {outs[-1]['cmd']}" if rc else f"checks lost: {', '.join(lost)}")
@@ -103,7 +100,8 @@ class Walk:
             installed = set(self.box.run(self.adapter["hop"]["installed_list"])[1].split())
             pkgs = [p for p in pkgs if p in installed]
             if pkgs and not self.execute([check.compile_step({"op": "remove", "packages": pkgs, "purge": True},
-                                                             self.adapter), "apt-get autoremove --purge"],
+                                                             self.adapter, self.route["to"]),
+                                          self.adapter["hop"]["autoremove"]],
                                          f"prune {len(pkgs)} obsolete packages") and len(pkgs) > 1:
                 go(pkgs[:len(pkgs) // 2])
                 go(pkgs[len(pkgs) // 2:])
@@ -129,7 +127,7 @@ class Walk:
                 break
         extra = self.prune() if self.route.get("finish", {}).get("prune_obsolete") and all(
             h["ok"] for h in self.hops) and len(self.hops) == len(self.route["hops"]) else {}
-        final = self.box.health(self.checks, self.adapter["release_file"])
+        final = self.check_health()
         failed = sorted(set(self.checks) - set(final["passed"]))
         complete = len(self.hops) == len(self.route["hops"]) and all(h["ok"] for h in self.hops)
         return {"schema": "wend.run/0", "route": check.content_id(self.route), "box": self.box_id,

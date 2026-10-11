@@ -26,7 +26,8 @@ The proof is a run that CI reproduces from scratch.
 
 - A throwaway Linux machine or VM where you have root (the sandbox uses chroot and mount). A cloud VM or CI runner is
   ideal. Don't use your laptop.
-- Python 3.11+, rsync, plus `debootstrap` for Debian boxes. Nothing else to install.
+- Python 3.11+ and rsync, plus `debootstrap` for Debian boxes, or `rpm2cpio`, `cpio` and `iproute2` for EL boxes.
+  Nothing else to install. EL boxes want about 25GB of free disk.
 - A model. See step 3.
 
 ```

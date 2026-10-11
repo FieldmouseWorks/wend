@@ -3,7 +3,8 @@
 
   ./wend check                              schema check + the gate's own tests (seconds, no root)
   ./wend list                               routes, boxes and wanted routes
-  ./wend replay ROUTE BOX                   replay a route on a box with no model, write the run   (root)
+  ./wend replay ROUTE BOX [--steps FILE]    replay a route on a box with no model, write the run   (root)
+                                            --steps: also save every command and its output
   ./wend discover FAMILY FROM TO BOX        walk FROM->TO on BOX; a model fills in hops that break   (root, WEND_MODEL)
   ./wend report RUN.json [--redact WORD]    a route broke and you won't fix it yourself: build a scrubbed gap report,
                                             show it, print a prefilled issue link. Sends nothing.
@@ -11,7 +12,8 @@
                                             writes .wend/pr-evidence.md for the PR body                 (root)
 
 ROUTE is a path like routes/debian/etch-to-trixie.toml; BOX is an id like debian/etch-web.
-Python 3.11+, standard library only. The sandbox needs root, chroot, rsync, and debootstrap for Debian boxes.
+Python 3.11+, standard library only. The sandbox needs root, chroot and rsync, plus debootstrap for Debian boxes or
+rpm2cpio, cpio, unshare and ip (iproute2) for EL boxes.
 """
 import glob
 import json
@@ -41,13 +43,19 @@ class Repo:
         self.boxes = {p[len("boxes/"):-len("/box.toml")]: d for p, d in load("boxes/").items()}
 
 
-def need_root():
+HOST_TOOLS = {"debian": ["debootstrap"], "el": ["rpm2cpio", "cpio", "unshare", "ip"]}
+APT_NAMES = {"ip": "iproute2", "unshare": "util-linux"}
+
+
+def need_root(families=("debian",)):
     if os.geteuid() != 0:
         sys.exit("the sandbox needs root (chroot, mount). Run with sudo, in a throwaway VM or CI runner.")
     import shutil
-    missing = [t for t in ("chroot", "rsync", "mount", "debootstrap") if not shutil.which(t)]
+    missing = [t for t in ["chroot", "rsync", "mount"] + [x for f in families for x in HOST_TOOLS.get(f, [])]
+               if not shutil.which(t)]
     if missing:
-        sys.exit(f"missing on this host: {', '.join(missing)} (Debian/Ubuntu: apt-get install {' '.join(missing)})")
+        sys.exit(f"missing on this host: {', '.join(missing)} (Debian/Ubuntu: apt-get install "
+                 f"{' '.join(sorted({APT_NAMES.get(t, t) for t in missing}))})")
 
 
 def save_run(run, out=None):
@@ -71,8 +79,8 @@ def summary(run):
     return s
 
 
-def cmd_replay(route_path, box, out=None, keep=False):
-    need_root()
+def cmd_replay(route_path, box, out=None, keep=False, steps=None):
+    need_root([box.split("/")[0]])
     import walk
     repo = Repo()
     w = walk.Walk(repo, repo.routes[route_path], box)
@@ -80,13 +88,15 @@ def cmd_replay(route_path, box, out=None, keep=False):
         run = w.walk()
     finally:
         w.close(keep)
+        if steps:
+            json.dump(w.steps, open(steps, "w"), indent=1)
     p = save_run(run, out)
     print(summary(run), "\nrun:", os.path.relpath(p, ROOT))
     return 0 if run["result"] == "pass" else 1
 
 
 def cmd_discover(family, frm, to, box, max_calls=12):
-    need_root()
+    need_root([family])
     import discover
     import models
     import walk
@@ -151,8 +161,8 @@ def cmd_verify(base=None, all_=False, jobs=2):
             subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_check.py"], stdout=subprocess.DEVNULL).returncode:
         print("schema check failed; fix that first")
         return 1
-    need_root()
     repo = Repo()
+    need_root({d["family"] for d in repo.boxes.values()})
     if all_ or not base:
         matrix = [{"route": r, "box": b} for r, d in repo.routes.items() for b, x in repo.boxes.items()
                   if x["family"] == d["family"]]
@@ -227,7 +237,7 @@ def main(argv):
     if c == "list":
         return cmd_list()
     if c == "replay":
-        return cmd_replay(rest[0], rest[1], opt("--out"), "--keep" in rest)
+        return cmd_replay(rest[0], rest[1], opt("--out"), "--keep" in rest, opt("--steps"))
     if c == "discover":
         return cmd_discover(*rest[:4], max_calls=int(opt("--max-calls", 12)))
     if c == "report":
