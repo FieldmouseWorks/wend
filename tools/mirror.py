@@ -76,8 +76,25 @@ class H(http.server.BaseHTTPRequestHandler):
                         break
             if err and not os.path.exists(local):  # a live mirror hiccup: serve the last good copy if there is one
                 return self.send_error(err.code if isinstance(err, urllib.error.HTTPError) else 502, str(err)[:100])
+        size = os.path.getsize(local)
+        rng = self.headers.get("Range", "")
+        if rng.startswith("bytes=") and "," not in rng:  # anaconda (tools/vm.py) reads rpm headers by byte range
+            a, _, b = rng[6:].partition("-")
+            start = int(a) if a else max(size - int(b or 0), 0)
+            end = min(int(b), size - 1) if a and b else size - 1
+            if start > end:
+                return self.send_error(416)
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.send_header("Content-Length", str(end - start + 1))
+            self.end_headers()
+            if body:
+                with open(local, "rb") as f:
+                    f.seek(start)
+                    self.wfile.write(f.read(end - start + 1))
+            return
         self.send_response(200)
-        self.send_header("Content-Length", str(os.path.getsize(local)))
+        self.send_header("Content-Length", str(size))
         self.end_headers()
         if body:
             with open(local, "rb") as f:

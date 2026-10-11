@@ -655,6 +655,33 @@ other brace syntax is touched, so `${...}` and `%{...}` pass through). Values fo
 - The harness sets umask 022 for itself before it touches a root (see "How a hop runs"), never taking the caller's.
 - A rollback restores the whole root from the pre-hop snapshot. Nothing from a failed hop survives.
 
+## VM tier (maintainer-run)
+
+A chroot can't test kernels, bootloaders, init or networking (open question 10). `tools/vm.py` replays a route on a
+box installed in a KVM guest by its release's own installer. The kickstart is made from `box.toml`: its packages,
+`customize` and `start_hook`, a static address and the release's kernel and bootloader. The box is then brought to
+the release's last packages, as the chroot build does. Each hop compiles exactly the commands the chroot harness
+runs (the same `hop_cmds`), runs them inside the running guest, and reboots it for real (checked by `boot_id`).
+After every hop:
+
+- the guest has to come back reachable over ssh on the box's port (`[vm].ssh_port`);
+- its addresses, default route and resolvers have to be the ones it booted with at the start;
+- the box's checks have to keep passing, running on the live box. Roles that start their own daemons are listed in
+  `[vm].skip`, and `[vm].live` gives their live forms, which ask the running services instead.
+
+A hop whose commands fail, or that doesn't come back, ends the replay. Its disk and serial console are kept.
+
+The rules:
+
+- Maintainer-run only. It runs the guest on the host that runs it, needs `/dev/kvm`, and is never wired to a CI
+  runner that a pull request can trigger. Its runs go to `.wend/vm/`, with `runner.kind = "vm"`, not to `runs/`.
+- QEMU user-mode networking only: nothing on the host changes. The guest reaches the mirror shim at `10.0.2.2`.
+- The adapter names each start release's installer (`releases.<id>.install`: the `tree` through the shim and its
+  `pxeboot` dir). The shim answers byte ranges, which the installer uses to read package headers.
+- When `reboot` doesn't change `boot_id` within two minutes (the first boot onto systemd: PID 1 is still the old init,
+  and the new release's `reboot` can't talk to it), the harness syncs, remounts read-only and resets with sysrq. It
+  says so in the run (`reboot_forced`).
+
 ## Open questions
 
 Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them as follows; 7 to 12 are still open.
@@ -685,7 +712,8 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
     machine without a check that init is systemd. Do some fixes need a `requires_boot_check` flag that CI can't
     satisfy yet? Part answered for EL: what a chroot *can* see is which units are enabled. `service.record` and
     `service.enable` carry SysV runlevels onto systemd, and boxes check enablement offline (`systemctl is-enabled`,
-    `chkconfig --list` before EL7). Kernels, bootloaders and the first real boot are still untested.
+    `chkconfig --list` before EL7). Kernels, bootloaders and the first real boot are tested by the VM tier (see
+    "VM tier"), which the maintainer runs. What it found on the EL route is in wend#13.
 11. **The family map.** Move it from box checks into the adapter (a `[families]` table of renames), so a client can
     compute name families for its fingerprint hint and services check without a box? Probably yes; nothing reads it
     outside boxes yet.
