@@ -57,3 +57,10 @@ dns = "named-checkconf /etc/named.conf && named-checkzone example.org /var/named
 # vsftpd 3 can't start in the sandbox with its seccomp sandbox and namespace isolation on. The check turns them off
 # on its own command line (vsftpd -v writes to fd 0), so no fix has to switch off a real box's hardening.
 ftp = "O=''; /usr/sbin/vsftpd -v 0>&1 2>&1 | grep -q 'version [3-9]' && O='-oseccomp_sandbox=NO -oisolate=NO -oisolate_network=NO'; (/usr/sbin/vsftpd /etc/vsftpd/vsftpd.conf $O >/tmp/ftp.log 2>&1 &); i=0; while [ $i -lt 20 ] && ! curl -s ftp://127.0.0.1/pub/hello.txt >/dev/null; do sleep 1; i=$((i+1)); done; curl -sS ftp://127.0.0.1/pub/hello.txt | grep 'ftp from 2007' || { cat /tmp/ftp.log; exit 1; }"
+
+# tools/vm.py: the same box installed in a VM. ftp starts its own vsftpd, which a running box already has; the live
+# check asks the running one instead, after every reboot.
+[vm]
+ssh_port = 2222
+skip = ["ftp"]
+live = { ftp = "for i in $(seq 1 30); do curl -s ftp://127.0.0.1/pub/hello.txt | grep -q 'ftp from 2007' && exit 0; sleep 2; done; curl -sS ftp://127.0.0.1/pub/hello.txt; exit 1" }
