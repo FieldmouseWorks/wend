@@ -252,7 +252,8 @@ def main(argv):
     if c == "check":
         a = subprocess.run([sys.executable, "-B", f"{ROOT}/tools/check.py", *rest]).returncode
         b = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_check.py"]).returncode
-        return a or b
+        u = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_umask.py"]).returncode
+        return a or b or u
     if c == "list":
         return cmd_list()
     if c == "replay":

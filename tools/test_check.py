@@ -144,32 +144,19 @@ print("ids: content changes the id, renaming does not")
 # SPEC "How a hop runs": every command that touches a root sets umask 022 first (a 077 caller made the mysqli shim
 # unreadable to php-fpm on AlmaLinux 10, wend#13). Both engines, checked by structure: CI's own umask is 022.
 import ast  # noqa: E402
+import re  # noqa: E402
 tree = ast.parse(open(os.path.join(check.ROOT, "wend")).read())
 fns = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
-# root_umask() sets 022 inside and puts the caller's mask back after, also when the walk raises (by behaviour)
-import importlib.machinery  # noqa: E402
-import importlib.util  # noqa: E402
-loader = importlib.machinery.SourceFileLoader("wend_entry", os.path.join(check.ROOT, "wend"))
-wend_mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
-loader.exec_module(wend_mod)
-saved, results = os.umask(0o077), []
-try:
-    with wend_mod.root_umask():
-        results.append(os.umask(0o022))
-    results.append(os.umask(0o077))
-    try:
-        with wend_mod.root_umask():
-            results.append(os.umask(0o022))
-            raise KeyboardInterrupt
-    except KeyboardInterrupt:
-        pass
-    results.append(os.umask(0o077))
-except Exception as e:  # a missing or broken root_umask fails the case
-    results.append(repr(e))
-finally:
-    os.umask(saved)
-ok = results == [0o022, 0o077, 0o022, 0o077]
-print(("passed  " if ok else f"WRONG   {results} ") + "wend root_umask() is 022 inside, the caller's mask after (also on an exception)")
+# root_umask() sets 022 and puts the caller's mask back in a finally. Checked statically: the gate's schema job judges a
+# PR with the base branch's tools and never runs the PR's own `wend` (tools/test_umask.py does that, in the client job
+# and `wend check`)
+fn = fns.get("root_umask")
+body = [b for b in fn.body if not (isinstance(b, ast.Expr) and isinstance(b.value, ast.Constant))] if fn else []
+ok = (fn is not None and [ast.unparse(d) for d in fn.decorator_list] == ["contextlib.contextmanager"]
+      and len(body) == 2 and ast.unparse(body[0]) == "old = os.umask(18)"  # 18 == 0o022
+      and isinstance(body[1], ast.Try) and [ast.unparse(x) for x in body[1].body] == ["yield"]
+      and [ast.unparse(x) for x in body[1].finalbody] == ["os.umask(old)"] and not body[1].handlers)
+print(("passed  " if ok else "WRONG   ") + "wend root_umask() sets 022 and restores the caller's mask in a finally")
 bad += not ok
 
 def walk_under_mask(fn):
@@ -190,7 +177,8 @@ for name in ("cmd_replay", "cmd_discover"):  # every command that walks a root; 
 rs = open(os.path.join(check.ROOT, "client", "src", "main.rs")).read()
 walk = rs[rs.index("fn cmd_walk("):]
 walk = walk[:walk.index("\n}\n")]
-code = "\n".join(ln.split("//")[0].strip() for ln in walk.split("\n")[1:])  # comments don't count
+walk = re.sub(r"/\*.*?\*/", "", walk, flags=re.S)  # comments don't count
+code = "\n".join(ln.split("//")[0].strip() for ln in walk.split("\n")[1:])
 body = [ln for ln in code.split("\n") if ln]
 ok = (body[0] == "let mask = RootUmask::set();" and "drop(mask);" in code
       and code.index("drop(mask);") < code.index("&o.steps") < code.index("&o.out"))
