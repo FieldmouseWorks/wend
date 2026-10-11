@@ -392,7 +392,7 @@ class Rpm:
         # keywords none/off/no/false/null (any case) mean empty
         return ("V=$(awk 'FNR == 1 { s = 0 } /^[[:space:]]*\\[/ { s = tolower($0) ~ /^[[:space:]]*\\[(path|host)=/ } "
                 "!s && sub(/^[[:space:]]*auto_prepend_file[[:space:]]*=[[:space:]]*/, \"\") { v = $0 } END { print v }' "
-                "$([ -f /etc/php.ini ] && echo /etc/php.ini) $(LC_ALL=C ls /etc/php.d/*.ini 2>/dev/null | grep -vx " + ini + ") 2>/dev/null | "
+                "$([ -f /etc/php.ini ] && echo /etc/php.ini) $(LC_ALL=C ls /etc/php.d/*.ini 2>/dev/null | grep -vx " + ini + ") </dev/null 2>/dev/null | "
                 "sed 's/;.*//' | tr -d \"\\\"' \\t\\r\"); "
                 "case $(echo \"$V\" | tr A-Z a-z) in ''|none|off|no|false|null) ;; *) rm -f " + ini + "; "
                 "echo \"auto_prepend_file is already $V: left as is, mysqli_report not changed\"; exit 0;; esac; "
