@@ -471,3 +471,38 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
     );
     Ok(run["result"] == "pass")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::RootUmask;
+
+    fn mask_now() -> libc::mode_t {
+        // SAFETY: reads the mask by setting it and putting it straight back.
+        unsafe {
+            let m = libc::umask(0o077);
+            libc::umask(m);
+            m
+        }
+    }
+
+    /// The only test that touches the process umask: 022 while the guard lives, the caller's mask after, also when
+    /// the walk panics.
+    #[test]
+    fn root_umask_is_022_inside_and_restores_the_callers_mask() {
+        // SAFETY: as above.
+        let saved = unsafe { libc::umask(0o077) };
+        let g = RootUmask::set();
+        assert_eq!(mask_now(), 0o022);
+        drop(g);
+        assert_eq!(mask_now(), 0o077);
+        let r = std::panic::catch_unwind(|| {
+            let _g = RootUmask::set();
+            assert_eq!(mask_now(), 0o022);
+            panic!("walk failed");
+        });
+        assert!(r.is_err());
+        assert_eq!(mask_now(), 0o077);
+        // SAFETY: as above.
+        unsafe { libc::umask(saved) };
+    }
+}

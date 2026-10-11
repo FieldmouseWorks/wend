@@ -146,12 +146,31 @@ print("ids: content changes the id, renaming does not")
 import ast  # noqa: E402
 tree = ast.parse(open(os.path.join(check.ROOT, "wend")).read())
 fns = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
-# root_umask() sets exactly 022 and puts the caller's mask back
-src = ast.unparse(fns["root_umask"]) if "root_umask" in fns else ""
-ok = "old = os.umask(18)" in src and "os.umask(old)" in src and src.count("os.umask(") == 2  # 18 == 0o022
-print(("passed  " if ok else "WRONG   ") + "wend root_umask() sets 022 and restores the caller's mask")
+# root_umask() sets 022 inside and puts the caller's mask back after, also when the walk raises (by behaviour)
+import importlib.machinery  # noqa: E402
+import importlib.util  # noqa: E402
+loader = importlib.machinery.SourceFileLoader("wend_entry", os.path.join(check.ROOT, "wend"))
+wend_mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+loader.exec_module(wend_mod)
+saved, results = os.umask(0o077), []
+try:
+    with wend_mod.root_umask():
+        results.append(os.umask(0o022))
+    results.append(os.umask(0o077))
+    try:
+        with wend_mod.root_umask():
+            results.append(os.umask(0o022))
+            raise KeyboardInterrupt
+    except KeyboardInterrupt:
+        pass
+    results.append(os.umask(0o077))
+except Exception as e:  # a missing or broken root_umask fails the case
+    results.append(repr(e))
+finally:
+    os.umask(saved)
+ok = results == [0o022, 0o077, 0o022, 0o077]
+print(("passed  " if ok else f"WRONG   {results} ") + "wend root_umask() is 022 inside, the caller's mask after (also on an exception)")
 bad += not ok
-
 
 def walk_under_mask(fn):
     """Walk(...) is built only inside `with root_umask():`, and the run and step files are written outside it."""
@@ -171,10 +190,10 @@ for name in ("cmd_replay", "cmd_discover"):  # every command that walks a root; 
 rs = open(os.path.join(check.ROOT, "client", "src", "main.rs")).read()
 walk = rs[rs.index("fn cmd_walk("):]
 walk = walk[:walk.index("\n}\n")]
-body = [ln.strip() for ln in walk.split("\n")[1:] if ln.strip() and not ln.strip().startswith("//")]
-impl = rs[rs.index("impl RootUmask {"):] if "impl RootUmask {" in rs else ""
-ok = (body[0] == "let mask = RootUmask::set();" and "RootUmask(unsafe { libc::umask(0o022) })" in impl
-      and "drop(mask);" in walk and walk.index("drop(mask);") < walk.index("&o.steps") < walk.index("&o.out"))
-print(("passed  " if ok else "WRONG   ") + "client cmd_walk walks under umask 022, writes its files under the caller's")
+code = "\n".join(ln.split("//")[0].strip() for ln in walk.split("\n")[1:])  # comments don't count
+body = [ln for ln in code.split("\n") if ln]
+ok = (body[0] == "let mask = RootUmask::set();" and "drop(mask);" in code
+      and code.index("drop(mask);") < code.index("&o.steps") < code.index("&o.out"))
+print(("passed  " if ok else "WRONG   ") + "client cmd_walk walks under RootUmask, drops it before --steps and --out")
 bad += not ok
 sys.exit(1 if bad else 0)
