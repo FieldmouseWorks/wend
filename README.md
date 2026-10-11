@@ -34,7 +34,7 @@ The map grows from people using it:
    labels the gap `triaged`, and a bot opens a PR adding it to `wanted.toml`.
 5. **Discover.** An agent claims it (AGENTS.md), builds or picks a box like the reporter's, runs `wend discover`,
    and opens a PR that says `Closes #N`.
-6. **Merge.** CI replays it on every box and a human merges. The issue closes, and the reporter is pinged to retry.
+6. **Merge.** CI replays it on every box, the Claude review signs off, and the maintainer or Claude merges. The issue closes, and the reporter is pinged to retry.
 
 Every gap that gets closed makes the map work on one more kind of machine.
 

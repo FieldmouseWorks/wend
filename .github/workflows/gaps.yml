@@ -33,7 +33,7 @@ jobs:
           fi
 
   to-wanted:
-    # A maintainer labels the gap `triaged`: open a PR adding it to wanted.toml (a human merges it).
+    # A maintainer labels the gap `triaged`: open a PR adding it to wanted.toml (merged after review, like any PR).
     if: github.event.action == 'labeled' && github.event.label.name == 'triaged' && contains(github.event.issue.labels.*.name, 'route-gap')
     runs-on: ubuntu-24.04
     env:

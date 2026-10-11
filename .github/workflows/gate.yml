@@ -116,9 +116,9 @@ jobs:
           python3 -B tools/check.py                 # includes the fires_on check over the fresh runs
 
   claude-review:
-    # Asks for the Claude review and waits for its verdict. The verdict is a commit status named "claude-review"
-    # that only the Claude GitHub App can set. Branch protection requires it. Claude can comment and set that
-    # status. It cannot push to main, approve, or merge.
+    # Asks for the Claude review. Today the verdict is a PR comment from a Claude session; later a commit status
+    # named "claude-review" that branch protection requires. Claude merges only after every required check is green
+    # and the review has signed off (CONTRIBUTING.md, layer 5). Nobody pushes to main directly.
     needs: decoys
     if: ${{ needs.decoys.result == 'success' }}
     runs-on: ubuntu-24.04
@@ -131,7 +131,7 @@ jobs:
           gh pr edit "$PR" --add-label needs-claude-review -R "$REPO"
         env: { GH_TOKEN: "${{ github.token }}", PR: "${{ github.event.pull_request.number }}", REPO: "${{ github.repository }}" }
 
-# Not in this file, set in the repo settings (done 2026-10-10):
+# Not in this file, set in the repo settings by the maintainer (the GitHub proxy Claude sessions use can't):
 #   branch protection on main: PRs only, no force pushes or deletion; required checks dco, schema, plan, decoys
 #   (decoys fails if any replay failed; matrix replay names vary per route, so they aren't listed one by one);
 #   1 approving review from CODEOWNERS. Admins can bypass, because PRs opened by the maintainer's own Claude

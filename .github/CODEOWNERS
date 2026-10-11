@@ -1,4 +1,4 @@
-# Every change needs a human. The spec surface needs the owner specifically.
+# The maintainer is notified on every change. Merges happen after green checks and the Claude review (CONTRIBUTING.md).
 *               @TusanHomichi
 /tools/         @TusanHomichi
 /adapters/      @TusanHomichi

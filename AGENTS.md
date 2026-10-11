@@ -133,5 +133,5 @@ says `VERIFIED`.
 - Commits are signed off (`git commit -s`). That's the DCO, and the human running you is the one signing off.
 - Commit the new and changed `fixes/`, `routes/` and `runs/` files. Don't commit `.wend/`.
 
-Then CI replays everything again from scratch. A Claude reviewer reads it for check gaming and loose gates, and a
-human merges. If CI fails, read the failing job's run file, fix, and push. Don't open a new PR.
+Then CI replays everything again from scratch. A Claude reviewer reads it for check gaming and loose gates, and once
+every check is green and the review signs off, the maintainer or Claude merges. If CI fails, read the failing job's run file, fix, and push. Don't open a new PR.
