@@ -120,7 +120,8 @@ jobs:
     # named "claude-review" that branch protection requires. Claude merges only after every required check is green
     # and the review has signed off (CONTRIBUTING.md, layer 5). Nobody pushes to main directly.
     needs: decoys
-    if: ${{ needs.decoys.result == 'success' }}
+    # !cancelled(): without it GitHub adds success(), which is false whenever replay was skipped (nothing to replay)
+    if: ${{ !cancelled() && needs.decoys.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       pull-requests: write
