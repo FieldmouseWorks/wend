@@ -425,7 +425,7 @@ if it doesn't exist.
 
 ### EL ops
 
-**`rpm.swap-release`** `remove`, `install` (package names ending in `-release`). Replaces the release package without the package
+**`rpm.swap-release`** `remove`, `install` (package names ending in `-release`; the EL adapter holds them to lowercase, as every EL release package is). Replaces the release package without the package
 manager, because an epoch drop (CentOS 5's `centos-release` has epoch 10, EL6's has none) or a vendor switch isn't an
 upgrade to yum. Effect: `remove` is gone from the database (its scriptlets don't run), and the first
 `install-<digit>...` package for x86_64 or noarch listed in `BASE`'s metadata is installed (a release's base repo

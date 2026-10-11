@@ -124,6 +124,10 @@ nm = {**el_good, "when": {"installed": "initscripts"}, "adds": ["NetworkManager"
     {"op": "install", "packages": ["NetworkManager"]},
     {"op": "service.enable", "unit": "NetworkManager", "like": ["network"]}]}
 for name, fix, want in (("NetworkManager install and enable", nm, False),
+                        ("an underscore in a package name (mod_ssl)", {**nm, "post": [
+                            {"op": "install", "packages": ["mod_ssl"]}]}, False),
+                        ("a package name starting with an underscore", {**nm, "post": [
+                            {"op": "install", "packages": ["_x"]}]}, True),
                         ("shell in a capitalized package name", {**nm, "post": [
                             {"op": "install", "packages": ["NetworkManager;reboot"]}]}, True),
                         ("shell in a capitalized unit", {**nm, "post": [
