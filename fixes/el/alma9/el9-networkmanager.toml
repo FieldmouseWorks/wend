@@ -1,0 +1,23 @@
+# Found replaying the route on a real CentOS 5.11 install in a VM (wend#13).
+schema = "wend.fix/0"
+family = "el"
+hop = "alma9"
+when = { all = [{ installed = "initscripts" }, { not = { installed = "NetworkManager" } }] }
+restores = []
+adds = ["NetworkManager"]
+
+[[post]]
+op = "install"
+packages = ["NetworkManager"]
+
+[[post]]
+op = "service.enable"
+unit = "NetworkManager"
+like = ["network"]
+
+[meta]
+name = "el9-networkmanager"
+author = "claude (wend#13, hand-written from the VM replay)"
+source = "wend#13"
+note = "Up to EL7 the network service (initscripts, later network-scripts) brings up /etc/sysconfig/network-scripts/ifcfg-*. EL9 has no network-scripts, and nothing installs NetworkManager on an upgraded box: after the reboot every interface is down and the box is unreachable. EL9's NetworkManager reads the same ifcfg files (static address, gateway and DNS kept, verified in the VM). Enabled where the network service started at boot. No chroot check sees networking: the proof is the VM replay."
+fires_on = ["el/centos5-dns", "el/centos5-web"]
