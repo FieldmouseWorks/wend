@@ -368,8 +368,21 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
     // runs with the harness's config. Lent for the walk only, and given back after.
     let mut lent = vec![];
     if let Some(conf) = get(a, "hop").and_then(|h| get(h, "apt_conf")).and_then(Value::as_str) {
-        lent.push(root.lend("usr/sbin/policy-rc.d", b"#!/bin/sh\nexit 101\n", 0o755)?);
-        lent.push(root.lend("etc/apt/apt.conf.d/00wend", conf.as_bytes(), 0o644)?);
+        for (rel, bytes, mode) in [
+            ("usr/sbin/policy-rc.d", &b"#!/bin/sh\nexit 101\n"[..], 0o755),
+            ("etc/apt/apt.conf.d/00wend", conf.as_bytes(), 0o644),
+        ] {
+            match root.lend(rel, bytes, mode) {
+                Ok(l) => lent.push(l),
+                Err(e) => {
+                    for l in &lent {
+                        let _ = root.give_back(l);
+                    }
+                    let _ = sandbox::safe_rm(&snap, &work);
+                    return Err(e);
+                }
+            }
+        }
     }
     let guard = sandbox::Root { dir: root_dir.clone() };
     let mut w = walk::Walk::new(r, a, atlas.fixes_by_id(), checks, root, snap.clone(), box_id);
