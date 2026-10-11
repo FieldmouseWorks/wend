@@ -39,7 +39,7 @@ GUEST_HOST = "10.0.2.2"  # the host, as QEMU user-mode networking shows it to th
 MAC = "52:54:00:12:34:56"
 SSH_FWD, HTTP_FWD = 10022, 10080
 ENV = "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C HOME=/root TERM=dumb; umask 022; "
-# what the guest's own boot record looks like to the live checks: address, default route, resolver, outbound HTTP
+# the guest's network as the live checks compare it after every boot: addresses, default route, resolvers
 NET = ("(ip -o -4 addr 2>/dev/null || /sbin/ip -o -4 addr) | "
        "awk '$2 != \"lo\" {print $2, $4}' | sort; "
        "(ip route 2>/dev/null || /sbin/ip route) | awk '/^default/ {print $1, $2, $3}'; "
