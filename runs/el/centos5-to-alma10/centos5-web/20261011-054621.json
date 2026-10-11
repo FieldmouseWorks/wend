@@ -1,12 +1,12 @@
 {
  "schema": "wend.run/0",
- "route": "sha256:c64afaad8e52dc4f2bd7a573797c92533bec06705f7c2825d633bcbdcdb7c8a2",
+ "route": "sha256:e144c641dbeff39435203dc73db2d9f1fc7deb837395f76c184445626f5a96fb",
  "box": "el/centos5-web",
  "from": "centos5",
  "to": "alma10",
  "result": "pass",
- "started": "20261011-053259",
- "wall_seconds": 590,
+ "started": "20261011-054621",
+ "wall_seconds": 604,
  "start_fingerprint": "sha256:c2d1bcf3f1e2c02845407817c7cbc870c71f858557e8a70ad36b6504999e3337",
  "runner": {
   "kind": "local",
@@ -29,7 +29,7 @@
     "httpd22-drop-missing-modules"
    ],
    "ok": true,
-   "seconds": 83.5
+   "seconds": 88.7
   },
   {
    "to": "centos7",
@@ -50,7 +50,7 @@
     "httpd24-config"
    ],
    "ok": true,
-   "seconds": 97.6
+   "seconds": 101.6
   },
   {
    "to": "alma9",
@@ -62,7 +62,7 @@
     "sha256:608d59864a7bbcc47c69815e74183389e4865933edae0fb17dcc9e3b9e6770b7",
     "sha256:f4341598b841b3e004c75aca526d92da77a6997f6164bc1b44423eb82f55c36a",
     "sha256:d99088da93a73b9606892e9b835938c7598c86e33c3918d7df079664690c310a",
-    "sha256:fc9a2426f6c5615ce389a9bce15cf9946866c868d82f80747f3a314becdb1730",
+    "sha256:6429bb8a3f1abb3d67fd28ac8ad6a054faaaab2c220921a115b08afaa90ababe",
     "sha256:c5de001649525a86c2727b966232869401546ceb6cd0e982e39ec46ceb3fecf9"
    ],
    "fired_names": [
@@ -77,7 +77,7 @@
     "el9-httpd-config"
    ],
    "ok": true,
-   "seconds": 265.3
+   "seconds": 272.1
   },
   {
    "to": "alma10",
@@ -94,7 +94,7 @@
     "php81-mysqli-report-off"
    ],
    "ok": true,
-   "seconds": 116.3
+   "seconds": 113.2
   }
  ],
  "start_services": [
@@ -142,5 +142,5 @@
   "failed_logs": {}
  },
  "model_calls": 0,
- "log_sha256": "sha256:c8334e63c406eabb20924b507badef2bb86fbd53d272c78be2515ba3e49557bb"
+ "log_sha256": "sha256:70c200af7435c24ee8f2df95a98606f47d290dc95ca27c1572e3acf8648e4ff9"
 }

@@ -22,6 +22,10 @@ when = { all = [
   { not = { file-contains = { path = "/etc/my.cnf", text = "datadir=/var/lib/mysql7" } } },
   { not = { file-contains = { path = "/etc/my.cnf", text = "datadir=/var/lib/mysql8" } } },
   { not = { file-contains = { path = "/etc/my.cnf", text = "datadir=/var/lib/mysql9" } } },
+  # A commented-out default next to an active custom datadir would also match: refuse any commented datadir line.
+  { not = { file-contains = { path = "/etc/my.cnf", text = "#datadir" } } },
+  { not = { file-contains = { path = "/etc/my.cnf", text = "# datadir" } } },
+  { not = { file-contains = { path = "/etc/my.cnf", text = ";datadir" } } },
   { not = { file-contains = { path = "/etc/my.cnf", text = "bind-address" } } },
   { not = { file-contains = { path = "/etc/my.cnf", text = "skip-networking" } } },
   { not = { file-contains = { path = "/etc/my.cnf", text = "log-bin" } } },
