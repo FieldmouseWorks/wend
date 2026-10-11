@@ -191,6 +191,13 @@ fn hop_dump(atlas: &Atlas, route: &Doc, hop: &str, only: Option<&[String]>) -> R
 fn cmd_hop(atlas: &Atlas, route: &str, hop: &str, fired: Option<&str>) -> Result<bool, String> {
     preflight(atlas)?;
     let (_, r) = atlas.route(route)?;
+    let hops = atlas::list_of(r, "hops")?;
+    if !hops.iter().any(|h| h == hop) {
+        return Err(format!(
+            "{hop} is not a hop of this route (its hops: {})",
+            hops.join(", ")
+        ));
+    }
     let only: Option<Vec<String>> = fired.map(|f| f.split(',').filter(|s| !s.is_empty()).map(String::from).collect());
     let d = hop_dump(atlas, r, hop, only.as_deref())?;
     println!("{}", serde_json::to_string_pretty(&d).unwrap());
