@@ -127,9 +127,10 @@ installed = "rpm -q {pkg}"
 file = "test -f {path}"
 file-contains = "grep -qF '{text}' {path}"
 # The server's own view: the server-group options in {path} and everything it includes, last one winning, comments and
-# spacing already resolved. Groups by name, not --mysqld: MySQL's my_print_defaults lacks that flag. Keys match with -
-# and _ alike. Without a value, true when the key is set.
-mysql-option = '''my_print_defaults --defaults-file={path} mysqld server mariadb mariadb-server client-server 2>/dev/null | awk -v k='--{key}' -v v='{value}' -v any={any} '{ n = $0; sub(/=.*/, "", n); gsub(/_/, "-", n); if (n == k) { f = 1; x = $0; sub(/^[^=]*=?/, "", x) } } END { exit !(f && (any || x == v)) }''''
+# spacing already resolved. Groups by name, not --mysqld (MySQL's my_print_defaults lacks that flag), plus the
+# installed server's versioned groups ([mysqld-5.1], [mariadb-10.11]). Keys match with - and _ alike. Without a value,
+# true when the key is set.
+mysql-option = '''v=$( (mysqld --version || /usr/sbin/mysqld --version || /usr/libexec/mysqld --version || mariadbd --version) 2>/dev/null | sed -n 's/.* Ver \([0-9]*\.[0-9]*\).*/\1/p' | head -n 1); my_print_defaults --defaults-file={path} mysqld server mariadb mariadbd mariadb-server client-server galera ${v:+mysqld-$v mariadb-$v mariadbd-$v} 2>/dev/null | awk -v k='--{key}' -v v='{value}' -v any={any} '{ n = $0; sub(/=.*/, "", n); gsub(/_/, "-", n); if (n == k) { f = 1; x = $0; sub(/^[^=]*=?/, "", x) } } END { exit !(f && (any || x == v)) }''''
 
 [box]
 # Seed packages for building a CentOS 5 root from the vault (tools/sandbox.py build_el); yum installs the rest.

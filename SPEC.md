@@ -94,13 +94,13 @@ A precondition is a table with exactly one key:
 
 Paths match `/etc/[A-Za-z0-9_./-]+` and contain no `..`. `text` contains no `'`. `mysql-option` keys are lowercase and
 dashed (`-` and `_` match alike); values match `[A-Za-z0-9_./:,@+-]*`. It asks the server's own option reader for the
-server groups (`mysqld`, `server`, `mariadb`, `mariadb-server`, `client-server`) of `path`, so comments, spacing,
-repeated keys (the last one wins) and `!include` files resolve as the server reads that file; `loose-` and `skip-`
-prefixes are not folded into the key; a substring test can't say "datadir is exactly the default". Where no server tools
-are installed it is false, so its `not` is true there: pair a negated one with a positive one. Package names match
-`[a-z0-9][a-z0-9.+-]*`. There is no shell predicate. An adapter gives each predicate's command as a template in
-`[predicates]` (`{pkg}`, `{path}`, `{text}`, `{key}`, `{value}`, `{any}`); `not`, `all` and `any` are the shell's `!`,
-`&&` and `||` over those.
+server groups of `path` (`mysqld`, `server`, `mariadb`, `mariadbd`, `mariadb-server`, `client-server`, `galera`, and the
+installed server's versioned ones such as `mysqld-5.1` or `mariadb-10.11`), so comments, spacing, repeated keys (the
+last one wins) and `!include` files resolve as the server reads that file; `loose-` and `skip-` prefixes are not folded
+into the key; a substring test can't say "datadir is exactly the default". Where no server tools are installed it is
+false, so its `not` is true there: pair a negated one with a positive one. Package names match `[a-z0-9][a-z0-9.+-]*`.
+There is no shell predicate. An adapter gives each predicate's command as a template in `[predicates]` (`{pkg}`,
+`{path}`, `{text}`, `{key}`, `{value}`, `{any}`); `not`, `all` and `any` are the shell's `!`, `&&` and `||` over those.
 
 **The install rule.** A fix that has an `install` step must be gated, positively, on `installed` of the package it
 replaces. This is the stray-MySQL lesson from dep-lab round 2. A fix gated on `/etc/mysql/my.cnf` installed a MySQL
