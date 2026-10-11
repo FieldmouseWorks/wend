@@ -131,7 +131,7 @@ file-contains = "grep -qF '{text}' {path}"
 # lists them: mysqld server mysqld-5.0 on MySQL 5.0; mariadb, mariadbd, galera and the versioned ones on MariaDB), so
 # a group only the other server reads never counts. No server binary, no groups: false. Keys match with - and _ alike.
 # Without a value, true when the key is set.
-mysql-option = '''g=$( (mysqld --verbose --help || /usr/sbin/mysqld --verbose --help || /usr/libexec/mysqld --verbose --help || mariadbd --verbose --help) 2>/dev/null | sed -n 's/^The following groups are read: //p' | head -n 1); [ -n "$g" ] && my_print_defaults --defaults-file={path} $g 2>/dev/null | awk -v k='--{key}' -v v='{value}' -v any={any} '{ n = $0; sub(/=.*/, "", n); gsub(/_/, "-", n); if (n == k) { f = 1; x = $0; sub(/^[^=]*=?/, "", x) } } END { exit !(f && (any || x == v)) }''''
+mysql-option = '''g=$( (mysqld --verbose --help || /usr/sbin/mysqld --verbose --help || /usr/libexec/mysqld --verbose --help || mariadbd --verbose --help || /usr/sbin/mariadbd --verbose --help || /usr/libexec/mariadbd --verbose --help) 2>/dev/null | sed -n 's/^The following groups are read: //p' | head -n 1); [ -n "$g" ] && my_print_defaults --defaults-file={path} $g 2>/dev/null | awk -v k='--{key}' -v v='{value}' -v any={any} '{ n = $0; sub(/=.*/, "", n); gsub(/_/, "-", n); if (n == k) { f = 1; x = $0; sub(/^[^=]*=?/, "", x) } } END { exit !(f && (any || x == v)) }''''
 
 [box]
 # Seed packages for building a CentOS 5 root from the vault (tools/sandbox.py build_el); yum installs the rest.
