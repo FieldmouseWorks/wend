@@ -177,7 +177,12 @@ class Rpm:
         scriptlets), then fail if any is left. EL5 x86_64 installs carried i386 multilib copies; EL6's transaction
         can't upgrade them alongside the x86_64 ones (file conflicts), and nothing on the box needs them."""
         alt = "|".join(sorted(s["arches"]))
-        return (f"set -e; cd /tmp; L=$(rpm -qa --qf '%{{NAME}}-%{{VERSION}}-%{{RELEASE}}.%{{ARCH}}\\n' | "
+        # Only multilib copies are disposable: refuse if any package of these arches has no twin of another arch
+        # (a 32-bit-only app or compat library), so such a box stops here instead of losing it.
+        return (f"set -e; cd /tmp; for n in $(rpm -qa --qf '%{{NAME}} %{{ARCH}}\\n' | awk '$2 ~ /^({alt})$/ {{print $1}}' "
+                f"| sort -u); do rpm -q --qf '%{{ARCH}}\\n' $n | grep -qvE '^({alt})$' || "
+                "{ echo \"refusing: $n is installed only as 32-bit, not a multilib copy\"; exit 1; }; done; "
+                f"L=$(rpm -qa --qf '%{{NAME}}-%{{VERSION}}-%{{RELEASE}}.%{{ARCH}}\\n' | "
                 f"grep -E '\\.({alt})$' || true); [ -z \"$L\" ] || rpm -e --nodeps --noscripts $L; "
                 f"test -z \"$(rpm -qa --qf '%{{ARCH}}\\n' | grep -E '^({alt})$')\"")
 
@@ -228,6 +233,15 @@ class Rpm:
         base = f"{shim}/{next(iter(t['repos'].values()))}"
         reinstall = " ".join(s["reinstall"])
         return "\n".join([
+            # The last step drops every package EL8 doesn't ship from the rpm database (files kept). That is only
+            # acceptable for the old release's own packages: refuse up front if anything else is installed (EPEL,
+            # vendor or locally built RPMs), so such a box stops here instead of ending up with unowned software.
+            # CentOS's own SIG and Software Collections packages carry its vendor too but EL8 doesn't ship them, so
+            # those are refused by name.
+            f"V=$(rpm -q --qf '%{{VENDOR}}' {s['remove']}); T=$(rpm -qa --qf '%{{VENDOR}}|%{{NAME}}|%{{NAME}}-%{{VERSION}}-"
+            "%{RELEASE}.%{ARCH}\\n' | awk -F'|' -v v=\"$V\" '$2 != \"gpg-pubkey\" && ($1 != v || "
+            "$2 ~ /^(rh-|devtoolset-|centos-release-.)/ && $2 != \"centos-release-notes\") {print $3}'); [ -z \"$T\" ] || "
+            "{ printf 'refusing, not plain %s packages: ' \"$V\"; printf '%s ' $T; echo; exit 1; }",
             f"set -e; rm -rf {b}; mkdir -p {b}/old {b}/new {b}/pkgs {b}/stage",
             f"printf '{old_repos}' > {b}/old/boot.repo; printf '{new_repos}' > {b}/new/ladder.repo",
             f"yum -y --setopt=reposdir={b}/old install dnf",
