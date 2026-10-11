@@ -1,0 +1,19 @@
+# Found replaying the route on a real CentOS 5.11 install in a VM (wend#13).
+schema = "wend.fix/0"
+family = "el"
+hop = "alma9"
+when = { installed = "polkit" }
+restores = ["services"]
+adds = []
+
+[[post]]
+op = "remove"
+packages = ["polkit-pkla-compat", "polkit"]
+purge = true
+
+[meta]
+name = "el9-drop-orphaned-polkit"
+author = "claude (wend#13, hand-written from the VM replay)"
+source = "wend#13"
+note = "EL6 pulls in polkit for hal (CentOS 5's hal used PolicyKit, a different name family). From EL9 nothing on the box requires it, so it is a new service family the box never ran, and the services check flags it. polkit-pkla-compat goes too: EL10's version requires polkit and would bring it back. remove fails if anything still needs them, so a box that uses polkit keeps it."
+fires_on = ["el/centos5-web"]

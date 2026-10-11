@@ -52,7 +52,7 @@ id = "sha256:85f7db6108e947a7c2e1c3fd5fa0efa62e5477a44f7ae4d6d4a76b8139a75c1a"
 name = "el7-drop-portreserve"
 
 [[fixes]]
-id = "sha256:9994de41c770bd54fd7213fc844c2205dd0f78632a8d21156b85fcb730d7c5c4"
+id = "sha256:06b4f94fd3afc25e27beee68d524af4b58b7f6a55d291f61e937ea2a31e9b0d6"
 name = "el7-drop-system-config-firewall"
 
 [[fixes]]
@@ -106,6 +106,10 @@ name = "el9-httpd-config"
 [[fixes]]
 id = "sha256:e8702cb424e0a946035342b9f09dd72dd3bebec98a8fe865b01818086ef02e6f"
 name = "vsftpd-drop-tcp-wrappers"
+
+[[fixes]]
+id = "sha256:7aa2ee229b394192cc90f13098dea996af758664709e416eb8add860aabeeb9c"
+name = "el9-drop-orphaned-polkit"
 
 [[fixes]]
 id = "sha256:645af92e570ed65e10a8d48297fcc9012a6a2e7723cceb4eac2084a73a27522d"
