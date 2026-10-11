@@ -1,0 +1,18 @@
+# Ported from dep-lab's CentOS fix library: same steps, now typed ops (SPEC.md, Op reference).
+schema = "wend.fix/0"
+family = "el"
+hop = "alma9"
+when = { installed = "mariadb-server" }
+restores = ["box:db"]
+adds = []
+
+[[post]]
+op = "install"
+packages = ["mariadb", "mariadb-server"]
+
+[meta]
+name = "el9-mariadb-server"
+author = "claude-opus-5-5 medium (dep-lab guided run A)"
+curated_by = "claude (wend port to typed ops)"
+source = "dep-lab centos/fixes-v3.json: a9-install-mariadb"
+fires_on = ["el/centos5-web"]

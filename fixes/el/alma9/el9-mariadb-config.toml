@@ -1,0 +1,33 @@
+# Ported from dep-lab's CentOS fix library: same steps, now typed ops (SPEC.md, Op reference).
+schema = "wend.fix/0"
+family = "el"
+hop = "alma9"
+# Only where the server reads the default datadir from /etc/my.cnf and none of the settings an owner would miss:
+# the packaged file replaces it. A custom datadir, a bind-address or skip-networking, binary logging or replication
+# is a route gap, not something to drop. mysql-option asks the server's own option reader, so comments, spacing,
+# repeated keys and !include files count exactly as mysqld sees them.
+when = { all = [
+  { installed = "mariadb-server" },
+  { mysql-option = { path = "/etc/my.cnf", key = "datadir", value = "/var/lib/mysql" } },
+  { not = { mysql-option = { path = "/etc/my.cnf", key = "bind-address" } } },
+  { not = { mysql-option = { path = "/etc/my.cnf", key = "skip-networking" } } },
+  { not = { mysql-option = { path = "/etc/my.cnf", key = "log-bin" } } },
+  { not = { mysql-option = { path = "/etc/my.cnf", key = "server-id" } } },
+] }
+restores = ["box:db"]
+adds = []
+
+[[post]]
+op = "rpm.adopt-rpmnew"
+paths = ["/etc/my.cnf"]
+
+[[post]]
+op = "mysql.upgrade-data"
+
+[meta]
+name = "el9-mariadb-config"
+author = "claude-opus-5-5 medium (dep-lab guided run A)"
+curated_by = "claude (wend port to typed ops)"
+source = "dep-lab centos/fixes-v3.json: a9-mariadb-upgrade"
+note = "EL9 leaves its packaged /etc/my.cnf (just !includedir /etc/my.cnf.d) as .rpmnew; this takes it, keeps the old file under /var/lib/wend/saved, and upgrades the data files. Fires only when, as the server reads it, the old file sets the default datadir and no bind-address, skip-networking, log-bin or server-id. Other server settings in the old file (buffer sizes, max_connections) are not carried over: re-apply them in /etc/my.cnf.d."
+fires_on = ["el/centos5-web"]
