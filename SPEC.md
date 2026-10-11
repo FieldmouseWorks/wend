@@ -69,7 +69,8 @@ For each hop on a route, the harness (not the fix) does:
 4. the upgrade transaction: the arriving release's own `upgrade` list if the adapter gives one, else `hop.upgrade`
    (Debian: `dist-upgrade`, then `autoremove --purge`; EL: from `yum upgrade` on EL6 to
    `dnf distro-sync --allowerasing` on EL9 and 10),
-5. the `post` steps of those fixes, in route order,
+5. the `post` steps of those fixes, in route order, then the harness appends their `adds` to
+   `/var/lib/wend/added-families` (see "restores and adds"),
 6. remove the drop-ins of any `pm-option` used on this hop,
 7. `hop.verify` if the adapter has one (EL: the release file names the new major),
 8. `hop.after`, whatever happened above (cleanup: package caches, the rpm database),
@@ -180,8 +181,11 @@ typed ops; its proof is the replay, since the cut changed the commands.
   `box:web`). This is documentation for reviewers and a hint for model authors. It isn't enforced, because health is
   always checked in full.
 - `adds`: the name families a fix is allowed to bring in as new explicitly installed services. The `services` check
-  rejects any other new family. Empty for every seed fix. Switching mysql to mariadb isn't new, because the family map
-  treats them as the same.
+  rejects any other new family. Each value is a family as defined below (`[A-Za-z_+]+`: no digits or dots, nothing
+  from the first `-` on). The harness records them: after the post steps of a hop (step 5 below), it appends the
+  `adds` of every fix that fired to `/var/lib/wend/added-families`, one per line, and a box's `services` check accepts
+  those families as well as the ones the box started with. A failed hop's rollback takes its lines away with it.
+  Switching mysql to mariadb isn't new, because the family map treats them as the same.
 
 **Name families.** A package's family is its name with every digit and `.` removed and everything from the first
 `-` on dropped (`php5-mysql` and `php-mysqlnd` are both `php`), then mapped through the **family map**: renames a

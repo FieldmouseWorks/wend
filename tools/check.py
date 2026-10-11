@@ -25,6 +25,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PKG = r"[A-Za-z0-9][A-Za-z0-9._+-]*"  # rpm names have capitals (NetworkManager) and underscores
 ETC_PATH = r"/etc/[A-Za-z0-9_./-]+"
 MYSQL_KEY = r"[a-z][a-z0-9-]*"
+FAMILY = r"[A-Za-z_+]+"  # a name family: no digits or dots, nothing from the first "-" on (SPEC "restores and adds")
 MYSQL_VALUE = r"[A-Za-z0-9_./:,@+-]*"
 ETC_GLOB = r"/etc/[A-Za-z0-9_./*-]+"
 CORE_OPS = {"install", "remove", "repair", "force-remove", "write-file", "pm-option"}
@@ -252,6 +253,9 @@ def check_fix(doc, adapters, where):
     for c in doc.get("restores", []):
         if c not in checks and not re.fullmatch(r"box:[a-z0-9-]+", c):
             errs.append(f"{where}: restores {c!r}, which is neither an adapter check nor box:<role>")
+    for f in doc.get("adds", []):
+        if not isinstance(f, str) or not re.fullmatch(FAMILY, f):
+            errs.append(f"{where}: adds {f!r}, which is not a name family ({FAMILY})")
     m = doc.get("meta", {})
     if not m.get("name") or not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", m["name"]):
         errs.append(f"{where}: meta.name must be a lowercase slug")

@@ -13,6 +13,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Mutex;
 
+/// a name family: no digits or dots, nothing from the first "-" on (SPEC "restores and adds")
+pub const FAMILY: &str = r"[A-Za-z_+]+";
 /// rpm names have capitals (NetworkManager) and underscores
 pub const PKG: &str = r"[A-Za-z0-9][A-Za-z0-9._+-]*";
 const ETC_PATH: &str = r"/etc/[A-Za-z0-9_./-]+";
@@ -660,6 +662,11 @@ pub fn check_fix(doc: &Doc, adapters: &BTreeMap<String, Doc>, wh: &str) -> Vec<S
             errs.push(format!(
                 "{wh}: restores {c:?}, which is neither an adapter check nor box:<role>"
             ));
+        }
+    }
+    for f in get(doc, "adds").and_then(Value::as_array).into_iter().flatten() {
+        if !f.as_str().is_some_and(|s| full(FAMILY, s)) {
+            errs.push(format!("{wh}: adds {f}, which is not a name family ({FAMILY})"));
         }
     }
     let name = get(doc, "meta").and_then(|m| get(m, "name")).and_then(Value::as_str);

@@ -6,6 +6,9 @@ use crate::backend::{fill, hop_vars, step};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
+/// SPEC "restores and adds": one name family per line, appended by the harness, read by the services check
+pub const ADDED: &str = "/var/lib/wend/added-families";
+
 pub struct HopPlan {
     /// steps 1 to 7: set the release, refresh, pre steps, the upgrade, post steps, pm-option cleanup, verify
     pub commands: Vec<String>,
@@ -56,6 +59,15 @@ pub fn hop_plan(adapter: &Doc, hop: &str, fixes: &[&Doc]) -> Result<HopPlan, Str
     commands.extend(comp("pre")?);
     commands.extend(upgrade.iter().map(|c| fill(c, &v)));
     commands.extend(comp("post")?);
+    // SPEC "restores and adds": the families the fired fixes may introduce, for the services check
+    let adds: BTreeSet<String> = fixes
+        .iter()
+        .flat_map(|f| list_of(f, "adds").unwrap_or_default())
+        .collect();
+    if !adds.is_empty() {
+        let lines: String = adds.iter().map(|x| format!("{x}\\n")).collect();
+        commands.push(format!("mkdir -p /var/lib/wend && printf '{lines}' >> {ADDED}"));
+    }
     commands.extend(cleanup);
     if let Some(verify) = get(h, "verify").and_then(Value::as_str) {
         commands.push(fill(verify, &v)); // the release file says we arrived
@@ -84,4 +96,31 @@ pub fn pinned<'a>(
                 .ok_or(format!("the route pins {id}, which no fix has"))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hop_plan;
+    use crate::atlas::Doc;
+
+    /// The same string tools/test_check.py asserts for the Python engine: families sorted and deduplicated, one per
+    /// line, appended after the post steps.
+    #[test]
+    fn records_the_fired_fixes_adds_after_their_post_steps() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let a: Doc =
+            crate::atlas::parse_toml(&std::fs::read_to_string(root.join("adapters/el.toml")).unwrap()).unwrap();
+        let fix = |adds: &str| -> Doc {
+            crate::atlas::parse_toml(&format!(
+                "hop = \"alma9\"\nadds = [{adds}]\n[[post]]\nop = \"kv.set\"\npath = \"/etc/vsftpd/vsftpd.conf\"\nvalues = {{ tcp_wrappers = \"NO\" }}\n"
+            ))
+            .unwrap()
+        };
+        let (f1, f2) = (fix("\"polkit\", \"NetworkManager\""), fix("\"polkit\""));
+        let p = hop_plan(&a, "alma9", &[&f1, &f2]).unwrap();
+        let want = "mkdir -p /var/lib/wend && printf 'NetworkManager\\npolkit\\n' >> /var/lib/wend/added-families";
+        let at = p.commands.iter().position(|c| c == want).expect("no adds step");
+        let post = p.commands.iter().rposition(|c| c.contains("vsftpd")).unwrap();
+        assert!(at > post);
+    }
 }

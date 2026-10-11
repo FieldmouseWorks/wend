@@ -135,6 +135,21 @@ for name, fix, want in (("NetworkManager install and enable", nm, False),
     errs = check.check_fix(fix, adapters, "fixes/el/alma9/t.toml")
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
+# adds: a family, never shell; the harness records the fired fixes' families after the post steps (SPEC "restores and adds").
+# The same command string is asserted in client/src/hop.rs's tests, so both engines write it byte for byte.
+for name, adds, want in (("adds a name family", ["NetworkManager"], False), ("shell in adds", ["x' >> /etc/passwd; '"], True),
+                         ("digits in adds (not a family)", ["php5"], True)):
+    errs = check.check_fix({**el_good, "adds": adds}, adapters, "fixes/el/alma9/t.toml")
+    print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
+    bad += bool(errs) != want
+import walk  # noqa: E402
+w = type("W", (), {})()
+w.adapter = adapters["el"]
+cmds = walk.Walk.hop_cmds(w, "alma9", [{**el_good, "adds": ["polkit", "NetworkManager"]}, {**el_good, "adds": ["polkit"]}])
+want = "mkdir -p /var/lib/wend && printf 'NetworkManager\\npolkit\\n' >> /var/lib/wend/added-families"
+ok = want in cmds and cmds.index(want) > max(i for i, c in enumerate(cmds) if "kv" in c or "vsftpd" in c)
+print(("passed  " if ok else "WRONG   ") + "the hop records the fired fixes' adds after their post steps")
+bad += not ok
 el_route = {"schema": "wend.route/0", "family": "el", "from": "centos5", "to": "alma10", "fixes": []}
 for hops, want in ((["centos6", "centos7", "alma9", "alma10"], True), (["centos6", "alma9", "alma10"], False),
                    (["centos6", "centos7", "alma8", "alma9", "alma10"], True), (["centos7", "centos6", "alma10"], False)):
