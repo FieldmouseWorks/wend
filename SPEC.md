@@ -271,7 +271,10 @@ rpm), with any harness shim prefix stripped. A value is the sha256 of the bytes 
 pins everything under it: `Release` lists the hash of every `Packages` index and `repomd.xml` the hash of
 `primary.xml`, and those list a checksum for every package. So a run pins the exact package set its route proved
 without listing thousands of packages, and a client can verify any package from any source against it (open
-question 12 says how). The harness writes `sources` from the files it refreshed. A run without them proves the route
+question 12 says how). One exception: apt 0.9 (wheezy) deletes the `Release` when the archive's signing key fails
+and keeps only the indexes. Then the hop pins each index it kept, keyed by the path the `Release` lists it under
+(`dists/wheezy/main/binary-amd64/Packages`), with the sha256 of the uncompressed bytes. The `Release` hashes the
+same bytes, so a client fetches whichever compressed form the archive serves and checks it after decompressing. The harness writes `sources` from the files it refreshed. A run without them proves the route
 against whatever the mirrors held that day and nothing more.
 
 A discovery run records which model was used and how many calls it made. Replays record `model_calls: 0`. CI only

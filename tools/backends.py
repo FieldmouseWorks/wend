@@ -67,8 +67,17 @@ class Apt:
         """SPEC.md "Pinned sources": the Release/InRelease file apt read for this hop, by its origin URL."""
         url = f"{self.hop_vars(adapter, release)['mirror']}/dists/{release}"
         stem = re.sub(r"^[a-z]+://", "", url).replace("/", "_")
-        found = {f"{url}/{n}": file_sha256(f"{root}/var/lib/apt/lists/{stem}_{n}") for n in ("InRelease", "Release")}
-        return {u: h for u, h in found.items() if h}
+        lists = f"{root}/var/lib/apt/lists"
+        found = {f"{url}/{n}": file_sha256(f"{lists}/{stem}_{n}") for n in ("InRelease", "Release")}
+        found = {u: h for u, h in found.items() if h}
+        if not found and os.path.isdir(lists) and not os.path.islink(lists):
+            # apt 0.9 throws the Release away when its signing key fails: pin the indexes it kept, by the path the
+            # Release lists them under (their bytes are the uncompressed ones the Release hashes)
+            for n in sorted(os.listdir(lists)):
+                h = file_sha256(f"{lists}/{n}") if n.startswith(f"{stem}_") and not n.endswith(".gpg") else None
+                if h:
+                    found[f"{url}/{n[len(stem) + 1:].replace('_', '/')}"] = h
+        return found
 
     def hop_vars(self, adapter, release):
         lad, r = adapter["ladder"], adapter["releases"]

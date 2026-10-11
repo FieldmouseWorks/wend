@@ -367,9 +367,31 @@ impl<'a> Walk<'a> {
                     .unwrap_or("");
                 let url = format!("{mirror}/dists/{hop}");
                 let stem = url.split_once("://").map_or(url.as_str(), |(_, r)| r).replace('/', "_");
+                let lists = root.join("var/lib/apt/lists");
                 for n in ["InRelease", "Release"] {
-                    if let Some(h) = file_sha256(root, &root.join("var/lib/apt/lists").join(format!("{stem}_{n}"))) {
+                    if let Some(h) = file_sha256(root, &lists.join(format!("{stem}_{n}"))) {
                         out.insert(format!("{url}/{n}"), h);
+                    }
+                }
+                if out.is_empty() && dirs_under(root, &lists).first() == Some(&lists) {
+                    // apt 0.9 throws the Release away when its signing key fails: pin the indexes it kept, by the
+                    // path the Release lists them under (their bytes are the uncompressed ones the Release hashes)
+                    let mut names: Vec<String> = std::fs::read_dir(&lists)
+                        .map_err(|e| format!("{}: {e}", lists.display()))?
+                        .flatten()
+                        .filter_map(|e| e.file_name().into_string().ok())
+                        .collect();
+                    names.sort();
+                    for n in names {
+                        let Some(rest) = n.strip_prefix(&format!("{stem}_")) else {
+                            continue;
+                        };
+                        if n.ends_with(".gpg") {
+                            continue;
+                        }
+                        if let Some(h) = file_sha256(root, &lists.join(&n)) {
+                            out.insert(format!("{url}/{}", rest.replace('_', "/")), h);
+                        }
                     }
                 }
             }
