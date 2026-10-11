@@ -5,7 +5,9 @@ family = "el"
 release = "centos5"
 arch = "x86_64"
 summary = "CentOS 5.11 web server: httpd 2.2 + mod_php 5.1 (mysqli), MySQL 5.0 with a real row, postfix, ssh on 2222, cron"
-packages = ["httpd", "php", "php-mysql", "mysql-server", "openssh-server", "openssh-clients", "postfix", "vixie-cron", "crontabs", "sudo", "perl", "curl", "rsync", "python", "logrotate", "ntp", "which"]
+packages = ["httpd", "php", "php-mysql", "mysql-server", "openssh-server", "openssh-clients", "postfix", "vixie-cron", "crontabs", "sudo", "perl", "curl", "rsync", "python", "logrotate", "ntp", "which",
+            # what a real CentOS 5.11 install (anaconda, @core) has and a bare root doesn't: each one blocks a hop (wend#13)
+            "kudzu", "rhpl", "hal", "system-config-securitylevel-tui"]
 customize = '''
 set -e
 grep -q localhost /etc/hosts 2>/dev/null || printf '127.0.0.1 localhost localhost.localdomain\n' >> /etc/hosts

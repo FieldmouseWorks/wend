@@ -1,0 +1,19 @@
+# Found replaying the route on a real CentOS 5.11 install in a VM (wend#13).
+schema = "wend.fix/0"
+family = "el"
+hop = "centos7"
+when = { all = [{ installed = "system-config-firewall-base" }, { not = { file = "/etc/sysconfig/iptables" } }, { not = { file = "/etc/sysconfig/ip6tables" } }] }
+restores = ["services"]
+adds = []
+
+[[post]]
+op = "remove"
+packages = ["system-config-firewall-tui", "system-config-firewall-base"]
+purge = true
+
+[meta]
+name = "el7-drop-system-config-firewall"
+author = "claude (wend#13, hand-written from the VM replay)"
+source = "wend#13"
+note = "CentOS 5's firewall tool (system-config-securitylevel-tui) becomes system-config-firewall-tui/-base on EL6, so the gate names the EL6 package. On EL7 those require iptables-ipv6, which only iptables-services provides, so el7-drop-unused-iptables-service can't remove the unused service. Gated like that fix: only where the box saved no firewall rules. Pinned before it."
+fires_on = ["el/centos5-web"]

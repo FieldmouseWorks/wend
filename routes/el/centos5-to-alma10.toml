@@ -8,6 +8,10 @@ hops = ["centos6", "centos7", "alma9", "alma10"]
 finish = { prune_obsolete = false }
 
 [[fixes]]
+id = "sha256:321563b3b07c9abdd2444fc46c7549c93082420ae93ba3c1f9a361d0d1777513"
+name = "el6-drop-kudzu-rhpl"
+
+[[fixes]]
 id = "sha256:e0fb1a56cc91ead37da70377e4cd252fa583a5997f57b1f33304070a32060061"
 name = "el6-bootstrap-rpm-yum"
 
@@ -22,6 +26,10 @@ name = "el6-swap-release-package"
 [[fixes]]
 id = "sha256:0c7ee7437e09c8f1175fd2ec9d74aa7f260575a3daf2107699e59f8e8bca1248"
 name = "httpd22-drop-missing-modules"
+
+[[fixes]]
+id = "sha256:65fa037cf383daaea92a5df836657d378a0563702358e04fb271dc50f0b47377"
+name = "el7-drop-hal-info"
 
 [[fixes]]
 id = "sha256:397a077d5ce43514ebee2d4c21a0237c9cf4278ca621c4c7bc7bcdd05ea980a6"
@@ -42,6 +50,10 @@ name = "el7-swap-release-package"
 [[fixes]]
 id = "sha256:85f7db6108e947a7c2e1c3fd5fa0efa62e5477a44f7ae4d6d4a76b8139a75c1a"
 name = "el7-drop-portreserve"
+
+[[fixes]]
+id = "sha256:06b4f94fd3afc25e27beee68d524af4b58b7f6a55d291f61e937ea2a31e9b0d6"
+name = "el7-drop-system-config-firewall"
 
 [[fixes]]
 id = "sha256:506d9872830c08ee699fa031fa7638dc0cc1dd00309be811af2b84b2159457b7"
@@ -94,6 +106,10 @@ name = "el9-httpd-config"
 [[fixes]]
 id = "sha256:e8702cb424e0a946035342b9f09dd72dd3bebec98a8fe865b01818086ef02e6f"
 name = "vsftpd-drop-tcp-wrappers"
+
+[[fixes]]
+id = "sha256:7aa2ee229b394192cc90f13098dea996af758664709e416eb8add860aabeeb9c"
+name = "el9-drop-orphaned-polkit"
 
 [[fixes]]
 id = "sha256:645af92e570ed65e10a8d48297fcc9012a6a2e7723cceb4eac2084a73a27522d"
