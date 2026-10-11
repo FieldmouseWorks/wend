@@ -262,8 +262,8 @@ Written by CI. JSON, because no human edits it.
 
 ```json
 "hops": [{"to": "alma9", "...": "...",
-          "sources": {"https://repo.almalinux.org/almalinux/9.8/BaseOS/x86_64/os/repodata/repomd.xml": "sha256:9f2c...",
-                      "https://repo.almalinux.org/almalinux/9.8/AppStream/x86_64/os/repodata/repomd.xml": "sha256:41ab..."}}]
+          "sources": {"https://repo.almalinux.org/almalinux/9/BaseOS/x86_64/os/repodata/repomd.xml": "sha256:9f2c...",
+                      "https://repo.almalinux.org/almalinux/9/AppStream/x86_64/os/repodata/repomd.xml": "sha256:41ab..."}}]
 ```
 
 A key is the origin URL of the repo's top metadata file (`dists/<suite>/Release` on apt, `repodata/repomd.xml` on
@@ -272,8 +272,8 @@ pins everything under it: `Release` lists the hash of every `Packages` index and
 `primary.xml`, and those list a checksum for every package. So a run pins the exact package set its route proved
 without listing thousands of packages, and a client can verify any package from any source against it (open
 question 12 says how). One exception: apt 0.9 (wheezy) deletes the `Release` when the archive's signing key fails
-and keeps only the indexes. Then the hop pins each index it kept, keyed by the path the `Release` lists it under
-(`dists/wheezy/main/binary-amd64/Packages`), with the sha256 of the uncompressed bytes. The `Release` hashes the
+and keeps only the indexes. Then the hop pins each index it kept, keyed by its URL
+(`<mirror>/dists/wheezy/main/binary-amd64/Packages`), with the sha256 of the uncompressed bytes. The `Release` hashes the
 same bytes, so a client fetches whichever compressed form the archive serves and checks it after decompressing.
 A hop records only its own release's repos: yum and dnf leave the caches of disabled repos behind, so a cache from
 an earlier hop says nothing about this one. An op that fetches through temporary repos the hop then drops
@@ -448,7 +448,10 @@ payloads, and yum 3.2.22 can't check EL6's sha256 repodata. Effect: the files of
 rpm has rebuilt the database. The packages stay recorded at their old versions; the hop's own transaction then
 installs them properly. Reference:
 1. In a fresh `/var/lib/wend/boot`, take `PKGLIST` of `release`'s first repo.
-2. Download `bootstrap.p7zip` from `bootstrap.p7zip_repo` and install it with `rpm -Uvh --nosignature`.
+2. Download each file in `bootstrap.p7zip` (a table of file name → `sha256:` digest) from `bootstrap.p7zip_repo`.
+   Fail unless each one's sha256 is its pin: nothing else vouches for them. Write the pins to
+   `/var/lib/wend/sources/<hop>/fetched`, one `https://<p7zip_repo>/<file> sha256:<hex>` per line (the hop's
+   `sources` take a line only if it is one of the adapter's pins), then install them with `rpm -Uvh --nosignature`.
 3. For each name in `bootstrap.packages`, download the first `name-<digit>...` x86_64 or noarch file in the list.
    A name with no file is reported and skipped.
 4. For each downloaded file, unpack its payload with `7z` and extract it over `/` with
@@ -485,6 +488,9 @@ repos kept in private `reposdir`s so `/etc/yum.repos.d` stays the harness's:
    directories trip it once).
 8. Remove the EL7 `yum*` packages without scriptlets; move `/etc/yum/{pluginconf.d,protected.d,vars}` to `SAVED`.
 9. `dnf install yum {reinstall}` (fatal on failure).
+   Then, before the cleanup wipes them, copy the `repomd.xml` of the `old` repos (`boot-<name>`) and of `release`'s
+   repos (`<release>-<name>`) from the yum and dnf caches to a fresh `/var/lib/wend/sources/<hop>/<repo id>.repomd.xml`,
+   and nothing else: the hop's `sources` pin them.
 10. `rpm -e --nodeps --noscripts --justdb` every package (but `gpg-pubkey`) without the `el{major}` tag, listing them
     in the output; delete the work dir; `CLEAN_REPOS`. That drops the old release's leftovers from the database and
     keeps their files. It would also drop a third-party package the owner installed, which is why the list is printed

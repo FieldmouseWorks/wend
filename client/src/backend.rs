@@ -656,10 +656,12 @@ fn transit(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
         ]
         .concat(),
         // the hop's refresh cleans every cache: keep the transit repos' metadata so the hop pins it (Walk::sources)
+        // (only its own repos: older releases' caches outlive their hops)
         format!(
-            "S={SOURCES}/{}; mkdir -p $S; for f in /var/cache/dnf/*/repodata/repomd.xml \
+            "S={SOURCES}/{}; rm -rf $S; mkdir -p $S; for f in /var/cache/dnf/*/repodata/repomd.xml \
              /var/cache/yum/*/*/*/repomd.xml; do [ -f \"$f\" ] || continue; d=${{f%/repomd.xml}}; d=${{d%/repodata}}; \
-             d=${{d##*/}}; case $f in /var/cache/dnf/*) d=${{d%-*}};; esac; cp \"$f\" \"$S/$d.repomd.xml\"; done",
+             d=${{d##*/}}; case $f in /var/cache/dnf/*) d=${{d%-*}};; esac; \
+             case $d in boot-*|{target}-*) cp \"$f\" \"$S/$d.repomd.xml\";; esac; done",
             var(v, "release")
         ),
         format!("cd /; rm -rf {b}; {CLEAN_REPOS}"),

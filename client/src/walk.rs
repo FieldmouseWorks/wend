@@ -445,7 +445,8 @@ impl<'a> Walk<'a> {
                 }
                 let fetched = kept.join("fetched");
                 if file_sha256(root, &fetched).is_some() {
-                    let text = std::fs::read_to_string(&fetched).map_err(|e| format!("{}: {e}", fetched.display()))?;
+                    let bytes = std::fs::read(&fetched).map_err(|e| format!("{}: {e}", fetched.display()))?;
+                    let text = String::from_utf8_lossy(&bytes);
                     for line in text.lines() {
                         let (u, h) = line.trim().split_once(' ').unwrap_or((line.trim(), ""));
                         if pins.get(u).is_some_and(|p| p == h) {
@@ -459,7 +460,18 @@ impl<'a> Walk<'a> {
                         .flatten()
                     {
                         let n = e.file_name().to_string_lossy().into_owned();
-                        let url = n.strip_suffix(".repomd.xml").and_then(|rid| ids.get(rid));
+                        // only the transit's own repos: boot-<name> and the release it passes through
+                        let url = n
+                            .strip_suffix(".repomd.xml")
+                            .filter(|rid| {
+                                rid.starts_with("boot-")
+                                    || rid.split('-').next().is_some_and(|r| {
+                                        get(self.adapter, "releases")
+                                            .and_then(|rs| get(rs, r))
+                                            .is_some_and(|x| get(x, "transit").is_some())
+                                    })
+                            })
+                            .and_then(|rid| ids.get(rid));
                         if let Some(h) = url.and_then(|_| file_sha256(root, &e.path())) {
                             out.insert(url.unwrap().clone(), h);
                         }

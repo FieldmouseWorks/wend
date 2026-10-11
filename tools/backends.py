@@ -84,7 +84,7 @@ class Apt:
                 h = file_sha256(root, f"{lists}/{n}") if n.startswith(f"{stem}_") and not n.endswith(".gpg") else None
                 if h:
                     found[f"{url}/{n[len(stem) + 1:].replace('_', '/')}"] = h
-        return found
+        return dict(sorted(found.items()))
 
     def hop_vars(self, adapter, release):
         lad, r = adapter["ladder"], adapter["releases"]
@@ -170,24 +170,27 @@ class Rpm:
         root = os.path.realpath(root)
         ids = {f"{rel}-{n}": f"https://{u}/repodata/repomd.xml"
                for rel, r in adapter["releases"].items() for n, u in r.get("repos", {}).items()}
+        transits = {rel for rel, r in adapter["releases"].items() if "transit" in r}
         for r in adapter["releases"].values():  # rpm.transit's boot-<name> repos
             if "transit" in r:
                 t = r["transit"]
-                for n, u in {**adapter["releases"][t["from"]]["repos"], **t["extra_repos"]}.items():
+                for n, u in {**adapter["releases"][t["from"]]["repos"], **t.get("extra_repos", {})}.items():
                     ids[f"boot-{n}"] = f"https://{u}/repodata/repomd.xml"
         out = {}
         kept = f"{root}{SOURCES}/{release}"
         pins = {u: h for r in adapter["releases"] for u, h in bootstrap_pins(adapter, r).items()}
         f = f"{kept}/fetched"
         if file_sha256(root, f):  # a line counts only if it is one of the adapter's own pins
-            with open(f) as fh:
-                for u, _, h in (line.strip().partition(" ") for line in fh):
+            with open(f, "rb") as fh:
+                for u, _, h in (line.decode("utf-8", "replace").strip().partition(" ") for line in fh):
                     if pins.get(u) == h:
                         out[u] = h
         if plain_dir(root, kept):
             for n in os.listdir(kept):
-                h = file_sha256(root, f"{kept}/{n}") if n.endswith(".repomd.xml") else None
-                if h and n[:-len(".repomd.xml")] in ids:
+                rid = n[:-len(".repomd.xml")] if n.endswith(".repomd.xml") else None
+                ok = rid in ids and (rid.startswith("boot-") or rid.split("-", 1)[0] in transits)
+                h = file_sha256(root, f"{kept}/{n}") if ok else None
+                if h:
                     out[ids[n[:-len(".repomd.xml")]]] = h
         for top, layout in ((f"{root}/var/cache/yum", "yum"), (f"{root}/var/cache/dnf", "dnf")):
             for d, dirs, files in os.walk(top) if plain_dir(root, top) else ():  # never follows symlinks below top
@@ -362,9 +365,11 @@ class Rpm:
             "[ -z \"$L\" ] || { echo \"dropped from the rpm database (files kept): $L\"; "
             "rpm -e --nodeps --noscripts --justdb $L; }",
             # the hop's refresh cleans every cache: keep the transit repos' metadata so the hop pins it (Rpm.sources)
-            f"S={SOURCES}/{v['release']}; mkdir -p $S; for f in /var/cache/dnf/*/repodata/repomd.xml "
+            # (only its own repos: older releases' caches outlive their hops)
+            f"S={SOURCES}/{v['release']}; rm -rf $S; mkdir -p $S; for f in /var/cache/dnf/*/repodata/repomd.xml "
             "/var/cache/yum/*/*/*/repomd.xml; do [ -f \"$f\" ] || continue; d=${f%/repomd.xml}; d=${d%/repodata}; "
-            "d=${d##*/}; case $f in /var/cache/dnf/*) d=${d%-*};; esac; cp \"$f\" \"$S/$d.repomd.xml\"; done",
+            "d=${d##*/}; case $f in /var/cache/dnf/*) d=${d%-*};; esac; "
+            f"case $d in boot-*|{target}-*) cp \"$f\" \"$S/$d.repomd.xml\";; esac; done",
             f"cd /; rm -rf {b}; {CLEAN_REPOS}",
         ])
 
