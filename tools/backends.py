@@ -392,7 +392,7 @@ class Rpm:
         # keywords none/off/no/false/null (any case) mean empty
         return ("V=$(awk 'FNR == 1 { s = 0 } /^[[:space:]]*\\[/ { s = tolower($0) ~ /^[[:space:]]*\\[(path|host)=/ } "
                 "!s && sub(/^[[:space:]]*auto_prepend_file[[:space:]]*=[[:space:]]*/, \"\") { v = $0 } END { print v }' "
-                "/etc/php.ini $(LC_ALL=C ls /etc/php.d/*.ini 2>/dev/null | grep -vx " + ini + ") 2>/dev/null | "
+                "$([ -f /etc/php.ini ] && echo /etc/php.ini) $(LC_ALL=C ls /etc/php.d/*.ini 2>/dev/null | grep -vx " + ini + ") 2>/dev/null | "
                 "sed 's/;.*//' | tr -d \"\\\"' \\t\\r\"); "
                 "case $(echo \"$V\" | tr A-Z a-z) in ''|none|off|no|false|null) ;; *) rm -f " + ini + "; "
                 "echo \"auto_prepend_file is already $V: left as is, mysqli_report not changed\"; exit 0;; esac; "
@@ -419,7 +419,7 @@ class Rpm:
         return (f"W=''; for n in {like}; do if grep -Fqx \"$n\" {SYSV_RECORD} 2>/dev/null || "
                 "[ \"$(systemctl is-enabled \"$n\" 2>/dev/null)\" = enabled ]; then W=$n; break; fi; done; "
                 f"[ -n \"$W\" ] || {{ echo 'none of {like} starts at boot: {u} left as is'; exit 0; }}; "
-                f"systemctl enable {u} || exit 1; S=$(systemctl is-enabled {u} 2>&1); "
+                f"systemctl enable {u} || exit 1; S=$(systemctl is-enabled {u} 2>/dev/null); "
                 f"[ \"$S\" = enabled ] || {{ echo \"{u} is $S after systemctl enable, not enabled\"; exit 1; }}; "
                 f"echo \"{u} enabled, like $W\"")
 
