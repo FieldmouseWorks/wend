@@ -24,6 +24,9 @@ conditions are the same.
 | **run** | evidence that a route worked (or didn't) on one box | CI only | JSON | `runs/<family>/<route>/<box>/<stamp>.json` |
 | **box** | a test machine: a starting release, packages, local config, health checks | maintainers | TOML | `boxes/<family>/<name>/box.toml` |
 
+The **atlas** is all of it together: every adapter, fix, route and run in this repository, the thing a client
+fetches and path-finds over (plus the boxes CI proves it on, which clients never see).
+
 Plus one **adapter** per distro family (`adapters/<family>.toml`), which holds everything family-specific.
 
 Fixes and routes are *source*: you review them. Runs are *proof*: you don't edit them, CI writes them. Boxes are
@@ -142,7 +145,9 @@ Rules that keep this from being shell with extra steps:
   ops never write content. They take the file the package shipped, or move a file no package owns, and keep the old
   one under `/var/lib/wend/saved`.
 - Harness-owned paths (sources.list, the harness apt config, yum.repos.d and the yum/dnf config on EL) are never
-  writable.
+  writable, and neither is anything under `/etc/wend/` (the box owner's secrets) on any family.
+- No op takes a secret as an argument. A value a fix would need but must not publish (a password) is named, and the
+  op reads it from `/etc/wend/secrets/<name>` on the box.
 - A fix whose steps install packages (`install`, or `rpm.transit` with a non-empty `reinstall`) must pass the install
   rule above.
 
@@ -158,6 +163,12 @@ typed ops; its proof is the replay, since the cut changed the commands.
 - `adds`: the name families a fix is allowed to bring in as new explicitly installed services. The `services` check
   rejects any other new family. Empty for every seed fix. Switching mysql to mariadb isn't new, because the family map
   treats them as the same.
+
+**Name families.** A package's family is its name with every digit and `.` removed and everything from the first
+`-` on dropped (`php5-mysql` and `php-mysqlnd` are both `php`), then mapped through the **family map**: renames a
+route is known to cause, such as `mariadb` to `mysql`, `ntpsec` and `chrony` to `ntp`, `cronie` to `vixie`. Today
+the map lives in each box's `services` check (a list of `sed` rules) and is the same for every box of a family.
+Where it should live for clients, which have no box file, is open question 11.
 
 ### Identity
 
@@ -423,7 +434,7 @@ repos kept in private `reposdir`s so `/etc/yum.repos.d` stays the harness's:
    (`new`).
 2. `yum install dnf` from `old` (CentOS 7 extras ships an EL7 dnf).
 3. With that dnf and `new`: `--downloadonly` distro-sync into the work dir, `--releasever` = the release's major,
-   `--allowerasing --nobest`, no weak deps, no protected packages. Its exit code is ignored; the step fails if
+   `--allowerasing --setopt=best=False` (EL7's dnf 4.0 has no `--nobest`), no weak deps, no protected packages. Its exit code is ignored; the step fails if
    `rpm`, `rpm-libs`, `glibc`, `dnf` or `python3-dnf` wasn't downloaded. Also fetch `transit.release_package` from
    `PKGLIST(BASE)` if the sync didn't.
 4. `rpm -e dnf` (the EL7 one), rebuild the database, and unpack every downloaded package into a staging dir.
@@ -469,11 +480,14 @@ dirs (`/run/mariadb`, `/run/mysqld`, `/var/log/mariadb`) owned by `mysql` togeth
 stale socket and pid file, start it as `mysql` in the background, and wait up to 120 s for
 `/var/lib/mysql/mysql.sock`. Stop: SIGTERM, then wait up to 300 s; the stop fails if a server is still running.
 
-**`mysql.set-password`** `user` (`[A-Za-z0-9_]+`), `password` (`[A-Za-z0-9_.-]+`). Rehashes one account's password
-with the server's current scheme (MySQL 4.0's 16-character hashes stop working with MariaDB 10's clients). Start
-with `--skip-grant-tables --skip-networking`, run `SET SESSION old_passwords=0; UPDATE mysql.user SET
-Password=PASSWORD('{password}') WHERE User='{user}'` as root, stop. Fails if the SQL or the stop fails. It needs the
-plaintext, so a fix using it is always local to one box and never belongs in a shared route.
+**`mysql.set-password`** `user` (`[A-Za-z0-9_]+`), `secret` (`[a-z0-9][a-z0-9-]*`). Rehashes one account's
+password with the server's current scheme (MySQL 4.0's 16-character hashes stop working with MariaDB 10's clients).
+The plaintext is read from `/etc/wend/secrets/{secret}` on the box, a file the box's owner puts there; a fix never
+carries a password, and no op takes one as an argument. Fails if that file is missing or holds anything but
+`[A-Za-z0-9_.@%+=-]+`. Then: start with `--skip-grant-tables --skip-networking`, run `SET SESSION old_passwords=0;
+UPDATE mysql.user SET Password=PASSWORD('<plaintext>') WHERE User='{user}'` as root, stop. Fails if the SQL or the
+stop fails. A fix using it should also be gated on `file = "/etc/wend/secrets/{secret}"`, so it only fires where
+the owner has provided one.
 
 **`mysql.clean-shutdown`** (no arguments). Start with `--innodb-fast-shutdown=0`, stop. The next major version then
 finds a clean redo log (MariaDB 10.11 refuses 10.5's otherwise). Fails if the stop fails.
@@ -558,7 +572,7 @@ other brace syntax is touched, so `${...}` and `%{...}` pass through). Values fo
 
 ## Open questions
 
-Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them as follows; 7 to 10 are still open.
+Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them as follows; 7 to 12 are still open.
 
 1. **Op vocabulary.** Yes, RPM needed ops Debian never did, and none of them is a variant of an apt op: bootstrapping
    the next package manager (twice), the UsrMove and /run layout changes, swapping release packages, adopting
@@ -585,3 +599,11 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
 10. **Booting.** A chroot can't test init. `drop-sysvinit-for-trixie` is fine in a chroot and dangerous on a real
     machine without a check that init is systemd. Do some fixes need a `requires_boot_check` flag that CI can't
     satisfy yet?
+11. **The family map.** Move it from box checks into the adapter (a `[families]` table of renames), so a client can
+    compute name families for its fingerprint hint and services check without a box? Probably yes; nothing reads it
+    outside boxes yet.
+12. **Pinning what a route installs.** A run proves a route against the mirror state it saw, and live EL mirrors
+    move under it (AlmaLinux 9 and 10 keep publishing updates). Runs reserve `sources` for repo-metadata hashes; the next step
+    is recording the sha256 of every package a run installed, so a client can fetch and verify a whole route before
+    the first hop and fall back across mirrors and archives for exactly those files. Not written yet: the harness
+    would need to record downloads per run, which the shared mirror cache doesn't do today.

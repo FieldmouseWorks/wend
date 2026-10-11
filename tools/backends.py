@@ -300,10 +300,12 @@ class Rpm:
 
     def op_mysql_set_password(self, s, adapter, release, v, rel):
         """Rehash one account's password with the current scheme (MySQL 4.0's 16-character hashes stop working with
-        MariaDB 10's clients). Needs the plaintext, so a fix using it is always local to one box."""
-        sql = (f"SET SESSION old_passwords=0; UPDATE mysql.user SET Password=PASSWORD('{s['password']}') "
+        MariaDB 10's clients). The plaintext comes from a file the box's owner puts in /etc/wend/secrets, never from
+        the fix, so no password ever lands in a public repo."""
+        sql = (f"SET SESSION old_passwords=0; UPDATE mysql.user SET Password=PASSWORD('$P') "
                f"WHERE User='{s['user']}';")
-        return (f"{STOP_DB}; {DB_DAEMON}; {DB_DIRS}; ($D --user=mysql --skip-grant-tables --skip-networking "
+        return (f"P=$(cat /etc/wend/secrets/{s['secret']}) && printf '%s' \"$P\" | grep -qE '^[A-Za-z0-9_.@%+=-]+$' || "
+                f"{{ echo 'no usable /etc/wend/secrets/{s['secret']}'; exit 1; }}; {STOP_DB}; {DB_DAEMON}; {DB_DIRS}; ($D --user=mysql --skip-grant-tables --skip-networking "
                 f">/tmp/wend-db.log 2>&1 &); {WAIT_SOCK}; C=$(command -v mariadb || command -v mysql); "
                 f"$C -uroot -e \"{sql}\"; rc=$?; {STOP_DB} && exit $rc")
 

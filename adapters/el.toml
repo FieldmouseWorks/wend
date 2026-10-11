@@ -14,7 +14,7 @@ may_skip = ["alma8"]
 
 # The harness owns the repo configuration, like sources.list on Debian, and clears the vendor .repo files every
 # release package drops there (they point at mirrors that are gone).
-harness_owned = ["/etc/yum.repos.d/", "/etc/yum.conf", "/etc/yum/", "/etc/dnf/"]
+harness_owned = ["/etc/yum.repos.d/", "/etc/yum.conf", "/etc/yum/", "/etc/dnf/", "/etc/wend/"]
 
 # The only files write-file and kv.* may write. An allowlist; growing it is a spec change (see debian.toml).
 writable = ["/etc/my.cnf", "/etc/vsftpd/vsftpd.conf"]
@@ -167,8 +167,8 @@ summary = "delete a key's key=value lines"
 args = { path = { path = "writable" }, keys = { list = "[A-Za-z0-9_]+" } }
 
 [ops."mysql.set-password"]
-summary = "rehash one account's password with the current scheme; needs the plaintext, so it is always a local fix"
-args = { user = { pattern = "[A-Za-z0-9_]+" }, password = { pattern = "[A-Za-z0-9_.-]+" } }
+summary = "rehash one account's password with the current scheme, reading the plaintext from the box's /etc/wend/secrets/<secret> (never from the fix)"
+args = { user = { pattern = "[A-Za-z0-9_]+" }, secret = { pattern = "[a-z0-9][a-z0-9-]*" } }
 
 [ops."mysql.clean-shutdown"]
 summary = "start the database once and stop it with a slow shutdown, so the next major version finds a clean redo log"

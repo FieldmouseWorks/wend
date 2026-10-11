@@ -85,7 +85,8 @@ def installed_names(w):
 def writable(path, adapter, allow="writable"):
     """On one of the adapter's allowlists: matches one of its globs, one directory level only. A glob in `path` (the
     paths of rpm.adopt-rpmnew) must name a subset of an allowed glob, so '*' only matches '*' there."""
-    return not any(path.startswith(p) for p in adapter.get("harness_owned", [])) and any(
+    owned = list(adapter.get("harness_owned", [])) + ["/etc/wend/"]  # the box owner's secrets, on every family
+    return not any(path.startswith(p) for p in owned) and any(
         fnmatch.fnmatchcase(path, g) and "/" not in path[len(g.rsplit("/", 1)[0]) + 1:]
         for g in adapter.get(allow, []))
 
