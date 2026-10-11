@@ -60,7 +60,7 @@ fn main() -> ExitCode {
     let r = match (cmd.as_str(), &args[1..]) {
         ("check", []) => cmd_check(&atlas),
         ("ids", []) => cmd_ids(&atlas),
-        ("compile", [fix]) => cmd_compile(&atlas, fix),
+        ("compile", [fix]) => cmd_compile(&atlas, &root, fix),
         ("hop", [route, hop]) => cmd_hop(&atlas, route, hop, fired.as_deref()),
         ("parity", [input]) => cmd_parity(&atlas, input),
         _ => Err(format!(
@@ -139,9 +139,16 @@ fn compile_fix(atlas: &Atlas, f: &Doc) -> Result<Value, String> {
     )
 }
 
-fn cmd_compile(atlas: &Atlas, path: &str) -> Result<bool, String> {
+fn cmd_compile(atlas: &Atlas, root: &std::path::Path, path: &str) -> Result<bool, String> {
     preflight(atlas)?;
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    // a relative path that isn't here is looked up in the atlas, so `--atlas DIR compile fixes/...` works anywhere
+    let p = std::path::Path::new(path);
+    let file = if p.is_absolute() || p.exists() {
+        p.to_path_buf()
+    } else {
+        root.join(p)
+    };
+    let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
     let f = atlas::parse_toml(&text)?;
     let errs = check::check_fix(&f, &atlas.adapters, path.trim_start_matches("./"));
     for e in &errs {
