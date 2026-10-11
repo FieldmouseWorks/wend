@@ -1,0 +1,40 @@
+# The Rust client (client/): build it, test it, and hold it to the Python engine byte for byte (client/parity.py).
+# Not a required check. It runs on changes to the atlas and the tools too: a spec change the client hasn't caught up
+# with (a new op, a changed reference command) turns this red instead of shipping a client that runs something CI
+# never proved.
+name: client
+
+on:
+  pull_request:
+    paths: ["client/**", "tools/**", "adapters/**", "fixes/**", "routes/**", "runs/**", ".github/workflows/client.yml"]
+  push:
+    branches: [main]
+    paths: ["client/**", "tools/**", "adapters/**", "fixes/**", "routes/**", "runs/**", ".github/workflows/client.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  client:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add x86_64-unknown-linux-musl
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+      - name: static binary
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+      - name: parity with the Python engine
+        working-directory: .
+        run: python3 -B client/parity.py client/target/x86_64-unknown-linux-musl/release/wend
+      - name: the atlas passes the client's own check
+        working-directory: .
+        run: client/target/x86_64-unknown-linux-musl/release/wend check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wend-x86_64-linux-musl
+          path: client/target/x86_64-unknown-linux-musl/release/wend

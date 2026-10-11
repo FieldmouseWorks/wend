@@ -1,0 +1,20 @@
+[package]
+name = "wend"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+description = "wend client: walk a proven upgrade route on a machine, no model, no network beyond the mirrors"
+repository = "https://github.com/FieldmouseWorks/wend"
+publish = false
+
+[dependencies]
+regex = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+toml = { version = "0.8", features = ["preserve_order"] }
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
