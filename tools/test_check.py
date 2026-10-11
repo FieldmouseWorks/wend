@@ -124,7 +124,7 @@ nm = {**el_good, "when": {"installed": "initscripts"}, "adds": ["NetworkManager"
     {"op": "install", "packages": ["NetworkManager"]},
     {"op": "service.enable", "unit": "NetworkManager", "like": ["network"]}]}
 for name, fix, want in (("NetworkManager install and enable", nm, False),
-                        ("an underscore in a package name (mod_ssl)", {**nm, "post": [
+                        ("an underscore in a package name (mod_ssl)", {**nm, "adds": [], "post": [
                             {"op": "install", "packages": ["mod_ssl"]}]}, False),
                         ("a package name starting with an underscore", {**nm, "post": [
                             {"op": "install", "packages": ["_x"]}]}, True),
@@ -135,6 +135,58 @@ for name, fix, want in (("NetworkManager install and enable", nm, False),
     errs = check.check_fix(fix, adapters, "fixes/el/alma9/t.toml")
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
+# adds: a family, never shell; the harness records the fired fixes' families after the post steps (SPEC "restores and adds").
+# The same command string is asserted in client/src/hop.rs's tests, so both engines write it byte for byte.
+# A fix may only declare the family of a package its own steps install (Codex review of #28: no self-attested
+# allow-list).
+for name, adds, want in (("adds the family of a package the fix installs", ["NetworkManager"], False),
+                         ("adds a family the fix doesn't install", ["vsftpd"], True),
+                         ("shell in adds", ["x' >> /etc/passwd; '"], True),
+                         ("digits in adds (not a family)", ["php5"], True),
+                         ("adds not a list", "NetworkManager", True)):
+    errs = check.check_fix({**nm, "adds": adds}, adapters, "fixes/el/alma9/t.toml")
+    print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
+    bad += bool(errs) != want
+# how a package's family is derived: digits and dots go, nothing from the first "-" on; pre and post steps and a
+# transit's reinstall all count
+_inst = lambda ph, pkgs, adds: {**nm, "adds": adds, "post": [], "pre": [], ph: [{"op": "install", "packages": pkgs}]}  # noqa: E731
+_tr = {**nm, "adds": ["mariadb"], "post": [], "pre": [{"op": "rpm.transit", "release": "alma8", "remove": "centos-release",
+                                                       "reinstall": ["mariadb-server"]}]}
+for name, fix, want in (("adds php for php-fpm", _inst("post", ["php-fpm"], ["php"]), False),
+                        ("adds mysql for mysql55", _inst("post", ["mysql55"], ["mysql"]), False),
+                        ("adds php-fpm (not a family)", _inst("post", ["php-fpm"], ["php-fpm"]), True),
+                        ("adds for an install in a pre step", _inst("pre", ["NetworkManager"], ["NetworkManager"]), False),
+                        ("adds for a transit's reinstall", _tr, False)):
+    errs = check.check_fix(fix, adapters, "fixes/el/alma9/t.toml")
+    print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
+    bad += bool(errs) != want
+import walk  # noqa: E402
+w = type("W", (), {})()
+w.adapter = adapters["el"]
+_ins = lambda adds: {**el_good, "adds": adds, "post": [{"op": "install", "packages": adds}] + el_good["post"]}  # noqa: E731
+cmds = walk.Walk.hop_cmds(w, "alma9", [_ins(["polkit", "NetworkManager"]), _ins(["polkit"])])
+want = "mkdir -p /var/lib/wend && printf 'NetworkManager\\npolkit\\n' >> /var/lib/wend/added-families"
+ok = want in cmds and cmds.index(want) > max(i for i, c in enumerate(cmds) if "kv" in c or "vsftpd" in c)
+print(("passed  " if ok else "WRONG   ") + "the hop records the fired fixes' adds after their post steps")
+bad += not ok
+try:  # a direct `wend replay` doesn't run check_fix first: the compile refuses a non-family itself
+    walk.Walk.hop_cmds(w, "alma9", [_ins(["x' ; reboot ; '"])])
+    print("WRONG   the hop compile accepted shell in adds")
+    bad += 1
+except ValueError:
+    print("refused shell in adds at hop compile")
+try:  # nor a family the fix doesn't install
+    walk.Walk.hop_cmds(w, "alma9", [{**el_good, "adds": ["vsftpd"]}])
+    print("WRONG   the hop compile accepted adds for a family the fix doesn't install")
+    bad += 1
+except ValueError:
+    print("refused adds the fix doesn't install, at hop compile")
+try:
+    walk.Walk.hop_cmds(w, "alma9", [{**el_good, "adds": "NetworkManager"}])
+    print("WRONG   the hop compile accepted a non-list adds")
+    bad += 1
+except ValueError:
+    print("refused a non-list adds at hop compile")
 el_route = {"schema": "wend.route/0", "family": "el", "from": "centos5", "to": "alma10", "fixes": []}
 for hops, want in ((["centos6", "centos7", "alma9", "alma10"], True), (["centos6", "alma9", "alma10"], False),
                    (["centos6", "centos7", "alma8", "alma9", "alma10"], True), (["centos7", "centos6", "alma10"], False)):

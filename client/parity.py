@@ -30,6 +30,19 @@ import walk  # noqa: E402
 adapters, fixes, routes, boxes, runs = check.load_all()
 rel = lambda p: os.path.relpath(p, ROOT)  # noqa: E731
 
+# hops of fixes made here, for harness steps no pinned fix exercises yet (adds: sorted, deduplicated, after the post
+# steps, before the pm-option cleanup and verify)
+_kv = {"op": "kv.set", "path": "/etc/vsftpd/vsftpd.conf", "values": {"tcp_wrappers": "NO"}}
+_po = {"op": "pm-option", "option": "overwrite-conflicting-files"}
+_fx = lambda fam, hop, adds, step: {"schema": "wend.fix/0", "family": fam, "hop": hop, "when": {"installed": "x"},
+                                    "restores": [], "adds": adds, "meta": {"name": "t"},
+                                    "post": [{"op": "install", "packages": adds or ["x"]}, step]}  # noqa: E731
+SYNTH_HOPS = [
+    ("el", "alma9", [_fx("el", "alma9", ["polkit", "NetworkManager"], _kv), _fx("el", "alma9", ["polkit"], _kv),
+                     _fx("el", "alma9", [], _kv)]),
+    ("debian", "squeeze", [_fx("debian", "squeeze", ["libstdc++", "Zeta", "apache"], _po)]),
+]
+
 # one example of every op, with every argument shape, per family
 STEPS = [
     ("debian", "squeeze", {"op": "install", "packages": ["mysql-server-5.1", "libc6"]}),
@@ -169,6 +182,8 @@ def type_corpus():
     fix("restores string", S(restores="abc"))
     fix("restores table", S(restores={"bogus": 1}))
     fix("adds float", S(adds=[1e-5]))
+    fix("adds string", S(adds="NetworkManager"))
+    fix("adds table", S(adds={"NetworkManager": 1}))
     fix("packages string", P({"op": "remove", "packages": "abc", "purge": True}))
     fix("purge string", P({"op": "remove", "packages": ["abc"], "purge": "no"}))
     fix("write-file content list", P({"op": "write-file", "path": "/etc/my.cnf", "content": ["x'"]}))
@@ -289,6 +304,11 @@ def python_side(cases):
     out["prune"] = {rel(p): check.compile_step({"op": "remove", "packages": ["foo", "bar.baz"], "purge": True},
                                                adapters[r["family"]], r["to"]) for p, r in routes.items()}
     out["steps"] = [check.compile_step(s, adapters[fam], r) for fam, r, s in STEPS]
+    out["synth_hops"] = []
+    for fam, hop, fs in SYNTH_HOPS:
+        w = type("W", (), {})()
+        w.adapter = adapters[fam]
+        out["synth_hops"].append(walk.Walk.hop_cmds(w, hop, fs))
     out["preds"] = [backends.pred_sh(w, adapters[fam]) for fam, w in PREDS]
     out["cases"] = [c["refused"] for c in cases]
     return out
@@ -323,6 +343,7 @@ def main(binary):
     py = python_side(cases)
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"steps": [{"family": fam, "release": r, "step": s} for fam, r, s in STEPS],
+                   "synth_hops": [{"family": fam, "hop": h, "fixes": fs} for fam, h, fs in SYNTH_HOPS],
                    "preds": [{"family": fam, "when": w} for fam, w in PREDS],
                    "cases": [{k: c[k] for k in ("kind", "doc", "adapters", "where", "fixes")}
                              for c in cases + corpus]}, f)
