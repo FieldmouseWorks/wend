@@ -80,7 +80,7 @@ id = "sha256:d99088da93a73b9606892e9b835938c7598c86e33c3918d7df079664690c310a"
 name = "el9-ssh-host-keys"
 
 [[fixes]]
-id = "sha256:6429bb8a3f1abb3d67fd28ac8ad6a054faaaab2c220921a115b08afaa90ababe"
+id = "sha256:f5da5627009064cfbf97b6108e4701627535103ff1c14c4165b345ae0de5e524"
 name = "el9-mariadb-config"
 
 [[fixes]]
@@ -88,7 +88,7 @@ id = "sha256:c5de001649525a86c2727b966232869401546ceb6cd0e982e39ec46ceb3fecf9"
 name = "el9-httpd-config"
 
 [[fixes]]
-id = "sha256:c29dc3c9eb9a0082dd63e3a3cb646b423c57e912060b2dad6c0f5b0a68a073d9"
+id = "sha256:e8702cb424e0a946035342b9f09dd72dd3bebec98a8fe865b01818086ef02e6f"
 name = "vsftpd-drop-tcp-wrappers"
 
 [[fixes]]

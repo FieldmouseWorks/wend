@@ -1,12 +1,12 @@
 {
  "schema": "wend.run/0",
- "route": "sha256:e144c641dbeff39435203dc73db2d9f1fc7deb837395f76c184445626f5a96fb",
+ "route": "sha256:79b22e12475c28bbfa01c1d94762cc577ffd57152f071f3c97cc954170530fa0",
  "box": "el/centos5-dns",
  "from": "centos5",
  "to": "alma10",
  "result": "pass",
- "started": "20261011-054641",
- "wall_seconds": 538,
+ "started": "20261011-062010",
+ "wall_seconds": 581,
  "start_fingerprint": "sha256:64506855792f03c180c74cb7187f786e6b8137caf3303517b7ad1ed93608369a",
  "runner": {
   "kind": "local",
@@ -27,7 +27,7 @@
     "el6-swap-release-package"
    ],
    "ok": true,
-   "seconds": 69.7
+   "seconds": 75.7
   },
   {
    "to": "centos7",
@@ -48,14 +48,14 @@
     "vsftpd3-standalone-ipv4"
    ],
    "ok": true,
-   "seconds": 90.5
+   "seconds": 99.0
   },
   {
    "to": "alma9",
    "fired": [
     "sha256:035f0b28d9ddc9a18be4a58e77994d5f8e54079cd77528173150bfe14e29f000",
     "sha256:d99088da93a73b9606892e9b835938c7598c86e33c3918d7df079664690c310a",
-    "sha256:c29dc3c9eb9a0082dd63e3a3cb646b423c57e912060b2dad6c0f5b0a68a073d9"
+    "sha256:e8702cb424e0a946035342b9f09dd72dd3bebec98a8fe865b01818086ef02e6f"
    ],
    "fired_names": [
     "el8-transit",
@@ -63,14 +63,14 @@
     "vsftpd-drop-tcp-wrappers"
    ],
    "ok": true,
-   "seconds": 260.9
+   "seconds": 280.2
   },
   {
    "to": "alma10",
    "fired": [],
    "fired_names": [],
    "ok": true,
-   "seconds": 102.6
+   "seconds": 111.1
   }
  ],
  "start_services": [
@@ -118,5 +118,5 @@
   "failed_logs": {}
  },
  "model_calls": 0,
- "log_sha256": "sha256:21384bace6266014532db58c28743763fd747583503208735fe7c3e91a68ea8a"
+ "log_sha256": "sha256:1a2eb3c0268a782da047aedfb45262aae0c9d2135aa2ea7517e116a455b6e720"
 }
