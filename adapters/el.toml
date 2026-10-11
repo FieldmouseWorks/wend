@@ -195,8 +195,16 @@ summary = "comment out every LoadModule whose module httpd can no longer load"
 args = {}
 
 [ops."php.mysqli-report-off"]
-summary = "PHP 8.1+ throws from mysqli where it used to warn; restore the old default for every script"
+summary = "PHP 8.1+ throws from mysqli where it used to warn; restore the old default for every script, unless the owner already set an auto_prepend_file"
 args = {}
+
+[ops."service.record"]
+summary = "write down which SysV services start in the default runlevel, before the hop that brings systemd (the first record is kept)"
+args = {}
+
+[ops."service.enable"]
+summary = "enable a systemd unit at boot if a service it replaces or follows (like) is in the SysV record or is an enabled unit now; never disables"
+args = { unit = { pattern = "[a-z0-9][a-z0-9_.-]*" }, like = { list = "[a-z0-9][a-z0-9_.-]*" } }
 
 [checks]
 # Universal checks every EL box gets. Boxes add their own roles.
