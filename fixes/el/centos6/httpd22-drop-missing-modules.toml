@@ -1,0 +1,22 @@
+# Ported from dep-lab's CentOS fix library: same steps, now typed ops (SPEC.md, Op reference).
+schema = "wend.fix/0"
+family = "el"
+hop = "centos6"
+when = { installed = "httpd" }
+restores = ["box:site"]
+adds = []
+
+[[post]]
+op = "rpm.adopt-rpmnew"
+paths = ["/etc/httpd/conf.d/php.conf"]
+
+[[post]]
+op = "httpd.drop-missing-modules"
+
+[meta]
+name = "httpd22-drop-missing-modules"
+author = "claude-opus-5-5 medium (dep-lab guided run A)"
+curated_by = "claude (wend port to typed ops)"
+source = "dep-lab centos/fixes-v3.json: c6-httpd-drop-missing-modules"
+note = "Takes the packaged conf.d/php.conf where rpm left it as .rpmnew (old one kept under /var/lib/wend/saved), then comments out LoadModule lines whose module no longer exists."
+fires_on = ["el/centos5-web"]

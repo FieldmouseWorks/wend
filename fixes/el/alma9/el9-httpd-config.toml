@@ -1,0 +1,26 @@
+# Ported from dep-lab's CentOS fix library: same steps, now typed ops (SPEC.md, Op reference).
+schema = "wend.fix/0"
+family = "el"
+hop = "alma9"
+when = { installed = "httpd" }
+restores = ["box:site"]
+adds = []
+
+[[post]]
+op = "rpm.adopt-rpmnew"
+paths = ["/etc/httpd/conf/httpd.conf", "/etc/httpd/conf.d/*.conf", "/etc/httpd/conf.modules.d/*.conf"]
+
+[[post]]
+op = "rpm.set-aside-unowned"
+paths = ["/etc/httpd/conf.modules.d/*.conf"]
+
+[[post]]
+op = "httpd.drop-missing-modules"
+
+[meta]
+name = "el9-httpd-config"
+author = "claude-opus-5-5 medium (dep-lab guided run A)"
+curated_by = "claude (wend port to typed ops)"
+source = "dep-lab centos/fixes-v3.json: a9-httpd-config"
+note = "Takes every packaged httpd config rpm left as .rpmnew (httpd.conf, conf.d/*.conf including ssl.conf, conf.modules.d) and sets aside module configs no package owns. The owner's changes in those files are NOT carried over: the old files are under /var/lib/wend/saved, re-apply them. Vhost files no package ships are kept."
+fires_on = ["el/centos5-web"]

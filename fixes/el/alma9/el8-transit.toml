@@ -1,0 +1,21 @@
+# Ported from dep-lab's CentOS fix library: same steps, now typed ops (SPEC.md, Op reference).
+schema = "wend.fix/0"
+family = "el"
+hop = "alma9"
+when = { all = [{ installed = "centos-release" }, { not = { installed = "epel-release" } }, { installed = "perl" }, { installed = "curl" }, { installed = "rsync" }, { installed = "sudo" }, { installed = "openssh-server" }, { installed = "postfix" }, { installed = "cronie" }] }
+restores = ["pkgdb"]
+adds = []
+
+[[pre]]
+op = "rpm.transit"
+release = "alma8"
+remove = "centos-release"
+reinstall = ["perl", "curl", "rsync", "sudo", "openssh-server", "postfix", "cronie"]
+
+[meta]
+name = "el8-transit"
+author = "claude-opus-5-5 medium (dep-lab guided run A)"
+curated_by = "claude (wend port to typed ops)"
+source = "dep-lab centos/fixes-v3.json: a9-bootstrap-el8-rpm"
+note = "reinstall is what the lab's EL8 distro-sync erased on both boxes. Gated on all of them being installed, so a box without one (no postfix, no sshd) never gets it; such a box needs its own variant of this fix. rpm.transit drops every package EL8 does not ship from the rpm database, so it refuses up front when anything installed is not from the release package's vendor (EPEL, vendor or local RPMs) or is a Software Collections or SIG package; the epel-release gate just keeps such boxes from matching at all."
+fires_on = ["el/centos5-dns", "el/centos5-web"]
