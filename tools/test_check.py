@@ -31,6 +31,10 @@ CASES = {
     "extra argument smuggled into an op": lambda f: f["post"][0].update(options="--allow-unauthenticated"),
     "hop not on the ladder": lambda f: f.update(hop="sid"),
     "unknown predicate": lambda f: f.update(when={"shell": "true"}),
+    "shell through a mysql-option value": lambda f: f.update(when={"all": [f["when"], {"mysql-option": {
+        "path": "/etc/my.cnf", "key": "datadir", "value": "x' ; rm -rf / ; '"}}]}),
+    "mysql-option outside /etc": lambda f: f.update(when={"all": [f["when"], {"mysql-option": {
+        "path": "/root/.my.cnf", "key": "datadir"}}]}),
     "no steps at all": lambda f: (f.pop("post"), f.pop("pre", None)),
 }
 bad = 0
