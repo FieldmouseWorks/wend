@@ -1,8 +1,17 @@
 # wend format spec, draft 0
 
-Status: draft, 2026-10-10. Written from the dep-lab Debian runs (etch 2007 to trixie, two boxes, 12 fixes). The
-CentOS 5 to AlmaLinux 10 run is still in progress; everything it might change is listed under
-[Open questions](#open-questions). `tools/check.py` is the executable copy of this document.
+Status: draft, 2026-10-11. Written from the dep-lab runs: Debian (etch 2007 to trixie, two boxes, 12 fixes) and
+Enterprise Linux (CentOS 5.11 to AlmaLinux 10, two boxes, 22 fixes). What the second family settled is under
+[Open questions](#open-questions).
+
+This document is the format. It is meant to stand on its own: everything a tool needs to read a fix, a route or an
+adapter, check it, and apply it is defined here, including what every op does. wend's own tools (`tools/` in this
+repo) are one implementation of it. Where they disagree with this document, they have a bug. Another tool that
+reads these files and does what this document says is just as valid a client.
+
+The key words "must", "must not" and "may" are normative. Shell commands given as a backend's **reference** are the
+commands wend runs. Another implementation may run different commands as long as the effect and the failure
+conditions are the same.
 
 `wend` is the working name (see NAMES.md). Swapping it is a find-and-replace.
 
@@ -14,6 +23,9 @@ CentOS 5 to AlmaLinux 10 run is still in progress; everything it might change is
 | **route** | a release-to-release path and the set of fixes pinned to it | contributors | TOML | `routes/<family>/<from>-to-<to>.toml` |
 | **run** | evidence that a route worked (or didn't) on one box | CI only | JSON | `runs/<family>/<route>/<box>/<stamp>.json` |
 | **box** | a test machine: a starting release, packages, local config, health checks | maintainers | TOML | `boxes/<family>/<name>/box.toml` |
+
+The **atlas** is all of it together: every adapter, fix, route and run in this repository, the thing a client
+fetches and path-finds over (plus the boxes CI proves it on, which clients never see).
 
 Plus one **adapter** per distro family (`adapters/<family>.toml`), which holds everything family-specific.
 
@@ -52,11 +64,17 @@ fires_on = ["debian/etch-db", "debian/etch-web"]
 For each hop on a route, the harness (not the fix) does:
 
 1. set the release (adapter `hop.set_release`; harness-owned files are rewritten),
-2. refresh the indexes,
+2. refresh the indexes (`hop.refresh`),
 3. the `pre` steps of every fix whose `when` held, in route order,
-4. the upgrade transaction (Debian: `dist-upgrade`, then `autoremove --purge`),
+4. the upgrade transaction: the arriving release's own `upgrade` list if the adapter gives one, else `hop.upgrade`
+   (Debian: `dist-upgrade`, then `autoremove --purge`; EL: from `yum upgrade` on EL6 to
+   `dnf distro-sync --allowerasing` on EL9 and 10),
 5. the `post` steps of those fixes, in route order,
-6. all health checks. Any failure rolls the hop back.
+6. remove the drop-ins of any `pm-option` used on this hop,
+7. `hop.verify` if the adapter has one (EL: the release file names the new major),
+8. `hop.after`, whatever happened above (cleanup: package caches, the rpm database),
+9. all health checks. Any command that fails in 1 to 7, or any check that passed before the hop and fails now,
+   rolls the whole hop back.
 
 Every `when` is evaluated **once, before step 1**, on the box as it is then. A fix can't observe another fix's effect
 on the same hop. Ordering is route order. (Open question 6.)
@@ -65,15 +83,17 @@ on the same hop. Ordering is route order. (Open question 6.)
 
 A precondition is a table with exactly one key:
 
-| predicate | means | Debian | RPM (proposed) |
+| predicate | means | Debian (reference) | EL (reference) |
 |---|---|---|---|
-| `installed = "P"` | P is installed **now** | dpkg state `ii`; `rc` does not count | `rpm -q P` |
+| `installed = "P"` | P is installed **now** | dpkg state `ii`; `rc` does not count | `rpm -q P` (any version or arch) |
 | `file = "/etc/..."` | that file exists | `test -f` | same |
 | `file-contains = { path, text }` | the file contains the literal text | `grep -qF` | same |
 | `not = {...}` | negation | | |
 | `all = [...]`, `any = [...]` | and, or | | |
 
-Paths are under `/etc`. There is no shell predicate.
+Paths match `/etc/[A-Za-z0-9_./-]+` and contain no `..`. `text` contains no `'`. Package names match
+`[a-z0-9][a-z0-9.+-]*`. There is no shell predicate. An adapter gives each predicate's command as a template in
+`[predicates]` (`{pkg}`, `{path}`, `{text}`); `not`, `all` and `any` are the shell's `!`, `&&` and `||` over those.
 
 **The install rule.** A fix that has an `install` step must be gated, positively, on `installed` of the package it
 replaces. This is the stray-MySQL lesson from dep-lab round 2. A fix gated on `/etc/mysql/my.cnf` installed a MySQL
@@ -82,31 +102,60 @@ positive `installed`). Only review and decoy boxes can enforce the meaning (it's
 
 ### Op vocabulary
 
-The core ops are family-neutral. The adapter compiles them.
+Ops are typed: a name and a fixed set of arguments, never a command. The core ops are family-neutral, and each
+adapter names the **backend** that carries them out (`backend = "apt"` or `"rpm"`). What every op does on every
+backend is defined in the [Op reference](#op-reference) below. A fix can't change what an op does; only a change to
+this document can. In this repo, CI always takes its implementation of the ops **and the adapters** from the base
+branch, so a PR that changes either is reviewed as a spec change before it is ever run. A checker must also hold
+every adapter to its backend (see [Adapter format](#adapter-format)): an adapter can narrow what fixes may do, never
+widen it.
 
-| op | args | Debian compiles to |
-|---|---|---|
-| `install` | `packages` | `apt-get install P...` |
-| `remove` | `packages`, `purge` | `apt-get purge` / `apt-get remove` |
-| `repair` | | `apt-get -f install` |
-| `force-remove` | `packages`, `purge`, `force` ⊆ {`depends`, `remove-essential`} | `dpkg --purge --force-depends ...` |
-| `write-file` | `path`, `content` | write the whole file. Only paths on the adapter's `writable` allowlist |
-| `pm-option` | `option` ∈ {`overwrite-conflicting-files`} | a hop-scoped `apt.conf.d` drop-in |
+| op | args | apt (Debian) | rpm (EL) |
+|---|---|---|---|
+| `install` | `packages` | `apt-get install P...` | `yum -y install` / `dnf -y --allowerasing install` (vendor .repo files cleared first) |
+| `remove` | `packages`, `purge` | `apt-get purge` / `apt-get remove` | `rpm -e` each one that is installed; fails if anything still needs it |
+| `repair` | | `apt-get -f install` | remove packages from older releases that have unmet dependencies |
+| `force-remove` | `packages`, `purge`, `force` | `dpkg --purge --force-depends ...`; `force` ⊆ {`depends`, `remove-essential`} | `rpm -e --nodeps ...`; `force` ⊆ {`depends`, `scripts`} |
+| `write-file` | `path`, `content` | write the whole file. Only paths on the adapter's `writable` allowlist | same |
+| `pm-option` | `option` | `overwrite-conflicting-files`: a hop-scoped `apt.conf.d` drop-in | none yet |
 
-Adapter ops are named `<tool>.<verb>`. Debian has `apache.enable` and `apache.disable` (`kind` = site/mod/conf,
-`name`). They compile to `a2en*`/`a2dis*`.
+The table is a summary. The [Op reference](#op-reference) has the arguments, effects and failure conditions.
+
+Adapter ops are named `<tool>.<verb>`. The adapter declares which ones its family offers and each one's arguments
+(`[ops."<name>"].args`, see [Argument specs](#argument-specs)); the Op reference defines what they do.
+
+- Debian: `apache.enable` and `apache.disable` (`kind` = site/mod/conf, `name`) compile to `a2en*`/`a2dis*`.
+- EL: `rpm.bootstrap` (unpack EL6's rpm/yum stack over / with 7-Zip, because rpm 4.4 can't read xz payloads),
+  `rpm.transit` (pass through EL8: EL8's rpm run from a staging dir, then a real distro-sync), `rpm.swap-release`
+  (release packages by hand: epochs and vendor switches), `rpm.drop-arch` (multilib leftovers), `rpm.adopt-rpmnew`,
+  `rpm.set-aside-unowned`, `fs.layout` (`usrmove`, `run`), `kv.set` / `kv.unset` (key=value lines),
+  `mysql.set-password`, `mysql.clean-shutdown`, `mysql.upgrade-data`, `ssh.generate-host-keys`,
+  `httpd.drop-missing-modules`, `php.mysqli-report-off`.
+
+`rpm.bootstrap`, `rpm.transit` and `fs.layout` are surgery: dozens of shell lines each, replayed as root on a
+stranger's box. They are exactly why ops are typed. The surgery is written once, reviewed as a spec change, and every
+fix that needs it says only `{ op = "rpm.transit", release = "alma8", ... }`.
 
 Rules that keep this from being shell with extra steps:
 
 - An op takes exactly its listed args. Extra keys are refused.
 - Package names match `[a-z0-9][a-z0-9.+-]*`.
 - `write-file` content has no `'` or `%`. The path must match the adapter's `writable` globs, one directory level
-  only. The globs are an allowlist, not "anything under /etc". Cron, systemd units, `/etc/default`, sudoers,
+  only (`*` never matches `/`). The globs are an allowlist, not "anything under /etc". Cron, systemd units, `/etc/default`, sudoers,
   profile.d, logrotate and apt.conf.d all execute code or grant trust. Growing the list is a spec change.
-- Harness-owned paths (sources.list, the harness apt config, yum.repos.d on RPM) are never writable.
+- EL has a second list, `managed`: config files that `rpm.adopt-rpmnew` and `rpm.set-aside-unowned` may move. Those
+  ops never write content. They take the file the package shipped, or move a file no package owns, and keep the old
+  one under `/var/lib/wend/saved`.
+- Harness-owned paths (sources.list, the harness apt config, yum.repos.d and the yum/dnf config on EL) are never
+  writable, and neither is anything under `/etc/wend/` (the box owner's secrets) on any family.
+- No op takes a secret as an argument. A value a fix would need but must not publish (a password) is named, and the
+  op reads it from `/etc/wend/secrets/<name>` on the box.
+- A fix whose steps install packages (`install`, or `rpm.transit` with a non-empty `reinstall`) must pass the install
+  rule above.
 
-The Debian seed library uses only these ops, and it compiles back byte-for-byte to the commands dep-lab ran
-(`tools/port_oldlinux.py` proves this on every port).
+The Debian seed library uses only these ops, and its reference commands are byte-for-byte the commands dep-lab ran
+(wend's port script re-checks this on every port). The EL library is dep-lab's CentOS fix library recut into
+typed ops; its proof is the replay, since the cut changed the commands.
 
 ### restores and adds
 
@@ -117,12 +166,19 @@ The Debian seed library uses only these ops, and it compiles back byte-for-byte 
   rejects any other new family. Empty for every seed fix. Switching mysql to mariadb isn't new, because the family map
   treats them as the same.
 
+**Name families.** A package's family is its name with every digit and `.` removed and everything from the first
+`-` on dropped (`php5-mysql` and `php-mysqlnd` are both `php`), then mapped through the **family map**: renames a
+route is known to cause, such as `mariadb` to `mysql`, `ntpsec` and `chrony` to `ntp`, `cronie` to `vixie`. Today
+the map lives in each box's `services` check (a list of `sed` rules) and is the same for every box of a family.
+Where it should live for clients, which have no box file, is open question 11.
+
 ### Identity
 
 `id = "sha256:" + hex(sha256(canonical_json(fix without [meta])))`
 
-Canonical JSON means keys sorted, no whitespace, UTF-8, the way `tools/check.py` does it. (A full RFC 8785 is
-pointless while values are only strings, booleans and lists.) Consequences:
+Canonical JSON: the TOML document as JSON, object keys sorted by code point, no whitespace at all (separators `,`
+and `:`), strings as UTF-8 with only `"`, `\` and control characters escaped (`\n`, `\t`, ... and `\u00XX` for the
+rest). Values are only strings, booleans, integers, lists and tables, so a full RFC 8785 isn't needed. Consequences:
 
 - Renaming a fix or editing its notes does not change its id. Changing what it does always does.
 - Two people who find the same fix produce the same id, and the checker refuses the duplicate.
@@ -147,13 +203,17 @@ family = "debian"
 arch = "amd64"
 from = "etch"
 to = "trixie"
-hops = ["lenny", "squeeze", ..., "trixie"]   # every release in between, in order: no skipping (yet)
+hops = ["lenny", "squeeze", ..., "trixie"]   # every release in between, in order (see may_skip below)
 finish = { prune_obsolete = true }           # after the last hop, purge packages the target no longer ships
 
 [[fixes]]
 id = "sha256:0a151144716a..."
 name = "purge-stale-libdb4"                  # must agree with the fix's meta.name
 ```
+
+`hops` lists every release on the ladder after `from`, up to `to`. The one exception is a release the adapter
+lists in `may_skip`: a route may cross it inside one hop. EL lists `alma8`, because the box only ever passes through
+EL8 (`rpm.transit`) on the hop to EL9. No health check runs on a release the route skips.
 
 A route is a **map, not a playlist**. It pins a *set* of fixes by id, and the client applies whichever ones hold on
 each hop. In dep-lab, stitching fixes from three different runs into one map beat replaying any single run, and the
@@ -190,6 +250,10 @@ Written by CI. JSON, because no human edits it.
 }
 ```
 
+`sources` is reserved: a table of repo URL to the sha256 of the repo metadata the run used (`Release` on Debian,
+`repomd.xml` on EL), so a later replay can tell whether the mirror it sees is the one the run proved. Nothing writes
+it yet. Live EL mirrors change under a route, so this is likely the next field a run gains.
+
 A discovery run records which model was used and how many calls it made. Replays record `model_calls: 0`. CI only
 ever replays.
 
@@ -222,6 +286,7 @@ arch = "amd64"
 packages = ["openssh-server", "apache2", ...]
 customize = '''shell run once in the fresh chroot'''
 start_hook = '''records the starting service families, outside /etc'''
+isolate = ["db"]              # roles whose checks start daemons: run them in a network namespace of their own
 [roles]                       # box-specific health checks, shell; adapter checks are added automatically
 web = "apache2ctl -t && ..."
 ```
@@ -238,7 +303,8 @@ checker enforces this over the runs it has. CI produces fresh runs.
 
 `adapters/<family>.toml` holds the ladder, release mirrors, the per-hop harness commands, how predicates evaluate,
 the `writable` allowlist, `pm_options`, the adapter ops, and the universal checks. A fix never mentions apt, dpkg,
-yum or rpm directly. If it needs to, that's a new op in an adapter.
+yum or rpm directly. If it needs to, that's a new op in an adapter. The keys are defined in
+[Adapter format](#adapter-format).
 
 ### Debian (done)
 
@@ -249,19 +315,262 @@ See `adapters/debian.toml`. Notes that matter:
 - `current`: every binary a service runs comes from a package that the release in sources.list still ships
   (`apt-cache madison`). This closed the "PHP 5 still serving on trixie" hole, without per-release version tables.
 
-### RPM (placeholder, waiting on the CentOS thread)
+### Enterprise Linux (`el`, rpm backend)
 
-What the CentOS harness (`dep-lab/centos/co.py`) already shows:
+See `adapters/el.toml`. Notes that matter:
 
-- The ladder crosses vendors: `c5 c6 c7 a8 a9 a10` (CentOS 5.11 to AlmaLinux 10). Release ids need a vendor, so a
-  family isn't the same thing as a distro.
-- The harness owns `/etc/yum.repos.d`, and clears vendor .repo files that point at dead mirrors. That's equivalent
-  to sources.list.
-- The package manager itself changes mid-ladder (yum through 7, dnf from 8).
+- The ladder crosses vendors: `centos5 centos6 centos7 alma8 alma9 alma10`. A family isn't a distro; release ids
+  carry the vendor.
+- The package manager changes mid-ladder (yum through 7, dnf from 8), and so does the upgrade verb: `upgrade` on EL6,
+  `distro-sync` from EL7 (EL6's grep is newer than EL7's). Each release can set its own `upgrade` in the adapter.
+- The harness owns `/etc/yum.repos.d` and clears the vendor .repo files every release package drops (they point at
+  dead mirrors). After each hop it also rebuilds the rpm database and, on EL10, moves it to `/usr/lib/sysimage/rpm`.
+- CentOS 5's yum can't speak today's TLS, so repos go through a mirror shim the harness runs on the host
+  (`[mirror]` in the adapter): plain http on 127.0.0.1, fetching `https://<host>/<path>` for
+  `http://127.0.0.1:<port>/<host>/<path>`, for a fixed list of hosts, and caching what it fetched.
 - No EL release has an in-place path through a chroot (Leapp and redhat-upgrade-tool reboot), so every hop is a plain
-  transaction, likely `distro-sync --allowerasing`.
-- "Explicitly installed" doesn't exist before yum 3 on EL6. The draft services check uses "nothing requires it"
-  instead.
+  transaction plus fixes.
+- `installed` is `rpm -q`. "Explicitly installed" doesn't exist before yum 3 on EL6, so a box's services check uses
+  "nothing requires it, by name or by any capability it provides" instead.
+- `current`: the service binaries come from a package whose dist tag is the running major (`[._]el$MAJOR`).
+- Boxes can name roles that start daemons in `isolate`; those checks run in a network namespace of their own.
+
+## Op reference
+
+Every op below is defined by its arguments, its effect, and when it fails. A failing step fails the hop, and the
+hop is rolled back. Each backend gives a **reference**: the commands wend runs. `{x}` in a reference is an argument
+or a value from the adapter. Every value that comes from a fix has matched a strict pattern before anything runs, so
+none carries a quote, a space or a `$`. (Adapter values are reviewed harness code, and some, like `{dnf_opts}`, do.)
+
+Values every rpm reference uses, for the release `R` the hop arrives at:
+
+- `SHIM`: the adapter's `[mirror].shim`; a repo URL is `SHIM/<repos value>`.
+- `BASE`: the first repo of `R` (`releases.R.repos`, in file order).
+- `PM_INSTALL`: `yum -y install` if `releases.R.pm` is `yum`, else `dnf -y --releasever=MAJOR --allowerasing
+  --setopt=install_weak_deps=False --setopt=protected_packages= install`.
+- `CLEAN_REPOS`: delete every `/etc/yum.repos.d/*.repo` except the harness's `ladder.repo`.
+- `SAVED`: `/var/lib/wend/saved`. A file an op moves aside goes to `SAVED` + its original path. An existing saved
+  file is never overwritten, so `SAVED` always holds the owner's original, however many hops touch the file.
+- `PKGLIST(base)`: the file names of every package in a repo: fetch `base/repodata/repomd.xml`, take the
+  `primary.xml.gz` it names, list its `<location href="Packages/...">` entries. Fails if the list is empty.
+
+### Core ops
+
+**`install`** `packages` (list of package names, at least one). Installs them from the release being entered, with
+whatever dependencies they pull in. Fails if any can't be installed. The fix must pass the install rule.
+- apt: `apt-get install {packages}` (the harness's apt config answers yes and keeps local config files).
+- rpm: `CLEAN_REPOS; PM_INSTALL {packages}`.
+
+**`remove`** `packages`, `purge` (boolean). Removes the packages that are installed; a package that isn't is not an
+error.
+- apt: `apt-get purge {packages}` if `purge`, else `apt-get remove {packages}`. As always with apt, packages that
+  depend on them go too.
+- rpm: for each package, `rpm -q P && rpm -e P`. Nothing else is removed: if another installed package still needs
+  one, the step fails. `purge` changes nothing: rpm has no "keep config" removal.
+
+**`repair`** (no arguments). Brings the package database back to consistent: no installed package with unmet
+dependencies.
+- apt: `apt-get -f install`.
+- rpm: up to 8 rounds of: list the packages `rpm -Va --nofiles --nodigest --noscripts` reports as having unsatisfied
+  dependencies, drop those whose release tag is the current major (`.elMAJOR`), and `rpm -e --nodeps --noscripts`
+  the rest. Fails if the verify output is still not empty after that.
+
+**`force-remove`** `packages`, `purge`, `force` (list, a subset of the adapter's `force`). Removes exactly these
+packages, overriding the safety checks named in `force`. (dpkg skips a package that isn't installed; rpm fails.)
+- apt: `dpkg --purge` (or `--remove`) with `--force-depends` / `--force-remove-essential` for each flag.
+- rpm: `rpm -e` with `depends` = `--nodeps`, `scripts` = `--noscripts`. `purge` changes nothing. There is no
+  `--justdb` flag for fixes: dropping a package from the database while its files stay would fake the `pkgdb` check.
+
+**`write-file`** `path` (on the adapter's `writable` list), `content` (no `'` or `%`). Replaces the whole file with
+`content`. Reference on both: `printf '{content}' > {path}`, with `\` and newlines escaped for printf.
+
+**`pm-option`** `option` (a key of the adapter's `[pm_options]`). Writes the option's `content` to its `path` for
+this hop only; the harness deletes the file after the post steps (step 6 of a hop). Debian's one option,
+`overwrite-conflicting-files`, lets dpkg replace a file another package owns. EL has none.
+
+### Debian ops
+
+**`apache.enable`, `apache.disable`** `kind` (`site`, `mod` or `conf`), `name` (`[A-Za-z0-9_.-]+`). Enables or
+disables one Apache site, module or config snippet. Reference: `a2en{kind} {name}` / `a2dis{kind} {name}`. Fails
+if it doesn't exist.
+
+### EL ops
+
+**`rpm.swap-release`** `remove`, `install` (package names ending in `-release`). Replaces the release package without the package
+manager, because an epoch drop (CentOS 5's `centos-release` has epoch 10, EL6's has none) or a vendor switch isn't an
+upgrade to yum. Effect: `remove` is gone from the database (its scriptlets don't run), and the first
+`install-<digit>...` package for x86_64 or noarch listed in `BASE`'s metadata is installed (a release's base repo
+carries exactly one; CentOS 5's `sort` has no `-V` to pick among several). Fails if there is no such package.
+Reference: find it in `PKGLIST(BASE)`, download it, `rpm -e --nodeps --noscripts {remove}`,
+`rpm -ivh --nodeps --noscripts` the file, `CLEAN_REPOS`.
+
+**`rpm.drop-arch`** `arches` (list of `i[3-6]86`, at least one). Removes every installed package built for one of
+these architectures, files and database entries, with no dependency checks and no scriptlets. EL5 x86_64 installs
+carry i386 copies of libraries (curl, glibc, ...) that conflict with EL6's x86_64 packages. Fails if any such
+package is still installed afterwards. Reference: `rpm -e --nodeps --noscripts` every
+`NAME-VERSION-RELEASE.ARCH` that `rpm -qa` lists with one of the arches, then check `rpm -qa --qf '%{ARCH}\n'` has
+none of them.
+
+**`rpm.bootstrap`** `release` (the adapter's `releases.<release>.bootstrap` table must exist; EL defines it for
+`centos6` only). Installs the next release's package manager when the old one can't: rpm 4.4 can't read EL6's xz
+payloads, and yum 3.2.22 can't check EL6's sha256 repodata. Effect: the files of every package in
+`bootstrap.packages` (from `release`'s first repo) are on disk, except their `/etc` and documentation, and the new
+rpm has rebuilt the database. The packages stay recorded at their old versions; the hop's own transaction then
+installs them properly. Reference:
+1. In a fresh `/var/lib/wend/boot`, take `PKGLIST` of `release`'s first repo.
+2. Download `bootstrap.p7zip` from `bootstrap.p7zip_repo` and install it with `rpm -Uvh --nosignature`.
+3. For each name in `bootstrap.packages`, download the first `name-<digit>...` x86_64 or noarch file in the list.
+   A name with no file is reported and skipped.
+4. For each downloaded file, unpack its payload with `7z` and extract it over `/` with
+   `cpio -idmu -f './etc/*' './usr/share/doc/*' './usr/share/man/*'` (everything except those). Fail on any error.
+5. `ldconfig; rpm --version; rm -f /var/lib/rpm/__db.*; rpm --rebuilddb`; then `rpm -e p7zip p7zip-plugins`, and
+   delete the work dir.
+
+**`rpm.transit`** `release` (the adapter's `releases.<release>.transit` table must exist; EL: `alma8`), `remove`
+(a package name), `reinstall` (list of package names, may be empty). Takes the box through a release its rpm can't
+reach: rpm 4.11 (EL7) can't install packages with rich dependencies. Effect: every installed package is replaced by
+`release`'s version of it, installed by `release`'s own rpm; `reinstall` is installed again (the release's first
+distro-sync erases some packages the box needs); the package manager is `release`'s dnf with a `yum` front end;
+nothing from older releases is left in the rpm database. Fails if the box doesn't say it is `release` afterwards.
+A fix with a non-empty `reinstall` must pass the install rule. Reference, with work dir `/var/lib/wend/boot`, and
+repos kept in private `reposdir`s so `/etc/yum.repos.d` stays the harness's:
+1. Write a repo file for `transit.from`'s repos plus `transit.extra_repos` (`old`), and one for `release`'s repos
+   (`new`).
+2. `yum install dnf` from `old` (CentOS 7 extras ships an EL7 dnf).
+3. With that dnf and `new`: `--downloadonly` distro-sync into the work dir, `--releasever` = the release's major,
+   `--allowerasing --setopt=best=False` (EL7's dnf 4.0 has no `--nobest`), no weak deps, no protected packages. Its exit code is ignored; the step fails if
+   `rpm`, `rpm-libs`, `glibc`, `dnf` or `python3-dnf` wasn't downloaded. Also fetch `transit.release_package` from
+   `PKGLIST(BASE)` if the sync didn't.
+4. `rpm -e dnf` (the EL7 one), rebuild the database, and unpack every downloaded package into a staging dir.
+5. `rpm -e --nodeps --noscripts {remove}` (the old release package), then run the staged rpm through the staged
+   `ld-linux-x86-64.so.2 --library-path <stage>/usr/lib64` with `-Uvh --nodeps --replacefiles --replacepkgs
+   --oldpackage --nosignature --nodigest` over every downloaded package. Its exit code is ignored and its errors are
+   reported: some EL7 scriptlets fail under EL8's rpm, and step 6 checks the result.
+6. `ldconfig`, rebuild the database, check `/etc/redhat-release` says `release {major}`, `CLEAN_REPOS`.
+7. A real distro-sync with `release`'s dnf and the `new` repos (errors reported, not fatal: the EL7 yum
+   directories trip it once).
+8. Remove the EL7 `yum*` packages without scriptlets; move `/etc/yum/{pluginconf.d,protected.d,vars}` to `SAVED`.
+9. `dnf install yum {reinstall}` (fatal on failure).
+10. `rpm -e --nodeps --noscripts --justdb` every package (but `gpg-pubkey`) without the `el{major}` tag, listing them
+    in the output; delete the work dir; `CLEAN_REPOS`. That drops the old release's leftovers from the database and
+    keeps their files. It would also drop a third-party package the owner installed, which is why the list is printed
+    (and recorded in the run's step output): a client must show it to the owner.
+
+**`rpm.adopt-rpmnew`** `paths` (on the adapter's `managed` list; globs allowed). For each file that has a
+`FILE.rpmnew` next to it, keep the old file under `SAVED` and put the `.rpmnew` in its place. Files without one are
+left alone. Never writes content of its own.
+
+**`rpm.set-aside-unowned`** `paths` (on `managed`). Moves each existing file that no installed package owns
+(`rpm -qf` fails) to `SAVED`. If `SAVED` already holds that path (an earlier hop set aside the owner's original), the
+current file, which a package or the harness made since, is deleted instead. Never writes content of its own.
+
+**`fs.layout`** `layout` (`usrmove` or `run`).
+- `usrmove`: `/bin`, `/sbin`, `/lib` and `/lib64` become symlinks to `usr/bin`, `usr/sbin`, `usr/lib`, `usr/lib64`
+  (EL7's `filesystem` package requires it; redhat-upgrade-tool did it at boot). Reference: for each one not already
+  a symlink, copy every entry `/usr/<dir>` lacks into it (a symlink in `/usr` that points at the same file is
+  replaced by the file); then, in one process (python), rename each dir to `<dir>.usrmove` and create the symlink;
+  then `/bin/sh -c true; ldconfig; rpm -q glibc bash` (fails the step if the system no longer runs), and delete the
+  `.usrmove` dirs.
+- `run`: `/var/run` becomes a symlink to `../run` and `/var/lock` to `../run/lock`, with their contents copied over
+  first. Fails if `/var/run` isn't a symlink afterwards.
+
+**`kv.set`** `path` (on the adapter's `kv` list, with `set = true`), `values` (a table; its keys must be on that
+file's `keys` list, values `[A-Za-z0-9_./:-]+`). For a file of `key=value` lines without sections: every line setting one of the keys, commented out or not
+(`^\s*#*\s*key\s*=`), is deleted, and `key=value` is appended for each, in key order. Fails if the file doesn't
+exist.
+
+**`kv.unset`** `path` (on the adapter's `kv` list), `keys` (on that file's `keys` list). Deletes every uncommented line setting one
+of the keys (`^\s*key\s*=`). Works in files with sections too (`my.cnf`). Fails if the file doesn't exist.
+
+The three database ops share a start and a stop. Start: stop any running `mariadbd`/`mysqld`, take the first of
+`/usr/libexec/mariadbd`, `/usr/libexec/mysqld`, `/usr/sbin/mariadbd`, `/usr/sbin/mysqld`, create its runtime and log
+dirs (`/run/mariadb`, `/run/mysqld`, `/var/log/mariadb`) owned by `mysql` together with `/var/lib/mysql`, remove a
+stale socket and pid file, start it as `mysql` in the background with `--skip-networking`, and wait up to 120 s
+for `/var/lib/mysql/mysql.sock`. The start fails if no server binary exists or the socket never appears. Stop:
+SIGTERM, then wait up to 300 s; the stop fails if a server is still running.
+
+**`mysql.set-password`** `user` (`[A-Za-z0-9_]+`), `secret` (`[a-z0-9][a-z0-9-]*`). Rehashes one account's
+password with the server's current scheme (MySQL 4.0's 16-character hashes stop working with MariaDB 10's clients).
+The plaintext is read from `/etc/wend/secrets/{secret}` on the box, a file the box's owner puts there; a fix never
+carries a password, and no op takes one as an argument. Fails if that file is missing or holds anything but
+`[A-Za-z0-9_.@%+=-]+`. Then: start with `--skip-grant-tables --skip-networking`, run `SET SESSION old_passwords=0;
+UPDATE mysql.user SET Password=PASSWORD('<plaintext>') WHERE User='{user}'` as root, stop. Fails if the SQL or the
+stop fails. A fix using it should also be gated on `file = "/etc/wend/secrets/{secret}"`, so it only fires where
+the owner has provided one.
+
+**`mysql.clean-shutdown`** (no arguments). Start with `--innodb-fast-shutdown=0`, stop. The next major version then
+finds a clean redo log (MariaDB 10.11 refuses 10.5's otherwise). Fails if the start or the stop fails.
+
+**`mysql.upgrade-data`** (no arguments). Start the installed server on the existing data, run `mariadb-upgrade` (or
+`mysql_upgrade`) `-uroot --force` if there is one, stop. Fails if the start or the stop fails. The tool's own exit
+code is not: the server starting and stopping cleanly on the data is the point, and the tool complains about
+things it then fixes.
+
+**`ssh.generate-host-keys`** (no arguments). Creates every host key type this sshd expects that the box lacks
+(`ssh-keygen -A`; `sshd-keygen` does it at boot, which a chroot never has).
+
+**`httpd.drop-missing-modules`** (no arguments). Comments out each `LoadModule` line, in the `*.conf` files of
+`/etc/httpd/conf`, `conf.d` and `conf.modules.d`, whose module httpd can't load: first every line whose module file
+doesn't exist (relative to `/etc/httpd`), including lines inside an `<IfModule>` that `httpd -t` never evaluates,
+then each one `httpd -t` reports it cannot load, repeating until it stops reporting one (at most 40 rounds). Fails if
+`httpd -t` fails afterwards.
+
+**`php.mysqli-report-off`** (no arguments). PHP 8.1 made mysqli throw exceptions where it used to warn and return
+false. Restores the old default for every script without touching the app: writes
+`/usr/share/wend/php-mysqli-report-off.php` (calls `mysqli_report(MYSQLI_REPORT_OFF)` if the function exists) and
+`/etc/php.d/99-wend-mysqli-report-off.ini` with `auto_prepend_file` pointing at it.
+
+### Argument specs
+
+An adapter op declares each argument as a table with one of these keys. A step must give exactly the declared
+arguments, each valid by its spec.
+
+| spec | the value must be |
+|---|---|
+| `enum = [...]` | one of the listed strings |
+| `pattern = "RE"` | a string that matches RE in full |
+| `list = "RE"`, optional `min` (default 1) | a list of at least `min` strings, each matching RE in full |
+| `path = "LIST"` | a string matching `/etc/[A-Za-z0-9_./-]+`, no `..`, on the adapter's allowlist named LIST |
+| `paths = "LIST"` | a non-empty list of such paths; `*` is allowed and must name a subset of an allowed glob |
+| `table = "RE"` | a non-empty table, keys `[A-Za-z0-9_]+`, values strings matching RE in full |
+
+A path is on an allowlist when it doesn't start with a `harness_owned` prefix and matches one of the list's globs
+with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of the `[kv]` table).
+
+## Adapter format
+
+`adapters/<family>.toml`, schema `wend.adapter/0`. A fix's `family` names one.
+
+| key | meaning |
+|---|---|
+| `schema`, `family`, `backend` | `wend.adapter/0`; the family's name; `apt` or `rpm` (required) |
+| `release_file` | the file whose content names the running release (shown in runs and checks) |
+| `ladder` | every release in order; a hop goes one step along it |
+| `may_skip` | releases a route may cross inside one hop (see Route) |
+| `harness_owned` | path prefixes no fix may write |
+| `writable`, `managed` | the allowlists (globs) named by `write-file` (`writable`) and the `rpm.*` file ops (`managed`). Nothing under `/etc/wend/` is ever on either |
+| `[kv."<path>"]` | the files `kv.*` may touch: `keys` (the only keys it may set or unset; never one that grants access) and `set` (false for files with sections, which only take `kv.unset`) |
+| `force` | required: the `force-remove` flags this family allows, a subset of its backend's (apt: `depends`, `remove-essential`; rpm: `depends`, `scripts`) |
+| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`). rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit` |
+| `[mirror]` | rpm: `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts) |
+| `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `autoremove`, `obsolete`, `installed_list`; apt also `apt_conf`, the harness's apt config |
+| `[predicates]` | `installed`, `file`, `file-contains` command templates |
+| `[pm_options.<name>]` | `path`, `content`. apt: only `overwrite-conflicting-files`; rpm: none |
+| `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear. Whatever a `pattern`, `list` or `table` says, every value a fix passes through one must also match `[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*`: no quote, whitespace, backslash, glob character, `%`, any of `` $`;&|<>(){}~ ``, or leading `-` |
+| `[checks]` | universal health checks: `pkgdb` is a command; `current` and `services` are described in words and built by the harness from the box |
+| `[box]` | how to build a fresh box of this family (rpm: `seeds`, the packages to bootstrap a root from) |
+
+These checks narrow what an adapter lets fixes do (ops, force flags, argument values). They don't judge an adapter's
+allowlists, hop commands or package lists: those are reviewed as spec changes, and CI never takes them from a PR.
+
+Templates in `[hop]`, `releases.*.upgrade` and `[predicates]` use `{name}` placeholders, replaced literally (no
+other brace syntax is touched, so `${...}` and `%{...}` pass through). Values for a hop:
+
+- apt: `{mirror}` (archive or current, see `[releases]`), `{release}`.
+- rpm: `{release}`, `{major}`, `{shim}`, `{repofile}` (a yum repo file with one section `[<release>-<name>]` per repo,
+  `baseurl=SHIM/<repo>/`, `gpgcheck=0`, newlines as `\n` for printf), `{pm}` (`dnf` if installed, else `yum`),
+  `{clean_repos}` (`CLEAN_REPOS`), `{dnf_opts}` (`--releasever={major} --allowerasing
+  --setopt=install_weak_deps=False --setopt=protected_packages=`).
 
 ## Sandbox requirements (for any harness: CI, the verifier, the authoring lab)
 
@@ -277,21 +586,23 @@ What the CentOS harness (`dep-lab/centos/co.py`) already shows:
 
 ## Open questions
 
-These are the ones RPM may answer. Each one is reconciled when the CentOS thread posts results.
+Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them as follows; 7 to 12 are still open.
 
-1. **Op vocabulary.** Does RPM need ops that Debian didn't? Likely candidates are `rpm --rebuilddb` (the rpmdb
-   moved from BDB to sqlite in EL9), dnf module streams (`module enable php:8.2` on EL8), and `swap` (dnf's atomic
-   replace, versus install + remove). Does `force-remove` map cleanly to `rpm -e --nodeps`?
-2. **pm-option.** `overwrite-conflicting-files` on RPM is `--replacefiles`. Is that a hop-scoped option there too,
-   or per transaction?
-3. **Config files.** Debian keeps local config (`--force-confold`). RPM writes `.rpmnew`/`.rpmsave` next to it.
-   Do fixes need an op to adopt a `.rpmnew`, or is `write-file` enough?
-4. **The `installed` predicate.** `rpm -q` has no `rc` state, but it does have multiple installed versions
-   (kernels, multilib). Does `installed` need an arch or version qualifier?
-5. **Release ids across vendors.** Is `rpm:c7` → `rpm:a8` one ladder, or two families joined by a bridge hop
-   (like AlmaLinux's ELevate)? Does a route ever skip releases?
-6. **Ordering and interaction.** All `when`s are evaluated before the hop, and steps run in route order. Is there
-   ever a fix that needs another fix's effect on the same hop? Debian never did.
+1. **Op vocabulary.** Yes, RPM needed ops Debian never did, and none of them is a variant of an apt op: bootstrapping
+   the next package manager (twice), the UsrMove and /run layout changes, swapping release packages, adopting
+   `.rpmnew` files, and running a database once to migrate its data. Database rebuilds and module-stream resets
+   turned out to be harness work on every hop, not fix steps. `force-remove` maps to `rpm -e --nodeps`, with
+   `--noscripts` as EL's own force flag (`--justdb` stays harness-only: it would let a fix fake `pkgdb`). So: typed ops with a backend per package manager.
+2. **pm-option.** Not needed by any EL fix yet. EL has none until one is.
+3. **Config files.** An op (`rpm.adopt-rpmnew`), not `write-file`: the packaged file is the right content, and a
+   model rewriting httpd.conf by hand is exactly the drift reviewers have to hunt. Plus `rpm.set-aside-unowned` for
+   files no package owns any more.
+4. **The `installed` predicate.** Plain `rpm -q` was enough on both boxes. No qualifier until a box needs one.
+5. **Release ids across vendors.** One ladder, vendor in the release id. A route may skip a release the adapter lists
+   in `may_skip` (EL8, crossed inside one hop by `rpm.transit`).
+6. **Ordering and interaction.** Yes, once: on the hop to EL9, the database password rehash and the slow shutdown
+   have to run on EL7, before `rpm.transit` replaces the server. Route order handles it (pre steps run in the order
+   the route pins fixes), and the route says so. No fix needs to see another fix's effect in its `when`.
 7. **Parameterized fixes.** `apache24-site-conf` is gated on one site's file (`sites-available/mysite`). It's a
    local fix, not a universal one. A useful version would be "for every 2.2 vhost with no `.conf`, write the 2.4
    form". Do we add a `for-each` over files, or keep local fixes out of the shared library?
@@ -302,3 +613,13 @@ These are the ones RPM may answer. Each one is reconciled when the CentOS thread
 10. **Booting.** A chroot can't test init. `drop-sysvinit-for-trixie` is fine in a chroot and dangerous on a real
     machine without a check that init is systemd. Do some fixes need a `requires_boot_check` flag that CI can't
     satisfy yet?
+11. **The family map.** Move it from box checks into the adapter (a `[families]` table of renames), so a client can
+    compute name families for its fingerprint hint and services check without a box? Probably yes; nothing reads it
+    outside boxes yet.
+12. **Pinning what a route installs.** A run proves a route against the mirror state it saw, and live EL mirrors
+    move under it (AlmaLinux 9 and 10 keep publishing updates). Runs reserve `sources` for repo-metadata hashes; the next step
+    is recording the sha256 of every package a run installed, so a client can fetch and verify a whole route before
+    the first hop and fall back across mirrors and archives for exactly those files. Not written yet: the harness
+    would need to record downloads per run, which the shared mirror cache doesn't do today. Until then integrity
+    rests on TLS to the mirrors and the shim's cache: EL repos run with `gpgcheck=0` (CentOS 5's keys can't check
+    what comes later), and the shim keeps only complete downloads and checks hash-named metadata against its name.

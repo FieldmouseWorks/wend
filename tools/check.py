@@ -17,13 +17,23 @@ import re
 import sys
 import tomllib
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import backends  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 PKG = r"[a-z0-9][a-z0-9.+-]*"
 ETC_PATH = r"/etc/[A-Za-z0-9_./-]+"
+ETC_GLOB = r"/etc/[A-Za-z0-9_./*-]+"
 CORE_OPS = {"install", "remove", "repair", "force-remove", "write-file", "pm-option"}
-FORCE = {"depends", "remove-essential"}
-PM_OPTIONS = {"overwrite-conflicting-files"}
+# Characters no adapter argument pattern may accept: values land in root shell commands.
+UNSAFE = ["%", "'", '"', " ", "\t", "\n", "$", "`", ";", "&", "|", "<", ">", "(", ")", "{", "}", "\\", "*", "?", "[", "~"]
+# Whatever an adapter's patterns say, a value a fix passes to an adapter op is held to this too: no shell
+# metacharacters, no printf %, and no leading - (it would read as an option).
+SAFE_VALUE = r"[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*"
+ADAPTER_KEYS = {"schema", "family", "backend", "release_file", "ladder", "may_skip", "harness_owned", "writable",
+                "managed", "force", "releases", "mirror", "hop", "predicates", "pm_options", "box", "ops", "checks",
+                "kv"}
 
 
 def canonical(obj):
@@ -42,6 +52,46 @@ def load_adapters():
 
 # ---------- validation ----------
 
+def check_adapter(a, where):
+    """An adapter can narrow what fixes may do, never widen it past what its backend implements (tools/backends.py
+    holds the lists). CI also takes adapters from the base branch; this is the second lock."""
+    errs = []
+    if a.get("schema") != "wend.adapter/0":
+        return [f"{where}: schema must be 'wend.adapter/0'"]
+    if set(a) - ADAPTER_KEYS:
+        errs.append(f"{where}: unknown keys {sorted(set(a) - ADAPTER_KEYS)}")
+    for k in ("family", "backend", "release_file", "ladder", "force", "hop", "predicates", "checks"):
+        if k not in a:
+            errs.append(f"{where}: missing {k}")
+    b = backends.BACKENDS.get(a.get("backend"))
+    if not b:
+        return errs + [f"{where}: backend must be one of {sorted(backends.BACKENDS)}"]
+    if not set(a.get("force", [])) <= b.FORCE:
+        errs.append(f"{where}: force may only name {sorted(b.FORCE)} on the {b.name} backend")
+    if not set(a.get("pm_options", {})) <= b.PM_OPTIONS:
+        errs.append(f"{where}: pm_options may only name {sorted(b.PM_OPTIONS)} on the {b.name} backend")
+    if not set(a.get("ops", {})) <= b.OPS:
+        errs.append(f"{where}: the {b.name} backend has no ops {sorted(set(a.get('ops', {})) - b.OPS)}")
+    if not set(a.get("may_skip", [])) <= set(a.get("ladder", [])[1:-1]):
+        errs.append(f"{where}: may_skip names releases that aren't inside the ladder")
+    for op, d in a.get("ops", {}).items():
+        for name, spec in d.get("args", {}).items():
+            for kind in ("pattern", "list", "table"):
+                if kind in spec and any(re.fullmatch(spec[kind], f"a{c}b") or re.fullmatch(spec[kind], c)
+                                        for c in UNSAFE):
+                    errs.append(f"{where}: ops.{op}.args.{name}: {spec[kind]!r} accepts shell metacharacters")
+            if not any(k in spec for k in ("enum", "pattern", "list", "path", "paths", "table")):
+                errs.append(f"{where}: ops.{op}.args.{name} has no spec")
+            for k in ("path", "paths"):
+                if k in spec and spec[k] not in ("writable", "managed", "kv"):
+                    errs.append(f"{where}: ops.{op}.args.{name}: {k} must name writable, managed or kv")
+    for p, d in a.get("kv", {}).items():
+        if not re.fullmatch(ETC_PATH, p) or not d.get("keys") or \
+                not all(re.fullmatch(r"[A-Za-z0-9_]+", k) for k in d["keys"]):
+            errs.append(f"{where}: kv.{p!r} needs a path under /etc and plain keys")
+    return errs
+
+
 def check_when(w, adapter, where, errs):
     if not isinstance(w, dict) or len(w) != 1:
         return errs.append(f"{where}: a predicate is a table with exactly one key, got {w!r}")
@@ -54,13 +104,14 @@ def check_when(w, adapter, where, errs):
     elif k == "not":
         check_when(v, adapter, f"{where}.not", errs)
     elif k == "installed":
-        if not re.fullmatch(PKG, str(v)):
+        if not isinstance(v, str) or not re.fullmatch(PKG, v):
             errs.append(f"{where}: bad package name {v!r}")
     elif k == "file":
-        if not re.fullmatch(ETC_PATH, str(v)) or ".." in v:
+        if not isinstance(v, str) or not re.fullmatch(ETC_PATH, v) or ".." in v:
             errs.append(f"{where}: 'file' must be a path under /etc, got {v!r}")
     elif k == "file-contains":
-        if set(v) != {"path", "text"} or not re.fullmatch(ETC_PATH, v["path"]) or "'" in v["text"]:
+        if not isinstance(v, dict) or set(v) != {"path", "text"} or not all(isinstance(x, str) for x in v.values()) \
+                or not re.fullmatch(ETC_PATH, v["path"]) or ".." in v["path"] or "'" in v["text"]:
             errs.append(f"{where}: 'file-contains' needs path (under /etc) and text (no single quotes)")
     else:
         errs.append(f"{where}: unknown predicate {k!r}")
@@ -79,6 +130,42 @@ def installed_names(w):
     return set()
 
 
+def writable(path, adapter, allow="writable"):
+    """On one of the adapter's allowlists: matches one of its globs, one directory level only. A glob in `path` (the
+    paths of rpm.adopt-rpmnew) must name a subset of an allowed glob, so '*' only matches '*' there."""
+    owned = list(adapter.get("harness_owned", [])) + ["/etc/wend/"]  # the box owner's secrets, on every family
+    return not any(path.startswith(p) for p in owned) and any(
+        fnmatch.fnmatchcase(path, g) and "/" not in path[len(g.rsplit("/", 1)[0]) + 1:]
+        for g in adapter.get(allow, []))
+
+
+def check_arg(name, spec, val, adapter, where, errs):
+    """An adapter op's argument, by its spec: enum, pattern, list (of a pattern), path or paths (on one of the
+    adapter's allowlists, named by the spec), table (string keys and values, each matching a pattern)."""
+    vals = val.values() if isinstance(val, dict) else val if isinstance(val, list) else [val]
+    if any(k in spec for k in ("pattern", "list", "table")) and not all(
+            isinstance(x, str) and re.fullmatch(SAFE_VALUE, x) for x in vals):
+        errs.append(f"{where}: {name} may only hold plain values ({SAFE_VALUE})")
+    if "enum" in spec and val not in spec["enum"]:
+        errs.append(f"{where}: {name} must be one of {spec['enum']}")
+    if "pattern" in spec and not (isinstance(val, str) and re.fullmatch(spec["pattern"], val)):
+        errs.append(f"{where}: {name}={val!r} does not match {spec['pattern']}")
+    if "list" in spec and not (isinstance(val, list) and len(val) >= spec.get("min", 1) and
+                               all(isinstance(x, str) and re.fullmatch(spec["list"], x) for x in val)):
+        errs.append(f"{where}: {name} must be a list of at least {spec.get('min', 1)} strings matching {spec['list']}")
+    if "path" in spec and not (isinstance(val, str) and re.fullmatch(ETC_PATH, val) and ".." not in val and
+                               writable(val, adapter, spec["path"])):
+        errs.append(f"{where}: {name}={val!r} is not on the {adapter['family']} adapter's {spec['path']} list")
+    if "paths" in spec and not (isinstance(val, list) and val and all(
+            isinstance(x, str) and re.fullmatch(ETC_GLOB, x) and ".." not in x and writable(x, adapter, spec["paths"])
+            for x in val)):
+        errs.append(f"{where}: {name} must be a list of paths on the {adapter['family']} adapter's {spec['paths']} list")
+    if "table" in spec and not (isinstance(val, dict) and val and all(
+            re.fullmatch(r"[A-Za-z0-9_]+", k) and isinstance(v, str) and re.fullmatch(spec["table"], v)
+            for k, v in val.items())):
+        errs.append(f"{where}: {name} must be a table of key = \"value\" with values matching {spec['table']}")
+
+
 def check_step(s, adapter, where, errs):
     op = s.get("op")
     adapter_ops = adapter.get("ops", {})
@@ -95,25 +182,32 @@ def check_step(s, adapter, where, errs):
     if "packages" in want:
         if not s["packages"] or not all(re.fullmatch(PKG, p) for p in s["packages"]):
             errs.append(f"{where}: packages must be a non-empty list of package names")
-    if op == "force-remove" and not set(s["force"]) <= FORCE:
-        errs.append(f"{where}: force may only use {sorted(FORCE)}")
+    force = adapter["force"]
+    if op == "force-remove" and not (isinstance(s["force"], list) and set(s["force"]) <= set(force)):
+        errs.append(f"{where}: force may only use {sorted(force)}")
     if op == "write-file":
         if not re.fullmatch(ETC_PATH, s["path"]) or ".." in s["path"]:
             errs.append(f"{where}: write-file only writes under /etc")
         if any(s["path"].startswith(p) for p in adapter.get("harness_owned", [])):
             errs.append(f"{where}: {s['path']} is owned by the harness")
-        elif not any(fnmatch.fnmatchcase(s["path"], g) and "/" not in s["path"][len(g.rsplit("/", 1)[0]) + 1:]
-                     for g in adapter.get("writable", [])):
+        elif not writable(s["path"], adapter):
             errs.append(f"{where}: {s['path']} is not on the {adapter['family']} adapter's writable list")
         if "'" in s["content"] or "%" in s["content"]:
             errs.append(f"{where}: write-file content may not contain ' or %")
-    if op == "pm-option" and s["option"] not in PM_OPTIONS:
+    if op in ("kv.set", "kv.unset") and isinstance(s.get("path"), str):
+        kv = adapter.get("kv", {}).get(s["path"])
+        keys = set(s["values"]) if op == "kv.set" and isinstance(s["values"], dict) else set(s.get("keys") or [])
+        if not kv:
+            errs.append(f"{where}: {s['path']} is not on the {adapter['family']} adapter's kv list")
+        else:
+            if op == "kv.set" and not kv.get("set"):
+                errs.append(f"{where}: {s['path']} has sections; kv.set can't write it")
+            if not keys <= set(kv["keys"]):
+                errs.append(f"{where}: {s['path']} only allows keys {kv['keys']}, not {sorted(keys - set(kv['keys']))}")
+    if op == "pm-option" and s["option"] not in adapter.get("pm_options", {}):
         errs.append(f"{where}: unknown pm-option {s['option']!r}")
     for a, spec in adapter_ops.get(op, {}).get("args", {}).items():
-        if "enum" in spec and s[a] not in spec["enum"]:
-            errs.append(f"{where}: {a} must be one of {spec['enum']}")
-        if "pattern" in spec and not re.fullmatch(spec["pattern"], str(s[a])):
-            errs.append(f"{where}: {a}={s[a]!r} does not match {spec['pattern']}")
+        check_arg(a, spec, s[a], adapter, where, errs)
 
 
 def check_fix(doc, adapters, where):
@@ -139,7 +233,8 @@ def check_fix(doc, adapters, where):
         for i, s in enumerate(doc.get(ph, [])):
             check_step(s, a, f"{where}.{ph}[{i}]", errs)
     # The stray-MySQL rule: whatever a fix installs, it installs in place of something that is installed now.
-    if any(s.get("op") == "install" for s in steps) and not errs and not installed_names(doc["when"]):
+    if any(s.get("op") == "install" or s.get("reinstall") for s in steps) and not errs and \
+            not installed_names(doc["when"]):
         errs.append(f"{where}: a fix that installs packages must be gated on 'installed' of the package it replaces")
     checks = set(a.get("checks", {}))
     for c in doc.get("restores", []):
@@ -164,15 +259,24 @@ def check_route(doc, fixes_by_id, adapters, where):
     if doc["from"] not in lad or doc["to"] not in lad or lad.index(doc["from"]) >= lad.index(doc["to"]):
         return [f"{where}: from/to must be releases on the ladder, in order"]
     hops = lad[lad.index(doc["from"]) + 1: lad.index(doc["to"]) + 1]
-    if doc.get("hops") != hops:
-        errs.append(f"{where}: hops must be every release from {doc['from']} to {doc['to']}: {hops}")
+    # every release in between, in order. The adapter may let a route pass through a release in one hop
+    # (`may_skip`): EL8 is only ever a bootstrap step between EL7 and EL9.
+    skip, got = a.get("may_skip", []), doc.get("hops")
+    if not isinstance(got, list) or not got or got[-1] != doc["to"] or \
+            [h for h in hops if h in got] != got or any(h not in got and h not in skip for h in hops):
+        errs.append(f"{where}: hops must be every release from {doc['from']} to {doc['to']}: {hops}" +
+                    (f" (this adapter lets a route skip {skip})" if skip else ""))
+        return errs
+    if doc.get("finish", {}).get("prune_obsolete") and not {"obsolete", "autoremove"} <= set(a.get("hop", {})):
+        errs.append(f"{where}: prune_obsolete needs hop.obsolete and hop.autoremove, which the {a['family']} "
+                    "adapter doesn't have")
     for ref in doc.get("fixes", []):
         f = fixes_by_id.get(ref["id"])
         if not f:
             errs.append(f"{where}: no fix with id {ref['id']} (named {ref.get('name')}); edited fixes get new ids")
         elif f["meta"]["name"] != ref.get("name"):
             errs.append(f"{where}: {ref['id'][:19]} is {f['meta']['name']}, not {ref.get('name')}")
-        elif f["hop"] not in hops:
+        elif f["hop"] not in got:
             errs.append(f"{where}: {ref['name']} applies on {f['hop']}, outside this route")
     return errs
 
@@ -187,6 +291,8 @@ def check_box(doc, adapters, where):
     for k in ("packages", "customize", "roles"):
         if k not in doc:
             errs.append(f"{where}: missing {k}")
+    if not set(doc.get("isolate", [])) <= set(doc.get("roles", {})):
+        errs.append(f"{where}: isolate names roles the box does not have")
     return errs
 
 
@@ -221,9 +327,10 @@ def decoy_errors(runs, routes_by_id, fixes_by_id):
     return errs
 
 
-# ---------- the Debian adapter compiler (what a client runs; the lab's ol.py is the reference) ----------
+# ---------- compiling: the backends in backends.py; the lab's ol.py/co.py are the references ----------
 
 def compile_when(w, family="debian"):
+    """ol.py's precondition language (for tools/port_oldlinux.py). The harness uses the adapter's [predicates]."""
     k, v = next(iter(w.items()))
     if k == "installed":
         return f"dpkg -s {v}"
@@ -236,35 +343,17 @@ def compile_when(w, family="debian"):
     raise ValueError(f"'{k}' has no single-command form in ol.py's precondition language")
 
 
-def printf(content, path):
-    return "printf '" + content.replace("\\", "\\\\").replace("\n", "\\n") + f"' > {path}"
-
-
-def compile_step(s, adapter):
-    op = s["op"]
-    if op == "install":
-        return "apt-get install " + " ".join(s["packages"])
-    if op == "remove":
-        return ("apt-get purge " if s["purge"] else "apt-get remove ") + " ".join(s["packages"])
-    if op == "repair":
-        return "apt-get -f install"
-    if op == "force-remove":
-        return (f"dpkg --{'purge' if s['purge'] else 'remove'} " + "".join(f"--force-{x} " for x in s["force"]) +
-                " ".join(s["packages"]))
-    if op == "write-file":
-        return printf(s["content"], s["path"])
-    if op == "pm-option":
-        o = adapter["pm_options"][s["option"]]
-        return printf(o["content"], o["path"])
-    if op in ("apache.enable", "apache.disable"):
-        return f"a2{'en' if op == 'apache.enable' else 'dis'}{s['kind']} {s['name']}"
-    raise ValueError(op)
+def compile_step(s, adapter, release=None):
+    """The shell one step runs on the hop that arrives at `release` (the apt backend doesn't need it)."""
+    return backends.of(adapter).step(s, adapter, release)
 
 
 def compile_fix(doc, adapter):
-    return {"when": compile_when(doc["when"]),
-            "pre": [compile_step(s, adapter) for s in doc.get("pre", [])],
-            "post": [compile_step(s, adapter) for s in doc.get("post", [])]}
+    out = {"pre": [compile_step(s, adapter, doc["hop"]) for s in doc.get("pre", [])],
+           "post": [compile_step(s, adapter, doc["hop"]) for s in doc.get("post", [])]}
+    if adapter.get("backend", "apt") != "apt":
+        return {"when": backends.pred_sh(doc["when"], adapter), **out}
+    return {"when": compile_when(doc["when"]), **out}
 
 
 # ---------- main ----------
@@ -297,6 +386,8 @@ def main(argv):
             open(p, "w").write(text)
         return 0
     errs = []
+    for fam, a in adapters.items():
+        errs += check_adapter(a, f"adapters/{fam}.toml")
     by_id = {}
     for p, d in fixes.items():
         rel = os.path.relpath(p, ROOT)

@@ -16,9 +16,9 @@ minutes, and ended with zero obsolete packages.
 **Agents and contributors: start with [AGENTS.md](AGENTS.md).** Clone, plug in any model, discover a path, prove it
 with the same command CI runs, and open a PR.
 
-> **Early days.** The fix format (`wend.fix/0`) may still change once the RPM (CentOS 5 → AlmaLinux 10) results
-> land. See [SPEC.md, open questions](SPEC.md#open-questions). Fixes written now will be migrated by a script, not
-> abandoned.
+> **Early days.** The fix format (`wend.fix/0`) now covers two package managers: ops are typed, and each family's
+> adapter names a backend (apt or rpm) that compiles them. Open questions remain (see
+> [SPEC.md](SPEC.md#open-questions)); fixes written now will be migrated by a script, not abandoned.
 
 ## The loop
 
@@ -52,7 +52,7 @@ NAMES.md                     why "wend"
 LICENSE-MIT, LICENSE-APACHE  dual license
 adapters/
   debian.toml                ladder, mirrors, how a hop runs, predicates, writable allowlist, adapter ops, checks
-  rpm.toml                   (waiting on the CentOS 5 -> AlmaLinux 10 run)
+  el.toml                    Enterprise Linux: CentOS 5 to AlmaLinux 10, the rpm backend, the mirror shim
 fixes/<family>/<hop>/<name>.toml
   debian/wheezy/purge-stale-libdb4.toml   ...12 seed fixes
 routes/<family>/<from>-to-<to>.toml
@@ -62,6 +62,8 @@ boxes/<family>/<name>/box.toml            CI fixtures, trusted test code, never 
 runs/<family>/<route>/<box>/<stamp>.json  written by CI only
 tools/
   check.py           schema check, content ids, decoy check, --repin, --compile
+  backends.py        what each typed op compiles to: apt (Debian) and rpm (EL)
+  mirror.py          http -> https cache for EL boxes (CentOS 5's yum can't speak today's TLS)
   test_check.py      broken fixes the gate must refuse
   sandbox.py         chroot boxes: build, snapshot, roll back, private /dev
   walk.py            walk a route on a box (the map walk), write the run

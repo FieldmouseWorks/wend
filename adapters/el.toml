@@ -1,0 +1,209 @@
+# The Enterprise Linux adapter: CentOS 5 to AlmaLinux 10, everything rpm/yum/dnf-specific that fixes may not say for
+# themselves. What each op does is in SPEC.md, "Op reference" (rpm backend). Written from dep-lab's
+# CentOS round (co.py, 2026-10-10/11), where Opus found the route and a fix library replayed it on two boxes.
+schema = "wend.adapter/0"
+family = "el"
+backend = "rpm"
+release_file = "/etc/redhat-release"
+
+# Release ids carry the vendor: the ladder crosses from CentOS to AlmaLinux at 8 (open question 5 in SPEC.md).
+ladder = ["centos5", "centos6", "centos7", "alma8", "alma9", "alma10"]
+# A route may pass through these in one hop. EL8 is only ever a bootstrap step: rpm.transit lands the box on EL8 and
+# the same hop's transaction takes it on to EL9, so no health check ever runs on EL8.
+may_skip = ["alma8"]
+
+# The harness owns the repo configuration, like sources.list on Debian, and clears the vendor .repo files every
+# release package drops there (they point at mirrors that are gone).
+harness_owned = ["/etc/yum.repos.d/", "/etc/yum.conf", "/etc/yum/", "/etc/dnf/", "/etc/wend/"]
+
+# The only files write-file may write (kv.* has its own per-key list at the end). An allowlist; growing it is a spec change (see debian.toml).
+writable = ["/etc/my.cnf"]
+
+# Config files rpm.adopt-rpmnew and rpm.set-aside-unowned may move. They never write content: one takes the file the
+# package itself shipped as .rpmnew, the other moves a file no installed package owns. Both keep the old file under
+# /var/lib/wend/saved.
+managed = [
+  "/etc/my.cnf",
+  "/etc/httpd/conf/httpd.conf",
+  "/etc/httpd/conf.d/*.conf",
+  "/etc/httpd/conf.modules.d/*.conf",
+  "/etc/php.ini",
+  "/etc/php.d/*.ini",
+  "/etc/php-fpm.conf",
+  "/etc/php-fpm.d/*.conf",
+]
+
+# force-remove's flags on rpm: --nodeps, --noscripts. No --justdb: a fix that drops a package from the database
+# and leaves its files would fake the pkgdb check.
+force = ["depends", "scripts"]
+
+[mirror]
+# CentOS 5's yum can't speak today's TLS and the vaults are https-only now. The harness runs tools/mirror.py on the
+# host (an http -> https cache for a fixed list of hosts) and every repo URL goes through it.
+shim = "http://127.0.0.1:8085"
+probe = "vault.centos.org/5.11/os/x86_64/repodata/repomd.xml"
+
+[releases.centos5]
+major = 5
+pm = "yum"
+repos = { base = "vault.centos.org/5.11/os/x86_64", updates = "vault.centos.org/5.11/updates/x86_64" }
+
+[releases.centos6]
+major = 6
+pm = "yum"
+repos = { base = "vault.centos.org/6.10/os/x86_64", updates = "vault.centos.org/6.10/updates/x86_64" }
+upgrade = ["yum -y upgrade"]
+
+[releases.centos6.bootstrap]
+# rpm.bootstrap: EL6's rpm, yum and python stack, unpacked over / with 7-Zip from archived EPEL 5
+p7zip_repo = "archives.fedoraproject.org/pub/archive/epel/5/x86_64"
+p7zip = ["p7zip-9.20.1-2.el5.x86_64.rpm", "p7zip-plugins-9.20.1-2.el5.x86_64.rpm"]
+packages = ["glibc", "glibc-common", "libgcc", "nss-softokn-freebl", "nss-softokn", "nss", "nss-util", "nspr",
+            "nss-sysinit", "rpm", "rpm-libs", "rpm-python", "popt", "xz-libs", "xz", "lua", "file-libs", "sqlite",
+            "db4", "libselinux", "libcap", "libacl", "libattr", "elfutils-libelf", "bzip2-libs", "zlib", "python",
+            "python-libs", "libffi", "gdbm", "expat", "readline", "ncurses-libs", "openssl", "krb5-libs",
+            "keyutils-libs", "libcom_err", "libidn", "openldap", "cyrus-sasl-lib", "libssh2", "libcurl",
+            "python-pycurl", "python-urlgrabber", "python-iniparse", "yum", "yum-metadata-parser", "glib2",
+            "libxml2", "pygpgme", "gpgme", "libgpg-error", "libassuan", "pth"]
+
+[releases.centos7]
+major = 7
+pm = "yum"
+repos = { base = "vault.centos.org/7.9.2009/os/x86_64", updates = "vault.centos.org/7.9.2009/updates/x86_64" }
+# el6's grep is newer than el7's, so `upgrade` leaves it behind; distro-sync takes everything to el7's version
+upgrade = ["yum -y distro-sync"]
+
+[releases.alma8]
+major = 8
+pm = "dnf"
+repos = { baseos = "repo.almalinux.org/almalinux/8/BaseOS/x86_64/os", appstream = "repo.almalinux.org/almalinux/8/AppStream/x86_64/os" }
+
+[releases.alma8.transit]
+# rpm.transit: a temporary EL7 dnf (from CentOS 7 extras) downloads the EL8 set, EL8's own rpm installs it
+from = "centos7"
+extra_repos = { extras = "vault.centos.org/7.9.2009/extras/x86_64" }
+release_package = "almalinux-release"
+
+[releases.alma9]
+major = 9
+pm = "dnf"
+repos = { baseos = "repo.almalinux.org/almalinux/9/BaseOS/x86_64/os", appstream = "repo.almalinux.org/almalinux/9/AppStream/x86_64/os" }
+# EL8 module streams don't exist on EL9: reset them, and tell dnf which platform it is on (a chroot has no os-release
+# it trusts yet). EL9's rpm only reads EL8's Berkeley DB read-only, so the database is rebuilt (as sqlite) before any
+# fix installs anything.
+upgrade = ["rm -f /etc/dnf/modules.d/*.module",
+           "{clean_repos}; dnf -y {dnf_opts} --nobest --setopt=module_platform_id=platform:el9 distro-sync",
+           "/usr/sbin/ldconfig; rm -f /var/lib/rpm/__db.*; rpmdb --rebuilddb && rpm -q rpm"]
+
+[releases.alma10]
+major = 10
+pm = "dnf"
+repos = { baseos = "repo.almalinux.org/almalinux/10/BaseOS/x86_64/os", appstream = "repo.almalinux.org/almalinux/10/AppStream/x86_64/os" }
+# download first, with retries: 1100 packages from a live mirror; the second attempt only fetches what's missing
+upgrade = ["rm -f /etc/dnf/modules.d/*.module",
+           "{clean_repos}; O='{dnf_opts} --nobest --setopt=module_platform_id=platform:el10 --setopt=retries=10'; dnf -y $O --downloadonly distro-sync >/tmp/wend-dl.log 2>&1 || dnf -y $O --downloadonly distro-sync",
+           "dnf -y {dnf_opts} --nobest --setopt=module_platform_id=platform:el10 distro-sync"]
+
+[hop]
+# What the harness runs for every hop, around the fixes' pre and post steps. {placeholders} come from the release
+# being entered (SPEC.md, "Adapter format"); fixes can't change any of it.
+set_release = "rm -f /etc/yum.repos.d/*.repo && printf '{repofile}' > /etc/yum.repos.d/ladder.repo"
+refresh = "rm -f /var/lib/rpm/__db.*; rpm --rebuilddb && {pm} clean all"
+upgrade = ["{pm} -y distro-sync"]
+verify = "grep -q 'release {major}[. ]' /etc/redhat-release"
+after = [
+  "{clean_repos}",
+  "/usr/sbin/ldconfig 2>/dev/null || /sbin/ldconfig",
+  # EL10's rpm keeps its database in /usr/lib/sysimage/rpm; move it there and leave a symlink
+  "D=$(rpm --eval '%{_dbpath}'); if [ \"$D\" != /var/lib/rpm ] && [ ! -L /var/lib/rpm ] && [ -s /var/lib/rpm/rpmdb.sqlite ] && [ ! -s \"$D/rpmdb.sqlite\" ]; then mkdir -p \"$D\" && cp -a /var/lib/rpm/. \"$D\"/ && rm -rf /var/lib/rpm && ln -s \"$D\" /var/lib/rpm; fi",
+  "rm -f /var/lib/rpm/__db.*; rpm --rebuilddb",
+  "{pm} clean packages",
+]
+installed_list = "rpm -qa --qf '%{NAME}\\n' | sort -u"
+
+[predicates]
+# "installed" is rpm -q: EL has no removed-but-configured state. Multiple versions (kernels) still count as installed.
+installed = "rpm -q {pkg}"
+file = "test -f {path}"
+file-contains = "grep -qF '{text}' {path}"
+
+[box]
+# Seed packages for building a CentOS 5 root from the vault (tools/sandbox.py build_el); yum installs the rest.
+seeds = ["bash", "yum", "centos-release", "rpm", "coreutils", "passwd", "shadow-utils", "vim-minimal", "findutils",
+         "grep", "sed", "gzip", "tar"]
+
+[ops."rpm.bootstrap"]
+summary = "unpack the next release's rpm/yum stack over / when the old rpm can't install it (EL5 -> EL6: xz payloads, sha256 repodata)"
+args = { release = { enum = ["centos6"] } }
+
+[ops."rpm.drop-arch"]
+summary = "remove every package built for these architectures (rpm -e --nodeps --noscripts), then check none is left: EL5's i386 multilib copies block EL6's transaction"
+args = { arches = { list = "i[3-6]86", min = 1 } }
+
+[ops."rpm.transit"]
+summary = "pass through a release the old rpm can't reach (EL7 -> EL8: rich dependencies): run its rpm from a staging dir over everything, distro-sync, reinstall what the sync erased, drop the old release's leftovers from the rpm database"
+args = { release = { enum = ["alma8"] }, remove = { pattern = "[a-z0-9][a-z0-9.+-]*" }, reinstall = { list = "[a-z0-9][a-z0-9.+-]*", min = 0 } }
+
+[ops."rpm.swap-release"]
+summary = "replace the release package by hand (rpm -e --nodeps old, rpm -i new from the hop's repo): epochs and vendor switches block yum"
+args = { remove = { pattern = "[a-z0-9][a-z0-9.+-]*-release" }, install = { pattern = "[a-z0-9][a-z0-9.+-]*-release" } }
+
+[ops."rpm.adopt-rpmnew"]
+summary = "where rpm left the packaged config as FILE.rpmnew, use it; the old file is kept under /var/lib/wend/saved"
+args = { paths = { paths = "managed" } }
+
+[ops."rpm.set-aside-unowned"]
+summary = "move config files no installed package owns (leftovers of removed packages) to /var/lib/wend/saved"
+args = { paths = { paths = "managed" } }
+
+[ops."fs.layout"]
+summary = "usrmove: /bin, /sbin, /lib, /lib64 become symlinks into /usr (EL7); run: /var/run -> /run, /var/lock -> /run/lock"
+args = { layout = { enum = ["usrmove", "run"] } }
+
+[ops."kv.set"]
+summary = "set key=value lines in a file without sections (replaces the key's lines, commented ones too, and appends)"
+args = { path = { path = "kv" }, values = { table = "[A-Za-z0-9_./:-]+" } }
+
+[ops."kv.unset"]
+summary = "delete a key's key=value lines"
+args = { path = { path = "kv" }, keys = { list = "[A-Za-z0-9_]+" } }
+
+[ops."mysql.set-password"]
+summary = "rehash one account's password with the current scheme, reading the plaintext from the box's /etc/wend/secrets/<secret> (never from the fix)"
+args = { user = { pattern = "[A-Za-z0-9_]+" }, secret = { pattern = "[a-z0-9][a-z0-9-]*" } }
+
+[ops."mysql.clean-shutdown"]
+summary = "start the database once and stop it with a slow shutdown, so the next major version finds a clean redo log"
+args = {}
+
+[ops."mysql.upgrade-data"]
+summary = "start the new database server on the old data once, run its upgrade tool, stop it cleanly"
+args = {}
+
+[ops."ssh.generate-host-keys"]
+summary = "create the host key types this sshd expects (ssh-keygen -A; sshd-keygen does it at boot)"
+args = {}
+
+[ops."httpd.drop-missing-modules"]
+summary = "comment out every LoadModule whose module httpd can no longer load"
+args = {}
+
+[ops."php.mysqli-report-off"]
+summary = "PHP 8.1+ throws from mysqli where it used to warn; restore the old default for every script"
+args = {}
+
+[checks]
+# Universal checks every EL box gets. Boxes add their own roles.
+pkgdb = "rpm -qa >/dev/null && test -z \"$(rpm -Va --nofiles --nodigest --noscripts 2>&1)\" && test -z \"$(rpm -qa --qf '%{NAME}.%{ARCH}\\n' | grep -vE '^(gpg-pubkey|kernel)[.-]' | sort | uniq -d)\""
+current = "every binary a service runs comes from a package built for the running major release (dist tag el$MAJOR); the box lists the binaries"
+services = "no package that ships an init script or unit belongs to a name family the box did not have at the start, unless something installed requires it (EL5/6 rpm has no 'explicitly installed')"
+
+# The keys kv.set and kv.unset may touch, per file. Only files without [sections] take kv.set. Keys that grant access
+# (anonymous uploads, skip-grant-tables, ...) never go on this list. vsftpd's seccomp_sandbox and isolate* are here
+# because vsftpd 3 can't start inside a chroot with them on; they turn off vsftpd's own hardening, not access control.
+[kv."/etc/vsftpd/vsftpd.conf"]
+keys = ["listen", "listen_ipv6", "background", "seccomp_sandbox", "isolate", "isolate_network", "tcp_wrappers"]
+set = true
+[kv."/etc/my.cnf"]
+keys = ["old_passwords"]
+set = false

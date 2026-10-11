@@ -3,6 +3,8 @@
 # fixes only add steps before or after it. See SPEC.md, "Adapters".
 schema = "wend.adapter/0"
 family = "debian"
+backend = "apt"                      # what carries out the ops: SPEC.md, "Op reference"
+force = ["depends", "remove-essential"]   # the force-remove flags fixes may use
 release_file = "/etc/debian_version"
 
 # One hop = one step along this list. A fix's `hop` names the release it helps you *arrive at*.
@@ -33,6 +35,7 @@ current_from = "bullseye"
 set_release = "printf 'deb {mirror} {release} main\\n' > /etc/apt/sources.list"
 refresh = "apt-get update"
 upgrade = ["apt-get dist-upgrade", "apt-get autoremove --purge"]
+autoremove = "apt-get autoremove --purge"   # after prune_obsolete removes packages
 after = ["apt-get clean"]
 obsolete = "apt-get update >/dev/null 2>&1; apt list '?obsolete' 2>/dev/null | grep / | cut -d/ -f1"
 installed_list = "dpkg-query -W -f '${Status} ${Package}\\n' | awk '$3==\"installed\"{print $4}'"
