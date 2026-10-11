@@ -80,15 +80,6 @@ fn unescape(m: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn mounts_unescape() {
-        assert_eq!(super::unescape("/a\\040b/c\\134d"), "/a b/c\\d");
-        assert_eq!(super::unescape("/plain\\04"), "/plain\\04");
-    }
-}
-
 /// Paths the client mounts under or deletes: plain ones only, so they read back from /proc/mounts unchanged.
 pub fn plain_path(p: &Path) -> Result<(), String> {
     let Some(s) = p.to_str() else {
@@ -416,4 +407,13 @@ pub fn work_dir(work: &Path, root: &Path) -> Result<PathBuf, String> {
         ));
     }
     Ok(w)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn mounts_unescape() {
+        assert_eq!(super::unescape("/a\\040b/c\\134d"), "/a b/c\\d");
+        assert_eq!(super::unescape("/plain\\04"), "/plain\\04");
+    }
 }
