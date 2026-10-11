@@ -1,0 +1,54 @@
+# CI fixture, from dep-lab centos/co.py (CO_BOX=b).
+# Box files are trusted test code: humans review them, clients never run them.
+schema = "wend.box/0"
+family = "el"
+release = "centos5"
+arch = "x86_64"
+summary = "CentOS 5.11 DNS/FTP server: BIND master zone, anonymous vsftpd, postfix, ssh on 2222, cron; no web, PHP or database"
+packages = ["bind", "bind-utils", "vsftpd", "openssh-server", "openssh-clients", "postfix", "vixie-cron", "crontabs", "sudo", "perl", "curl", "rsync", "python", "logrotate", "ntp", "which"]
+customize = '''
+set -e
+grep -q localhost /etc/hosts 2>/dev/null || printf '127.0.0.1 localhost localhost.localdomain\n' >> /etc/hosts
+cat > /etc/named.conf <<'EOF'
+options { directory "/var/named"; listen-on { 127.0.0.1; }; allow-query { any; }; recursion no; };
+zone "example.org" { type master; file "example.org.zone"; };
+EOF
+cat > /var/named/example.org.zone <<'EOF'
+$TTL 3600
+@   IN SOA ns1.example.org. hostmaster.example.org. ( 2007100901 3600 600 604800 3600 )
+    IN NS  ns1.example.org.
+ns1 IN A   192.0.2.1
+www IN A   192.0.2.10
+EOF
+chgrp named /etc/named.conf /var/named/example.org.zone
+mkdir -p /var/ftp/pub && echo 'ftp from 2007' > /var/ftp/pub/hello.txt
+grep -q '^anonymous_enable=YES' /etc/vsftpd/vsftpd.conf
+for t in rsa dsa; do ssh-keygen -q -t $t -N '' -f /etc/ssh/ssh_host_${t}_key; done
+sed -i 's/^#\?Port 22$/Port 2222/' /etc/ssh/sshd_config
+grep -q '^Port 2222' /etc/ssh/sshd_config
+postconf -e myhostname=oldbox.example.org
+useradd -m -s /bin/bash alice
+mkdir -p /home/alice/backup
+echo '0 3 * * * /usr/bin/rsync -a /var/ftp/ /home/alice/backup/ # nightly-backup' | crontab -u alice -
+yum clean all >/dev/null
+'''
+# The services role flags service packages whose family wasn't on the box at the start. It skips EL7+'s own
+# base-system service packages by exact name (dbus-daemon, dbus-broker, hostname, readonly-root, netconsole-service,
+# systemd, systemd-udev, and systemd-container, which EL8 split out of systemd so upgraded boxes keep machinectl). Every
+# real EL7+ machine has these; the lab removed some in the chroot, which a real box must not copy. Any other
+# systemd-* package, or a stray daemon from a fix (mysql on a DNS box), is still caught.
+start_hook = "rpm -qa --qf '%{NAME}\\n' | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 's/^mariadb$/mysql/' -e 's/^chrony$/ntp/' -e 's/^cronie$/vixie/' -e 's/^openssh$/openssh/' | sort -u > /var/lib/wend-expected-families"
+isolate = ["ftp"]
+
+[roles]
+ssh = "mkdir -p /var/run/sshd /run/sshd; /usr/sbin/sshd -t && grep -q '^Port 2222' /etc/ssh/sshd_config"
+cron = "test -x /usr/sbin/crond && crontab -l -u alice | grep nightly-backup"
+python = "python3 -c 'print(6*7)' | grep 42 || python -c 'print 6*7' | grep 42"
+tools = "perl -e 1 && curl -s file:///etc/redhat-release && rsync --version && sudo -V && id alice"
+mail = "postfix check && test \"$(postconf -h myhostname)\" = oldbox.example.org"
+current = "M=$(grep -o '[0-9][0-9]*' /etc/redhat-release | head -n1); for f in /usr/sbin/named /usr/sbin/vsftpd; do p=$(rpm -qf --qf '%{NAME}-%{VERSION}-%{RELEASE}' \"$(readlink -f $f)\" 2>/dev/null); echo \"$p\" | grep -qE \"[._]el${M}([._]|$)\" || { echo \"$f comes from '$p', not a release-$M package\"; exit 1; }; done"
+services = "for p in $(ls /etc/rc.d/init.d/* /usr/lib/systemd/system/*.service 2>/dev/null | xargs rpm -qf --qf '%{NAME}\\n' 2>/dev/null | grep -v 'not owned' | sort -u); do case $p in dbus-daemon|dbus-broker|hostname|readonly-root|netconsole-service|systemd|systemd-udev|systemd-container) continue;; esac; f=$(echo $p | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 's/^mariadb$/mysql/' -e 's/^chrony$/ntp/' -e 's/^cronie$/vixie/' -e 's/^openssh$/openssh/'); grep -qx \"$f\" /var/lib/wend-expected-families && continue; for c in $p $(rpm -q --provides $p | awk '{print $1}'); do rpm -q --whatrequires \"$c\" >/dev/null 2>&1 && continue 2; done; echo \"unexpected new service package: $p\"; exit 1; done"
+dns = "named-checkconf /etc/named.conf && named-checkzone example.org /var/named/example.org.zone"
+# vsftpd 3 can't start in the sandbox with its seccomp sandbox and namespace isolation on. The check turns them off
+# on its own command line (vsftpd -v writes to fd 0), so no fix has to switch off a real box's hardening.
+ftp = "O=''; /usr/sbin/vsftpd -v 0>&1 2>&1 | grep -q 'version [3-9]' && O='-oseccomp_sandbox=NO -oisolate=NO -oisolate_network=NO'; (/usr/sbin/vsftpd /etc/vsftpd/vsftpd.conf $O >/tmp/ftp.log 2>&1 &); i=0; while [ $i -lt 20 ] && ! curl -s ftp://127.0.0.1/pub/hello.txt >/dev/null; do sleep 1; i=$((i+1)); done; curl -sS ftp://127.0.0.1/pub/hello.txt | grep 'ftp from 2007' || { cat /tmp/ftp.log; exit 1; }"
