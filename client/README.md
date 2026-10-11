@@ -57,5 +57,10 @@ that silently runs something CI never proved.
 - Rust's standard library supports Linux 3.2 and later. CentOS 5 runs 2.6.18 and CentOS 6 runs 2.6.32, so on those
   kernels the binary is untested (it may still run). The routes already need real reboots into newer kernels on
   the way up (wend#13), which is where this gets settled.
+- The checker is stricter than tools/check.py in one direction only: it refuses wrong-type fields (a `pre` that
+  isn't a list of tables, a `packages` that is a string, an adapter op without an `args` table, floats and dates
+  anywhere in a fix or route), several of which Python accepts or crashes on. Parity requires Rust to refuse
+  everything Python refuses, and lists what only Rust refuses so tools/check.py can be tightened to match.
+- Boxes are CI fixtures the client never sees, so it doesn't check them (or whether a run's box exists).
 - The checker's error messages follow tools/check.py's but aren't identical (Python prints `repr()` of values);
   parity compares verdicts, not wording.

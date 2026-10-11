@@ -20,12 +20,18 @@ pub struct Atlas {
 }
 
 pub fn parse_toml(text: &str) -> Result<Doc, String> {
+    if text.starts_with('\u{feff}') {
+        return Err("starts with a byte order mark, which TOML doesn't allow".into());
+    }
     toml::from_str::<Value>(text).map_err(|e| e.to_string())
 }
 
 fn files(dir: &Path, depth: usize, ext: &str, out: &mut Vec<PathBuf>) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     for e in rd.flatten() {
+        if e.file_name().to_string_lossy().starts_with('.') {
+            continue; // as Python's glob: hidden files aren't part of the atlas
+        }
         let p = e.path();
         if p.is_dir() {
             if depth > 0 {
@@ -40,6 +46,9 @@ fn files(dir: &Path, depth: usize, ext: &str, out: &mut Vec<PathBuf>) {
 fn runs_under(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     for e in rd.flatten() {
+        if e.file_name().to_string_lossy().starts_with('.') {
+            continue; // as Python's glob: hidden files aren't part of the atlas
+        }
         let p = e.path();
         if p.is_dir() {
             runs_under(&p, out);

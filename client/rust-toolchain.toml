@@ -1,0 +1,5 @@
+# CI and contributors build with the same toolchain, so a new clippy lint never turns the client check red on its own.
+[toolchain]
+channel = "1.97.0"
+components = ["clippy", "rustfmt"]
+targets = ["x86_64-unknown-linux-musl"]

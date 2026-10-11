@@ -56,7 +56,12 @@ pub fn full(pattern: &str, s: &str) -> bool {
     let re = g
         .get_or_insert_with(HashMap::new)
         .entry(pattern.to_string())
-        .or_insert_with(|| Regex::new(&format!(r"\A(?:{pattern})\z")).ok());
+        // the pattern must compile on its own first: `a)|(?:.*` would otherwise break out of the anchors
+        .or_insert_with(|| {
+            Regex::new(pattern)
+                .ok()
+                .and(Regex::new(&format!(r"\A(?:{pattern})\z")).ok())
+        });
     re.as_ref().is_some_and(|r| r.is_match(s))
 }
 
@@ -64,11 +69,62 @@ fn full_v(pattern: &str, v: &Value) -> bool {
     v.as_str().is_some_and(|s| full(pattern, s))
 }
 
+/// What Python's set() makes of a list of names or a table's keys. Never use it to decide which keys a table may
+/// have: a list there is a type error, and `want`/`got` comparisons use table_keys.
 fn keys(v: Option<&Value>) -> BTreeSet<String> {
     match v {
         Some(Value::Object(m)) => m.keys().cloned().collect(),
         Some(Value::Array(a)) => a.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
         _ => BTreeSet::new(),
+    }
+}
+
+fn table_keys(v: Option<&Value>) -> Option<BTreeSet<String>> {
+    v.and_then(Value::as_object).map(|m| m.keys().cloned().collect())
+}
+
+/// Values in fixes and routes are only strings, booleans, integers, lists and tables (SPEC.md, "Identity"): no
+/// floats (their canonical JSON isn't settled between implementations) and no TOML dates.
+fn plain_values(v: &Value) -> bool {
+    match v {
+        Value::Null => false,
+        Value::Number(n) => n.is_i64() || n.is_u64(),
+        Value::Array(a) => a.iter().all(plain_values),
+        Value::Object(m) => !m.contains_key("$__toml_private_datetime") && m.values().all(plain_values),
+        _ => true,
+    }
+}
+
+/// A field that is there must have its type: a list of tables, a list of strings, a table.
+fn want_shape(doc: &Value, k: &str, shape: &str, wh: &str, errs: &mut Vec<String>) {
+    let Some(v) = get(doc, k) else { return };
+    let ok = match shape {
+        "tables" => v.as_array().is_some_and(|a| a.iter().all(Value::is_object)),
+        "strings" => v.as_array().is_some_and(|a| a.iter().all(Value::is_string)),
+        "table" => v.is_object(),
+        "string" => v.is_string(),
+        _ => unreachable!(),
+    };
+    if !ok {
+        let what = match shape {
+            "tables" => "a list of tables",
+            "strings" => "a list of strings",
+            "table" => "a table",
+            _ => "a string",
+        };
+        errs.push(format!("{wh}: {k} must be {what}"));
+    }
+}
+
+/// Python's truthiness, for the few flags tools/check.py reads that way.
+fn truthy(v: &Value) -> bool {
+    match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64() != Some(0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(m) => !m.is_empty(),
     }
 }
 
@@ -109,6 +165,22 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
             errs.push(format!("{wh}: missing {k}"));
         }
     }
+    for k in ["ladder", "may_skip", "harness_owned", "writable", "managed", "force"] {
+        want_shape(a, k, "strings", wh, &mut errs);
+    }
+    for k in [
+        "releases",
+        "mirror",
+        "hop",
+        "predicates",
+        "pm_options",
+        "box",
+        "ops",
+        "checks",
+        "kv",
+    ] {
+        want_shape(a, k, "table", wh, &mut errs);
+    }
     let Some(b) = get(a, "backend").and_then(Value::as_str).and_then(caps) else {
         errs.push(format!("{wh}: backend must be one of ['apt', 'rpm']"));
         return errs;
@@ -147,9 +219,25 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
     if let Some(Value::Object(ops)) = get(a, "ops") {
         for (op, d) in ops {
             let Some(Value::Object(args)) = get(d, "args") else {
+                errs.push(format!("{wh}: ops.{op} needs an args table (args = {{}} for none)"));
                 continue;
             };
             for (name, spec) in args {
+                if !spec.is_object() {
+                    errs.push(format!("{wh}: ops.{op}.args.{name} must be a table"));
+                    continue;
+                }
+                for kind in ["pattern", "list", "table", "path", "paths"] {
+                    if get(spec, kind).is_some_and(|p| !p.is_string()) {
+                        errs.push(format!("{wh}: ops.{op}.args.{name}.{kind} must be a string"));
+                    }
+                }
+                if get(spec, "enum").is_some_and(|e| !e.as_array().is_some_and(|e| e.iter().all(Value::is_string))) {
+                    errs.push(format!("{wh}: ops.{op}.args.{name}.enum must be a list of strings"));
+                }
+                if get(spec, "min").is_some_and(|m| !m.is_u64()) {
+                    errs.push(format!("{wh}: ops.{op}.args.{name}.min must be a whole number"));
+                }
                 for kind in ["pattern", "list", "table"] {
                     if let Some(p) = get(spec, kind).and_then(Value::as_str) {
                         if Regex::new(p).is_err() {
@@ -181,6 +269,9 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
     }
     if let Some(Value::Object(kv)) = get(a, "kv") {
         for (p, d) in kv {
+            if get(d, "set").is_some_and(|s| !s.is_boolean()) {
+                errs.push(format!("{wh}: kv.{p:?}.set must be true or false"));
+            }
             let ks = get(d, "keys").and_then(Value::as_array);
             let ok = full(ETC_PATH, p)
                 && ks.is_some_and(|ks| !ks.is_empty() && ks.iter().all(|k| full_v("[A-Za-z0-9_]+", k)));
@@ -384,6 +475,9 @@ fn check_arg(name: &str, spec: &Value, val: &Value, adapter: &Doc, wh: &str, err
 }
 
 fn check_step(s: &Value, adapter: &Doc, wh: &str, errs: &mut Vec<String>) {
+    if !s.is_object() {
+        return errs.push(format!("{wh}: a step is a table with an op"));
+    }
     let family = get(adapter, "family").and_then(Value::as_str).unwrap_or("?");
     let adapter_ops = get(adapter, "ops").and_then(Value::as_object);
     let op = get(s, "op").and_then(Value::as_str).unwrap_or("");
@@ -401,7 +495,10 @@ fn check_step(s: &Value, adapter: &Doc, wh: &str, errs: &mut Vec<String>) {
         "force-remove" => ["packages", "force", "purge"].map(String::from).into(),
         "write-file" => ["path", "content"].map(String::from).into(),
         "pm-option" => ["option"].map(String::from).into(),
-        _ => keys(aop.and_then(|d| get(d, "args"))),
+        _ => match table_keys(aop.and_then(|d| get(d, "args"))) {
+            Some(k) => k,
+            None => return errs.push(format!("{wh}: the {family} adapter's {op} has no args table")),
+        },
     };
     let got: BTreeSet<String> = keys(Some(s)).into_iter().filter(|k| k != "op").collect();
     if got != want {
@@ -480,6 +577,10 @@ fn check_step(s: &Value, adapter: &Doc, wh: &str, errs: &mut Vec<String>) {
     }
     if let Some(Value::Object(args)) = aop.and_then(|d| get(d, "args")) {
         for (a, spec) in args {
+            if !spec.is_object() {
+                errs.push(format!("{wh}: the {family} adapter's {op}.{a} has no spec"));
+                continue;
+            }
             check_arg(a, spec, &s[a.as_str()], adapter, wh, errs);
         }
     }
@@ -500,6 +601,16 @@ pub fn check_fix(doc: &Doc, adapters: &BTreeMap<String, Doc>, wh: &str) -> Vec<S
     if !extra.is_empty() {
         errs.push(format!("{wh}: unknown fields {}", sorted(&extra)));
     }
+    if !plain_values(doc) {
+        errs.push(format!(
+            "{wh}: values are only strings, booleans, integers, lists and tables"
+        ));
+    }
+    want_shape(doc, "pre", "tables", wh, &mut errs);
+    want_shape(doc, "post", "tables", wh, &mut errs);
+    want_shape(doc, "restores", "strings", wh, &mut errs);
+    want_shape(doc, "adds", "strings", wh, &mut errs);
+    want_shape(doc, "meta", "table", wh, &mut errs);
     let family = get(doc, "family").and_then(Value::as_str);
     let Some(a) = family.and_then(|f| adapters.get(f)) else {
         errs.push(format!("{wh}: unknown family {:?}", family));
@@ -534,17 +645,9 @@ pub fn check_fix(doc: &Doc, adapters: &BTreeMap<String, Doc>, wh: &str) -> Vec<S
         }
     }
     // The stray-MySQL rule: whatever a fix installs, it installs in place of something that is installed now.
-    let installs = steps.iter().any(|s| {
-        get(s, "op").and_then(Value::as_str) == Some("install")
-            || get(s, "reinstall").is_some_and(|r| match r {
-                Value::Array(a) => !a.is_empty(),
-                Value::String(s) => !s.is_empty(),
-                Value::Bool(b) => *b,
-                Value::Null => false,
-                Value::Number(n) => n.as_f64() != Some(0.0),
-                Value::Object(m) => !m.is_empty(),
-            })
-    });
+    let installs = steps
+        .iter()
+        .any(|s| get(s, "op").and_then(Value::as_str) == Some("install") || get(s, "reinstall").is_some_and(truthy));
     if installs && errs.is_empty() && installed_names(&doc["when"]).is_empty() {
         errs.push(format!(
             "{wh}: a fix that installs packages must be gated on 'installed' of the package it replaces"
@@ -595,13 +698,32 @@ pub fn check_route(
     let Some(a) = get(doc, "family").and_then(Value::as_str).and_then(|f| adapters.get(f)) else {
         return vec![format!("{wh}: unknown family")];
     };
+    if !plain_values(doc) {
+        errs.push(format!(
+            "{wh}: values are only strings, booleans, integers, lists and tables"
+        ));
+    }
+    want_shape(doc, "finish", "table", wh, &mut errs);
+    want_shape(doc, "fixes", "tables", wh, &mut errs);
+    want_shape(doc, "meta", "table", wh, &mut errs);
+    for (i, r) in get(doc, "fixes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        if !(get(r, "id").is_some_and(Value::is_string) && get(r, "name").is_some_and(Value::is_string)) {
+            errs.push(format!("{wh}: fixes[{i}] needs an id and a name"));
+        }
+    }
     let ladder = str_list(get(a, "ladder"));
     let (from, to) = (
         get(doc, "from").and_then(Value::as_str),
         get(doc, "to").and_then(Value::as_str),
     );
     let Some(hops) = from.zip(to).and_then(|(f, t)| route_hops(&ladder, f, t)) else {
-        return vec![format!("{wh}: from/to must be releases on the ladder, in order")];
+        errs.push(format!("{wh}: from/to must be releases on the ladder, in order"));
+        return errs;
     };
     // every release in between, in order. The adapter may let a route pass through a release in one hop.
     let skip = str_list(get(a, "may_skip"));
@@ -627,7 +749,7 @@ pub fn check_route(
     let got = got.unwrap();
     let prune = get(doc, "finish")
         .and_then(|f| get(f, "prune_obsolete"))
-        .is_some_and(|p| p.as_bool() == Some(true));
+        .is_some_and(truthy);
     let hop_keys = keys(get(a, "hop"));
     if prune && !(hop_keys.contains("obsolete") && hop_keys.contains("autoremove")) {
         errs.push(format!(
@@ -744,4 +866,31 @@ pub fn check_atlas(atlas: &Atlas) -> Vec<String> {
     }
     errs.extend(decoy_errors(&atlas.runs, &routes_by_id, &fixes_by_id));
     errs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::atlas::parse_toml;
+
+    #[test]
+    fn a_pattern_cannot_break_out_of_its_anchors() {
+        assert!(full("[a-z]+", "abc"));
+        assert!(!full("[a-z]+", "abc;"));
+        assert!(!full("[a-z]+)|(?:.*", "x; rm -rf /"));
+    }
+
+    #[test]
+    fn dates_and_floats_are_not_values() {
+        let d = parse_toml("schema = \"wend.fix/0\"\nadds = [1979-05-27T07:32:00Z]\n").unwrap();
+        assert!(!plain_values(&d));
+        let f = parse_toml("adds = [1.5]\n").unwrap();
+        assert!(!plain_values(&f));
+        assert!(plain_values(&parse_toml("adds = [\"a\", 1, true]\n").unwrap()));
+    }
+
+    #[test]
+    fn a_byte_order_mark_is_refused_like_tomllib() {
+        assert!(parse_toml("\u{feff}a = 1\n").is_err());
+    }
 }
