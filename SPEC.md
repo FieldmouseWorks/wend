@@ -18,7 +18,7 @@ CentOS 5 to AlmaLinux 10 run is still in progress; everything it might change is
 Plus one **adapter** per distro family (`adapters/<family>.toml`), which holds everything family-specific.
 
 Fixes and routes are *source*: you review them. Runs are *proof*: you don't edit them, CI writes them. Boxes are
-*test code*: they can contain arbitrary shell, because only CI runs them and humans review every change. Clients never
+*test code*: they can contain arbitrary shell, because only CI runs them and every change is reviewed. Clients never
 see a box.
 
 ## Fix

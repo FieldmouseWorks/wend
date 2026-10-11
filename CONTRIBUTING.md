@@ -77,13 +77,17 @@ hunting specifically for:
   writable paths
 - **provenance claims** that the runs don't back up
 
-The verdict is the `claude-review` commit status plus one PR comment that explains it. Claude can't push to `main`,
-approve, or merge, and its status is one required check among several, not a shortcut past them.
+The verdict is one PR comment that explains it. Today the `claude-review` job only applies the label; nothing in
+CI waits for the verdict, so branch protection can't enforce it yet. Until a `claude-review` commit status exists and
+is required, whoever merges checks for the review comment first. The review is one layer among several, not a
+shortcut past them.
 
-### 5. A human merges
+### 5. The maintainer or Claude merges
 
-Always. CODEOWNERS requires a human approval on every PR, and the owner's approval for `tools/`, `adapters/`,
-`SPEC.md` and `.github/`. Nobody, human or bot, can push to `main` directly.
+Only after every required check is green **and** the Claude review has signed off on the PR. The maintainer
+(CODEOWNERS) can merge, and so can Claude, under a standing permission from the maintainer. Either way the bar is
+the same: a red check, an unresolved review finding, or no review at all means no merge. Nobody, human or bot, can
+push to `main` directly.
 
 ## What a good fix looks like
 
