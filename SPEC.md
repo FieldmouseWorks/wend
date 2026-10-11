@@ -138,7 +138,7 @@ Adapter ops are named `<tool>.<verb>`. The adapter declares which ones its famil
   (release packages by hand: epochs and vendor switches), `rpm.drop-arch` (multilib leftovers), `rpm.adopt-rpmnew`,
   `rpm.set-aside-unowned`, `fs.layout` (`usrmove`, `run`), `kv.set` / `kv.unset` (key=value lines),
   `mysql.set-password`, `mysql.clean-shutdown`, `mysql.upgrade-data`, `ssh.generate-host-keys`,
-  `httpd.drop-missing-modules`, `php.mysqli-report-off`.
+  `httpd.drop-missing-modules`, `php.mysqli-report-off`, `service.record`, `service.enable`.
 
 `rpm.bootstrap`, `rpm.transit` and `fs.layout` are surgery: dozens of shell lines each, replayed as root on a
 stranger's box. They are exactly why ops are typed. The surgery is written once, reviewed as a spec change, and every
@@ -532,7 +532,25 @@ then each one `httpd -t` reports it cannot load, repeating until it stops report
 **`php.mysqli-report-off`** (no arguments). PHP 8.1 made mysqli throw exceptions where it used to warn and return
 false. Restores the old default for every script without touching the app: writes
 `/usr/share/wend/php-mysqli-report-off.php` (calls `mysqli_report(MYSQLI_REPORT_OFF)` if the function exists) and
-`/etc/php.d/99-wend-mysqli-report-off.ini` with `auto_prepend_file` pointing at it.
+`/etc/php.d/99-wend-mysqli-report-off.ini` with `auto_prepend_file` pointing at it. `auto_prepend_file` holds one
+file and this ini sorts last, so it never replaces the owner's: if `/etc/php.ini` or another `/etc/php.d/*.ini`
+already sets it (the last setting in PHP's load order, anything but empty or `none`), the op removes its own ini if
+an earlier hop left one, says so, and changes nothing. That box keeps PHP 8.1's exceptions. A per-pool or per-vhost
+`php_value` beats php.d anyway, so the op can't override those either.
+
+**`service.record`** (no arguments). Writes down which SysV services start at boot, before the hop that brings
+systemd: the old packages' scriptlets delete their runlevel links when the new ones replace them, and systemd's
+presets leave most units disabled (on EL, every one but a few base services). Effect: `/var/lib/wend/sysv-enabled`
+lists, one per line, every service with an `S` link in the default runlevel (`initdefault` in `/etc/inittab`, else 3).
+Only the first record is kept: if the file exists, it is left as it is, so it always holds the box's own state.
+Fails if `/etc/rc.d/rc<L>.d` doesn't exist. Reference: `ls /etc/rc.d/rc$L.d | sed -n 's/^S[0-9][0-9]//p' | sort -u`.
+
+**`service.enable`** `unit` (`[a-z0-9][a-z0-9_.-]*`), `like` (a list of the same, at least one). Enables `unit` at
+boot if any service in `like` started at boot: it is in the SysV record, or `systemctl is-enabled` says `enabled`
+now. `like` names what the unit replaces (`mysqld` for `mariadb`) or follows (`httpd` for `php-fpm`, new on EL9, which
+the site needs). Never disables anything, and a unit whose `like` services were all off is left as it is. Fails if
+`systemctl enable` fails (the unit doesn't exist) or the unit isn't `enabled` afterwards. Works offline, as in a
+chroot. Reference: `systemctl enable {unit}`, then `systemctl is-enabled {unit}` must print `enabled`.
 
 ### Argument specs
 
@@ -626,7 +644,9 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
    box? The client trusts a run only if it is attested and refers to the route id it is about to apply.
 10. **Booting.** A chroot can't test init. `drop-sysvinit-for-trixie` is fine in a chroot and dangerous on a real
     machine without a check that init is systemd. Do some fixes need a `requires_boot_check` flag that CI can't
-    satisfy yet?
+    satisfy yet? Part answered for EL: what a chroot *can* see is which units are enabled. `service.record` and
+    `service.enable` carry SysV runlevels onto systemd, and boxes check enablement offline (`systemctl is-enabled`,
+    `chkconfig --list` before EL7). Kernels, bootloaders and the first real boot are still untested.
 11. **The family map.** Move it from box checks into the adapter (a `[families]` table of renames), so a client can
     compute name families for its fingerprint hint and services check without a box? Probably yes; nothing reads it
     outside boxes yet.

@@ -96,6 +96,7 @@ STOP_DB = ("pkill -TERM -x mariadbd; pkill -TERM -x mysqld; i=0; "
            "while pgrep -x 'mariadbd|mysqld' >/dev/null && [ $i -lt 300 ]; do sleep 1; i=$((i+1)); done; "
            "! pgrep -x 'mariadbd|mysqld' >/dev/null")
 SAVED = "/var/lib/wend/saved"  # what adopt-rpmnew replaced and set-aside-unowned moved, kept for the admin
+SYSV_RECORD = "/var/lib/wend/sysv-enabled"  # service.record: the SysV services the box started at boot, one per line
 
 
 def repo_file(adapter, release, shim):
@@ -115,7 +116,8 @@ class Rpm:
     name = "rpm"
     OPS = {"rpm.swap-release", "rpm.drop-arch", "rpm.bootstrap", "rpm.transit", "rpm.adopt-rpmnew",
            "rpm.set-aside-unowned", "fs.layout", "kv.set", "kv.unset", "mysql.set-password", "mysql.clean-shutdown",
-           "mysql.upgrade-data", "ssh.generate-host-keys", "httpd.drop-missing-modules", "php.mysqli-report-off"}
+           "mysql.upgrade-data", "ssh.generate-host-keys", "httpd.drop-missing-modules", "php.mysqli-report-off",
+           "service.record", "service.enable"}
     # no --justdb for fixes: dropping a package from the database while its files stay is how a fix would fake the
     # pkgdb check. rpm.transit uses it internally, on the previous release's leftovers only.
     FORCE = {"depends", "scripts"}
@@ -380,12 +382,41 @@ class Rpm:
 
     def op_php_mysqli_report_off(self, s, adapter, release, v, rel):
         """PHP 8.1 made mysqli throw exceptions where it used to warn and return false. Restore the old default for
-        code written against it (mysqli_report(MYSQLI_REPORT_OFF), run before every script). The app is untouched."""
+        code written against it (mysqli_report(MYSQLI_REPORT_OFF), run before every script). The app is untouched.
+        auto_prepend_file holds one file, so if the owner already set one in php.ini or php.d, theirs stays and this
+        does nothing (and says so): ours would sort last and silently replace it."""
         php = "<?php if (function_exists(\"mysqli_report\")) { mysqli_report(MYSQLI_REPORT_OFF); }\\n"
-        return (f"mkdir -p /usr/share/wend && printf '{php}' > /usr/share/wend/php-mysqli-report-off.php && "
-                "printf 'auto_prepend_file=/usr/share/wend/php-mysqli-report-off.php\\n' > "
-                "/etc/php.d/99-wend-mysqli-report-off.ini")
+        ini = "/etc/php.d/99-wend-mysqli-report-off.ini"
+        return ("V=$(cat /etc/php.ini $(ls /etc/php.d/*.ini 2>/dev/null | grep -vx " + ini + ") 2>/dev/null | "
+                "sed -n 's/^[[:space:]]*auto_prepend_file[[:space:]]*=[[:space:]]*//p' | tail -n 1 | sed 's/;.*//' | "
+                "tr -d \"\\\"' \\t\\r\"); "
+                "if [ -n \"$V\" ] && [ \"$V\" != none ]; then rm -f " + ini + "; "
+                "echo \"auto_prepend_file is already $V: left as is, mysqli_report not changed\"; exit 0; fi; "
+                f"mkdir -p /usr/share/wend && printf '{php}' > /usr/share/wend/php-mysqli-report-off.php && "
+                "printf 'auto_prepend_file=/usr/share/wend/php-mysqli-report-off.php\\n' > " + ini)
 
+    # ----- boot: SysV runlevels to systemd -----
+
+    def op_service_record(self, s, adapter, release, v, rel):
+        """Write down which SysV services start at boot (S links in the default runlevel), before the hop that
+        replaces SysV init with systemd: the old packages' scriptlets remove their links, and systemd's presets
+        leave most new units disabled. Only the first record is kept, so it is always the box's own state."""
+        r = SYSV_RECORD
+        return (f"if [ -e {r} ]; then echo \"kept the earlier record: $(tr '\\n' ' ' < {r})\"; exit 0; fi; "
+                "L=$(sed -n 's/^id:\\([0-9]\\):initdefault:.*/\\1/p' /etc/inittab 2>/dev/null | head -n 1); "
+                "[ -n \"$L\" ] || L=3; [ -d /etc/rc.d/rc$L.d ] || { echo \"no /etc/rc.d/rc$L.d: no SysV runlevels to record\"; exit 1; }; "
+                f"mkdir -p /var/lib/wend && ls /etc/rc.d/rc$L.d | sed -n 's/^S[0-9][0-9]//p' | sort -u > {r}.new && "
+                f"mv {r}.new {r} && echo \"runlevel $L starts: $(tr '\\n' ' ' < {r})\"")
+
+    def op_service_enable(self, s, adapter, release, v, rel):
+        """Enable a systemd unit at boot if the service it replaces or follows was: one of `like` is in the SysV
+        record, or is an enabled unit now. Never disables anything; a unit nothing it follows started is left as is."""
+        like, u = " ".join(s["like"]), s["unit"]
+        return (f"W=''; for n in {like}; do if grep -qx \"$n\" {SYSV_RECORD} 2>/dev/null || "
+                "[ \"$(systemctl is-enabled \"$n\" 2>/dev/null)\" = enabled ]; then W=$n; break; fi; done; "
+                f"[ -n \"$W\" ] || {{ echo 'none of {like} starts at boot: {u} left as is'; exit 0; }}; "
+                f"systemctl enable {u} && [ \"$(systemctl is-enabled {u} 2>/dev/null)\" = enabled ] && "
+                f"echo \"{u} enabled, like $W\"")
 
 BACKENDS = {"apt": Apt(), "rpm": Rpm()}
 
