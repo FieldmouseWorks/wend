@@ -621,7 +621,7 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `writable`, `managed` | the allowlists (globs) named by `write-file` (`writable`) and the `rpm.*` file ops (`managed`). Nothing under `/etc/wend/` is ever on either |
 | `[kv."<path>"]` | the files `kv.*` may touch: `keys` (the only keys it may set or unset; never one that grants access) and `set` (false for files with sections, which only take `kv.unset`) |
 | `force` | required: the `force-remove` flags this family allows, a subset of its backend's (apt: `depends`, `remove-essential`; rpm: `depends`, `scripts`) |
-| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`). rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit` |
+| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`). rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer) |
 | `[mirror]` | rpm: `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts) |
 | `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `autoremove`, `obsolete`, `installed_list`; apt also `apt_conf`, the harness's apt config |
 | `[predicates]` | `installed`, `file`, `file-contains`, `mysql-option` command templates |
@@ -669,18 +669,30 @@ After every hop:
 - the box's checks have to keep passing, running on the live box. Roles that start their own daemons are listed in
   `[vm].skip`, and `[vm].live` gives their live forms, which ask the running services instead.
 
-A hop whose commands fail, or that doesn't come back, ends the replay. Its disk and serial console are kept.
+A hop ends the replay when its commands fail, when the guest doesn't come back, when its network differs from the
+start, or when a check that passed before it fails after the reboot. Its disk and serial console are kept.
+
+The VM box differs from the chroot box in ways a replay can show: it has what the installer adds (`@core`, a kernel, a
+bootloader, a 200 MB `/boot`), SELinux is permissive and the firewall off (kickstart `selinux --permissive`,
+`firewall --disabled`), and `customize` runs before the release's last updates, not after. The kickstart is EL5's
+format for now. Its static address is not the one QEMU's DHCP hands out, so a box that falls back to DHCP shows up
+as a changed network.
 
 The rules:
 
 - Maintainer-run only. It runs the guest on the host that runs it, needs `/dev/kvm`, and is never wired to a CI
-  runner that a pull request can trigger. Its runs go to `.wend/vm/`, with `runner.kind = "vm"`, not to `runs/`.
-- QEMU user-mode networking only: nothing on the host changes. The guest reaches the mirror shim at `10.0.2.2`.
-- The adapter names each start release's installer (`releases.<id>.install`: the `tree` through the shim and its
-  `pxeboot` dir). The shim answers byte ranges, which the installer uses to read package headers.
-- When `reboot` doesn't change `boot_id` within two minutes (the first boot onto systemd: PID 1 is still the old init,
-  and the new release's `reboot` can't talk to it), the harness syncs, remounts read-only and resets with sysrq. It
-  says so in the run (`reboot_forced`).
+  runner that a pull request can trigger. Its runs go to `.wend/vm/` (schema `wend.vmrun/0`, `runner.kind = "vm"`),
+  not to `runs/`.
+- QEMU user-mode networking only: nothing on the host changes. The guest reaches the mirror shim at `10.0.2.2`, and its
+  ssh and http are forwarded to fixed ports on `127.0.0.1`, so a host runs one VM replay at a time.
+- Box: an optional `[vm]` table with `ssh_port` (default 22), `skip` (roles that start their own daemons, which a
+  running box already has) and `live` (role name to shell: the live forms of those checks). The checker holds it to
+  that.
+- Adapter: `releases.<id>.install` names a start release's installer: its `tree` through the shim and the `pxeboot`
+  dir in it. The shim answers single byte ranges, which the installer uses to read package headers.
+- A reboot is proven by a new `boot_id`. When `reboot` doesn't change it within two minutes (the first boot onto
+  systemd: PID 1 is still the old init, and the new release's `reboot` can't talk to it), the harness syncs,
+  remounts read-only and resets with sysrq, and records `reboot_forced`.
 
 ## Open questions
 

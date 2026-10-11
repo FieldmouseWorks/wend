@@ -12,13 +12,15 @@ not runs/ (runs/ holds what CI proved).
   python3 tools/vm.py build BOX            install the box in a VM (cached by box file + adapter)
   python3 tools/vm.py replay ROUTE BOX     walk ROUTE on a fresh copy of it, rebooting after every hop
 
-Networking is QEMU user mode: nothing on the host changes. The guest reaches the mirror shim at 10.0.2.2.
+Networking is QEMU user mode: nothing on the host changes. The guest reaches the mirror shim at 10.0.2.2. The guest's
+ssh and http are forwarded to fixed ports on 127.0.0.1 (10022, 10080), so one host runs one VM replay at a time; a
+second one fails at once ("qemu exited at once"). Disks go under $WEND_WORK/vm (default /var/tmp/wend/vm, which the
+chroot harness, run as root, may own: point WEND_WORK somewhere the user can write).
 """
 import hashlib
 import http.server
 import json
 import os
-import socket
 import subprocess
 import sys
 import threading
@@ -37,6 +39,9 @@ import walk  # noqa: E402
 WORK = os.path.join(sandbox.WORK, "vm")
 GUEST_HOST = "10.0.2.2"  # the host, as QEMU user-mode networking shows it to the guest
 MAC = "52:54:00:12:34:56"
+# The box's static address. Not 10.0.2.15, which slirp's DHCP hands out: a box that falls back to DHCP must show up
+# as a changed network, not pass because DHCP happened to give the same address.
+ADDR = "10.0.2.20"
 SSH_FWD, HTTP_FWD = 10022, 10080
 ENV = "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C HOME=/root TERM=dumb; umask 022; "
 # the guest's network as the live checks compare it after every boot: addresses, default route, resolvers
@@ -62,6 +67,9 @@ def guest_adapter(family):
     return a
 
 
+GUESTS = []  # every qemu this run started: killed on the way out, whatever happened
+
+
 class Guest:
     def __init__(self, disk, key, ssh_port):
         self.disk, self.key, self.ssh_port = disk, key, ssh_port
@@ -71,10 +79,11 @@ class Guest:
     def start(self, extra=()):
         argv = ["qemu-system-x86_64", "-machine", "pc,accel=kvm", "-cpu", "host", "-smp", "2", "-m", "3072",
                 "-drive", f"file={self.disk},if=virtio,format=qcow2", "-netdev",
-                f"user,id=n0,hostfwd=tcp:127.0.0.1:{SSH_FWD}-:{self.ssh_port},hostfwd=tcp:127.0.0.1:{HTTP_FWD}-:80",
+                f"user,id=n0,hostfwd=tcp:127.0.0.1:{SSH_FWD}-{ADDR}:{self.ssh_port},hostfwd=tcp:127.0.0.1:{HTTP_FWD}-{ADDR}:80",
                 "-device", f"virtio-net-pci,netdev=n0,mac={MAC}", "-display", "none",
                 "-serial", f"file:{self.console}", "-monitor", f"unix:{self.monitor_path},server,nowait", *extra]
         self.proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=open(self.console + ".qemu", "a"))
+        GUESTS.append(self)
         time.sleep(2)
         if self.proc.poll() is not None:
             raise RuntimeError(f"qemu exited at once: {open(self.console + '.qemu').read()[-800:]}")
@@ -113,13 +122,16 @@ class Guest:
         nothing (the first boot onto systemd: PID 1 is still the old init, the new tools can't talk to it), sync,
         remount read-only and reset with sysrq (SPEC "VM tier")."""
         before = self.boot_id()
+        if before is None:  # can't prove a reboot without the boot we started from
+            return False, False
         self.ssh("sync; (sleep 2; reboot) >/dev/null 2>&1 &", timeout=30)
         forced, t = False, time.time()
         while time.time() - t < 120:
             time.sleep(10)
-            now = self.boot_id()
-            if now != before:
+            if self.boot_id() not in (None, before):
                 break
+            if not self.running():
+                return False, False
         else:
             forced = True
             self.ssh("sync; echo 1 > /proc/sys/kernel/sysrq; echo s > /proc/sysrq-trigger; sleep 2; "
@@ -135,10 +147,11 @@ class Guest:
         try:
             self.proc.wait(300)
         except subprocess.TimeoutExpired:
-            s = socket.socket(socket.AF_UNIX)
-            s.connect(self.monitor_path)
-            s.sendall(b"quit\n")
-            s.close()
+            self.kill()
+
+    def kill(self):
+        if self.running():
+            self.proc.kill()
             self.proc.wait(30)
 
 
@@ -149,9 +162,9 @@ def kickstart(box_doc, adapter, key_pub):
     return "\n".join([
         "install", f"url --url http://{GUEST_HOST}:{adapter['mirror']['shim'].rsplit(':', 1)[1]}/{inst['tree']}",
         "text", "skipx", "lang en_US.UTF-8", "keyboard us",
-        # a static address, as servers have: the live checks hold the guest to it after every boot
-        "network --device eth0 --bootproto static --ip 10.0.2.15 --netmask 255.255.255.0 --gateway 10.0.2.2 "
-        f"--nameserver 10.0.2.3 --hostname {k.get('hostname', 'oldbox.example.org')}",
+        # a static address, as servers have: the live checks compare the guest's addresses with it after every boot
+        f"network --device eth0 --bootproto static --ip {ADDR} --netmask 255.255.255.0 --gateway 10.0.2.2 "
+        "--nameserver 10.0.2.3 --hostname wend-vm.example.org",
         "rootpw --iscrypted !", "firewall --disabled", "selinux --permissive", "authconfig --enableshadow --enablemd5",
         "timezone --utc UTC", 'bootloader --location=mbr --append="console=tty0 console=ttyS0,115200"', "zerombr",
         "clearpart --all --initlabel", "part /boot --fstype ext3 --size=200", "part swap --size=1024",
@@ -184,7 +197,7 @@ def build(box_id):
     box_doc = load(f"boxes/{box_id}/box.toml")
     fam = box_doc["family"]
     raw = open(os.path.join(ROOT, f"boxes/{box_id}/box.toml"), "rb").read() + \
-        open(os.path.join(ROOT, f"adapters/{fam}.toml"), "rb").read()
+        open(os.path.join(ROOT, f"adapters/{fam}.toml"), "rb").read() + open(os.path.abspath(__file__), "rb").read()
     d = os.path.join(WORK, f"{box_id.replace('/', '_')}-{hashlib.sha256(raw).hexdigest()[:12]}")
     base = os.path.join(d, "base.qcow2")
     if os.path.exists(base):
@@ -255,22 +268,26 @@ ls main-*.rc | while read r; do cat $r; done | grep -qv '^0$' && echo 1 > DONE |
 def run_hop(g, cmds, after):
     """The hop's commands inside the guest, detached: the transaction replaces sshd and glibc under the session.
     Stops at the first failing command, then runs `after` whatever happened (SPEC "How a hop runs")."""
-    g.ssh("rm -rf /root/wend-hop && mkdir -p /root/wend-hop")
+    rc, o = g.ssh("rm -rf /root/wend-hop && mkdir -p /root/wend-hop && test ! -e /root/wend-hop/DONE")
+    if rc:  # the previous hop's directory (and its DONE) is on this overlay: never read it as this hop's result
+        raise RuntimeError(f"clearing the previous hop's work dir in the guest failed: {o}")
     files = {"runner.sh": RUNNER, **{f"main-{i:02d}.sh": c + "\n" for i, c in enumerate(cmds)},
              **{f"after-{i:02d}.sh": c + "\n" for i, c in enumerate(after)}}
     for name, body in files.items():
         rc, o = g.ssh(f"cat > /root/wend-hop/{name}", stdin=ENV + "\n" + body if name != "runner.sh" else body)
         if rc:
             raise RuntimeError(f"copying {name} into the guest failed: {o}")
-    g.ssh("cd /root/wend-hop && (setsid nohup sh runner.sh >runner.log 2>&1 </dev/null &)", timeout=30)
+    rc, o = g.ssh("cd /root/wend-hop && (setsid nohup sh runner.sh >runner.log 2>&1 </dev/null &)", timeout=30)
+    if rc:
+        raise RuntimeError(f"starting the hop in the guest failed: {o}")
     t = time.time()
-    while time.time() - t < 4 * 3600:
+    while time.time() - t < 4 * 3600 and g.running():
         time.sleep(20)
         rc, o = g.ssh("cat /root/wend-hop/DONE 2>/dev/null", timeout=60)
         if rc == 0 and o.strip() in ("0", "1"):
             break
     else:
-        return False, "the hop didn't finish in 4 hours"
+        return False, "the hop didn't finish in 4 hours, or the guest stopped"
     rc, o = g.ssh("cd /root/wend-hop; for f in main-*.sh after-*.sh; do [ -f $f.rc ] || continue; "
                   "echo \"### $f rc=$(cat $f.rc)\"; tail -c 3000 $f.out; done", timeout=120)
     return g.ssh("cat /root/wend-hop/DONE")[1].strip() == "0", o
@@ -290,7 +307,7 @@ def replay(route_path, box_id):
     w = type("W", (), {})()  # the harness's own hop_cmds (tools/walk.py), on a walk with no chroot box
     w.adapter = a
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    out_dir = os.path.join(ROOT, ".wend", "vm", f"{stamp}-{box_id.replace('/', '_')}")
+    out_dir = os.path.join(ROOT, ".wend", "vm", f"{stamp}-{box_id.replace('/', '_')}-{os.getpid()}")
     os.makedirs(out_dir)
     key, prev = os.path.join(d, "key"), os.path.join(d, "base.qcow2")
     port = box_doc.get("vm", {}).get("ssh_port", 22)
@@ -306,8 +323,13 @@ def replay(route_path, box_id):
             break
         start_net = start_net or g.ssh(NET)[1]
         before = checks(g, box_doc, a)
-        matched = [f for f in pinned if f["hop"] == hop and
-                   g.ssh(f"{backends.pred_sh(f['when'], a)} >/dev/null 2>&1")[0] == 0]
+        matched = []
+        for f in (f for f in pinned if f["hop"] == hop):
+            rc = g.ssh(f"{backends.pred_sh(f['when'], a)} >/dev/null 2>&1")[0]
+            if rc == 255:  # ssh itself failed: not an answer about the precondition
+                raise RuntimeError(f"couldn't evaluate {f['meta']['name']}'s precondition: ssh failed")
+            if rc == 0:
+                matched.append(f)
         log(f"hop to {hop}: {[f['meta']['name'] for f in matched]}")
         cmds = walk.Walk.hop_cmds(w, hop, matched)
         after = [backends.fill(c, w.vars) for c in a["hop"].get("after", [])]
@@ -316,7 +338,7 @@ def replay(route_path, box_id):
         open(os.path.join(out_dir, f"{hop}.steps.log"), "w").write(steps)
         h = {"to": hop, "fired_names": [f["meta"]["name"] for f in matched], "commands_ok": ok,
              "seconds": round(time.time() - t0)}
-        back, forced = g.reboot() if ok else (False, False)
+        back, forced = g.reboot() if ok else (None, False)  # None: commands failed, no reboot tried
         h["rebooted"], h["reboot_forced"] = back, forced
         if back:
             net = g.ssh(NET)[1]
@@ -338,7 +360,7 @@ def replay(route_path, box_id):
         if not h["ok"]:
             break
         prev = disk
-    run = {"schema": "wend.run/0", "route": check.content_id(route), "box": box_id, "from": route["from"],
+    run = {"schema": "wend.vmrun/0", "route": check.content_id(route), "box": box_id, "from": route["from"],
            "to": route["to"], "started": stamp, "result": "pass" if len(hops) == len(route["hops"]) and
            all(h["ok"] for h in hops) else "fail", "hops": hops,
            "runner": {"kind": "vm", "host": os.uname().nodename, "kernel": os.uname().release}}
@@ -347,11 +369,18 @@ def replay(route_path, box_id):
     return 0 if run["result"] == "pass" else 1
 
 
-if __name__ == "__main__":
-    args = sys.argv[1:]
+def main(args):
     if args[:1] == ["build"] and len(args) == 2:
         build(args[1])
-        sys.exit(0)
+        return 0
     if args[:1] == ["replay"] and len(args) == 3:
-        sys.exit(replay(args[1], args[2]))
-    sys.exit(__doc__)
+        return replay(args[1], args[2])
+    return __doc__
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    finally:
+        for guest in GUESTS:  # an exception or Ctrl-C must not leave a guest holding 3 GB and the forwarded ports
+            guest.kill()

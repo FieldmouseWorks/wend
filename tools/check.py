@@ -305,6 +305,13 @@ def check_box(doc, adapters, where):
             errs.append(f"{where}: missing {k}")
     if not set(doc.get("isolate", [])) <= set(doc.get("roles", {})):
         errs.append(f"{where}: isolate names roles the box does not have")
+    vm = doc.get("vm", {})  # tools/vm.py (SPEC "VM tier")
+    if not isinstance(vm, dict) or set(vm) - {"ssh_port", "skip", "live"}:
+        errs.append(f"{where}: [vm] takes only ssh_port, skip and live")
+    elif not isinstance(vm.get("ssh_port", 22), int) or \
+            not isinstance(vm.get("skip", []), list) or not set(vm.get("skip", [])) <= set(doc.get("roles", {})) or \
+            not isinstance(vm.get("live", {}), dict) or not all(isinstance(c, str) for c in vm.get("live", {}).values()):
+        errs.append(f"{where}: [vm] needs an integer ssh_port, skip naming roles the box has, and live as shell strings")
     return errs
 
 
