@@ -77,8 +77,10 @@ hunting specifically for:
   writable paths
 - **provenance claims** that the runs don't back up
 
-The verdict is one PR comment that explains it (later also a `claude-review` commit status). The review is one
-required layer among several, not a shortcut past them.
+The verdict is one PR comment that explains it. Today the `claude-review` job only applies the label; nothing in
+CI waits for the verdict, so branch protection can't enforce it yet. Until a `claude-review` commit status exists and
+is required, whoever merges checks for the review comment first. The review is one layer among several, not a
+shortcut past them.
 
 ### 5. The maintainer or Claude merges
 
