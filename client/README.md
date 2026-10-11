@@ -65,7 +65,8 @@ The same CI box, built by `./wend replay`, walked by both engines on one machine
 
 | Box | Route | Python | Rust |
 | --- | --- | --- | --- |
-| debian/etch-web | etch-to-trixie | 13.7, 9 hops, 9 fixes, 10/10 checks, 58 pruned, 14.7 min | identical, 13.5 min |
+| debian/etch-web | etch-to-trixie | 13.7, 9 hops, 9 fixes, 10/10 checks, 58 obsolete pruned | identical |
+| el/centos5-web | centos5-to-alma10 | AlmaLinux 10.2, 4 hops, 26 fixes, 12/12 checks | identical |
 
 "Identical" means the run JSON matches field for field (every hop's fired fix ids, the final checks, the obsolete
 package counts) except timing, the runner line and `log_sha256`, which hashes command output.
