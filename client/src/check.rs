@@ -15,6 +15,12 @@ use std::sync::Mutex;
 
 /// a name family: no digits or dots, nothing from the first "-" on (SPEC "restores and adds")
 pub const FAMILY: &str = r"[A-Za-z_+]+";
+
+/// A package's name family (SPEC "restores and adds"): digits and dots removed, nothing from the first "-" on.
+pub fn name_family(pkg: &str) -> String {
+    let s: String = pkg.chars().filter(|c| !c.is_ascii_digit() && *c != '.').collect();
+    s.split('-').next().unwrap_or_default().to_string()
+}
 /// rpm names have capitals (NetworkManager) and underscores
 pub const PKG: &str = r"[A-Za-z0-9][A-Za-z0-9._+-]*";
 const ETC_PATH: &str = r"/etc/[A-Za-z0-9_./-]+";
@@ -664,9 +670,29 @@ pub fn check_fix(doc: &Doc, adapters: &BTreeMap<String, Doc>, wh: &str) -> Vec<S
             ));
         }
     }
+    // a fix may only declare what it installs itself, so review sees both together
+    let installs: BTreeSet<String> = steps
+        .iter()
+        .flat_map(|s| {
+            let key = if get(s, "op").and_then(Value::as_str) == Some("install") {
+                "packages"
+            } else {
+                "reinstall"
+            };
+            str_list(get(s, key))
+        })
+        .map(|p| name_family(&p))
+        .collect();
     for f in get(doc, "adds").and_then(Value::as_array).into_iter().flatten() {
-        if !f.as_str().is_some_and(|s| full(FAMILY, s)) {
-            errs.push(format!("{wh}: adds {f}, which is not a name family ({FAMILY})"));
+        match f.as_str() {
+            Some(s) if full(FAMILY, s) => {
+                if !installs.contains(s) {
+                    errs.push(format!(
+                        "{wh}: adds {f}, but none of the fix's own install steps installs a package of that family"
+                    ));
+                }
+            }
+            _ => errs.push(format!("{wh}: adds {f}, which is not a name family ({FAMILY})")),
         }
     }
     let name = get(doc, "meta").and_then(|m| get(m, "name")).and_then(Value::as_str);

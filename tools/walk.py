@@ -8,6 +8,7 @@ With a model, a hop that fails asks it for the missing fix. Proposals go through
 import hashlib
 import json
 import os
+import re
 import time
 
 import backends
@@ -65,6 +66,8 @@ class Walk:
         verify = [fill(h["verify"], v)] if "verify" in h else []  # the release file says we arrived
         # SPEC "restores and adds": the families the fired fixes may introduce, for the services check
         adds = sorted({x for f in fixes for x in f.get("adds", [])})
+        if not all(isinstance(x, str) and re.fullmatch(check.FAMILY, x) for x in adds):  # never shell, on any path
+            raise ValueError(f"adds must be name families ({check.FAMILY}), not {adds!r}")
         declare = [f"mkdir -p /var/lib/wend && printf '{''.join(x + chr(92) + 'n' for x in adds)}' >> {ADDED}"] if adds else []
         return ([fill(h["set_release"], v), fill(h["refresh"], v)] + comp("pre") + [fill(c, v) for c in upgrade] +
                 comp("post") + declare + cleanup + verify)

@@ -64,6 +64,9 @@ pub fn hop_plan(adapter: &Doc, hop: &str, fixes: &[&Doc]) -> Result<HopPlan, Str
         .iter()
         .flat_map(|f| list_of(f, "adds").unwrap_or_default())
         .collect();
+    if let Some(bad) = adds.iter().find(|x| !crate::check::full(crate::check::FAMILY, x)) {
+        return Err(format!("adds must be name families, not {bad:?}")); // never shell, on any path
+    }
     if !adds.is_empty() {
         let lines: String = adds.iter().map(|x| format!("{x}\\n")).collect();
         commands.push(format!("mkdir -p /var/lib/wend && printf '{lines}' >> {ADDED}"));
@@ -122,5 +125,8 @@ mod tests {
         let at = p.commands.iter().position(|c| c == want).expect("no adds step");
         let post = p.commands.iter().rposition(|c| c.contains("vsftpd")).unwrap();
         assert!(at > post);
+        // a direct walk doesn't run the checker first: the compile refuses a non-family itself
+        let evil = fix("\"x' ; reboot ; '\"");
+        assert!(hop_plan(&a, "alma9", &[&evil]).is_err());
     }
 }
