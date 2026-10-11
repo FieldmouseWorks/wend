@@ -686,8 +686,10 @@ The rules:
 - QEMU user-mode networking only: nothing on the host changes. The guest reaches the mirror shim at `10.0.2.2`, and its
   ssh and http are forwarded to fixed ports on `127.0.0.1`, so a host runs one VM replay at a time.
 - Box: an optional `[vm]` table with `ssh_port` (default 22), `skip` (roles that start their own daemons, which a
-  running box already has) and `live` (role name to shell: the live forms of those checks). The checker holds it to
-  that.
+  running box already has) and `live` (role name to shell: the live forms of those checks; every skipped role needs
+  one, so skipping never drops a check). The checker holds it to that.
+- A route that ends with `prune_obsolete` is refused for now: the VM tier has no prune step, and won't report a pass
+  that skipped it.
 - Adapter: `releases.<id>.install` names a start release's installer: its `tree` through the shim and the `pxeboot`
   dir in it. The shim answers single byte ranges, which the installer uses to read package headers.
 - A reboot is proven by a new `boot_id`. When `reboot` doesn't change it within two minutes (the first boot onto

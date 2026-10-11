@@ -298,6 +298,9 @@ def run_hop(g, cmds, after):
 def replay(route_path, box_id):
     d, box_doc = build(box_id)
     route = load(route_path)
+    if route.get("finish", {}).get("prune_obsolete"):  # the chroot walk's finish step; no VM equivalent yet
+        raise SystemExit(f"{route_path} ends with prune_obsolete, which the VM tier doesn't run yet: refusing to "
+                         "report a pass that skipped it")
     a = guest_adapter(route["family"])
     sandbox.ensure_mirror(load(f"adapters/{route['family']}.toml"))
     fixes = {}
@@ -322,6 +325,7 @@ def replay(route_path, box_id):
         g.start()
         if not g.wait_ssh():
             hops.append({"to": hop, "ok": False, "stage": "the guest didn't come up before the hop"})
+            g.kill()  # free the forwarded ports; the overlay and console stay for a look
             break
         start_net = start_net or g.ssh(NET)[1]
         before = checks(g, box_doc, a)
