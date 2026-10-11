@@ -54,11 +54,12 @@ Dpkg::Options { "--force-confdef"; "--force-confold"; };
 installed = "dpkg-query -W -f '${Status}' {pkg} 2>/dev/null | grep -q 'ok installed'"
 file = "test -f {path}"
 file-contains = "grep -qF '{text}' {path}"
-# The server's own view: the server-group options in {path} and everything it includes, last one winning, comments and
-# spacing already resolved. Groups by name, not --mysqld (MySQL's my_print_defaults lacks that flag), plus the
-# installed server's versioned groups ([mysqld-5.1], [mariadb-10.11]). Keys match with - and _ alike. Without a value,
-# true when the key is set.
-mysql-option = '''v=$( (mysqld --version || /usr/sbin/mysqld --version || /usr/libexec/mysqld --version || mariadbd --version) 2>/dev/null | sed -n 's/.* Ver \([0-9]*\.[0-9]*\).*/\1/p' | head -n 1); my_print_defaults --defaults-file={path} mysqld server mariadb mariadbd mariadb-server client-server galera ${v:+mysqld-$v mariadb-$v mariadbd-$v} 2>/dev/null | awk -v k='--{key}' -v v='{value}' -v any={any} '{ n = $0; sub(/=.*/, "", n); gsub(/_/, "-", n); if (n == k) { f = 1; x = $0; sub(/^[^=]*=?/, "", x) } } END { exit !(f && (any || x == v)) }''''
+# The server's own view: the options the installed server reads from {path} and everything it includes, last one
+# winning, comments and spacing already resolved. The groups come from the server itself (mysqld --verbose --help
+# lists them: mysqld server mysqld-5.0 on MySQL 5.0; mariadb, mariadbd, galera and the versioned ones on MariaDB), so
+# a group only the other server reads never counts. No server binary, no groups: false. Keys match with - and _ alike.
+# Without a value, true when the key is set.
+mysql-option = '''g=$( (mysqld --verbose --help || /usr/sbin/mysqld --verbose --help || /usr/libexec/mysqld --verbose --help || mariadbd --verbose --help) 2>/dev/null | sed -n 's/^The following groups are read: //p' | head -n 1); [ -n "$g" ] && my_print_defaults --defaults-file={path} $g 2>/dev/null | awk -v k='--{key}' -v v='{value}' -v any={any} '{ n = $0; sub(/=.*/, "", n); gsub(/_/, "-", n); if (n == k) { f = 1; x = $0; sub(/^[^=]*=?/, "", x) } } END { exit !(f && (any || x == v)) }''''
 
 [pm_options.overwrite-conflicting-files]
 # Lets dpkg replace a file that another package owns (the systemd-sysv vs sysvinit halt.8 clash on buster).
