@@ -79,6 +79,14 @@ For each hop on a route, the harness (not the fix) does:
 Every `when` is evaluated **once, before step 1**, on the box as it is then. A fix can't observe another fix's effect
 on the same hop. Ordering is route order. (Open question 6.)
 
+The harness runs everything it does in a root (box build, every `when`, hop steps 1 to 9, health checks, prune) with
+**umask 022**, set by the harness itself, never taken from the caller. Op references create files and directories
+(`write-file` on a new path, `php.mysqli-report-off`, the work dirs) and rely on that: on a box whose root sessions
+default to 077 (AlmaLinux 10's `/etc/login.defs`), php-fpm couldn't read the mysqli shim and every page of an
+upgraded site was a 500 (seen replaying the EL route in a real VM, wend#13). A chroot run on CI inherits 022, so CI
+alone never sees this. The rule covers only the work on the root: the files written for the person (run files, step logs, gap
+reports) are written under the caller's umask, since they can hold check output the person hasn't scrubbed yet.
+
 ### Preconditions
 
 A precondition is a table with exactly one key:
@@ -644,6 +652,7 @@ other brace syntax is touched, so `${...}` and `%{...}` pass through). Values fo
 - **Unmount and verify before any cleanup.** Before deleting or rsync-restoring a box root, unmount everything under
   it and check `/proc/self/mountinfo` for leftovers. If anything is still mounted, refuse to delete.
 - Daemons never start on their own (`policy-rc.d` on Debian). Health checks start what they need and stop it again.
+- The harness sets umask 022 for itself before it touches a root (see "How a hop runs"), never taking the caller's.
 - A rollback restores the whole root from the pre-hop snapshot. Nothing from a failed hop survives.
 
 ## Open questions

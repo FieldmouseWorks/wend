@@ -87,11 +87,16 @@ class Agent:
         self.n = len([f for f in os.listdir(self.dir) if f.startswith("ask-")])
         self.label = f"agent ({os.environ.get('WEND_AGENT_NAME', 'unnamed agent; set WEND_AGENT_NAME')})"
         self.usage = {}
+        # the caller's umask, read before discover sets 022 for its walk: the questions carry unscrubbed check
+        # output, so they are written for the caller, under the caller's mask (SPEC "How a hop runs")
+        self.mask = os.umask(0o077)
+        os.umask(self.mask)
 
     def ask(self, prompt):
         self.n += 1
         q, a = f"{self.dir}/ask-{self.n}.md", f"{self.dir}/answer-{self.n}.json"
-        open(q, "w").write(prompt)
+        with os.fdopen(os.open(q, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o666 & ~self.mask), "w") as f:
+            f.write(prompt)
         print(f"WEND AGENT QUESTION: read {q} and write your JSON answer to {a}", flush=True)
         deadline = time.time() + float(os.environ.get("WEND_AGENT_TIMEOUT", "3600"))
         while time.time() < deadline:

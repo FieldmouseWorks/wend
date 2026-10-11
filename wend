@@ -15,6 +15,7 @@ ROUTE is a path like routes/debian/etch-to-trixie.toml; BOX is an id like debian
 Python 3.11+, standard library only. The sandbox needs root, chroot and rsync, plus debootstrap for Debian boxes or
 rpm2cpio, cpio, curl, unshare and ip (iproute2) for EL boxes.
 """
+import contextlib
 import glob
 import json
 import os
@@ -45,6 +46,18 @@ class Repo:
 
 HOST_TOOLS = {"debian": ["debootstrap"], "el": ["rpm2cpio", "cpio", "curl", "unshare", "ip"]}
 APT_NAMES = {"ip": "iproute2", "unshare": "util-linux"}
+
+
+@contextlib.contextmanager
+def root_umask():
+    """SPEC "How a hop runs": everything the harness runs or writes in a root gets umask 022, whatever the caller's is
+    (AlmaLinux 10 root sessions default to 077, and files a fix creates must be readable by daemons). Only the work on
+    the root: run files, step logs and reports are written under the caller's mask again."""
+    old = os.umask(0o022)
+    try:
+        yield
+    finally:
+        os.umask(old)
 
 
 def need_root(families=("debian",)):
@@ -83,12 +96,16 @@ def cmd_replay(route_path, box, out=None, keep=False, steps=None):
     need_root([box.split("/")[0]])
     import walk
     repo = Repo()
-    w = walk.Walk(repo, repo.routes[route_path], box)
+    w = None
     try:
-        run = w.walk()
+        with root_umask():
+            w = walk.Walk(repo, repo.routes[route_path], box)
+            try:
+                run = w.walk()
+            finally:
+                w.close(keep)
     finally:
-        w.close(keep)
-        if steps:
+        if steps and w:
             json.dump(w.steps, open(steps, "w"), indent=1)
     p = save_run(run, out)
     print(summary(run), "\nrun:", os.path.relpath(p, ROOT))
@@ -114,11 +131,12 @@ def cmd_discover(family, frm, to, box, max_calls=12):
                               "meta": {"name": f"{frm}-to-{to}"}}
     route = repo.routes[rpath]
     d = discover.Discoverer(provider, max_calls)
-    w = walk.Walk(repo, route, box)
-    try:
-        run = w.walk(d)
-    finally:
-        w.close()
+    with root_umask():
+        w = walk.Walk(repo, route, box)
+        try:
+            run = w.walk(d)
+        finally:
+            w.close()
     # new fixes become files and get pinned; existing fixes that fired here now claim this box (meta only: same id)
     for f in d.added:
         p = f"fixes/{family}/{f['hop']}/{f['meta']['name']}.toml"
@@ -157,6 +175,7 @@ def _set_fires_on(text, boxes):
 
 
 def cmd_verify(base=None, all_=False, jobs=2):
+    # no root_umask here: verify only runs replays, as child processes that set it for their own walk
     if subprocess.run([sys.executable, "-B", f"{ROOT}/tools/check.py"]).returncode or \
             subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_check.py"], stdout=subprocess.DEVNULL).returncode:
         print("schema check failed; fix that first")
@@ -233,7 +252,8 @@ def main(argv):
     if c == "check":
         a = subprocess.run([sys.executable, "-B", f"{ROOT}/tools/check.py", *rest]).returncode
         b = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_check.py"]).returncode
-        return a or b
+        u = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_umask.py"]).returncode
+        return a or b or u
     if c == "list":
         return cmd_list()
     if c == "replay":

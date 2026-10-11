@@ -344,7 +344,27 @@ fn proxied_adapter(a: &Doc, base: &str) -> Result<Doc, String> {
     Ok(a)
 }
 
+/// SPEC "How a hop runs": everything the client runs or writes in a root gets umask 022, whatever the caller's is
+/// (AlmaLinux 10 root sessions default to 077, and files a fix creates must be readable by daemons). Dropping it puts
+/// the caller's mask back, for the files written for the caller.
+struct RootUmask(libc::mode_t);
+
+impl RootUmask {
+    fn set() -> RootUmask {
+        // SAFETY: umask only sets this process's file mode mask; it can't fail and touches no memory.
+        RootUmask(unsafe { libc::umask(0o022) })
+    }
+}
+
+impl Drop for RootUmask {
+    fn drop(&mut self) {
+        // SAFETY: as above.
+        unsafe { libc::umask(self.0) };
+    }
+}
+
 fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
+    let mask = RootUmask::set();
     let (rpath, r) = atlas.route(route)?;
     let a = adapter_of(atlas, r)?;
     let root = o
@@ -489,6 +509,7 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
         )),
         (r, _) => r,
     };
+    drop(mask); // the steps and the run file are the caller's, written under the caller's mask
     if let Some(p) = &o.steps {
         let _ = std::fs::write(
             p,
@@ -543,4 +564,39 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
         }
     );
     Ok(run["result"] == "pass")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RootUmask;
+
+    fn mask_now() -> libc::mode_t {
+        // SAFETY: reads the mask by setting it and putting it straight back.
+        unsafe {
+            let m = libc::umask(0o077);
+            libc::umask(m);
+            m
+        }
+    }
+
+    /// The only test that touches the process umask: 022 while the guard lives, the caller's mask after, also when
+    /// the walk panics.
+    #[test]
+    fn root_umask_is_022_inside_and_restores_the_callers_mask() {
+        // SAFETY: as above.
+        let saved = unsafe { libc::umask(0o077) };
+        let g = RootUmask::set();
+        assert_eq!(mask_now(), 0o022);
+        drop(g);
+        assert_eq!(mask_now(), 0o077);
+        let r = std::panic::catch_unwind(|| {
+            let _g = RootUmask::set();
+            assert_eq!(mask_now(), 0o022);
+            panic!("walk failed");
+        });
+        assert!(r.is_err());
+        assert_eq!(mask_now(), 0o077);
+        // SAFETY: as above.
+        unsafe { libc::umask(saved) };
+    }
 }

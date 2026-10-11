@@ -158,4 +158,47 @@ for name, run, want in (("decoy hit: the MySQL fix fired on the web box", fake, 
 assert check.content_id(good) != check.content_id({**good, "when": {"installed": "x"}})
 assert check.content_id(good) == check.content_id({**good, "meta": {"name": "renamed"}}), "meta must not change ids"
 print("ids: content changes the id, renaming does not")
+# SPEC "How a hop runs": every command that touches a root sets umask 022 first (a 077 caller made the mysqli shim
+# unreadable to php-fpm on AlmaLinux 10, wend#13). Both engines, checked by structure: CI's own umask is 022.
+import ast  # noqa: E402
+import re  # noqa: E402
+tree = ast.parse(open(os.path.join(check.ROOT, "wend")).read())
+fns = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+# root_umask() sets 022 and puts the caller's mask back in a finally. Checked statically: the gate's schema job judges a
+# PR with the base branch's tools and never runs the PR's own `wend` (tools/test_umask.py does that, in the client job
+# and `wend check`)
+fn = fns.get("root_umask")
+body = [b for b in fn.body if not (isinstance(b, ast.Expr) and isinstance(b.value, ast.Constant))] if fn else []
+ok = (fn is not None and [ast.unparse(d) for d in fn.decorator_list] == ["contextlib.contextmanager"]
+      and len(body) == 2 and ast.unparse(body[0]) == "old = os.umask(18)"  # 18 == 0o022
+      and isinstance(body[1], ast.Try) and [ast.unparse(x) for x in body[1].body] == ["yield"]
+      and [ast.unparse(x) for x in body[1].finalbody] == ["os.umask(old)"] and not body[1].handlers)
+print(("passed  " if ok else "WRONG   ") + "wend root_umask() sets 022 and restores the caller's mask in a finally")
+bad += not ok
+
+def walk_under_mask(fn):
+    """Walk(...) is built only inside `with root_umask():`, and the run and step files are written outside it."""
+    withs = [n for n in ast.walk(fn) if isinstance(n, ast.With) and any(
+        isinstance(i.context_expr, ast.Call) and getattr(i.context_expr.func, "id", "") == "root_umask" for i in n.items)]
+    inside = {id(x) for w in withs for x in ast.walk(w)}
+    walks = [n for n in ast.walk(fn) if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "Walk"]
+    writes = [n for n in ast.walk(fn) if isinstance(n, ast.Call) and (getattr(n.func, "id", "") == "save_run" or
+                                                                       getattr(n.func, "attr", "") == "dump")]
+    return bool(withs) and bool(walks) and all(id(x) in inside for x in walks) and all(id(x) not in inside for x in writes)
+
+
+for name in ("cmd_replay", "cmd_discover"):  # every command that walks a root; a missing one fails
+    ok = name in fns and walk_under_mask(fns[name])
+    print(("passed  " if ok else "WRONG   ") + f"wend {name} walks under umask 022, writes its files under the caller's")
+    bad += not ok
+rs = open(os.path.join(check.ROOT, "client", "src", "main.rs")).read()
+walk = rs[rs.index("fn cmd_walk("):]
+walk = walk[:walk.index("\n}\n")]
+walk = re.sub(r"/\*.*?\*/", "", walk, flags=re.S)  # comments don't count
+code = "\n".join(ln.split("//")[0].strip() for ln in walk.split("\n")[1:])
+body = [ln for ln in code.split("\n") if ln]
+ok = (body[0] == "let mask = RootUmask::set();" and "drop(mask);" in code
+      and code.index("drop(mask);") < code.index("&o.steps") < code.index("&o.out"))
+print(("passed  " if ok else "WRONG   ") + "client cmd_walk walks under RootUmask, drops it before --steps and --out")
+bad += not ok
 sys.exit(1 if bad else 0)
