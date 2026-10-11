@@ -91,7 +91,9 @@ mod tests {
 
 /// Paths the client mounts under or deletes: plain ones only, so they read back from /proc/mounts unchanged.
 pub fn plain_path(p: &Path) -> Result<(), String> {
-    let s = p.to_string_lossy();
+    let Some(s) = p.to_str() else {
+        return Err(format!("{}: the root and work paths must be UTF-8", p.display()));
+    };
     if s.chars().any(|c| c.is_whitespace() || c == '\\' || c.is_control()) {
         return Err(format!(
             "{s:?}: the root and work paths can't contain whitespace or backslashes"
@@ -196,20 +198,36 @@ impl Root {
              mkdir pts shm && ln -s /proc/self/fd fd && ln -s fd/0 stdin && ln -s fd/1 stdout && ln -s fd/2 stderr && \
              mount -t devpts -o newinstance,ptmxmode=0666 devpts {dev}/pts && ln -sf pts/ptmx {dev}/ptmx"
         ));
-        // the host's resolver for the distro mirrors; never through a symlink (a real machine's resolv.conf often
-        // points into /run, which would be the host's)
-        if let (Ok(src), Ok(etc)) = (fs::read("/etc/resolv.conf"), self.inside("etc")) {
-            let f = fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(Path::new(&etc).join("resolv.conf"));
-            if let Ok(mut f) = f {
-                let _ = f.write_all(&src);
-            }
-        }
         Ok(())
+    }
+
+    /// Lend the root the host's resolver for one command (the distro mirrors need name service), remembering what
+    /// was there. Never through a symlink: a real machine's resolv.conf often points into /run, which would be the
+    /// host's.
+    fn lend_resolver(&self) -> Option<Lent> {
+        let host = fs::read("/etc/resolv.conf").ok()?;
+        let path = Path::new(&self.inside("etc").ok()?).join("resolv.conf");
+        let before = match fs::symlink_metadata(&path) {
+            Ok(m) if m.is_file() => Some(fs::read(&path).ok()?),
+            Ok(_) => return None,
+            Err(_) => None,
+        };
+        write_nofollow(&path, &host).ok()?;
+        Some(Lent { path, before, host })
+    }
+
+    /// Put the root's own resolv.conf back, unless the command itself replaced it.
+    fn return_resolver(&self, lent: Option<Lent>) {
+        let Some(l) = lent else { return };
+        let ours = fs::symlink_metadata(&l.path).is_ok_and(|m| m.is_file())
+            && fs::read(&l.path).is_ok_and(|now| now == l.host);
+        if !ours {
+            return;
+        }
+        let _ = match &l.before {
+            Some(b) => write_nofollow(&l.path, b),
+            None => fs::remove_file(&l.path),
+        };
     }
 
     fn umount(&self) -> Result<(), String> {
@@ -232,12 +250,16 @@ impl Root {
     /// Run a shell command inside the root. `isolated`: a network namespace of its own with only loopback, for
     /// checks that start daemons. Exit 124 on timeout, as in tools/sandbox.py.
     pub fn run(&self, cmd: &str, timeout: u64, isolated: bool) -> (i32, String) {
+        let lent = self.lend_resolver();
         if let Err(e) = self.mount() {
             let _ = self.umount();
+            self.return_resolver(lent);
             return (125, e);
         }
         let r = self.run_mounted(cmd, timeout, isolated);
-        if let Err(e) = self.umount() {
+        let u = self.umount();
+        self.return_resolver(lent);
+        if let Err(e) = u {
             return (125, format!("{}\n{e}", r.1));
         }
         r
@@ -292,7 +314,7 @@ impl Root {
         unmount_all(dst)?;
         fs::create_dir_all(dst).map_err(|e| e.to_string())?;
         let (rc, log) = host(&format!(
-            "rsync -aHx --modify-window=-1 --delete {} {}",
+            "rsync -aHAXx --modify-window=-1 --delete {} {}",
             q(&format!("{}/", self.dir.display())),
             q(&format!("{}/", dst.display()))
         ));
@@ -308,6 +330,22 @@ impl Root {
             dir: fs::canonicalize(dst).map_err(|e| e.to_string())?,
         })
     }
+}
+
+struct Lent {
+    path: PathBuf,
+    before: Option<Vec<u8>>,
+    host: Vec<u8>,
+}
+
+fn write_nofollow(p: &Path, b: &[u8]) -> std::io::Result<()> {
+    fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(p)?
+        .write_all(b)
 }
 
 fn read(p: &Path) -> String {
