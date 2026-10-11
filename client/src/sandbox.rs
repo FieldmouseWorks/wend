@@ -327,14 +327,7 @@ impl Root {
 
     fn run_mounted(&self, cmd: &str, timeout: u64, isolated: bool) -> (i32, String) {
         let root = self.dir.to_string_lossy().into_owned();
-        // umask 022 whatever ours is (SPEC "How a hop runs"): op references create files other users must read
-        let mut argv: Vec<String> = vec![
-            "chroot".into(),
-            root,
-            "/bin/sh".into(),
-            "-c".into(),
-            format!("umask 022\n{cmd}"),
-        ];
+        let mut argv: Vec<String> = vec!["chroot".into(), root, "/bin/sh".into(), "-c".into(), cmd.into()];
         if isolated {
             let pre = ["unshare", "-n", "sh", "-c", "ip link set lo up && exec \"$@\"", "x"];
             argv = pre.iter().map(|s| s.to_string()).chain(argv).collect();
