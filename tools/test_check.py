@@ -146,20 +146,35 @@ print("ids: content changes the id, renaming does not")
 import ast  # noqa: E402
 tree = ast.parse(open(os.path.join(check.ROOT, "wend")).read())
 fns = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
-helper = [b for b in fns["root_umask"].body if not (isinstance(b, ast.Expr) and isinstance(b.value, ast.Constant))] \
-    if "root_umask" in fns else []
-ok = len(helper) == 1 and ast.unparse(helper[0]) == "os.umask(18)"  # 18 == 0o022
-print(("passed  " if ok else "WRONG   ") + "wend root_umask() is exactly os.umask(0o022)")
+# root_umask() sets exactly 022 and puts the caller's mask back
+src = ast.unparse(fns["root_umask"]) if "root_umask" in fns else ""
+ok = "old = os.umask(18)" in src and "os.umask(old)" in src and src.count("os.umask(") == 2  # 18 == 0o022
+print(("passed  " if ok else "WRONG   ") + "wend root_umask() sets 022 and restores the caller's mask")
 bad += not ok
-for name in ("cmd_replay", "cmd_discover", "cmd_verify"):  # every command that touches a root; a missing one fails
-    first = fns[name].body[0] if name in fns else None
-    ok = isinstance(first, ast.Expr) and isinstance(first.value, ast.Call) and getattr(first.value.func, "id", "") == "root_umask"
-    print(("passed  " if ok else "WRONG   ") + f"wend {name} sets umask 022 first")
+
+
+def walk_under_mask(fn):
+    """Walk(...) is built only inside `with root_umask():`, and the run and step files are written outside it."""
+    withs = [n for n in ast.walk(fn) if isinstance(n, ast.With) and any(
+        isinstance(i.context_expr, ast.Call) and getattr(i.context_expr.func, "id", "") == "root_umask" for i in n.items)]
+    inside = {id(x) for w in withs for x in ast.walk(w)}
+    walks = [n for n in ast.walk(fn) if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "Walk"]
+    writes = [n for n in ast.walk(fn) if isinstance(n, ast.Call) and (getattr(n.func, "id", "") == "save_run" or
+                                                                       getattr(n.func, "attr", "") == "dump")]
+    return bool(withs) and bool(walks) and all(id(x) in inside for x in walks) and all(id(x) not in inside for x in writes)
+
+
+for name in ("cmd_replay", "cmd_discover"):  # every command that walks a root; a missing one fails
+    ok = name in fns and walk_under_mask(fns[name])
+    print(("passed  " if ok else "WRONG   ") + f"wend {name} walks under umask 022, writes its files under the caller's")
     bad += not ok
 rs = open(os.path.join(check.ROOT, "client", "src", "main.rs")).read()
 walk = rs[rs.index("fn cmd_walk("):]
+walk = walk[:walk.index("\n}\n")]
 body = [ln.strip() for ln in walk.split("\n")[1:] if ln.strip() and not ln.strip().startswith("//")]
-ok = body[0] == "unsafe { libc::umask(0o022) };"
-print(("passed  " if ok else "WRONG   ") + "client cmd_walk sets umask 022 first")
+impl = rs[rs.index("impl RootUmask {"):] if "impl RootUmask {" in rs else ""
+ok = (body[0] == "let mask = RootUmask::set();" and "RootUmask(unsafe { libc::umask(0o022) })" in impl
+      and "drop(mask);" in walk and walk.index("drop(mask);") < walk.index("&o.steps") < walk.index("&o.out"))
+print(("passed  " if ok else "WRONG   ") + "client cmd_walk walks under umask 022, writes its files under the caller's")
 bad += not ok
 sys.exit(1 if bad else 0)

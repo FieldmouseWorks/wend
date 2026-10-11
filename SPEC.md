@@ -84,8 +84,8 @@ The harness runs everything it does in a root (box build, every `when`, hop step
 (`write-file` on a new path, `php.mysqli-report-off`, the work dirs) and rely on that: on a box whose root sessions
 default to 077 (AlmaLinux 10's `/etc/login.defs`), php-fpm couldn't read the mysqli shim and every page of an
 upgraded site was a 500 (seen replaying the EL route in a real VM, wend#13). A chroot run on CI inherits 022, so CI
-alone never sees this. The rule is for the commands that touch a root (replay, discover, verify, a client's walk); commands that don't,
-such as `report`, keep the caller's umask.
+alone never sees this. The rule covers only the work on the root: the files written for the person (run files, step logs, gap
+reports) are written under the caller's umask, since they can hold check output the person hasn't scrubbed yet.
 
 ### Preconditions
 

@@ -301,11 +301,27 @@ struct WalkOpts {
     steps: Option<String>,
 }
 
+/// SPEC "How a hop runs": everything the client runs or writes in a root gets umask 022, whatever the caller's is
+/// (AlmaLinux 10 root sessions default to 077, and files a fix creates must be readable by daemons). Dropping it puts
+/// the caller's mask back, for the files written for the caller.
+struct RootUmask(libc::mode_t);
+
+impl RootUmask {
+    fn set() -> RootUmask {
+        // SAFETY: umask only sets this process's file mode mask; it can't fail and touches no memory.
+        RootUmask(unsafe { libc::umask(0o022) })
+    }
+}
+
+impl Drop for RootUmask {
+    fn drop(&mut self) {
+        // SAFETY: as above.
+        unsafe { libc::umask(self.0) };
+    }
+}
+
 fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
-    // SPEC "How a hop runs": everything the client runs or writes in a root gets umask 022, whatever the caller's is
-    // (AlmaLinux 10 root sessions default to 077, and files a fix creates must be readable by daemons).
-    // SAFETY: umask only sets this process's file mode mask; it can't fail and touches no memory.
-    unsafe { libc::umask(0o022) };
+    let mask = RootUmask::set();
     let (rpath, r) = atlas.route(route)?;
     let a = adapter_of(atlas, r)?;
     let root = o
@@ -399,6 +415,7 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
         )),
         (r, _) => r,
     };
+    drop(mask); // the steps and the run file are the caller's, written under the caller's mask
     if let Some(p) = &o.steps {
         let _ = std::fs::write(
             p,
