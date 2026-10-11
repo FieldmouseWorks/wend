@@ -1,0 +1,19 @@
+# Found replaying the route on a real CentOS 5.11 install in a VM (wend#13).
+schema = "wend.fix/0"
+family = "el"
+hop = "centos6"
+when = { any = [{ installed = "kudzu" }, { installed = "rhpl" }] }
+restores = ["pkgdb"]
+adds = []
+
+[[pre]]
+op = "remove"
+packages = ["kudzu", "rhpl"]
+purge = true
+
+[meta]
+name = "el6-drop-kudzu-rhpl"
+author = "claude (wend#13, hand-written from the VM replay)"
+source = "wend#13"
+note = "Every anaconda install of CentOS 5 has kudzu (boot-time hardware probe) and rhpl. EL6 ships neither, and both need python(abi) = 2.4 (rhpl also libiw.so.28), so yum's EL6 transaction fails on them. Nothing else requires them; kudzu goes first because it needs rhpl."
+fires_on = ["el/centos5-web"]
