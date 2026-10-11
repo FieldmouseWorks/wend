@@ -56,10 +56,48 @@ fn mounts_under(path: &Path) -> Vec<String> {
     fs::read_to_string("/proc/mounts")
         .unwrap_or_default()
         .lines()
-        .filter_map(|l| l.split_whitespace().nth(1).map(String::from))
+        .filter_map(|l| l.split_whitespace().nth(1).map(unescape))
         .filter(|m| *m == p || m.starts_with(&format!("{p}/")))
         .filter(|m| KEEP.get() != Some(m))
         .collect()
+}
+
+/// /proc/mounts writes a space, tab, newline or backslash in a path as an octal escape (\\040).
+fn unescape(m: &str) -> String {
+    let b = m.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let oct = |c: u8| (b'0'..=b'7').contains(&c);
+        if b[i] == b'\\' && i + 3 < b.len() && oct(b[i + 1]) && oct(b[i + 2]) && oct(b[i + 3]) {
+            out.push((b[i + 1] - b'0') * 64 + (b[i + 2] - b'0') * 8 + (b[i + 3] - b'0'));
+            i += 4;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn mounts_unescape() {
+        assert_eq!(super::unescape("/a\\040b/c\\134d"), "/a b/c\\d");
+        assert_eq!(super::unescape("/plain\\04"), "/plain\\04");
+    }
+}
+
+/// Paths the client mounts under or deletes: plain ones only, so they read back from /proc/mounts unchanged.
+pub fn plain_path(p: &Path) -> Result<(), String> {
+    let s = p.to_string_lossy();
+    if s.chars().any(|c| c.is_whitespace() || c == '\\' || c.is_control()) {
+        return Err(format!(
+            "{s:?}: the root and work paths can't contain whitespace or backslashes"
+        ));
+    }
+    Ok(())
 }
 
 /// Unmount everything under path, deepest first, and refuse to go on if anything is still mounted.
@@ -99,6 +137,7 @@ pub struct Root {
 impl Root {
     pub fn new(dir: &Path) -> Result<Root, String> {
         let dir = fs::canonicalize(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        plain_path(&dir)?;
         if dir == Path::new("/") {
             return Err(
                 "walking the running system (/) needs a snapshot backend (LVM, btrfs or ZFS), which the \
@@ -315,6 +354,7 @@ pub fn safe_rm(path: &Path, work: &Path) -> Result<(), String> {
 /// The work directory holds snapshots of a root, written as root: it must be root's alone (an existing directory
 /// someone else can write to could hold a planted symlink), and it must not be inside the root being walked.
 pub fn work_dir(work: &Path, root: &Path) -> Result<PathBuf, String> {
+    plain_path(work)?;
     if !work.exists() {
         fs::create_dir_all(work).map_err(|e| format!("{}: {e}", work.display()))?;
         fs::set_permissions(work, std::os::unix::fs::PermissionsExt::from_mode(0o700))
@@ -328,6 +368,7 @@ pub fn work_dir(work: &Path, root: &Path) -> Result<PathBuf, String> {
         ));
     }
     let w = fs::canonicalize(work).map_err(|e| e.to_string())?;
+    plain_path(&w)?;
     if w.starts_with(root) || root.starts_with(&w) {
         return Err(format!(
             "the work directory {} and the root {} must not contain each other (snapshots would copy into \

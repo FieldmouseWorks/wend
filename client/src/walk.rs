@@ -72,6 +72,8 @@ pub struct Walk<'a> {
     hops: Vec<Value>,
     t0: Instant,
     stamp: String,
+    /// A complete snapshot exists and the root may have changed since: only then is restoring from it right.
+    pub mid_step: bool,
 }
 
 impl<'a> Walk<'a> {
@@ -102,6 +104,7 @@ impl<'a> Walk<'a> {
             hops: vec![],
             t0: Instant::now(),
             stamp: host("date +%Y%m%d-%H%M%S").1.trim().to_string(),
+            mid_step: false,
         };
         w.health = w.check_health();
         w
@@ -141,6 +144,7 @@ impl<'a> Walk<'a> {
     fn execute(&mut self, commands: &[String], why: &str) -> Result<bool, String> {
         let t0 = Instant::now();
         self.root.copy_to(&self.snap)?;
+        self.mid_step = true;
         let mut outs = vec![];
         let mut rc = 0;
         for c in commands {
@@ -180,6 +184,7 @@ impl<'a> Walk<'a> {
         } else {
             Root { dir: self.snap.clone() }.copy_to(&self.root.dir)?;
         }
+        self.mid_step = false;
         self.steps.push(
             json!({"why": why, "ok": ok, "stage": stage, "outputs": outs, "health_after": health_after,
                                "seconds": round1(t0.elapsed().as_secs_f64())}),

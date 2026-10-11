@@ -367,15 +367,23 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
     let run = match run {
         Ok(r) => r,
         // the walk stopped mid-hop: the root may be half-changed, and the snapshot is its last good state
-        Err(e) => {
+        Err(e) if w.mid_step => {
             return Err(format!(
-                "{e}\n{} may be mid-hop. Its state before the hop is in {}; restore it with: rsync -aHx \
-                 --delete {}/ {}/",
+                "{e}\n{} may be mid-step. Its state before the step is in {}; restore it with: rsync -aHx \
+                 --modify-window=-1 --delete {}/ {}/",
                 root_dir.display(),
                 snap.display(),
                 snap.display(),
                 root_dir.display()
             ))
+        }
+        // stopped between steps (or while taking a snapshot): the root is as the last finished step left it
+        Err(e) => {
+            sandbox::safe_rm(&snap, &work)?;
+            return Err(format!(
+                "{e}\n{} is as the last finished step left it.",
+                root_dir.display()
+            ));
         }
     };
     sandbox::safe_rm(&snap, &work)?;

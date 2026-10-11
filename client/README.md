@@ -84,6 +84,9 @@ package counts) except timing, the runner line and `log_sha256`, which hashes co
   root's alone, and a work directory and root that contain each other. A root that is itself a mount point (a mounted
   LVM snapshot or disk image) is fine. It never mounts on or writes through a symlink in the root, so a root whose
   `etc/resolv.conf` is a symlink gets no name service until that's a plain file.
+  Root and work paths can't contain whitespace or backslashes (the kernel escapes those in its mount table, and
+  the client must read its own mounts back exactly). A root missing `proc`, `sys`, `dev` or `etc` gets them created
+  as empty directories.
 - Interrupting `walk` mid-hop leaves the root mid-hop. The snapshot of its state before the hop stays in the work
   directory, and the error says how to restore it. The same goes for any walk that stops on an error.
 - Boxes are CI fixtures the client never sees, so it doesn't check them (or whether a run's box exists).
