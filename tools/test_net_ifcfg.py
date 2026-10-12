@@ -29,7 +29,7 @@ STATIC = ["type", "ethernet", "con-name", "System eth0", "ifname", "eth0", "ethe
           "ipv4.dns-search", "example.org"]
 
 
-def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=()):
+def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=(), link_dirs=None):
     """Run the converter on a fresh root; return (exit message or None, {keyfile: nmcli args}, files left, printed)."""
     loader = importlib.machinery.SourceFileLoader("net_ifcfg_to_keyfile", SRC)
     m = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
@@ -39,7 +39,8 @@ def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=()
             setattr(m, k, t + getattr(m, k))
         m.LINK_DIRS = tuple(t + d for d in m.LINK_DIRS)
         os.makedirs(m.D)
-        for d, names in ((m.K, keyfiles), (m.L, links), (m.LINK_DIRS[2], vendor_links)):
+        for d, names in [(m.K, keyfiles), (m.L, links), (t + "/usr/lib/systemd/network", vendor_links)] + [
+                (t + d, names) for d, names in (link_dirs or {}).items()]:
             for n in names:
                 os.makedirs(d, exist_ok=True)
                 open(os.path.join(d, n), "w").close()
@@ -216,6 +217,12 @@ case("an earlier .link, which systemd would apply instead, is refused",
      refused(msg, "10-admin.link comes before 10-wend-eth0.link") and not kf)
 msg, kf, left, out = run({"ifcfg-eth0": KS}, vendor_links=["05-vendor.link"])
 case("an earlier .link in /usr/lib/systemd/network is refused too", refused(msg, "05-vendor.link comes before") and not kf)
+for d in ("/run/systemd/network", "/usr/local/lib/systemd/network", "/lib/systemd/network"):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, link_dirs={d: ["05-admin.link"]})
+    case(f"an earlier .link in {d} is refused", refused(msg, f"{d}/05-admin.link comes before") and not kf)
+msg, kf, left, out = run({"ifcfg-eth0": KS}, vendor_links=["10-wend-eth0.link", "05-foo.network"])
+case("the pin's own name in /usr/lib (overridden by /etc's) and an earlier .network don't stand in the way",
+     msg is None and list(kf) == ["eth0.nmconnection"])
 msg, kf, left, out = run({"ifcfg-eth0": KS}, links=["70-later.link"], vendor_links=["99-default.link"])
 case("later .link files (99-default) don't stand in the way", msg is None and list(kf) == ["eth0.nmconnection"])
 msg, kf, left, out = run({"ifcfg-eth0": KS}, links=["10-wend-eth0.link"])

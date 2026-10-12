@@ -24,7 +24,9 @@ import sys
 D = "/etc/sysconfig/network-scripts"
 K = "/etc/NetworkManager/system-connections"
 L = "/etc/systemd/network"
-LINK_DIRS = (L, "/run/systemd/network", "/usr/lib/systemd/network", "/lib/systemd/network")  # systemd.link(5)
+# systemd.link(5): the directories udevd reads .link files from (systemd's CONF_PATHS), and /lib, often /usr/lib
+LINK_DIRS = (L, "/run/systemd/network", "/usr/local/lib/systemd/network", "/usr/lib/systemd/network",
+             "/lib/systemd/network")
 SAVED = "/var/lib/wend/saved"
 NETWORK = "/etc/sysconfig/network"
 RESOLV = "/etc/resolv.conf"

@@ -636,13 +636,13 @@ In `/etc/sysconfig/network`, `GATEWAY`, `GATEWAYDEV` and `IPV6INIT` are read as 
 
 Any other setting in either file (bridges, VLANs, bonds, aliases, IPv6 addresses, `RES_OPTIONS`), a keyfile of the
 same name or a `10-wend-<DEVICE>.link` already there, any `.link` in `/etc/systemd/network`, `/run/systemd/network`,
-`/usr/lib/systemd/network` or `/lib/systemd/network` whose name sorts before the pin's (systemd applies only the first
-`.link` that matches, so it could name the NIC something else), two profiles that pin one name to different MACs or
-one MAC to different names, a `route-`, `route6-`, `rule-`, `rule6-` or `keys-` file beside a profile, or a value that
-isn't an address, MAC, boolean or plain name fails the step. Every profile is checked and serialized by `nmcli` before
-the first file is written, so a failure, including `nmcli` missing or refusing a profile, changes nothing. Reference:
-`python3 -` with the source in `tools/net_ifcfg_to_keyfile.py`, sent as a here-document; `tools/test_net_ifcfg.py`
-runs it on fixture roots.
+`/usr/local/lib/systemd/network`, `/usr/lib/systemd/network` or `/lib/systemd/network` whose name sorts before the
+pin's (systemd applies only the first `.link` that matches, so it could name the NIC something else), two profiles
+that pin one name to different MACs or one MAC to different names, a `route-`, `route6-`, `rule-`, `rule6-` or `keys-`
+file beside a profile, or a value that isn't an address, MAC, boolean or plain name fails the step. Every profile is
+checked and serialized by `nmcli` before the first file is written, so a failure, including `nmcli` missing or
+refusing a profile, changes nothing. Reference: `python3 -` with the source in `tools/net_ifcfg_to_keyfile.py`, sent
+as a here-document; `tools/test_net_ifcfg.py` runs it on fixture roots.
 
 ### Argument specs
 
