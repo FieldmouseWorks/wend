@@ -65,7 +65,7 @@ class Apt:
     name = "apt"
     # Everything an adapter may declare for this backend. check.py holds adapters to these lists, so an adapter
     # can narrow what fixes may do but never widen it past what this file implements.
-    OPS = {"apache.enable", "apache.disable"}
+    OPS = {"apache.enable", "apache.disable", "dpkg.reinstall"}
     FORCE = {"depends", "remove-essential"}
     PM_OPTIONS = {"overwrite-conflicting-files"}
 
@@ -109,6 +109,8 @@ class Apt:
             return printf(o["content"], o["path"])
         if op in ("apache.enable", "apache.disable"):
             return f"a2{'en' if op == 'apache.enable' else 'dis'}{s['kind']} {s['name']}"
+        if op == "dpkg.reinstall":
+            return "apt-get install --reinstall --only-upgrade " + " ".join(s["packages"])
         raise ValueError(f"the apt backend has no op {op!r}")
 
 
