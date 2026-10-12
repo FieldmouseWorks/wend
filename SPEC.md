@@ -143,7 +143,8 @@ The table is a summary. The [Op reference](#op-reference) has the arguments, eff
 Adapter ops are named `<tool>.<verb>`. The adapter declares which ones its family offers and each one's arguments
 (`[ops."<name>"].args`, see [Argument specs](#argument-specs)); the Op reference defines what they do.
 
-- Debian: `apache.enable` and `apache.disable` (`kind` = site/mod/conf, `name`) compile to `a2en*`/`a2dis*`.
+- Debian: `apache.enable` and `apache.disable` (`kind` = site/mod/conf, `name`) compile to `a2en*`/`a2dis*`;
+  `dpkg.reinstall` (`packages`) to `apt-get install --reinstall --only-upgrade`.
 - EL: `rpm.bootstrap` (unpack EL6's rpm/yum stack over / with 7-Zip, because rpm 4.4 can't read xz payloads),
   `rpm.transit` (pass through EL8: EL8's rpm run from a staging dir, then a real distro-sync), `rpm.swap-release`
   (release packages by hand: epochs and vendor switches), `rpm.drop-arch` (multilib leftovers), `rpm.adopt-rpmnew`,
@@ -464,6 +465,15 @@ this hop only; the harness deletes the file after the post steps (step 6 of a ho
 disables one Apache site, module or config snippet. Reference: `a2en{kind} {name}` / `a2dis{kind} {name}`. Fails
 if it doesn't exist.
 
+**`dpkg.reinstall`** `packages` (a list of package names). Installs the current release's build of packages that are
+already installed, as they are. A package an older dpkg unpacked without an md5sums file (a transitional package
+whose .deb ships none, unpacked by squeeze's dpkg during the wheezy transaction) is flagged by wheezy's
+`dpkg --audit` as needing a reinstall, which fails the `pkgdb` check; reinstalling it under the release's own dpkg
+writes them. A package apt doesn't know fails the step. One the release no longer ships can't be reinstalled: apt
+says so and carries on, so the step passes and the hop's `pkgdb` check is what fails; a fix purges such a package
+instead. A package that isn't installed is skipped, never installed (`--only-upgrade`, apt 0.8 and later: squeeze
+on). Reference: `apt-get install --reinstall --only-upgrade {packages}`.
+
 ### EL ops
 
 **`rpm.swap-release`** `remove`, `install` (package names ending in `-release`; the EL adapter holds them to lowercase, as every EL release package is). Replaces the release package without the package
@@ -697,9 +707,9 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `writable`, `managed` | the allowlists (globs) named by `write-file` (`writable`) and the `rpm.*` file ops (`managed`). Nothing under `/etc/wend/` is ever on either |
 | `[kv."<path>"]` | the files `kv.*` may touch: `keys` (the only keys it may set or unset; never one that grants access) and `set` (false for files with sections, which only take `kv.unset`) |
 | `force` | required: the `force-remove` flags this family allows, a subset of its backend's (apt: `depends`, `remove-essential`; rpm: `depends`, `scripts`) |
-| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`), and optional `releases.<id>.upgrade` like rpm's. rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader") |
+| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`), and optional `releases.<id>.upgrade` like rpm's. rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader"). apt: a start release may have `releases.<id>.install` too |
 | `[mirror]` | rpm: `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts) |
-| `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), `autoremove`, `obsolete`, `installed_list`; apt also `apt_conf`, the harness's apt config |
+| `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), `autoremove`, `obsolete`, `installed_list`, `kernel_newest` (the VM tier's newest-kernel query); apt also `apt_conf`, the harness's apt config |
 | `[predicates]` | `installed`, `file`, `file-contains`, `mysql-option` command templates |
 | `[pm_options.<name>]` | `path`, `content`. apt: only `overwrite-conflicting-files`; rpm: none |
 | `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear. Whatever a `pattern`, `list` or `table` says, every value a fix passes through one must also match `[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*`: no quote, whitespace, backslash, glob character, `%`, any of `` $`;&|<>(){}~ ``, or leading `-` |
@@ -764,6 +774,17 @@ harness, not to fixes, because the release's own tools can't carry them up the l
   entries whose kernel file is gone (memtest, Xen and chainloader entries stay). It fails if the new entry isn't
   there afterwards. EL6 and EL7 grubby still write their own entries. After every reboot the VM tier checks that the
   release's newest kernel is the one running.
+- **Debian keeps GRUB 2 installed** (`hop.kernel_after`). Debian's own packages carry its kernels and their boot
+  entries up the ladder; its bootloader they don't. On squeeze `grub` becomes grub-pc, which leaves GRUB legacy in the
+  MBR and chains a `core.img` ("Chainload into GRUB 2"). While grub-pc has no install device (an upgraded box has
+  none), nothing keeps the image GRUB legacy chains current, and on jessie the box stops after the chainload. After
+  every transaction on a booted machine with grub-pc whose install device is empty or names no existing device, the
+  harness installs GRUB 2 to the disk `/boot` is on (`grub-probe -t device /boot`, then the disk whose `/sys/block`
+  entry holds that partition; squeeze's grub-probe has no `-t disk`, and lenny's kernel, still running then, no
+  `/sys/class/block`). Once that worked it records the disk, by its `/dev/disk/by-id` name when it has one, as
+  grub-pc's install device, so the release's own upgrades keep it current. A box whose install device is set and
+  present is left to grub-pc. It fails if `/boot` isn't on a partition of a disk it can find (md, LVM: nothing is
+  installed or recorded) or `grub-install` fails.
 - **When to boot it.** EL6's binaries can't run on the EL5 kernel (EL6's apr asks for `SOCK_CLOEXEC`, so `httpd -t`
   fails), so on a real machine the `centos6` hop boots its new kernel between the transaction and the post steps
   (`releases.centos6.reboot = "before-post"`). Every other hop runs straight through, then reboots: on the hop to
@@ -776,9 +797,12 @@ The checker holds `reboot` to `"before-post"` and the kernel steps to lists of c
 ## VM tier (maintainer-run)
 
 A chroot can't test kernels, bootloaders, init or networking (open question 10). `tools/vm.py` replays a route on a
-box installed in a KVM guest by its release's own installer. The kickstart is made from `box.toml`: its packages,
-`customize` and `start_hook`, a static address and the release's kernel and bootloader. The box is then brought to
-the release's last packages, as the chroot build does. Each hop compiles exactly the commands the chroot harness
+box installed in a KVM guest by its release's own installer: anaconda with a kickstart for EL, debian-installer with a
+preseed for Debian (appended to the installer's initrd, so it needs no network to be read). Both are made from
+`box.toml`: its packages, `customize` and `start_hook` (and Debian's `debconf_selections`), a static address and the
+release's kernel and bootloader. The box is then brought to the release's last packages, as the chroot build does
+(Debian: the harness's `hop.apt_conf` first, then `set_release`, `refresh` and `apt-get dist-upgrade`, which on a
+frozen archive changes nothing the installer didn't already fetch). Each hop compiles exactly the commands the chroot harness
 runs (the same `hop_cmds`), runs them inside the running guest, and reboots it for real (checked by `boot_id`).
 After every hop:
 
@@ -788,12 +812,16 @@ After every hop:
   `[vm].skip`, and `[vm].live` gives their live forms, which ask the running services instead.
 
 A hop ends the replay when its commands fail, when the guest doesn't come back, when its network differs from the
-start, or when a check that passed before it fails after the reboot. Its disk and serial console are kept.
+start, when the newest installed kernel isn't the one running (or the query names none), or when a check that passed
+before it fails after the reboot. Its disk and serial console are kept.
 
 The VM box differs from the chroot box in ways a replay can show: it has what the installer adds (`@core`, a kernel, a
 bootloader, a 200 MB `/boot`), SELinux is permissive and the firewall off (kickstart `selinux --permissive`,
 `firewall --disabled`), and `customize` runs before the release's last updates, not after. The kickstart is EL5's
-format for now. Its static address is not the one QEMU's DHCP hands out and the forwards point at it, so a box that
+format for now. A Debian VM box has what debian-installer's minimal install adds (a kernel metapackage, GRUB legacy on
+etch, `iproute`, which the harness's own network check reads). The adapter gives the preseed lines that differ by
+installer version (disk path, partman names); the rest of the preseed is etch's spelling, the only Debian start
+release with an installer table so far. Its static address is not the one QEMU's DHCP hands out and the forwards point at it, so a box that
 falls back to DHCP is unreachable and fails the hop.
 
 The rules:
@@ -806,10 +834,21 @@ The rules:
 - Box: an optional `[vm]` table with `ssh_port` (default 22), `skip` (roles that start their own daemons, which a
   running box already has) and `live` (role name to shell: the live forms of those checks; every skipped role needs
   one, so skipping never drops a check). The checker holds it to that.
-- A route that ends with `prune_obsolete` is refused for now: the VM tier has no prune step, and won't report a pass
-  that skipped it.
-- Adapter: `releases.<id>.install` names a start release's installer: its `tree` through the shim and the `pxeboot`
-  dir in it. The shim answers single byte ranges, which the installer uses to read package headers.
+- A route that ends with `prune_obsolete` gets the chroot walk's prune after its last hop: the packages the target
+  no longer ships are purged and autoremoved, the set split in halves whenever a step fails or a check is lost, and
+  each attempt first drops what an earlier autoremove already took. Each attempt runs on its own overlay of the last
+  good disk and reboots; a kept attempt is the next base. As in the chroot walk, a removal the prune drops never fails
+  the run; a guest that doesn't come up from the last good disk, or a box it can't read, does. It records what was obsolete before and after.
+- Adapter: `releases.<id>.install` names a start release's installer. EL: its `tree` through the shim and the
+  `pxeboot` dir in it (the shim answers single byte ranges, which anaconda uses to read package headers). Debian: the
+  `netboot` dir under the archive, `preseed` (the version's own preseed lines) and `late` (shell the installer runs at
+  the end, for the bootloader's serial console). `disk` (`virtio`, `lsi53c895a`) and `nic` (`virtio`, `e1000`) name
+  the emulated hardware, default virtio: the machine keeps them through every hop, so the start release's kernel has
+  to know them (etch's has no virtio). `hop.kernel_newest` prints the newest installed kernel as `uname -r` names it;
+  after every reboot it has to be the running one.
+- `replay ROUTE BOX --from RUN HOP` starts from an earlier run's disk after the hop before HOP, to iterate on a late
+  hop. It only resumes from a hop that passed on the same box, logs in with the ssh key of the box build that disk
+  came from, and is recorded as `partial-pass` at best, never `pass`.
 - A reboot is proven by a new `boot_id`. When `reboot` doesn't change it within two minutes (the first boot onto
   systemd: PID 1 is still the old init, and the new release's `reboot` can't talk to it), the harness stops every
   process (`kill -TERM -1`, then `-KILL`), syncs, remounts read-only and resets with sysrq, and records

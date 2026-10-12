@@ -59,6 +59,7 @@ STEPS = [
     ("debian", "buster", {"op": "pm-option", "option": "overwrite-conflicting-files"}),
     ("debian", "jessie", {"op": "apache.enable", "kind": "mod", "name": "php5"}),
     ("debian", "jessie", {"op": "apache.disable", "kind": "site", "name": "000-default"}),
+    ("debian", "wheezy", {"op": "dpkg.reinstall", "packages": ["module-init-tools", "a"]}),
 ] + [("el", rel_, s) for rel_ in ("centos6", "centos7", "alma9", "alma10") for s in [
     {"op": "install", "packages": ["php", "php-mysqlnd"]},
     {"op": "remove", "packages": ["a", "b"], "purge": True},

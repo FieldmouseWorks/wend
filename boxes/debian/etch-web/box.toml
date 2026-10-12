@@ -43,3 +43,9 @@ web = "apache2ctl -t && apache2ctl -S 2>&1 | grep mysite.local && apache2ctl -M 
 php = "php /var/www/mysite/index.php | grep 'hello from oldbox OK'"
 mail = "postfix check && test \"$(postconf -h myhostname)\" = oldbox.example.org"
 current = "for f in $(command -v php) $(sed -n 's/^LoadModule [^ ]* //p' /etc/apache2/mods-enabled/php*.load); do f=$(readlink -f \"$f\"); p=$(dpkg -S \"$f\" 2>/dev/null | grep -v ^diversion | head -n1 | cut -d: -f1); test -n \"$p\" && test -n \"$(apt-cache madison \"$p\")\" || { echo \"$f comes from package '$p', which the current release does not ship\"; exit 1; }; done"
+
+# tools/vm.py: the same box installed in a VM by etch's debian-installer. Its roles all work offline on a running box;
+# the live checks ask the running services after every reboot.
+[vm]
+ssh_port = 2222
+live = { daemons = "for i in $(seq 1 30); do ok=1; for p in apache2 master cron sshd; do pgrep -x $p >/dev/null || ok=0; done; [ $ok = 1 ] && exit 0; sleep 2; done; for p in apache2 master cron sshd; do pgrep -x $p >/dev/null || echo \"$p is not running\"; done; exit 1", site = "for i in $(seq 1 30); do curl -s -H 'Host: mysite.local' http://127.0.0.1/ | grep -q 'hello from oldbox OK' && exit 0; sleep 2; done; curl -s -H 'Host: mysite.local' http://127.0.0.1/ | head -c 300; exit 1" }

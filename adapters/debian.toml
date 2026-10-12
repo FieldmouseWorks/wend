@@ -29,6 +29,18 @@ archive = "http://archive.debian.org/debian"
 current = "http://deb.debian.org/debian"
 current_from = "bullseye"
 
+[releases.etch]
+# tools/vm.py installs a VM box with the release's own debian-installer: its netboot kernel and initrd under the archive.
+# The machine is one etch's kernel knows (no virtio; QEMU's AHCI is newer than its ahci driver), and every later
+# kernel too: an LSI SCSI disk stays sda from etch to trixie. The preseed lines are etch's installer's own spellings
+# (devfs disk path, partman recipe and menu names). GRUB legacy gets the serial console in its kopt line.
+install = { netboot = "dists/etch/main/installer-amd64/current/images/netboot/debian-installer/amd64", disk = "lsi53c895a", nic = "e1000", preseed = [
+  "d-i partman-auto/disk string /dev/discs/disc0/disc",
+  "d-i partman-auto/choose_recipe select All files in one partition (recommended for new users)",
+  "d-i partman/choose_partition select Finish partitioning and write changes to disk",
+  "d-i grub-installer/with_other_os boolean true",
+], late = "sed -i 's/^# kopt=\\(.*\\)/# kopt=\\1 console=tty0 console=ttyS0,115200/' /target/boot/grub/menu.lst; in-target update-grub" }
+
 [hop]
 # What the harness runs for every hop, around the fixes' pre and post steps. Shown here so reviewers know what a
 # fix's steps are relative to; fixes cannot change it.
@@ -37,8 +49,22 @@ refresh = "apt-get update"
 upgrade = ["apt-get dist-upgrade", "apt-get autoremove --purge"]
 autoremove = "apt-get autoremove --purge"   # after prune_obsolete removes packages
 after = ["apt-get clean"]
+# SPEC "Kernels and the bootloader": GRUB 2 arrives on squeeze as grub-pc, chained from GRUB legacy through a core.img
+# that no later grub-pc upgrade keeps current while grub-pc has no install device (an upgraded box has none): on
+# jessie the box stops after "Chainload into GRUB 2". So after every transaction, on a booted machine with grub-pc and
+# no install device that exists, the harness installs GRUB 2 to the disk /boot is on (the device grub-probe names,
+# then the disk whose /sys/block entry holds it: the running kernel may still be the previous release's, and 2.6.26
+# has no /sys/class/block) and, once that worked, records the disk (its /dev/disk/by-id name when it has one, as
+# grub-pc does) as the install device, so the release's own upgrades keep it current. A box whose install device is
+# set and present is left to grub-pc.
+kernel_after = [
+  "[ / -ef /proc/1/root ] || exit 0; dpkg-query -W -f '${Status}' grub-pc 2>/dev/null | grep -q 'ok installed' || exit 0; I=$(echo 'get grub-pc/install_devices' | debconf-communicate grub-pc 2>/dev/null | sed -n 's/^0 //p' | tr ',' ' '); for d in $I; do [ -e \"$d\" ] && { echo \"grub-pc keeps GRUB 2 on $I\"; exit 0; }; done; P=$(grub-probe -t device /boot) && [ -b \"$P\" ] || { echo \"can't find the device /boot is on\"; exit 1; }; B=$(basename \"$P\"); D=; for d in /sys/block/*; do [ -d \"$d/$B\" ] && D=/dev/$(basename \"$d\"); done; [ -n \"$D\" ] && [ -b \"$D\" ] || { echo \"can't find the disk /boot ($P) is on\"; exit 1; }; grub-install \"$D\" && update-grub || exit 1; R=$D; for l in /dev/disk/by-id/*; do case $l in *-part*) continue;; esac; [ \"$(readlink -f \"$l\")\" = \"$D\" ] && { R=$l; break; }; done; echo \"grub-pc grub-pc/install_devices multiselect $R\" | debconf-set-selections && echo \"GRUB 2 installed to $D, recorded as $R\"",
+]
 obsolete = "apt-get update >/dev/null 2>&1; apt list '?obsolete' 2>/dev/null | grep / | cut -d/ -f1"
 installed_list = "dpkg-query -W -f '${Status} ${Package}\\n' | awk '$3==\"installed\"{print $4}'"
+# tools/vm.py: the newest installed kernel, as `uname -r` names it (the package name after linux-image-, compared by its
+# numbers); after every reboot it has to be the running one. Signed and unsigned builds of one kernel are the same.
+kernel_newest = "dpkg-query -W -f '${Status} ${Package}\\n' 'linux-image-[0-9]*' 2>/dev/null | awk '$3 == \"installed\" && $4 !~ /-dbg$/ {v = $4; sub(/^linux-image-/, \"\", v); sub(/-unsigned$/, \"\", v); split(v, n, /[.-]/); k = sprintf(\"%05d%05d%05d%05d\", n[1], n[2], n[3], n[4]); if (k > best) {best = k; out = v}} END {if (out != \"\") print out}'"
 # Harness apt config, identical for every approach: old archive keys have expired, and local config files are kept.
 apt_conf = """APT::Get::Assume-Yes "true";
 APT::Get::force-yes "true";
@@ -74,6 +100,10 @@ args = { kind = { enum = ["site", "mod", "conf"] }, name = { pattern = "[A-Za-z0
 [ops."apache.disable"]
 summary = "a2dissite / a2dismod / a2disconf"
 args = { kind = { enum = ["site", "mod", "conf"] }, name = { pattern = "[A-Za-z0-9_.-]+" } }
+
+[ops."dpkg.reinstall"]
+summary = "apt-get install --reinstall --only-upgrade: the release's own build again, which writes the md5sums an older dpkg left out"
+args = { packages = { list = "[a-z0-9][a-z0-9.+-]*" } }
 
 [checks]
 # Universal checks every box gets on this family. Boxes add their own roles (web, db, mail...).
