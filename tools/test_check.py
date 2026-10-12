@@ -268,7 +268,7 @@ for name, vm, want in (("the web box's own [vm]", web.get("vm", {}), False),
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
 # the kernel handover's place in a hop (SPEC "Kernels and the bootloader"): right after refresh, and right after the
-# upgrade; Debian has none. Parity holds the client to the same order.
+# upgrade; Debian has only the second. Parity holds the client to the same order.
 import walk as _walk  # noqa: E402
 for fam, hop in (("el", "centos6"), ("debian", "squeeze")):
     w_ = type("W", (), {})()
@@ -285,8 +285,8 @@ for fam, hop in (("el", "centos6"), ("debian", "squeeze")):
     if fam == "el":  # kernel_before before the pre steps: rpm.transit (a pre step) needs the kernel records gone
         ok = bool(kb) and bool(ka) and first[2:2 + len(kb)] == kb and "vsftpd" in first[2 + len(kb)] and \
             first[-len(ka):] == ka and first[-len(ka) - len(up):-len(ka)] == up
-    else:
-        ok = not kb and not ka
+    else:  # Debian's packages carry its kernels; the harness only keeps GRUB 2 installed, after the transaction
+        ok = not kb and bool(ka) and first[-len(ka):] == ka and first[-len(ka) - len(up):-len(ka)] == up
     print(("passed  " if ok else "WRONG   ") + f"{fam} {hop}: kernel steps right after refresh and right after the upgrade")
     bad += not ok
 sys.exit(1 if bad else 0)

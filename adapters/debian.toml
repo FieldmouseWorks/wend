@@ -37,6 +37,16 @@ refresh = "apt-get update"
 upgrade = ["apt-get dist-upgrade", "apt-get autoremove --purge"]
 autoremove = "apt-get autoremove --purge"   # after prune_obsolete removes packages
 after = ["apt-get clean"]
+# SPEC "Kernels and the bootloader": GRUB 2 arrives on squeeze as grub-pc, chained from GRUB legacy through a core.img
+# it builds once. With no install device in debconf (an upgraded box has none), no later grub-pc upgrade rebuilds
+# core.img, and on jessie the old one can't read the new modules: the box hangs after "Chainload into GRUB 2". So after
+# every transaction, on a booted machine with GRUB 2, the harness installs GRUB 2 to the disk /boot is on (the device
+# grub-probe names, or the disk whose /sys/block entry holds that partition: the running kernel may be the previous
+# release's, and 2.6.26 has no /sys/class/block) and records
+# that disk as grub-pc's install device, so the release's own upgrades keep it current from then on.
+kernel_after = [
+  "[ / -ef /proc/1/root ] || exit 0; command -v grub-probe >/dev/null 2>&1 && [ -f /boot/grub/grub.cfg ] || exit 0; P=$(grub-probe -t device /boot) && [ -b \"$P\" ] || { echo \"can't find the device /boot is on\"; exit 1; }; B=$(basename \"$P\"); D=$P; for d in /sys/block/*; do [ -d \"$d/$B\" ] && D=/dev/$(basename \"$d\"); done; [ -b \"$D\" ] || { echo \"can't find the disk /boot is on\"; exit 1; }; echo \"grub-pc grub-pc/install_devices multiselect $D\" | debconf-set-selections && grub-install \"$D\" && update-grub && echo \"GRUB 2 installed to $D\"",
+]
 obsolete = "apt-get update >/dev/null 2>&1; apt list '?obsolete' 2>/dev/null | grep / | cut -d/ -f1"
 installed_list = "dpkg-query -W -f '${Status} ${Package}\\n' | awk '$3==\"installed\"{print $4}'"
 # Harness apt config, identical for every approach: old archive keys have expired, and local config files are kept.
