@@ -447,7 +447,9 @@ if it doesn't exist.
 already installed, as they are. A package an older dpkg unpacked without an md5sums file (a transitional package
 whose .deb ships none, unpacked by squeeze's dpkg during the wheezy transaction) is flagged by wheezy's
 `dpkg --audit` as needing a reinstall, which fails the `pkgdb` check; reinstalling it under the release's own dpkg
-writes them. Fails if a package isn't available in the release. Reference: `apt-get install --reinstall {packages}`.
+writes them. A package apt doesn't know fails the step. One the release no longer ships can't be reinstalled: apt
+says so and carries on, so the step passes and the hop's `pkgdb` check is what fails; a fix purges such a package
+instead. A package that isn't installed gets installed. Reference: `apt-get install --reinstall {packages}`.
 
 ### EL ops
 
