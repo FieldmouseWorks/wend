@@ -6,7 +6,8 @@
 Compares, over the whole atlas: every fix's and route's content id; every fix compiled (its precondition as a test,
 its pre and post steps); every hop of every route, with all its pinned fixes and with none (the commands and the
 `after` cleanup); the prune step; one example of every op on every backend; every predicate shape; and the gate's
-own broken cases (tools/test_check.py), which the Rust checker must refuse exactly where the Python one does.
+own broken cases (tools/test_check.py), which the Rust checker must refuse exactly where the Python one does; and the
+sandbox's hostname prelude.
 
 The Python side (tools/) is CI's judge and SPEC.md's reference implementation. A difference here is a bug in the
 client, or a spec change (a new op, a new adapter value) the client hasn't caught up with yet.
@@ -25,6 +26,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import backends  # noqa: E402
 import check  # noqa: E402
+import sandbox  # noqa: E402
 import walk  # noqa: E402
 
 adapters, fixes, routes, boxes, runs = check.load_all()
@@ -358,6 +360,8 @@ def main(binary):
     verdicts = [bool(e) for e in rs["cases"]]
     rs["cases"], rs_corpus = verdicts[:len(cases)], verdicts[len(cases):]
     errs = diff(py, rs)
+    if sandbox.NAME_SELF.encode() not in open(binary, "rb").read():
+        errs.append("the sandbox's hostname prelude (tools/sandbox.py NAME_SELF) is not in the client binary")
     stricter = []
     for c, b in zip(corpus, rs_corpus):
         if c["refused"] and not b:

@@ -1,9 +1,10 @@
 """The sandbox: a box is a whole root filesystem in a chroot, snapshotted with rsync, rolled back by copying back.
 Generalized from dep-lab's oldlinux/ol.py and centos/co.py. Needs root, chroot and rsync on the host, plus debootstrap
-for Debian boxes, or rpm2cpio, cpio, unshare and ip for EL boxes.
+for Debian boxes, or rpm2cpio, cpio and ip for EL boxes. unshare (util-linux) for every box.
 
 Follows SPEC.md "Sandbox requirements": a private tmpfs /dev per box (never a bind of the host's), fresh proc/sys,
-daemons never start, and nothing is deleted until every mount under it is gone.
+a hostname of the box's own (never the host's), daemons never start, and nothing is deleted until every mount under
+it is gone.
 """
 import gzip
 import hashlib
@@ -19,6 +20,16 @@ import backends
 WORK = os.environ.get("WEND_WORK", "/var/tmp/wend")
 ENV = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "HOME": "/root",
        "DEBIAN_FRONTEND": "noninteractive", "TERM": "dumb"}
+# Every command runs in a UTS namespace of its own, named by the root's own /etc/hostname (or EL's
+# /etc/sysconfig/network), else HOSTNAME. Read inside the chroot, so a symlink there can't point at the host. Without
+# it a box takes the host's name, and a build depends on where it runs: etch's postfix postinst turns a bare host name
+# plus resolv.conf's "search ." into "name..", which newaliases refuses (wend#26). Same string in client/src/sandbox.rs.
+HOSTNAME = "wend-box.example.org"
+NAME_SELF = ("n=$(head -n 1 /etc/hostname 2>/dev/null | tr -d ' \\t\\r'); [ -n \"$n\" ] || "
+             "n=$(sed -n 's/^HOSTNAME=//p' /etc/sysconfig/network 2>/dev/null | tail -n 1 | tr -d \"\\\"' \"); "
+             f"case \"$n\" in ''|[!A-Za-z0-9]*|*[!A-Za-z0-9.-]*|*.|*..*) n={HOSTNAME};; esac; "
+             f"printf '%s\\n' \"$n\" >/proc/sys/kernel/hostname 2>/dev/null || echo {HOSTNAME} >/proc/sys/kernel/hostname; "
+             'exec /bin/sh -c "$1"')
 
 
 def host(cmd, timeout=3600):
@@ -81,9 +92,11 @@ class Box:
     def run(self, cmd, timeout=1800, isolated=False):
         """isolated: a network namespace of its own with only loopback, for checks that start daemons."""
         self._mount()
-        argv = ["chroot", self.root, "/bin/sh", "-c", cmd]
+        argv = ["chroot", self.root, "/bin/sh", "-c", NAME_SELF, "x", cmd]
         if isolated:
-            argv = ["unshare", "-n", "sh", "-c", 'ip link set lo up && exec "$@"', "x"] + argv
+            argv = ["unshare", "-u", "-n", "sh", "-c", 'ip link set lo up && exec "$@"', "x"] + argv
+        else:
+            argv = ["unshare", "-u"] + argv
         try:
             p = subprocess.run(argv, env=ENV, capture_output=True, text=True, timeout=timeout, errors="replace")
             return p.returncode, p.stdout + p.stderr
@@ -152,6 +165,11 @@ def build_debian(root, box_doc, adapter):
     with open(f"{root}/usr/sbin/policy-rc.d", "w") as f:
         f.write("#!/bin/sh\nexit 101\n")  # never start daemons inside the sandbox
     os.chmod(f"{root}/usr/sbin/policy-rc.d", 0o755)
+    with open(f"{root}/etc/hostname", "w") as f:
+        f.write(HOSTNAME + "\n")  # debootstrap copied the host's
+    if not os.path.exists(f"{root}/etc/hosts"):
+        with open(f"{root}/etc/hosts", "w") as f:
+            f.write(f"127.0.0.1\tlocalhost\n127.0.1.1\t{HOSTNAME} {HOSTNAME.split('.')[0]}\n")
     with open(f"{root}/etc/apt/apt.conf.d/00wend", "w") as f:
         f.write(adapter["hop"]["apt_conf"])
     with open(f"{root}/etc/apt/sources.list", "w") as f:
@@ -223,9 +241,14 @@ def build_el(root, box_doc, adapter):
 BUILDERS = {"debian": build_debian, "el": build_el}
 
 
+# Bump when what a build writes changes, so boxes cached before it rebuild. 1: the box's own /etc/hostname (wend#26).
+BUILD_VERSION = b"1"
+
+
 def build_box(box_id, box_doc, adapter, box_toml_bytes, adapter_bytes, log=print):
-    """Build a box once and cache it, keyed by the box file and the adapter. Returns the cached (read-only) Box."""
-    key = hashlib.sha256(box_toml_bytes + adapter_bytes).hexdigest()[:12]
+    """Build a box once and cache it, keyed by the box file, the adapter and BUILD_VERSION. Returns the cached
+    (read-only) Box."""
+    key = hashlib.sha256(box_toml_bytes + adapter_bytes + BUILD_VERSION).hexdigest()[:12]
     root = f"{WORK}/boxes/{box_id.replace('/', '_')}-{key}"
     if os.path.exists(f"{root}/.wend-ready"):
         return Box(root)

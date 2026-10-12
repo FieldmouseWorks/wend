@@ -12,8 +12,8 @@
                                             writes .wend/pr-evidence.md for the PR body                 (root)
 
 ROUTE is a path like routes/debian/etch-to-trixie.toml; BOX is an id like debian/etch-web.
-Python 3.11+, standard library only. The sandbox needs root, chroot and rsync, plus debootstrap for Debian boxes or
-rpm2cpio, cpio, curl, unshare and ip (iproute2) for EL boxes.
+Python 3.11+, standard library only. The sandbox needs root, chroot, unshare and rsync, plus debootstrap for Debian
+boxes or rpm2cpio, cpio, curl and ip (iproute2) for EL boxes.
 """
 import contextlib
 import glob
@@ -44,7 +44,7 @@ class Repo:
         self.boxes = {p[len("boxes/"):-len("/box.toml")]: d for p, d in load("boxes/").items()}
 
 
-HOST_TOOLS = {"debian": ["debootstrap"], "el": ["rpm2cpio", "cpio", "curl", "unshare", "ip"]}
+HOST_TOOLS = {"debian": ["debootstrap"], "el": ["rpm2cpio", "cpio", "curl", "ip"]}
 APT_NAMES = {"ip": "iproute2", "unshare": "util-linux"}
 
 
@@ -64,7 +64,7 @@ def need_root(families=("debian",)):
     if os.geteuid() != 0:
         sys.exit("the sandbox needs root (chroot, mount). Run with sudo, in a throwaway VM or CI runner.")
     import shutil
-    missing = [t for t in ["chroot", "rsync", "mount"] + [x for f in families for x in HOST_TOOLS.get(f, [])]
+    missing = [t for t in ["chroot", "rsync", "mount", "unshare"] + [x for f in families for x in HOST_TOOLS.get(f, [])]
                if not shutil.which(t)]
     if missing:
         sys.exit(f"missing on this host: {', '.join(missing)} (Debian/Ubuntu: apt-get install "
