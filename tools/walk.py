@@ -56,6 +56,13 @@ class Walk:
 
     def hop_cmds(self, hop, fixes):
         """SPEC.md "How a hop runs": set the release, refresh, pre steps, the upgrade, post steps (then checks)."""
+        first, second = Walk.hop_parts(self, hop, fixes)  # works on the bare walks parity.py and vm.py make
+        return first + second
+
+    def hop_parts(self, hop, fixes):
+        """hop_cmds in two parts: through the upgrade transaction, and the rest. A release the adapter marks
+        reboot = "before-post" boots its new kernel between them on a real machine (tools/vm.py); a chroot runs both
+        straight through."""
         a, h = self.adapter, self.adapter["hop"]
         self.vars = v = backends.of(a).hop_vars(a, hop)
         comp = lambda ph: [check.compile_step(s, a, hop) for f in fixes for s in f.get(ph, [])]
@@ -75,8 +82,9 @@ class Walk:
                 raise ValueError(f"{f.get('meta', {}).get('name')}: adds names a family its own install steps "
                                  "don't install")
         declare = [f"mkdir -p /var/lib/wend && printf '{''.join(x + chr(92) + 'n' for x in adds)}' >> {ADDED}"] if adds else []
-        return ([fill(h["set_release"], v), fill(h["refresh"], v)] + comp("pre") + [fill(c, v) for c in upgrade] +
-                comp("post") + declare + cleanup + verify)
+        kernel = lambda k: [fill(c, v) for c in h.get(k, [])]  # noqa: E731 (SPEC "Kernels and the bootloader")
+        return ([fill(h["set_release"], v), fill(h["refresh"], v)] + kernel("kernel_before") + comp("pre") +
+                [fill(c, v) for c in upgrade] + kernel("kernel_after"), comp("post") + declare + cleanup + verify)
 
     def execute(self, commands, why):
         """Run commands in order; keep the step only if all succeed and no passing check is lost."""

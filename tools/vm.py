@@ -337,13 +337,24 @@ def replay(route_path, box_id):
             if rc == 0:
                 matched.append(f)
         log(f"hop to {hop}: {[f['meta']['name'] for f in matched]}")
-        cmds = walk.Walk.hop_cmds(w, hop, matched)
+        first, second = walk.Walk.hop_parts(w, hop, matched)
         after = [backends.fill(c, w.vars) for c in a["hop"].get("after", [])]
         t0 = time.time()
-        ok, steps = run_hop(g, cmds, after)
+        h = {"to": hop, "fired_names": [f["meta"]["name"] for f in matched]}
+        if (a["releases"].get(hop) or {}).get("reboot") == "before-post":
+            # boot the new kernel before the post steps run the release's binaries (SPEC "Kernels and the bootloader")
+            ok, steps = run_hop(g, first, [])  # hop.after runs once, after everything (SPEC "How a hop runs")
+            if ok:
+                back, forced = g.reboot()
+                h["mid_reboot"], h["mid_reboot_forced"] = back, forced
+                ok = back
+                if back:
+                    ok, rest = run_hop(g, second, after)
+                    steps += "\n##### after the reboot into the new kernel\n" + rest
+        else:
+            ok, steps = run_hop(g, first + second, after)
         open(os.path.join(out_dir, f"{hop}.steps.log"), "w").write(steps)
-        h = {"to": hop, "fired_names": [f["meta"]["name"] for f in matched], "commands_ok": ok,
-             "seconds": round(time.time() - t0)}
+        h["commands_ok"], h["seconds"] = ok, round(time.time() - t0)
         back, forced = g.reboot() if ok else (None, False)  # None: commands failed, no reboot tried
         h["rebooted"], h["reboot_forced"] = back, forced
         if back:

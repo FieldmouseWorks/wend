@@ -64,11 +64,13 @@ fires_on = ["debian/etch-db", "debian/etch-web"]
 For each hop on a route, the harness (not the fix) does:
 
 1. set the release (adapter `hop.set_release`; harness-owned files are rewritten),
-2. refresh the indexes (`hop.refresh`),
+2. refresh the indexes (`hop.refresh`), then the kernel handover's first half (`hop.kernel_before`, see "Kernels
+   and the bootloader"),
 3. the `pre` steps of every fix whose `when` held, in route order,
 4. the upgrade transaction: the arriving release's own `upgrade` list if the adapter gives one, else `hop.upgrade`
    (Debian: `dist-upgrade`, then `autoremove --purge`; EL: from `yum upgrade` on EL6 to
-   `dnf distro-sync --allowerasing` on EL9 and 10),
+   `dnf distro-sync --allowerasing` on EL9 and 10), then the kernel handover's second half (`hop.kernel_after`). On a
+   real machine, a release whose adapter says `reboot = "before-post"` boots its new kernel here,
 5. the `post` steps of those fixes, in route order, then the harness appends their `adds` to
    `/var/lib/wend/added-families` (see "restores and adds"),
 6. remove the drop-ins of any `pm-option` used on this hop,
@@ -630,9 +632,9 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `writable`, `managed` | the allowlists (globs) named by `write-file` (`writable`) and the `rpm.*` file ops (`managed`). Nothing under `/etc/wend/` is ever on either |
 | `[kv."<path>"]` | the files `kv.*` may touch: `keys` (the only keys it may set or unset; never one that grants access) and `set` (false for files with sections, which only take `kv.unset`) |
 | `force` | required: the `force-remove` flags this family allows, a subset of its backend's (apt: `depends`, `remove-essential`; rpm: `depends`, `scripts`) |
-| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`). rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer) |
+| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`). rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader") |
 | `[mirror]` | rpm: `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts) |
-| `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `autoremove`, `obsolete`, `installed_list`; apt also `apt_conf`, the harness's apt config |
+| `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), `autoremove`, `obsolete`, `installed_list`; apt also `apt_conf`, the harness's apt config |
 | `[predicates]` | `installed`, `file`, `file-contains`, `mysql-option` command templates |
 | `[pm_options.<name>]` | `path`, `content`. apt: only `overwrite-conflicting-files`; rpm: none |
 | `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear. Whatever a `pattern`, `list` or `table` says, every value a fix passes through one must also match `[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*`: no quote, whitespace, backslash, glob character, `%`, any of `` $`;&|<>(){}~ ``, or leading `-` |
@@ -663,6 +665,35 @@ other brace syntax is touched, so `${...}` and `%{...}` pass through). Values fo
 - Daemons never start on their own (`policy-rc.d` on Debian). Health checks start what they need and stop it again.
 - The harness sets umask 022 for itself before it touches a root (see "How a hop runs"), never taking the caller's.
 - A rollback restores the whole root from the pre-hop snapshot. Nothing from a failed hop survives.
+
+## Kernels and the bootloader
+
+A chroot box has no kernel, and these steps do nothing there. A real machine's kernel and boot entries belong to the
+harness, not to fixes, because the release's own tools can't carry them up the ladder:
+
+- **The old release's kernel can't stay in the rpm database.** EL5's kernels require `mkinitrd`, which is gone in EL6
+  (`pkgdb` fails). EL6's kernel requires `/sbin/new-kernel-pkg`, which nothing provides on EL7 after UsrMove, so the
+  transaction fails. And dnf won't remove the running kernel, so `rpm.transit` fails. So `hop.kernel_before` drops
+  the installed kernel packages' records with `rpm -e --justdb --nodeps --noscripts` and keeps their files: the
+  running kernel and its boot entry stay as the fallback. This is the one place, besides `rpm.transit`'s last step,
+  where wend drops records and keeps files. Fixes can't, because a fix doing it could fake `pkgdb`. It then removes
+  the files of kernels that no package owns and that aren't running, so the release's kernel fits in `/boot`
+  (CentOS 5's default is 200 MB). This is how the previous hop's kernel, once a reboot has moved off it, finally
+  goes.
+- **The release's kernel is installed after the transaction** (`hop.kernel_after`), since the transaction itself only
+  syncs what the database lists.
+- **GRUB legacy stays.** From EL8 on, kernels only get BLS entries, which GRUB legacy can't read, and GRUB2 can't be
+  installed on the sector-63 partition layout of CentOS 5's installer (a 31 KB gap; EL9's smallest `core.img` is
+  33.9 KB). When `/boot/grub/grub.conf` exists, `hop.kernel_after` gives the newest installed kernel an entry there,
+  using the root and kernel arguments of the existing entries, makes it the default, and drops entries whose kernel
+  file is gone. EL6 and EL7 grubby still write their own entries.
+- **When to boot it.** EL6's binaries can't run on the EL5 kernel (EL6's apr asks for `SOCK_CLOEXEC`, so `httpd -t`
+  fails), so on a real machine the `centos6` hop boots its new kernel between the transaction and the post steps
+  (`releases.centos6.reboot = "before-post"`). Every other hop runs straight through, then reboots: on the hop to
+  EL7, the post steps re-enable the boot services, which must happen before the first boot onto systemd.
+
+The VM tier proves these steps (it reboots where `reboot` says, and after every hop). A client running a route on a
+real machine must reboot at the same points.
 
 ## VM tier (maintainer-run)
 

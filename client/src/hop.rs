@@ -55,9 +55,18 @@ pub fn hop_plan(adapter: &Doc, hop: &str, fixes: &[&Doc]) -> Result<HopPlan, Str
         Some(_) => list_of(rel.unwrap(), "upgrade")?,
         None => list_of(h, "upgrade")?,
     };
+    // SPEC "Kernels and the bootloader": the harness's kernel handover, around the fixes' pre steps and the upgrade
+    let kernel = |k: &str| -> Result<Vec<String>, String> {
+        Ok(match get(h, k) {
+            Some(_) => list_of(h, k)?.iter().map(|c| fill(c, &v)).collect(),
+            None => vec![],
+        })
+    };
     let mut commands = vec![fill(str_of(h, "set_release")?, &v), fill(str_of(h, "refresh")?, &v)];
+    commands.extend(kernel("kernel_before")?);
     commands.extend(comp("pre")?);
     commands.extend(upgrade.iter().map(|c| fill(c, &v)));
+    commands.extend(kernel("kernel_after")?);
     commands.extend(comp("post")?);
     // SPEC "restores and adds": the families the fired fixes may introduce, for the services check
     let mut adds = BTreeSet::new();
