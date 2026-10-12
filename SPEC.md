@@ -677,7 +677,7 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `force` | required: the `force-remove` flags this family allows, a subset of its backend's (apt: `depends`, `remove-essential`; rpm: `depends`, `scripts`) |
 | `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`). rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader"). apt: a start release may have `releases.<id>.install` too |
 | `[mirror]` | rpm: `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts) |
-| `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), `autoremove`, `obsolete`, `installed_list`; apt also `apt_conf`, the harness's apt config |
+| `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), `autoremove`, `obsolete`, `installed_list`, `kernel_newest` (the VM tier's newest-kernel query); apt also `apt_conf`, the harness's apt config |
 | `[predicates]` | `installed`, `file`, `file-contains`, `mysql-option` command templates |
 | `[pm_options.<name>]` | `path`, `content`. apt: only `overwrite-conflicting-files`; rpm: none |
 | `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear. Whatever a `pattern`, `list` or `table` says, every value a fix passes through one must also match `[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*`: no quote, whitespace, backslash, glob character, `%`, any of `` $`;&|<>(){}~ ``, or leading `-` |
@@ -757,7 +757,8 @@ box installed in a KVM guest by its release's own installer: anaconda with a kic
 preseed for Debian (appended to the installer's initrd, so it needs no network to be read). Both are made from
 `box.toml`: its packages, `customize` and `start_hook` (and Debian's `debconf_selections`), a static address and the
 release's kernel and bootloader. The box is then brought to the release's last packages, as the chroot build does
-(Debian: the harness's `hop.apt_conf` first, then `set_release`, `refresh` and `apt-get dist-upgrade`). Each hop compiles exactly the commands the chroot harness
+(Debian: the harness's `hop.apt_conf` first, then `set_release`, `refresh` and `apt-get dist-upgrade`, which on a
+frozen archive changes nothing the installer didn't already fetch). Each hop compiles exactly the commands the chroot harness
 runs (the same `hop_cmds`), runs them inside the running guest, and reboots it for real (checked by `boot_id`).
 After every hop:
 
@@ -767,14 +768,16 @@ After every hop:
   `[vm].skip`, and `[vm].live` gives their live forms, which ask the running services instead.
 
 A hop ends the replay when its commands fail, when the guest doesn't come back, when its network differs from the
-start, or when a check that passed before it fails after the reboot. Its disk and serial console are kept.
+start, when the newest installed kernel isn't the one running (or the query names none), or when a check that passed
+before it fails after the reboot. Its disk and serial console are kept.
 
 The VM box differs from the chroot box in ways a replay can show: it has what the installer adds (`@core`, a kernel, a
 bootloader, a 200 MB `/boot`), SELinux is permissive and the firewall off (kickstart `selinux --permissive`,
 `firewall --disabled`), and `customize` runs before the release's last updates, not after. The kickstart is EL5's
 format for now. A Debian VM box has what debian-installer's minimal install adds (a kernel metapackage, GRUB legacy on
-etch, `iproute`, which the harness's own network check reads); the preseed lines that differ by installer version
-come from the adapter. Its static address is not the one QEMU's DHCP hands out and the forwards point at it, so a box that
+etch, `iproute`, which the harness's own network check reads). The adapter gives the preseed lines that differ by
+installer version (disk path, partman names); the rest of the preseed is etch's spelling, the only Debian start
+release with an installer table so far. Its static address is not the one QEMU's DHCP hands out and the forwards point at it, so a box that
 falls back to DHCP is unreachable and fails the hop.
 
 The rules:
@@ -788,8 +791,10 @@ The rules:
   running box already has) and `live` (role name to shell: the live forms of those checks; every skipped role needs
   one, so skipping never drops a check). The checker holds it to that.
 - A route that ends with `prune_obsolete` gets the chroot walk's prune after its last hop: the packages the target
-  no longer ships are purged and autoremoved, the set split in halves whenever a step fails or a check is lost. Each
-  attempt runs on its own overlay of the last good disk and reboots; a kept attempt is the next base.
+  no longer ships are purged and autoremoved, the set split in halves whenever a step fails or a check is lost, and
+  each attempt first drops what an earlier autoremove already took. Each attempt runs on its own overlay of the last
+  good disk and reboots; a kept attempt is the next base. Like the chroot walk's, the prune never fails the run; it
+  records what was obsolete before and after.
 - Adapter: `releases.<id>.install` names a start release's installer. EL: its `tree` through the shim and the
   `pxeboot` dir in it (the shim answers single byte ranges, which anaconda uses to read package headers). Debian: the
   `netboot` dir under the archive, `preseed` (the version's own preseed lines) and `late` (shell the installer runs at
@@ -798,8 +803,8 @@ The rules:
   to know them (etch's has no virtio). `hop.kernel_newest` prints the newest installed kernel as `uname -r` names it;
   after every reboot it has to be the running one.
 - `replay ROUTE BOX --from RUN HOP` starts from an earlier run's disk after the hop before HOP, to iterate on a late
-  hop. Such a run is recorded as `partial-pass` at best, never `pass`. It logs in with the ssh key of the box build
-  that disk came from.
+  hop. It only resumes from a hop that passed on the same box, logs in with the ssh key of the box build that disk
+  came from, and is recorded as `partial-pass` at best, never `pass`.
 - A reboot is proven by a new `boot_id`. When `reboot` doesn't change it within two minutes (the first boot onto
   systemd: PID 1 is still the old init, and the new release's `reboot` can't talk to it), the harness stops every
   process (`kill -TERM -1`, then `-KILL`), syncs, remounts read-only and resets with sysrq, and records

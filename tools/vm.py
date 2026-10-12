@@ -1,9 +1,9 @@
 """The VM tier (SPEC.md "VM tier"): replay a route on a real install in a KVM guest, with a real reboot after every hop.
 
 A chroot can't see kernels, bootloaders, init or networking. This can: the box is installed by the release's own
-installer (a kickstart made from box.toml), the hop's commands are the ones the chroot harness runs (walk.Walk's
-hop_cmds, the same compile), they run inside the running guest over ssh, and after each hop the guest reboots and
-has to come back reachable on its own address with its services up.
+installer (a kickstart or a preseed made from box.toml), the hop's commands are the ones the chroot harness runs
+(walk.Walk's hop_cmds, the same compile), they run inside the running guest over ssh, and after each hop the guest
+reboots and has to come back reachable on its own address with its services up.
 
 Maintainer-run only. It needs /dev/kvm, qemu-system-x86_64 and qemu-img, a few GB per box, and it runs the guest's
 code on the host that runs it: never wire it to a CI runner a pull request can trigger. Its runs go to .wend/vm/,
@@ -11,6 +11,8 @@ not runs/ (runs/ holds what CI proved).
 
   python3 tools/vm.py build BOX            install the box in a VM (cached by box file + adapter)
   python3 tools/vm.py replay ROUTE BOX     walk ROUTE on a fresh copy of it, rebooting after every hop
+  python3 tools/vm.py replay ROUTE BOX --from RUN HOP
+                                           the same from RUN's disk after the hop before HOP (partial-pass at best)
 
 Networking is QEMU user mode: nothing on the host changes. The guest reaches the mirror shim at 10.0.2.2. The guest's
 ssh and http are forwarded to fixed ports on 127.0.0.1 (10022, 10080), so one host runs one VM replay at a time; a
@@ -167,10 +169,9 @@ class Guest:
     def stop(self):
         if not self.running():
             return
-        if self.ssh("sync; (sleep 1; poweroff) >/dev/null 2>&1 &", timeout=30)[0] != 0:
-            return self.kill()  # a guest that doesn't answer (hung at boot) won't power off either
+        # a guest that doesn't answer (hung at boot) won't power off either; one that answered gets its 300 s
         try:
-            self.proc.wait(300)
+            self.proc.wait(300 if self.ssh("sync; (sleep 1; poweroff) >/dev/null 2>&1 &", timeout=30)[0] == 0 else 60)
         except subprocess.TimeoutExpired:
             self.kill()
 
@@ -411,7 +412,11 @@ def replay(route_path, box_id, resume=None):
     todo = route["hops"]
     if resume:
         i = route["hops"].index(resume[1])
-        if i:
+        if i:  # only from a hop that passed, on the same box: a failed hop's disk would make lost checks vacuous
+            src = json.load(open(os.path.join(resume[0], "run.json")))
+            done = {h["to"]: h for h in src["hops"]}
+            if src["box"] != box_id or not done.get(route["hops"][i - 1], {}).get("ok"):
+                raise SystemExit(f"{resume[0]} has no passing {route['hops'][i - 1]} hop on {box_id} to resume from")
             prev = os.path.abspath(os.path.join(resume[0], f"{route['hops'][i - 1]}.qcow2"))
         todo = route["hops"][i:]
         if not os.path.exists(prev):
@@ -479,7 +484,9 @@ def replay(route_path, box_id, resume=None):
             lines = kv.split()
             h["kernel"] = lines[0] if lines else None
             running, newest = (lines + [None, None])[:2]
-            h["kernel_current"] = newest is None or newest in (running, (running or "").rsplit(".", 1)[0])
+            h["kernel_newest"] = newest
+            # every VM box has a kernel: no answer from the query is a failure, never a pass
+            h["kernel_current"] = newest is not None and newest in (running, (running or "").rsplit(".", 1)[0])
             h["lost"] = lost
             h["failed_logs"] = {n: after_checks[n][1][-1500:] for n in lost}
             h["ok"] = ok and h["net_kept"] and not lost and h["kernel_current"]
@@ -528,6 +535,15 @@ def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net):
             g.kill()
             h.update(ok=False, stage="the guest didn't come up")
             return h
+        rc, listed = g.ssh(a["hop"]["installed_list"])
+        if rc:
+            g.kill()
+            raise RuntimeError(f"couldn't list the installed packages for the prune: {listed[-300:]}")
+        pkgs = h["packages"] = [p for p in pkgs if p in set(listed.split())]  # an earlier autoremove took the rest
+        if not pkgs:
+            g.stop()
+            h.update(ok=True, stage="already gone")
+            return h
         before = checks(g, box_doc, a)
         cmds = [check.compile_step({"op": "remove", "packages": pkgs, "purge": True}, a, to),
                 a["hop"]["autoremove"]]
@@ -563,15 +579,27 @@ def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net):
     if not g.wait_ssh():
         g.kill()
         return [{"to": "prune", "ok": False, "stage": "the guest didn't come up"}]
-    installed = set(g.ssh(a["hop"]["installed_list"])[1].split())
-    rc, out = g.ssh(a["hop"]["obsolete"])
+    def obsolete(g):
+        (rc1, listed), (rc2, out) = g.ssh(a["hop"]["installed_list"]), g.ssh(a["hop"]["obsolete"])
+        if rc1 or rc2:  # an ssh failure must not read as "nothing to prune"
+            g.kill()
+            raise RuntimeError(f"couldn't read the obsolete packages for the prune: {(listed + out)[-300:]}")
+        return [p for p in out.split() if p in set(listed.split())]
+
+    pkgs = obsolete(g)
     g.stop()
-    pkgs = [p for p in out.split() if p in installed] if rc == 0 else []
     log(f"prune: {len(pkgs)} obsolete packages")
     go(pkgs)
+    g = Guest(os.path.join(out_dir, "prune-end.qcow2"), key, port, hw)  # what's left, as walk.prune reports it
+    sandbox.host(f"qemu-img create -q -f qcow2 -b {base[0]} -F qcow2 {g.disk}")
+    g.start()
+    if not g.wait_ssh():
+        g.kill()
+        return [{"to": "prune", "ok": False, "stage": "the guest didn't come up after the prune"}]
+    left = obsolete(g)
+    g.stop()
     # the chroot walk keeps what it could and reports the rest; a step that was split and then kept in halves passed
-    return [{"to": "prune", "ok": True, "obsolete_before": len(pkgs), "attempts": steps,
-             "kept": sum(len(h["packages"]) for h in steps if h["ok"])}]
+    return [{"to": "prune", "ok": True, "obsolete_before": len(pkgs), "obsolete_after": len(left), "attempts": steps}]
 
 
 def main(args):
