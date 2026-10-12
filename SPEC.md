@@ -372,7 +372,8 @@ See `adapters/ubuntu.toml`. The Debian adapter's engine on Ubuntu's own ladder. 
 - `release_file` is `/etc/lsb-release`: Ubuntu's `/etc/debian_version` names Debian testing, not the release. Each hop
   `verify`s `DISTRIB_CODENAME`.
 - Only the release pocket, with all four components. It is frozen at release time, so a hop's pinned Release stays
-  good; `-updates` and `-security` move and couldn't be replayed. The harness owns `sources.list.d` as well.
+  good; `-updates` and `-security` move and couldn't be replayed. The harness owns `sources.list.d` as well, and each
+  hop sets third-party sources (PPAs) aside as `*.wend-disabled`, the way do-release-upgrade disables them.
 - Noble needs a merged `/usr` (its libc6 preinst diverts `/lib64`), and noble no longer ships `usrmerge`, so the jammy
   hop installs jammy's `usrmerge` after its upgrade (`releases.jammy.upgrade`). A box is merged once, by the harness.
 - xenial's `mysql-server-5.7` postinst runs `mysql_upgrade` against the server it just started, and stops and
@@ -732,6 +733,7 @@ other brace syntax is touched, so `${...}` and `%{...}` pass through). Values fo
 - **Unmount and verify before any cleanup.** Before deleting or rsync-restoring a box root, unmount everything under
   it and check `/proc/self/mountinfo` for leftovers. If anything is still mounted, refuse to delete.
 - Daemons never start on their own (`policy-rc.d` on Debian). Health checks start what they need and stop it again.
+  The one exception is Ubuntu's xenial hop, which runs MySQL 5.7's server for its own configure (see Ubuntu).
 - The harness sets umask 022 for itself before it touches a root (see "How a hop runs"), never taking the caller's.
 - A rollback restores the whole root from the pre-hop snapshot. Nothing from a failed hop survives.
 

@@ -37,12 +37,12 @@ current_from = "trusty"
 # is down and the box's own policy-rc.d is back before the hop goes on. Boxes without MySQL never get here.
 upgrade = ['''apt-get dist-upgrade || {
 dpkg-query -W -f '${Status}' mysql-server-5.7 2>/dev/null | grep -q half-configured || exit 1
-cp -p /usr/sbin/policy-rc.d /tmp/wend-policy-rc.d
+cp -p /usr/sbin/policy-rc.d /tmp/wend-policy-rc.d || exit 1
 cat > /usr/sbin/policy-rc.d <<'WEND_EOF'
 #!/bin/sh
 case " $* " in *" mysql "*) ;; *) exit 101;; esac
 case " $* " in *stop*|*restart*)
-  mysqladmin --defaults-file=/etc/mysql/debian.cnf shutdown >/dev/null 2>&1
+  mysqladmin --defaults-file=/etc/mysql/debian.cnf shutdown >/dev/null 2>&1 || pkill -x mysqld
   i=0; while pgrep -x mysqld >/dev/null && [ $i -lt 120 ]; do sleep 1; i=$((i+1)); done;;
 esac
 case " $* " in *start*)
@@ -55,7 +55,9 @@ WEND_EOF
 dpkg --configure -a; rc=$?
 /usr/sbin/policy-rc.d mysql stop
 pkill -x mysqld; i=0; while pgrep -x mysqld >/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done
-cp -p /tmp/wend-policy-rc.d /usr/sbin/policy-rc.d && rm -f /tmp/wend-policy-rc.d
+pkill -KILL -x mysqld
+cp -p /tmp/wend-policy-rc.d /usr/sbin/policy-rc.d || exit 1
+rm -f /tmp/wend-policy-rc.d
 [ $rc = 0 ] && apt-get dist-upgrade
 }''', "apt-get autoremove --purge"]
 
@@ -63,7 +65,8 @@ cp -p /tmp/wend-policy-rc.d /usr/sbin/policy-rc.d && rm -f /tmp/wend-policy-rc.d
 # Noble needs a merged /usr: its libc6 preinst diverts /lib64 and fails ("cannot divert directories") while /lib64
 # is still a real directory, and every box that came up the ladder from trusty has one. Noble no longer ships
 # usrmerge, so the merge happens on arrival at jammy, with jammy's own usrmerge, like do-release-upgrade's quirk.
-# A box that is already merged gets a no-op. prune_obsolete purges usrmerge once a release no longer ships it.
+# A box that is already merged gets a no-op. A route with finish.prune_obsolete purges usrmerge once a later release
+# no longer ships it (noble doesn't).
 upgrade = ["apt-get dist-upgrade", "apt-get autoremove --purge", "apt-get install usrmerge"]
 
 [box]
@@ -72,7 +75,9 @@ upgrade = ["apt-get dist-upgrade", "apt-get autoremove --purge", "apt-get instal
 debootstrap_script = "gutsy"
 
 [hop]
-set_release = "printf 'deb {mirror} {release} main restricted universe multiverse\\n' > /etc/apt/sources.list && rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources"
+# Third-party sources (PPAs) are set aside, not deleted, the way do-release-upgrade disables them: a PPA built for the
+# old release would pull packages across the hop. They stay in sources.list.d as *.wend-disabled for the admin.
+set_release = "printf 'deb {mirror} {release} main restricted universe multiverse\\n' > /etc/apt/sources.list && for f in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do [ -f \"$f\" ] && mv \"$f\" \"$f.wend-disabled\"; done; true"
 refresh = "apt-get update"
 upgrade = ["apt-get dist-upgrade", "apt-get autoremove --purge"]
 verify = "grep -qx 'DISTRIB_CODENAME={release}' /etc/lsb-release"
