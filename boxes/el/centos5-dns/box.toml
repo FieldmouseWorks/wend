@@ -34,6 +34,9 @@ echo '0 3 * * * /usr/bin/rsync -a /var/ftp/ /home/alice/backup/ # nightly-backup
 chkconfig named on
 chkconfig vsftpd on
 yum clean all >/dev/null
+# the static address and MAC pin anaconda writes for a static install (QEMU's default MAC) (the VM's kickstart has written its own)
+mkdir -p /etc/sysconfig/network-scripts
+[ -f /etc/sysconfig/network-scripts/ifcfg-eth0 ] || printf 'DEVICE=eth0\nHWADDR=52:54:00:12:34:56\nBOOTPROTO=static\nIPADDR=10.0.2.20\nNETMASK=255.255.255.0\nGATEWAY=10.0.2.2\nONBOOT=yes\n' > /etc/sysconfig/network-scripts/ifcfg-eth0
 '''
 # The services role flags service packages whose family wasn't on the box at the start. It skips EL7+'s own
 # base-system service packages by exact name (dbus-daemon, dbus-broker, hostname, readonly-root, netconsole-service,
@@ -52,6 +55,7 @@ python = "python3 -c 'print(6*7)' | grep 42 || python -c 'print 6*7' | grep 42"
 tools = "perl -e 1 && curl -s file:///etc/redhat-release && rsync --version && sudo -V && id alice"
 mail = "postfix check && test \"$(postconf -h myhostname)\" = oldbox.example.org"
 current = "M=$(grep -o '[0-9][0-9]*' /etc/redhat-release | head -n1); for f in /usr/sbin/named /usr/sbin/vsftpd; do p=$(rpm -qf --qf '%{NAME}-%{VERSION}-%{RELEASE}' \"$(readlink -f $f)\" 2>/dev/null); echo \"$p\" | grep -qE \"[._]el${M}([._]|$)\" || { echo \"$f comes from '$p', not a release-$M package\"; exit 1; }; done"
+network = "M=$(grep -o '[0-9][0-9]*' /etc/redhat-release | head -n1); if [ $M -ge 10 ]; then K=$(grep -lx 'interface-name=eth0' /etc/NetworkManager/system-connections/*.nmconnection 2>/dev/null | head -n1); [ -n \"$K\" ] && [ \"$(stat -c %a \"$K\")\" = 600 ] && awk '/^\\[/ {s = $0} s == \"[ipv4]\" && $0 == \"method=manual\" {m = 1} END {exit !m}' \"$K\" && grep -iqx 'mac-address=52:54:00:12:34:56' \"$K\" && ! grep -qx 'autoconnect=false' \"$K\" && grep -iqx 'MACAddress=52:54:00:12:34:56' /etc/systemd/network/10-wend-eth0.link && grep -qx 'Name=eth0' /etc/systemd/network/10-wend-eth0.link && grep -Eqx 'address1=10\\.0\\.2\\.20/24(,10\\.0\\.2\\.2)?' \"$K\" && grep -Eqx '(address1=10\\.0\\.2\\.20/24,10\\.0\\.2\\.2|gateway=10\\.0\\.2\\.2)' \"$K\" || { echo 'eth0 has no 0600 autoconnecting keyfile for its MAC with the static 10.0.2.20/24 via 10.0.2.2, or no .link pinning eth0 to that MAC'; exit 1; }; else grep -qx 'IPADDR=10.0.2.20' /etc/sysconfig/network-scripts/ifcfg-eth0 || { echo 'ifcfg-eth0 lost the static 10.0.2.20'; exit 1; }; fi"
 services = "for p in $(ls /etc/rc.d/init.d/* /usr/lib/systemd/system/*.service 2>/dev/null | xargs rpm -qf --qf '%{NAME}\\n' 2>/dev/null | grep -v 'not owned' | sort -u); do case $p in dbus-daemon|dbus-broker|hostname|readonly-root|netconsole-service|systemd|systemd-udev|systemd-container) continue;; esac; f=$(echo $p | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 's/^mariadb$/mysql/' -e 's/^chrony$/ntp/' -e 's/^cronie$/vixie/' -e 's/^openssh$/openssh/'); grep -qxs \"$f\" /var/lib/wend-expected-families /var/lib/wend/added-families && continue; for c in $p $(rpm -q --provides $p | awk '{print $1}'); do rpm -q --whatrequires \"$c\" >/dev/null 2>&1 && continue 2; done; echo \"unexpected new service package: $p\"; exit 1; done"
 dns = "named-checkconf /etc/named.conf && named-checkzone example.org /var/named/example.org.zone"
 # vsftpd 3 can't start in the sandbox with its seccomp sandbox and namespace isolation on. The check turns them off
