@@ -226,6 +226,10 @@ args = {}
 summary = "write down which SysV services start in the default runlevel, before the hop that brings systemd (the first record is kept)"
 args = {}
 
+[ops."net.ifcfg-to-keyfile"]
+summary = "turn /etc/sysconfig/network-scripts/ifcfg-* into NetworkManager keyfiles (nmcli --offline, mode 0600) and pin each interface's name to its MAC, before EL10, whose NetworkManager can't read ifcfg; fails on any setting it doesn't convert"
+args = {}
+
 [ops."service.enable"]
 summary = "enable a systemd unit at boot if a service it replaces or follows (like) is in the SysV record or is an enabled unit now; never disables"
 args = { unit = { pattern = "[A-Za-z0-9][A-Za-z0-9_.-]*" }, like = { list = "[A-Za-z0-9][A-Za-z0-9_.-]*" } }

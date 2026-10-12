@@ -149,7 +149,7 @@ Adapter ops are named `<tool>.<verb>`. The adapter declares which ones its famil
   (release packages by hand: epochs and vendor switches), `rpm.drop-arch` (multilib leftovers), `rpm.adopt-rpmnew`,
   `rpm.set-aside-unowned`, `fs.layout` (`usrmove`, `run`), `kv.set` / `kv.unset` (key=value lines),
   `mysql.set-password`, `mysql.clean-shutdown`, `mysql.upgrade-data`, `ssh.generate-host-keys`,
-  `httpd.drop-missing-modules`, `php.mysqli-report-off`, `service.record`, `service.enable`.
+  `httpd.drop-missing-modules`, `php.mysqli-report-off`, `service.record`, `service.enable`, `net.ifcfg-to-keyfile`.
 
 `rpm.bootstrap`, `rpm.transit` and `fs.layout` are surgery: dozens of shell lines each, replayed as root on a
 stranger's box. They are exactly why ops are typed. The surgery is written once, reviewed as a spec change, and every
@@ -600,6 +600,26 @@ now. `like` names what the unit replaces (`mysqld` for `mariadb`) or follows (`h
 the site needs). Never disables anything, and a unit whose `like` services were all off is left as it is. Fails if
 `systemctl enable` fails (the unit doesn't exist) or the unit isn't `enabled` afterwards. Works offline, as in a
 chroot. Reference: `systemctl enable {unit}`, then `systemctl is-enabled {unit}` must print `enabled`.
+
+**`net.ifcfg-to-keyfile`** (no arguments). EL10's NetworkManager can't read the initscripts profiles
+(`/etc/sysconfig/network-scripts/ifcfg-*`) that EL9's still does. Without this op, a box with a static address comes
+up on EL10 with NetworkManager's automatic DHCP profile, or with no address at all. Effect, for each `ifcfg-*` except
+`ifcfg-lo`:
+- the profile becomes a NetworkManager keyfile in `/etc/NetworkManager/system-connections/`, mode 0600, written by
+  NetworkManager's own serializer (`nmcli --offline connection add`, which needs no daemon);
+- when it names a `HWADDR`, `/etc/systemd/network/70-wend-<DEVICE>.link` pins the interface name to that MAC. Once
+  the ifcfg file is gone, nothing else keeps an `eth0` from becoming `ens3`, and the keyfile is bound to the old
+  name;
+- the ifcfg file moves to `SAVED`.
+
+The files are read as `KEY=VALUE` lines and never executed. Only `DEVICE`, `HWADDR`, `BOOTPROTO` (`dhcp`, `static`,
+`none`), `IPADDR`, `NETMASK` or `PREFIX`, `GATEWAY` (or `/etc/sysconfig/network`'s `GATEWAY` for that device), `DNS1`,
+`DNS2`, `DOMAIN`, `ONBOOT`, `IPV6INIT`, `TYPE=Ethernet` and the inert `NAME`, `UUID`, `NM_CONTROLLED`, `DHCPCLASS`,
+`USERCTL` and `PEERDNS` are understood. With no `DNS1`/`DNS2`, the resolvers and search list come from
+`/etc/resolv.conf`, which is where CentOS 5's installer put them. A profile with any other setting (bridges, VLANs,
+bonds, aliases, IPv6 addresses) fails the step before anything changes, and so does a value that isn't an address,
+MAC or plain name. Fails if `nmcli` is missing or refuses a profile. Reference: `python3 -` with the source in
+`tools/net_ifcfg_to_keyfile.py`, sent as a here-document.
 
 ### Argument specs
 

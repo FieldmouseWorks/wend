@@ -80,6 +80,7 @@ STEPS = [
     {"op": "php.mysqli-report-off"},
     {"op": "service.record"},
     {"op": "service.enable", "unit": "mariadb", "like": ["mysqld", "mariadb"]},
+    {"op": "net.ifcfg-to-keyfile"},
 ]] + [
     ("el", "centos6", {"op": "rpm.bootstrap", "release": "centos6"}),
     ("el", "alma9", {"op": "rpm.transit", "release": "alma8", "remove": "centos-release", "reinstall": []}),
