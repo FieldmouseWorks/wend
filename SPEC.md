@@ -143,7 +143,8 @@ The table is a summary. The [Op reference](#op-reference) has the arguments, eff
 Adapter ops are named `<tool>.<verb>`. The adapter declares which ones its family offers and each one's arguments
 (`[ops."<name>"].args`, see [Argument specs](#argument-specs)); the Op reference defines what they do.
 
-- Debian: `apache.enable` and `apache.disable` (`kind` = site/mod/conf, `name`) compile to `a2en*`/`a2dis*`.
+- Debian: `apache.enable` and `apache.disable` (`kind` = site/mod/conf, `name`) compile to `a2en*`/`a2dis*`;
+  `dpkg.reinstall` (`packages`) to `apt-get install --reinstall --only-upgrade`.
 - EL: `rpm.bootstrap` (unpack EL6's rpm/yum stack over / with 7-Zip, because rpm 4.4 can't read xz payloads),
   `rpm.transit` (pass through EL8: EL8's rpm run from a staging dir, then a real distro-sync), `rpm.swap-release`
   (release packages by hand: epochs and vendor switches), `rpm.drop-arch` (multilib leftovers), `rpm.adopt-rpmnew`,
@@ -441,6 +442,15 @@ this hop only; the harness deletes the file after the post steps (step 6 of a ho
 **`apache.enable`, `apache.disable`** `kind` (`site`, `mod` or `conf`), `name` (`[A-Za-z0-9_.-]+`). Enables or
 disables one Apache site, module or config snippet. Reference: `a2en{kind} {name}` / `a2dis{kind} {name}`. Fails
 if it doesn't exist.
+
+**`dpkg.reinstall`** `packages` (a list of package names). Installs the current release's build of packages that are
+already installed, as they are. A package an older dpkg unpacked without an md5sums file (a transitional package
+whose .deb ships none, unpacked by squeeze's dpkg during the wheezy transaction) is flagged by wheezy's
+`dpkg --audit` as needing a reinstall, which fails the `pkgdb` check; reinstalling it under the release's own dpkg
+writes them. A package apt doesn't know fails the step. One the release no longer ships can't be reinstalled: apt
+says so and carries on, so the step passes and the hop's `pkgdb` check is what fails; a fix purges such a package
+instead. A package that isn't installed is skipped, never installed (`--only-upgrade`, apt 0.8 and later: squeeze
+on). Reference: `apt-get install --reinstall --only-upgrade {packages}`.
 
 ### EL ops
 
@@ -741,6 +751,17 @@ harness, not to fixes, because the release's own tools can't carry them up the l
   entries whose kernel file is gone (memtest, Xen and chainloader entries stay). It fails if the new entry isn't
   there afterwards. EL6 and EL7 grubby still write their own entries. After every reboot the VM tier checks that the
   release's newest kernel is the one running.
+- **Debian keeps GRUB 2 installed** (`hop.kernel_after`). Debian's own packages carry its kernels and their boot
+  entries up the ladder; its bootloader they don't. On squeeze `grub` becomes grub-pc, which leaves GRUB legacy in the
+  MBR and chains a `core.img` ("Chainload into GRUB 2"). While grub-pc has no install device (an upgraded box has
+  none), nothing keeps the image GRUB legacy chains current, and on jessie the box stops after the chainload. After
+  every transaction on a booted machine with grub-pc whose install device is empty or names no existing device, the
+  harness installs GRUB 2 to the disk `/boot` is on (`grub-probe -t device /boot`, then the disk whose `/sys/block`
+  entry holds that partition; squeeze's grub-probe has no `-t disk`, and lenny's kernel, still running then, no
+  `/sys/class/block`). Once that worked it records the disk, by its `/dev/disk/by-id` name when it has one, as
+  grub-pc's install device, so the release's own upgrades keep it current. A box whose install device is set and
+  present is left to grub-pc. It fails if `/boot` isn't on a partition of a disk it can find (md, LVM: nothing is
+  installed or recorded) or `grub-install` fails.
 - **When to boot it.** EL6's binaries can't run on the EL5 kernel (EL6's apr asks for `SOCK_CLOEXEC`, so `httpd -t`
   fails), so on a real machine the `centos6` hop boots its new kernel between the transaction and the post steps
   (`releases.centos6.reboot = "before-post"`). Every other hop runs straight through, then reboots: on the hop to
