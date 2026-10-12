@@ -240,7 +240,7 @@ fn apt_step(s: &Value, adapter: &Doc) -> Result<String, String> {
             str_of(s, "kind")?,
             str_of(s, "name")?
         ),
-        "dpkg.reinstall" => format!("apt-get install --reinstall {}", packages(s)?),
+        "dpkg.reinstall" => format!("apt-get install --reinstall --only-upgrade {}", packages(s)?),
         _ => return Err(format!("the apt backend has no op {op:?}")),
     })
 }

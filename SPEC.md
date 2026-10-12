@@ -144,7 +144,7 @@ Adapter ops are named `<tool>.<verb>`. The adapter declares which ones its famil
 (`[ops."<name>"].args`, see [Argument specs](#argument-specs)); the Op reference defines what they do.
 
 - Debian: `apache.enable` and `apache.disable` (`kind` = site/mod/conf, `name`) compile to `a2en*`/`a2dis*`;
-  `dpkg.reinstall` (`packages`) to `apt-get install --reinstall`.
+  `dpkg.reinstall` (`packages`) to `apt-get install --reinstall --only-upgrade`.
 - EL: `rpm.bootstrap` (unpack EL6's rpm/yum stack over / with 7-Zip, because rpm 4.4 can't read xz payloads),
   `rpm.transit` (pass through EL8: EL8's rpm run from a staging dir, then a real distro-sync), `rpm.swap-release`
   (release packages by hand: epochs and vendor switches), `rpm.drop-arch` (multilib leftovers), `rpm.adopt-rpmnew`,
@@ -449,7 +449,8 @@ whose .deb ships none, unpacked by squeeze's dpkg during the wheezy transaction)
 `dpkg --audit` as needing a reinstall, which fails the `pkgdb` check; reinstalling it under the release's own dpkg
 writes them. A package apt doesn't know fails the step. One the release no longer ships can't be reinstalled: apt
 says so and carries on, so the step passes and the hop's `pkgdb` check is what fails; a fix purges such a package
-instead. A package that isn't installed gets installed. Reference: `apt-get install --reinstall {packages}`.
+instead. A package that isn't installed is skipped, never installed (`--only-upgrade`, apt 0.8 and later: squeeze
+on). Reference: `apt-get install --reinstall --only-upgrade {packages}`.
 
 ### EL ops
 

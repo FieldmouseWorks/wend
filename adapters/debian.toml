@@ -76,7 +76,7 @@ summary = "a2dissite / a2dismod / a2disconf"
 args = { kind = { enum = ["site", "mod", "conf"] }, name = { pattern = "[A-Za-z0-9_.-]+" } }
 
 [ops."dpkg.reinstall"]
-summary = "apt-get install --reinstall: the release's own build again, which writes the md5sums an older dpkg left out"
+summary = "apt-get install --reinstall --only-upgrade: the release's own build again, which writes the md5sums an older dpkg left out"
 args = { packages = { list = "[a-z0-9][a-z0-9.+-]*" } }
 
 [checks]

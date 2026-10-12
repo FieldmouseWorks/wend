@@ -110,7 +110,7 @@ class Apt:
         if op in ("apache.enable", "apache.disable"):
             return f"a2{'en' if op == 'apache.enable' else 'dis'}{s['kind']} {s['name']}"
         if op == "dpkg.reinstall":
-            return "apt-get install --reinstall " + " ".join(s["packages"])
+            return "apt-get install --reinstall --only-upgrade " + " ".join(s["packages"])
         raise ValueError(f"the apt backend has no op {op!r}")
 
 
