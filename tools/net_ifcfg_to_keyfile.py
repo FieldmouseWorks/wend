@@ -3,13 +3,16 @@
 no ifcfg support, and pin each interface's name to its MAC so it doesn't become ens3 once the ifcfg file (whose HWADDR
 kept it eth0) is gone.
 
-Typed, not a guess: each file is read as KEY=VALUE lines (never executed), only the keys below are understood, and a
-file with any other setting (bridges, VLANs, bonds, aliases, IPv6 addresses...) fails the step before anything
-changes. The keyfile is written by NetworkManager's own serializer (`nmcli --offline connection add`, no daemon), mode
-0600 as NetworkManager requires. The ifcfg files move to /var/lib/wend/saved.
+Typed, not a guess: the profiles are the ones EL9's NetworkManager loads (its ifcfg-rh plugin's own list of ignored
+names), each is read as KEY=VALUE lines (never executed), only the keys below are understood, each with the meaning
+that plugin gives it, and anything else fails the step before anything changes. Every keyfile is serialized by
+NetworkManager itself (`nmcli --offline connection add`, no daemon) before the first file is written, so a profile
+nmcli refuses changes nothing either. Keyfiles are mode 0600, as NetworkManager requires. The ifcfg files move to
+/var/lib/wend/saved.
 
-Run on the box by both engines as `python3 - <<'EOF' ... EOF`; this file is the source, and the client embeds the
-same text (client/parity.py compares them).
+Run on the box by both engines as `python3 -` with this file as a here-document (tools/backends.py); this file is
+the source, and the client embeds the same text (client/parity.py compares them). tools/test_net_ifcfg.py runs it
+against fixture roots.
 """
 import ipaddress
 import os
@@ -22,8 +25,22 @@ D = "/etc/sysconfig/network-scripts"
 K = "/etc/NetworkManager/system-connections"
 L = "/etc/systemd/network"
 SAVED = "/var/lib/wend/saved"
-KEYS = {"DEVICE", "HWADDR", "BOOTPROTO", "IPADDR", "NETMASK", "PREFIX", "GATEWAY", "DNS1", "DNS2", "DOMAIN", "ONBOOT",
-        "TYPE", "NAME", "UUID", "NM_CONTROLLED", "DHCPCLASS", "USERCTL", "IPV6INIT", "PEERDNS"}
+NETWORK = "/etc/sysconfig/network"
+RESOLV = "/etc/resolv.conf"
+KEYS = {"DEVICE", "HWADDR", "BOOTPROTO", "IPADDR", "NETMASK", "PREFIX", "BROADCAST", "NETWORK", "GATEWAY", "DNS1",
+        "DNS2", "DOMAIN", "PEERDNS", "ONBOOT", "IPV6INIT", "IPV6_AUTOCONF", "TYPE", "NAME", "UUID", "NM_CONTROLLED",
+        "DHCPCLASS", "USERCTL"}
+# names NetworkManager's ifcfg-rh plugin never loads (nms-ifcfg-rh-utils.c, utils_should_ignore_file): backups, rpm
+# and augeas leftovers. EL9 ran the box with exactly the other ifcfg-* files, so those are the ones carried over.
+IGNORED = (".bak", "~", ".orig", ".rej", ".rpmnew", ".augnew", ".augtmp")
+# files the plugin reads beside a profile; this op converts none of them, so their presence fails the step
+SIDE = ("route-", "route6-", "rule-", "rule6-", "keys-")
+NAME = r"[A-Za-z0-9_][A-Za-z0-9_.-]*"
+YES, NO = {"yes", "true", "t", "y", "1"}, {"no", "false", "f", "n", "0"}  # shvar.c, svParseBoolean
+
+
+def fail(msg):
+    sys.exit(f"{msg}, nothing changed")
 
 
 def read(path, allowed=None):
@@ -34,94 +51,148 @@ def read(path, allowed=None):
             continue
         m = re.fullmatch(r"([A-Z][A-Z0-9_]*)=(.*)", line)
         if not m:
-            sys.exit(f"{path}:{n}: not a KEY=VALUE line, nothing changed")
-        words = shlex.split(m.group(2), comments=True)
-        if len(words) > 1:
-            sys.exit(f"{path}:{n}: {m.group(1)} holds more than one value, nothing changed")
+            fail(f"{path}:{n}: not a KEY=VALUE line")
+        try:
+            words = shlex.split(m.group(2))
+        except ValueError as e:
+            fail(f"{path}:{n}: {m.group(1)}: {e}")
+        if len(words) > 1 or "#" in m.group(2) or "$" in m.group(2) or "`" in m.group(2):
+            fail(f"{path}:{n}: {m.group(1)} isn't one plain value")
         out[m.group(1)] = words[0] if words else ""
     if allowed is not None and set(out) - allowed:
-        sys.exit(f"{path}: settings this op doesn't convert: {sorted(set(out) - allowed)}, nothing changed")
+        fail(f"{path}: settings this op doesn't convert: {sorted(set(out) - allowed)}")
     return out
+
+
+def boolean(path, v, key, default):
+    s = v.get(key, default).lower()
+    if s in YES or s in NO:
+        return s in YES
+    fail(f"{path}: {key}={v[key]} isn't yes or no")
+
+
+def addr(path, key, s):
+    try:
+        return ipaddress.IPv4Address(s)
+    except ValueError:
+        fail(f"{path}: {key}={s} isn't an IPv4 address")
 
 
 def plan(path, net, resolv):
     c = path[len(D) + len("/ifcfg-"):]
     v = read(path, KEYS)
     dev = v.get("DEVICE", c)
-    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", dev) or not re.fullmatch(r"[A-Za-z0-9_.-]+", c):
-        sys.exit(f"{path}: not a plain interface or connection name, nothing changed")
+    if not re.fullmatch(NAME, c) or not re.fullmatch(NAME, dev) or len(dev) > 15:
+        fail(f"{path}: not a plain interface or connection name")
+    for side in SIDE:
+        if os.path.exists(os.path.join(D, side + c)):
+            fail(f"{path}: {side}{c} beside it isn't converted")
     if v.get("TYPE", "Ethernet") != "Ethernet":
-        sys.exit(f"{path}: TYPE={v['TYPE']}: only Ethernet profiles are converted, nothing changed")
+        fail(f"{path}: TYPE={v['TYPE']}: only Ethernet profiles are converted")
     hw = v.get("HWADDR", "").lower()
     if hw and not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", hw):
-        sys.exit(f"{path}: HWADDR={hw} isn't a MAC address, nothing changed")
-    args = ["type", "ethernet", "con-name", v.get("NAME") or f"System {c}", "ifname", dev]
+        fail(f"{path}: HWADDR={hw} isn't a MAC address")
+    name = v.get("NAME") or f"System {c}"
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_. -]*", name):
+        fail(f"{path}: NAME={name} isn't a plain name")
+    # NM_CONTROLLED=no: EL9's NetworkManager left the device to the network service, which EL10 doesn't have, so the
+    # only way the address survives is a profile NetworkManager manages (SPEC says so)
+    boolean(path, v, "NM_CONTROLLED", "yes")
+    boolean(path, v, "USERCTL", "no")
+    args = ["type", "ethernet", "con-name", name, "ifname", dev]
     if hw:
         args += ["ethernet.mac-address", hw]
     proto = v.get("BOOTPROTO", "none").lower()
-    if proto == "dhcp":
+    if proto in ("dhcp", "bootp"):  # the plugin reads bootp as dhcp
+        for key in ("IPADDR", "PREFIX", "NETMASK", "GATEWAY"):
+            if key in v:
+                fail(f"{path}: {key} beside BOOTPROTO={proto} isn't converted")
         args += ["ipv4.method", "auto"]
     elif proto in ("static", "none", ""):
         if "IPADDR" not in v:
-            sys.exit(f"{path}: BOOTPROTO={proto} with no IPADDR, nothing changed")
-        ip = ipaddress.IPv4Address(v["IPADDR"])
+            fail(f"{path}: BOOTPROTO={proto} with no IPADDR")
+        ip = addr(path, "IPADDR", v["IPADDR"])
         if "PREFIX" in v:
+            if not re.fullmatch(r"[0-9]|[12][0-9]|3[0-2]", v["PREFIX"]):
+                fail(f"{path}: PREFIX={v['PREFIX']} isn't 0 to 32")
             prefix = int(v["PREFIX"])
         elif "NETMASK" in v:
-            prefix = ipaddress.IPv4Network(f"0.0.0.0/{v['NETMASK']}").prefixlen
+            m = int(addr(path, "NETMASK", v["NETMASK"]))
+            prefix = bin(m).count("1")
+            if m != (0xffffffff << (32 - prefix)) & 0xffffffff:
+                fail(f"{path}: NETMASK={v['NETMASK']} isn't a netmask")
         else:
-            sys.exit(f"{path}: no PREFIX or NETMASK, nothing changed")
+            fail(f"{path}: no PREFIX or NETMASK")
+        lan = ipaddress.IPv4Network(f"{ip}/{prefix}", strict=False)
+        for key, want in (("NETWORK", lan.network_address), ("BROADCAST", lan.broadcast_address)):
+            if key in v and addr(path, key, v[key]) != want:  # the installer writes both; NetworkManager derives them
+                fail(f"{path}: {key}={v[key]} doesn't match {ip}/{prefix}")
         args += ["ipv4.method", "manual", "ipv4.addresses", f"{ip}/{prefix}"]
-        gw = v.get("GATEWAY") or (net.get("GATEWAY") if net.get("GATEWAYDEV", dev) == dev else None)
-        if gw:
-            args += ["ipv4.gateway", str(ipaddress.IPv4Address(gw))]
-        dns = [v[k] for k in ("DNS1", "DNS2") if v.get(k)] or resolv["nameserver"]
-        if dns:
-            args += ["ipv4.dns", ",".join(str(ipaddress.IPv4Address(d)) for d in dns)]
-        search = v.get("DOMAIN", "").split() or resolv["search"]
-        if search:
-            if not all(re.fullmatch(r"[A-Za-z0-9.-]+", s) for s in search):
-                sys.exit(f"{path}: a search domain isn't a plain name, nothing changed")
-            args += ["ipv4.dns-search", ",".join(search)]
     else:
-        sys.exit(f"{path}: BOOTPROTO={proto} isn't converted, nothing changed")
-    args += ["ipv6.method", "auto" if v.get("IPV6INIT", "no").lower() == "yes" else "ignore",
-             "connection.autoconnect", "no" if v.get("ONBOOT", "yes").lower() == "no" else "yes"]
+        fail(f"{path}: BOOTPROTO={proto} isn't converted")
+    gw = v.get("GATEWAY") or net.get("GATEWAY")
+    if gw and proto not in ("dhcp", "bootp"):
+        args += ["ipv4.gateway", str(addr(path, "GATEWAY", gw))]
+    if net.get("GATEWAYDEV", dev) != dev:  # the plugin: only GATEWAYDEV gets the default route
+        args += ["ipv4.never-default", "yes"]
+    dns = [v[k] for k in ("DNS1", "DNS2") if v.get(k)]
+    search = v.get("DOMAIN", "").split()
+    if proto not in ("dhcp", "bootp") and not dns:  # CentOS 5's installer put a static box's resolvers only here
+        dns, search = resolv["nameserver"], search or resolv["search"]
+    if dns:
+        args += ["ipv4.dns", ",".join(str(addr(path, "DNS", d)) for d in dns)]
+    if search:
+        if not all(re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*",
+                                s) for s in search):
+            fail(f"{path}: a search domain isn't a plain name")
+        args += ["ipv4.dns-search", ",".join(search)]
+    if not boolean(path, v, "PEERDNS", "yes"):
+        args += ["ipv4.ignore-auto-dns", "yes"]
+    if not boolean(path, v, "IPV6INIT", net.get("IPV6INIT", "no")):
+        six = "ignore"
+    else:
+        six = "auto" if boolean(path, v, "IPV6_AUTOCONF", "yes") else "link-local"
+    args += ["ipv6.method", six, "connection.autoconnect", "yes" if boolean(path, v, "ONBOOT", "yes") else "no"]
     return c, dev, hw, args
 
 
+def ignored(n):
+    return n.endswith(IGNORED) or re.search(r";[0-9a-fA-F]{8}$", n) is not None
+
+
 def main():
-    files = sorted(f for f in (os.path.join(D, n) for n in os.listdir(D) if n.startswith("ifcfg-")) if
-                   os.path.isfile(f) and not f.endswith("ifcfg-lo")) if os.path.isdir(D) else []
+    files = sorted(os.path.join(D, n) for n in os.listdir(D) if n.startswith("ifcfg-") and n != "ifcfg-lo" and
+                   not ignored(n) and os.path.isfile(os.path.join(D, n))) if os.path.isdir(D) else []
     if not files:
         print("no ifcfg profiles: nothing to convert")
         return
-    net = read("/etc/sysconfig/network") if os.path.exists("/etc/sysconfig/network") else {}
+    net = read(NETWORK) if os.path.exists(NETWORK) else {}
     resolv = {"nameserver": [], "search": []}
-    if os.path.exists("/etc/resolv.conf"):
-        for line in open("/etc/resolv.conf"):
+    if os.path.exists(RESOLV):
+        for line in open(RESOLV):
             w = line.split()
             if len(w) >= 2 and w[0] == "nameserver" and len(resolv["nameserver"]) < 3:
                 resolv["nameserver"].append(w[1])
             elif w and w[0] == "search":
                 resolv["search"] = w[1:]
-    plans = [plan(f, net, resolv) for f in files]  # every profile checked before anything changes
+    plans = [plan(f, net, resolv) for f in files]
+    keyfiles = []
+    for (c, dev, hw, args), f in zip(plans, files):  # every keyfile serialized before anything is written
+        try:
+            p = subprocess.run(["nmcli", "--offline", "connection", "add"] + args, capture_output=True, text=True)
+        except OSError as e:
+            fail(f"nmcli: {e}")
+        if p.returncode or "[connection]" not in p.stdout:
+            fail(f"nmcli --offline refused {f}: {p.stderr.strip()}")
+        keyfiles.append(p.stdout)
     os.makedirs(K, exist_ok=True)
     os.makedirs(L, exist_ok=True)
     os.makedirs(SAVED + D, exist_ok=True)
-    for (c, dev, hw, args), f in zip(plans, files):
-        p = subprocess.run(["nmcli", "--offline", "connection", "add"] + args, capture_output=True, text=True)
-        if p.returncode or "[connection]" not in p.stdout:
-            sys.exit(f"nmcli --offline couldn't serialize {f}: {p.stderr.strip()}")
+    for (c, dev, hw, args), f, text in zip(plans, files, keyfiles):
         kf = os.path.join(K, f"{c}.nmconnection")
-        fd = os.open(kf + ".wend", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "w") as out:
-            out.write(p.stdout)
-        os.chmod(kf + ".wend", 0o600)
-        os.replace(kf + ".wend", kf)
+        write(kf, text, 0o600)
         if hw:
-            with open(os.path.join(L, f"70-wend-{dev}.link"), "w") as out:
-                out.write(f"[Match]\nMACAddress={hw}\n\n[Link]\nName={dev}\n")
+            write(os.path.join(L, f"10-wend-{dev}.link"), f"[Match]\nMACAddress={hw}\n\n[Link]\nName={dev}\n", 0o644)
         if os.path.exists(SAVED + f):  # SAVED keeps the owner's original, whatever later hops do (SPEC)
             os.remove(f)
         else:
@@ -129,4 +200,13 @@ def main():
         print(f"{f} -> {kf}" + (f", {dev} pinned to {hw}" if hw else ""))
 
 
-main()
+def write(path, text, mode):
+    fd = os.open(path + ".wend", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+    with os.fdopen(fd, "w") as out:
+        out.write(text)
+    os.chmod(path + ".wend", mode)
+    os.replace(path + ".wend", path)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,147 @@
+"""The EL op net.ifcfg-to-keyfile (SPEC.md, "EL ops"; tools/net_ifcfg_to_keyfile.py) by behaviour, on fixture roots
+with a stand-in nmcli that prints the arguments it was given as the keyfile: the exact nmcli arguments for the profiles
+CentOS 5's installer writes, the meaning NetworkManager's ifcfg-rh plugin gives each key, the files it ignores, and
+that every refusal changes nothing. It runs the PR's own converter, so the gate's schema job (which judges a PR with
+the base branch's tools and never runs the PR's code) doesn't run it: `wend check` and the client job do.
+python3 tools/test_net_ifcfg.py"""
+import contextlib
+import importlib.machinery
+import importlib.util
+import io
+import os
+import sys
+import tempfile
+
+sys.dont_write_bytecode = True
+SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "net_ifcfg_to_keyfile.py")
+NMCLI = """#!/bin/sh
+for a in "$@"; do [ "$a" = refuse-me ] && { echo "Error: refused" >&2; exit 2; }; done
+echo "[connection]"; for a in "$@"; do echo "$a"; done
+"""
+KS = "DEVICE=eth0\nBOOTPROTO=static\nHWADDR=52:54:00:12:34:56\nIPADDR=10.0.2.20\nNETMASK=255.255.255.0\nONBOOT=yes\n"
+GUI = ("# Realtek Semiconductor Co., Ltd. RTL-8139/8139C/8139C+\nDEVICE=eth0\nBOOTPROTO=none\nBROADCAST=10.0.2.255\n"
+       "HWADDR=52:54:00:12:34:56\nIPADDR=10.0.2.20\nIPV6INIT=yes\nIPV6_AUTOCONF=yes\nNETMASK=255.255.255.0\n"
+       "NETWORK=10.0.2.0\nONBOOT=yes\n")
+NET = "NETWORKING=yes\nNETWORKING_IPV6=no\nHOSTNAME=oldbox.example.org\nGATEWAY=10.0.2.2\n"
+RESOLV = "search example.org\nnameserver 10.0.2.3\n"
+STATIC = ["type", "ethernet", "con-name", "System eth0", "ifname", "eth0", "ethernet.mac-address", "52:54:00:12:34:56",
+          "ipv4.method", "manual", "ipv4.addresses", "10.0.2.20/24", "ipv4.gateway", "10.0.2.2", "ipv4.dns", "10.0.2.3",
+          "ipv4.dns-search", "example.org"]
+
+
+def run(profiles, net=NET, resolv=RESOLV):
+    """Run the converter on a fresh root; return (exit message or None, {keyfile: nmcli args}, files left, printed)."""
+    loader = importlib.machinery.SourceFileLoader("net_ifcfg_to_keyfile", SRC)
+    m = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(m)
+    with tempfile.TemporaryDirectory() as t:
+        for k in ("D", "K", "L", "SAVED", "NETWORK", "RESOLV"):
+            setattr(m, k, t + getattr(m, k))
+        os.makedirs(m.D)
+        os.makedirs(os.path.dirname(m.NETWORK), exist_ok=True)
+        for name, text in profiles.items():
+            with open(os.path.join(m.D, name), "w") as out:
+                out.write(text)
+        if net is not None:
+            with open(m.NETWORK, "w") as out:
+                out.write(net)
+        with open(m.RESOLV, "w") as out:
+            out.write(resolv)
+        os.makedirs(f"{t}/bin")
+        with open(f"{t}/bin/nmcli", "w") as out:
+            out.write(NMCLI)
+        os.chmod(f"{t}/bin/nmcli", 0o755)
+        path, msg, printed = os.environ["PATH"], None, io.StringIO()
+        os.environ["PATH"] = f"{t}/bin:{path}"
+        try:
+            with contextlib.redirect_stdout(printed):
+                m.main()
+        except SystemExit as e:
+            msg = str(e.code)
+        finally:
+            os.environ["PATH"] = path
+        keyfiles = {}
+        if os.path.isdir(m.K):
+            for n in sorted(os.listdir(m.K)):
+                f = os.path.join(m.K, n)
+                keyfiles[n] = (oct(os.stat(f).st_mode & 0o777), open(f).read().splitlines()[4:])  # after "[connection]", "--offline connection add"
+        left = sorted(os.path.relpath(os.path.join(r, n), t).replace(t.lstrip("/") + "/", "")  # SAVED keeps the path
+                      for r, _, ns in os.walk(t) for n in ns if not r.startswith(f"{t}/bin"))
+        return msg, keyfiles, left, printed.getvalue()
+
+
+def refused(msg, why):
+    return msg is not None and msg.endswith(", nothing changed") and why in msg
+
+
+cases = []
+
+
+def case(name, ok):
+    cases.append(ok)
+    print(("passed  " if ok else "WRONG   ") + "net.ifcfg-to-keyfile: " + name)
+
+
+# the positive control: what the VM tier's kickstart writes, the route's own box
+msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-lo": "DEVICE=lo\nIPADDR=127.0.0.1\n"})
+case("a kickstart static profile becomes the exact keyfile, pinned by MAC, the ifcfg saved",
+     msg is None and kf == {"eth0.nmconnection": ("0o600", STATIC + ["ipv6.method", "ignore",
+                                                                     "connection.autoconnect", "yes"])}
+     and "etc/systemd/network/10-wend-eth0.link" in left
+     and "var/lib/wend/saved/etc/sysconfig/network-scripts/ifcfg-eth0" in left
+     and "etc/sysconfig/network-scripts/ifcfg-eth0" not in left and "etc/sysconfig/network-scripts/ifcfg-lo" in left)
+msg, kf, left, out = run({"ifcfg-eth0": GUI})
+case("the GUI installer's profile (BROADCAST, NETWORK, IPV6_AUTOCONF) converts",
+     msg is None and kf["eth0.nmconnection"][1] == STATIC + ["ipv6.method", "auto", "connection.autoconnect", "yes"])
+msg, kf, left, out = run({"ifcfg-eth0": GUI.replace("BROADCAST=10.0.2.255", "BROADCAST=10.0.9.255")})
+case("a BROADCAST that doesn't match the address is refused", refused(msg, "BROADCAST=10.0.9.255") and not kf)
+msg, kf, left, out = run({"ifcfg-eth0": KS + "IPV6INIT=yes\nIPV6_AUTOCONF=no\n"})
+case("IPV6_AUTOCONF=no is link-local", msg is None and kf["eth0.nmconnection"][1][-4:-2] == ["ipv6.method",
+                                                                                             "link-local"])
+msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-eth0.bak": KS.replace(".20", ".99"), "ifcfg-eth0~": "junk",
+                          "ifcfg-eth0.rpmnew": "junk", "ifcfg-eth0;5f3a9b2c": "junk"})
+case("backups and rpm leftovers NetworkManager ignores are left alone",
+     msg is None and list(kf) == ["eth0.nmconnection"] and "etc/sysconfig/network-scripts/ifcfg-eth0.bak" in left
+     and "etc/sysconfig/network-scripts/ifcfg-eth0~" in left)
+msg, kf, left, out = run({"ifcfg-eth0": "DEVICE=eth0\nBOOTPROTO=dhcp\nPEERDNS=no\nDNS1=10.0.0.53\nDOMAIN=corp.example\n"})
+case("DHCP keeps its pinned resolvers and search domain, and ignores the server's",
+     msg is None and kf["eth0.nmconnection"][1] == [
+         "type", "ethernet", "con-name", "System eth0", "ifname", "eth0", "ipv4.method", "auto", "ipv4.dns",
+         "10.0.0.53", "ipv4.dns-search", "corp.example", "ipv4.ignore-auto-dns", "yes", "ipv6.method", "ignore",
+         "connection.autoconnect", "yes"])
+msg, kf, left, out = run({"ifcfg-eth0": "DEVICE=eth0\nBOOTPROTO=dhcp\n"})
+case("plain DHCP takes the server's resolvers, not resolv.conf's",
+     msg is None and "ipv4.dns" not in kf["eth0.nmconnection"][1])
+msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-eth1": "DEVICE=eth1\nIPADDR=192.168.9.5\nPREFIX=24\n"
+                          "GATEWAY=192.168.9.1\nDNS1=192.168.9.1\n"}, net=NET + "GATEWAYDEV=eth0\n")
+case("only GATEWAYDEV gets the default route",
+     msg is None and "ipv4.never-default" not in kf["eth0.nmconnection"][1]
+     and kf["eth1.nmconnection"][1][kf["eth1.nmconnection"][1].index("ipv4.never-default") + 1] == "yes")
+msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-eth1": "DEVICE=eth1\nIPADDR=192.168.9.5\nPREFIX=24\nNAME=refuse-me\n"})
+case("nmcli refusing the second profile changes nothing, not even the first",
+     refused(msg, "refused") and not kf and "etc/sysconfig/network-scripts/ifcfg-eth0" in left
+     and not any(x.startswith(("var/lib/wend", "etc/systemd")) for x in left))
+msg, kf, left, out = run({"ifcfg-eth0": KS.replace("ONBOOT=yes", "ONBOOT=false") + "IPV6INIT=true\n"})
+case("booleans as NetworkManager reads them (false, true)",
+     msg is None and kf["eth0.nmconnection"][1][-4:] == ["ipv6.method", "auto", "connection.autoconnect", "no"])
+for name, text, why in (
+        ("a shell expansion", KS.replace("ONBOOT=yes", "ONBOOT=$(reboot)"), "isn't one plain value"),
+        ("a # inside a value", KS + "NAME=lan#1\n", "isn't one plain value"),
+        ("an unbalanced quote", KS + "NAME=\"lan\n", "No closing quotation"),
+        ("a boolean that isn't one", KS.replace("ONBOOT=yes", "ONBOOT=maybe"), "isn't yes or no"),
+        ("a bridge", KS + "BRIDGE=br0\n", "doesn't convert: ['BRIDGE']"),
+        ("a host mask", KS.replace("255.255.255.0", "0.0.0.255"), "isn't a netmask"),
+        ("a prefix past 32", KS.replace("NETMASK=255.255.255.0", "PREFIX=40"), "isn't 0 to 32"),
+        ("a static address on DHCP", "DEVICE=eth0\nBOOTPROTO=dhcp\nIPADDR=10.0.2.20\n", "IPADDR beside"),
+        ("a dot as the device", KS.replace("DEVICE=eth0", "DEVICE=.."), "not a plain interface"),
+        ("an alias", KS, "not a plain interface")):
+    profiles = {"ifcfg-eth0:1" if name == "an alias" else "ifcfg-eth0": text}
+    msg, kf, left, out = run(profiles)
+    case(f"{name} is refused before anything changes", refused(msg, why) and not kf and len(left) == 3)
+msg, kf, left, out = run({"ifcfg-eth0": KS}, resolv="nameserver fe80::1\n")
+case("an IPv6 resolver in resolv.conf is refused, not a traceback", refused(msg, "isn't an IPv4 address") and not kf)
+msg, kf, left, out = run({"ifcfg-eth0": KS, "route-eth0": "10.9.0.0/16 via 10.0.2.1\n"})
+case("static routes beside a profile are refused", refused(msg, "route-eth0 beside it") and not kf)
+msg, kf, left, out = run({})
+case("no profiles: nothing to convert", msg is None and not kf and out.startswith("no ifcfg profiles"))
+sys.exit(0 if all(cases) else 1)

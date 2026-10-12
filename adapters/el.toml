@@ -227,7 +227,7 @@ summary = "write down which SysV services start in the default runlevel, before 
 args = {}
 
 [ops."net.ifcfg-to-keyfile"]
-summary = "turn /etc/sysconfig/network-scripts/ifcfg-* into NetworkManager keyfiles (nmcli --offline, mode 0600) and pin each interface's name to its MAC, before EL10, whose NetworkManager can't read ifcfg; fails on any setting it doesn't convert"
+summary = "turn /etc/sysconfig/network-scripts/ifcfg-* into NetworkManager keyfiles (nmcli --offline, mode 0600) and pin each interface's name to its MAC, before EL10, whose NetworkManager can't read ifcfg; fails, changing nothing, on any setting it doesn't convert"
 args = {}
 
 [ops."service.enable"]
