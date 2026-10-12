@@ -1,9 +1,9 @@
 """The VM tier (SPEC.md "VM tier"): replay a route on a real install in a KVM guest, with a real reboot after every hop.
 
 A chroot can't see kernels, bootloaders, init or networking. This can: the box is installed by the release's own
-installer (a kickstart made from box.toml), the hop's commands are the ones the chroot harness runs (walk.Walk's
-hop_cmds, the same compile), they run inside the running guest over ssh, and after each hop the guest reboots and
-has to come back reachable on its own address with its services up.
+installer (a kickstart or a preseed made from box.toml), the hop's commands are the ones the chroot harness runs
+(walk.Walk's hop_cmds, the same compile), they run inside the running guest over ssh, and after each hop the guest
+reboots and has to come back reachable on its own address with its services up.
 
 Maintainer-run only. It needs /dev/kvm, qemu-system-x86_64 and qemu-img, a few GB per box, and it runs the guest's
 code on the host that runs it: never wire it to a CI runner a pull request can trigger. Its runs go to .wend/vm/,
@@ -11,12 +11,15 @@ not runs/ (runs/ holds what CI proved).
 
   python3 tools/vm.py build BOX            install the box in a VM (cached by box file + adapter)
   python3 tools/vm.py replay ROUTE BOX     walk ROUTE on a fresh copy of it, rebooting after every hop
+  python3 tools/vm.py replay ROUTE BOX --from RUN HOP
+                                           the same from RUN's disk after the hop before HOP (partial-pass at best)
 
 Networking is QEMU user mode: nothing on the host changes. The guest reaches the mirror shim at 10.0.2.2. The guest's
 ssh and http are forwarded to fixed ports on 127.0.0.1 (10022, 10080), so one host runs one VM replay at a time; a
 second one fails at once ("qemu exited at once"). Disks go under $WEND_WORK/vm (default /var/tmp/wend/vm, which the
 chroot harness, run as root, may own: point WEND_WORK somewhere the user can write).
 """
+import gzip
 import hashlib
 import http.server
 import json
@@ -27,6 +30,7 @@ import sys
 import threading
 import time
 import tomllib
+import urllib.parse
 
 sys.dont_write_bytecode = True
 TOOLS = os.path.dirname(os.path.abspath(__file__))
@@ -44,7 +48,16 @@ MAC = "52:54:00:12:34:56"
 # back to DHCP is unreachable and fails the hop, instead of passing because DHCP happened to give the same address.
 ADDR = "10.0.2.20"
 SSH_FWD, HTTP_FWD = 10022, 10080
-ENV = "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C HOME=/root TERM=dumb; umask 022; "
+# the chroot harness's environment for box commands (tools/sandbox.py ENV), so a hop runs the same in both tiers
+ENV = ("export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C HOME=/root TERM=dumb "
+       "DEBIAN_FRONTEND=noninteractive; umask 022; ")
+# The emulated hardware, per start release (releases.<id>.install): a machine keeps its disk and NIC through every hop,
+# so an old installer's kernel has to know them. etch's 2.6.18 has no virtio and doesn't know QEMU's AHCI; an LSI SCSI
+# disk and an e1000 work from etch's installer to trixie, and keep the disk sda all the way.
+DISKS = {"virtio": ["-drive", "file={disk},if=virtio,format=qcow2"],
+         "lsi53c895a": ["-drive", "id=d0,file={disk},if=none,format=qcow2", "-device", "lsi53c895a,id=scsi0",
+                        "-device", "scsi-hd,drive=d0,bus=scsi0.0"]}
+NICS = {"virtio": "virtio-net-pci", "e1000": "e1000"}
 # the guest's network as the live checks compare it after every boot: addresses, default route, resolvers
 NET = ("(ip -o -4 addr 2>/dev/null || /sbin/ip -o -4 addr) | "
        "awk '$2 != \"lo\" {print $2, $4}' | sort; "
@@ -61,11 +74,17 @@ def load(path):
 
 
 def guest_adapter(family):
-    """The adapter with its mirror shim moved to where the guest sees the host."""
+    """The adapter with its mirror shim, if it has one, moved to where the guest sees the host."""
     a = load(f"adapters/{family}.toml")
-    port = a["mirror"]["shim"].rsplit(":", 1)[1]
-    a["mirror"] = {**a["mirror"], "shim": f"http://{GUEST_HOST}:{port}"}
+    if "mirror" in a:
+        port = a["mirror"]["shim"].rsplit(":", 1)[1]
+        a["mirror"] = {**a["mirror"], "shim": f"http://{GUEST_HOST}:{port}"}
     return a
+
+
+def hardware(adapter, release):
+    inst = adapter["releases"][release]["install"]
+    return inst.get("disk", "virtio"), inst.get("nic", "virtio")
 
 
 FORCED_RESET = ("sleep 2; kill -TERM -1; sleep 10; kill -KILL -1; sleep 3; sync; echo 1 > /proc/sys/kernel/sysrq; "
@@ -74,16 +93,16 @@ GUESTS = []  # every qemu this run started: killed on the way out, whatever happ
 
 
 class Guest:
-    def __init__(self, disk, key, ssh_port):
-        self.disk, self.key, self.ssh_port = disk, key, ssh_port
+    def __init__(self, disk, key, ssh_port, hw=("virtio", "virtio")):
+        self.disk, self.key, self.ssh_port, self.hw = disk, key, ssh_port, hw
         base = disk[:-len(".qcow2")]
         self.console, self.monitor_path, self.proc = base + ".console.log", base + ".monitor", None
 
     def start(self, extra=()):
         argv = ["qemu-system-x86_64", "-machine", "pc,accel=kvm", "-cpu", "host", "-smp", "2", "-m", "3072",
-                "-drive", f"file={self.disk},if=virtio,format=qcow2", "-netdev",
+                *[x.format(disk=self.disk) for x in DISKS[self.hw[0]]], "-netdev",
                 f"user,id=n0,hostfwd=tcp:127.0.0.1:{SSH_FWD}-{ADDR}:{self.ssh_port},hostfwd=tcp:127.0.0.1:{HTTP_FWD}-{ADDR}:80",
-                "-device", f"virtio-net-pci,netdev=n0,mac={MAC}", "-display", "none",
+                "-device", f"{NICS[self.hw[1]]},netdev=n0,mac={MAC}", "-display", "none",
                 "-serial", f"file:{self.console}", "-monitor", f"unix:{self.monitor_path},server,nowait", *extra]
         self.proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=open(self.console + ".qemu", "a"))
         GUESTS.append(self)
@@ -150,9 +169,9 @@ class Guest:
     def stop(self):
         if not self.running():
             return
-        self.ssh("sync; (sleep 1; poweroff) >/dev/null 2>&1 &", timeout=30)
+        # a guest that doesn't answer (hung at boot) won't power off either; one that answered gets its 300 s
         try:
-            self.proc.wait(300)
+            self.proc.wait(300 if self.ssh("sync; (sleep 1; poweroff) >/dev/null 2>&1 &", timeout=30)[0] == 0 else 60)
         except subprocess.TimeoutExpired:
             self.kill()
 
@@ -177,9 +196,59 @@ def kickstart(box_doc, adapter, key_pub):
         "clearpart --all --initlabel", "part /boot --fstype ext3 --size=200", "part swap --size=1024",
         "part / --fstype ext3 --size=1 --grow", "poweroff", "",
         "%packages --nobase", "kernel", "grub", *box_doc["packages"], "",
-        "%post --log=/root/ks-post.log", "set -x",
-        "mkdir -p /root/.ssh && chmod 700 /root/.ssh", f"echo '{key_pub}' > /root/.ssh/authorized_keys",
-        "chmod 600 /root/.ssh/authorized_keys", box_doc["customize"], box_doc.get("start_hook", ""), ""])
+        "%post --log=/root/ks-post.log", post_install(box_doc, key_pub)])
+
+
+def post_install(box_doc, key_pub):
+    """What every installer runs in the new system at the end: the harness's ssh key, then the box's own setup."""
+    return "\n".join(["set -x", "mkdir -p /root/.ssh && chmod 700 /root/.ssh",
+                      f"echo '{key_pub}' > /root/.ssh/authorized_keys", "chmod 600 /root/.ssh/authorized_keys",
+                      box_doc["customize"], box_doc.get("start_hook", ""), ""])
+
+
+def preseed(box_doc, adapter, inst):
+    """debian-installer's answers, read from the initrd (no network is needed to fetch them): a static address, the
+    archive as the mirror, one root partition, the box's packages and debconf answers, and post_install() at the end.
+    inst["preseed"] holds the lines that differ by installer version (etch's devfs disk path and partman recipe names),
+    inst["late"] what the release's bootloader needs for a serial console."""
+    m = urllib.parse.urlsplit(adapter["releases"]["archive"])
+    late = "cp /wend-post.sh /target/root/wend-post.sh; in-target sh -c 'sh /root/wend-post.sh > /root/wend-post.log 2>&1'"
+    return "\n".join([
+        "d-i debian-installer/locale string en_US", "d-i console-keymaps-at/keymap select us",
+        # a static address, as servers have: the live checks compare the guest's addresses with it after every boot
+        "d-i netcfg/choose_interface select eth0", "d-i netcfg/disable_dhcp boolean true",
+        f"d-i netcfg/get_ipaddress string {ADDR}", "d-i netcfg/get_netmask string 255.255.255.0",
+        f"d-i netcfg/get_gateway string {GUEST_HOST}", "d-i netcfg/get_nameservers string 10.0.2.3",
+        "d-i netcfg/confirm_static boolean true", "d-i netcfg/get_hostname string wend-vm",
+        "d-i netcfg/get_domain string example.org",
+        "d-i mirror/country string enter information manually", f"d-i mirror/http/hostname string {m.netloc}",
+        f"d-i mirror/http/directory string {m.path}", "d-i mirror/http/proxy string",
+        f"d-i mirror/suite string {box_doc['release']}",
+        # the archive's keys expired long ago; the harness's apt config allows the same (hop.apt_conf)
+        "d-i debian-installer/allow_unauthenticated boolean true",
+        "d-i clock-setup/utc boolean true", "d-i time/zone string UTC", "d-i partman-auto/method string regular",
+        "d-i partman/confirm_write_new_label boolean true", "d-i partman/confirm boolean true",
+        "d-i passwd/root-login boolean true", "d-i passwd/make-user boolean false",
+        "d-i passwd/root-password-crypted password $1$wendvm$NoPasswordOpensThisAcc", "d-i apt-setup/security_host string",
+        # iproute: the harness's own network check (NET) reads `ip`, which etch's minimal install doesn't have
+        "tasksel tasksel/first multiselect", f"d-i pkgsel/include string {' '.join(box_doc['packages'] + ['iproute'])}",
+        "popularity-contest popularity-contest/participate boolean false",
+        "d-i grub-installer/only_debian boolean true", "d-i finish-install/reboot_in_progress note",
+        "d-i debian-installer/exit/poweroff boolean true", *inst.get("preseed", []),
+        *box_doc.get("debconf_selections", []),
+        f"d-i preseed/late_command string {late}" + (f"; {inst['late']}" if inst.get("late") else ""), ""])
+
+
+def newc(files):
+    """A cpio archive (newc) of name -> bytes, all mode 0644 in the root: what an initramfs appended to another one
+    adds. The kernel unpacks every archive in the initrd in turn, so this adds files without unpacking the original."""
+    out = b""
+    for i, (name, data) in enumerate(list(files.items()) + [("TRAILER!!!", b"")]):
+        n = name.encode() + b"\0"
+        mode = 0o100644 if name != "TRAILER!!!" else 0
+        hdr = "070701" + "".join(f"{x:08X}" for x in (i + 1, mode, 0, 0, 1, 0, len(data), 0, 0, 0, 0, len(n), 0))
+        out += hdr.encode() + n + b"\0" * (-(110 + len(n)) % 4) + data + b"\0" * (-len(data) % 4)
+    return out
 
 
 class Serve:
@@ -199,8 +268,9 @@ def fetch(url, out):
 
 
 def build(box_id):
-    """Install BOX in a VM from its release's own installer, then bring it to the release's last packages, as the
-    chroot build does (yum update). Cached by box file and adapter, like sandbox.build_box."""
+    """Install BOX in a VM from its release's own installer (anaconda for EL, debian-installer for Debian), then bring
+    it to the release's last packages, as the chroot build does. Cached by box file and adapter, like
+    sandbox.build_box."""
     box_doc = load(f"boxes/{box_id}/box.toml")
     fam = box_doc["family"]
     raw = open(os.path.join(ROOT, f"boxes/{box_id}/box.toml"), "rb").read() + \
@@ -215,28 +285,48 @@ def build(box_id):
     key = os.path.join(d, "key")
     if not os.path.exists(key):
         sandbox.host(f"ssh-keygen -q -t rsa -b 3072 -N '' -C wend-vm -f {key}")
-    shim = load(f"adapters/{fam}.toml")["mirror"]["shim"]
     inst = a["releases"][box_doc["release"]]["install"]
-    for f in ("vmlinuz", "initrd.img"):
-        fetch(f"{shim}/{inst['tree']}/{inst['pxeboot']}/{f}", os.path.join(d, f))
-    ks = os.path.join(d, "ks")
-    os.makedirs(ks, exist_ok=True)
-    open(os.path.join(ks, "ks.cfg"), "w").write(kickstart(box_doc, a, open(key + ".pub").read().strip()))
-    srv = Serve(ks)
     disk = os.path.join(d, "install.qcow2")
     sandbox.host(f"qemu-img create -q -f qcow2 {disk} 30G")
-    g = Guest(disk, key, box_doc.get("vm", {}).get("ssh_port", 22))
+    hw = hardware(a, box_doc["release"])
+    g = Guest(disk, key, box_doc.get("vm", {}).get("ssh_port", 22), hw)
     log(f"installing {box_id} ({box_doc['release']}) in a VM; this takes 10 to 20 minutes")
-    g.start(["-kernel", os.path.join(d, "vmlinuz"), "-initrd", os.path.join(d, "initrd.img"), "-no-reboot",
-             "-append", f"ks=http://{GUEST_HOST}:{srv.port}/ks.cfg ksdevice=eth0 console=ttyS0,115200 text"])
-    g.proc.wait(3600)
-    srv.httpd.shutdown()
-    g = Guest(disk, key, g.ssh_port)
+    key_pub = open(key + ".pub").read().strip()
+    if isinstance(backends.of(a), backends.Rpm):  # anaconda: the kickstart over http from the host, the tree via the shim
+        shim = load(f"adapters/{fam}.toml")["mirror"]["shim"]
+        for f in ("vmlinuz", "initrd.img"):
+            fetch(f"{shim}/{inst['tree']}/{inst['pxeboot']}/{f}", os.path.join(d, f))
+        ks = os.path.join(d, "ks")
+        os.makedirs(ks, exist_ok=True)
+        open(os.path.join(ks, "ks.cfg"), "w").write(kickstart(box_doc, a, key_pub))
+        srv = Serve(ks)
+        g.start(["-kernel", os.path.join(d, "vmlinuz"), "-initrd", os.path.join(d, "initrd.img"), "-no-reboot",
+                 "-append", f"ks=http://{GUEST_HOST}:{srv.port}/ks.cfg ksdevice=eth0 console=ttyS0,115200 text"])
+        g.proc.wait(3600)
+        srv.httpd.shutdown()
+    else:  # debian-installer: netboot from the archive, the preseed and post_install() appended to its initrd
+        for f in ("linux", "initrd.gz"):
+            fetch(f"{a['releases']['archive']}/{inst['netboot']}/{f}", os.path.join(d, f))
+        extra = gzip.compress(newc({"preseed.cfg": preseed(box_doc, a, inst).encode(),
+                                    "wend-post.sh": post_install(box_doc, key_pub).encode()}))
+        open(os.path.join(d, "initrd-wend.gz"), "wb").write(open(os.path.join(d, "initrd.gz"), "rb").read() + extra)
+        g.start(["-kernel", os.path.join(d, "linux"), "-initrd", os.path.join(d, "initrd-wend.gz"), "-no-reboot",
+                 "-append", "priority=critical console=ttyS0,115200n8"])
+        g.proc.wait(3600)
+    g = Guest(disk, key, g.ssh_port, hw)
     g.start()
     if not g.wait_ssh():
         raise RuntimeError(f"the installed box never answered ssh; console: {g.console}")
     v = backends.of(a).hop_vars(a, box_doc["release"])
-    rc, out = g.ssh(backends.fill(a["hop"]["set_release"], v) + " && yum -y update && yum clean all", timeout=3600)
+    if isinstance(backends.of(a), backends.Rpm):
+        last = backends.fill(a["hop"]["set_release"], v) + " && yum -y update && yum clean all"
+    else:  # the harness's apt config first, as the chroot build writes it (tools/sandbox.py)
+        rc, out = g.ssh("mkdir -p /etc/apt/apt.conf.d && cat > /etc/apt/apt.conf.d/00wend", stdin=a["hop"]["apt_conf"])
+        if rc:
+            raise RuntimeError(f"writing the harness's apt config in the box failed: {out}")
+        last = " && ".join([backends.fill(a["hop"]["set_release"], v), backends.fill(a["hop"]["refresh"], v),
+                            "apt-get dist-upgrade", "apt-get clean"])
+    rc, out = g.ssh(last, timeout=3600)
     if rc:
         raise RuntimeError(f"updating the installed box failed:\n{out[-2000:]}")
     if not g.reboot()[0]:
@@ -300,12 +390,11 @@ def run_hop(g, cmds, after):
     return g.ssh("cat /root/wend-hop/DONE")[1].strip() == "0", o
 
 
-def replay(route_path, box_id):
+def replay(route_path, box_id, resume=None):
+    """resume = (an earlier run's directory, HOP): start from that run's disk after the hop before HOP, to iterate on
+    a late hop without replaying the early ones. Such a run is recorded as partial and never counts as a pass."""
     d, box_doc = build(box_id)
     route = load(route_path)
-    if route.get("finish", {}).get("prune_obsolete"):  # the chroot walk's finish step; no VM equivalent yet
-        raise SystemExit(f"{route_path} ends with prune_obsolete, which the VM tier doesn't run yet: refusing to "
-                         "report a pass that skipped it")
     a = guest_adapter(route["family"])
     sandbox.ensure_mirror(load(f"adapters/{route['family']}.toml"))
     fixes = {}
@@ -316,23 +405,47 @@ def replay(route_path, box_id):
     pinned = [fixes[r["id"]] for r in route["fixes"]]
     w = type("W", (), {})()  # the harness's own hop_cmds (tools/walk.py), on a walk with no chroot box
     w.adapter = a
+    key, prev = os.path.join(d, "key"), os.path.join(d, "base.qcow2")
+    todo = route["hops"]
+    if resume:
+        if resume[1] not in route["hops"][1:]:
+            raise SystemExit(f"--from needs one of {route['hops'][1:]}; for the whole route, replay without it")
+        i = route["hops"].index(resume[1])
+        # only from a hop that passed, on the same box: a failed hop's disk would make lost checks vacuous
+        if not os.path.exists(os.path.join(resume[0], "run.json")):
+            raise SystemExit(f"{resume[0]} has no run.json to say its hops passed")
+        src = json.load(open(os.path.join(resume[0], "run.json")))
+        done = {h["to"]: h for h in src["hops"]}
+        if src["box"] != box_id or not done.get(route["hops"][i - 1], {}).get("ok"):
+            raise SystemExit(f"{resume[0]} has no passing {route['hops'][i - 1]} hop on {box_id} to resume from")
+        prev = os.path.abspath(os.path.join(resume[0], f"{route['hops'][i - 1]}.qcow2"))
+        todo = route["hops"][i:]
+        if not os.path.exists(prev):
+            raise SystemExit(f"no disk to resume from: {prev}")
+        # that disk carries the ssh key of the box build it came from, which a changed adapter or vm.py has replaced
+        chain = json.loads(subprocess.run(["qemu-img", "info", "-U", "--backing-chain", "--output=json", prev],
+                                          capture_output=True, text=True, check=True).stdout)
+        key = os.path.join(os.path.dirname(chain[-1]["filename"]), "key")
     stamp = time.strftime("%Y%m%d-%H%M%S")
     out_dir = os.path.join(ROOT, ".wend", "vm", f"{stamp}-{box_id.replace('/', '_')}-{os.getpid()}")
     os.makedirs(out_dir)
-    key, prev = os.path.join(d, "key"), os.path.join(d, "base.qcow2")
     port = box_doc.get("vm", {}).get("ssh_port", 22)
-    g = Guest(prev, key, port)
+    hw = hardware(a, route["from"])
+    g = Guest(prev, key, port, hw)
     hops, start_net = [], None
-    for hop in route["hops"]:
+    for hop in todo:
         disk = os.path.join(out_dir, f"{hop}.qcow2")
         sandbox.host(f"qemu-img create -q -f qcow2 -b {prev} -F qcow2 {disk}")
-        g = Guest(disk, key, port)
+        g = Guest(disk, key, port, hw)
         g.start()
         if not g.wait_ssh():
             hops.append({"to": hop, "ok": False, "stage": "the guest didn't come up before the hop"})
             g.kill()  # free the forwarded ports; the overlay and console stay for a look
             break
-        start_net = start_net or g.ssh(NET)[1]
+        if start_net is None:
+            start_net = g.ssh(NET)[1]
+            if f"default via {GUEST_HOST}" not in start_net or ADDR not in start_net:  # never compare two empty reads
+                raise RuntimeError(f"the box's network can't be read at the start (no `ip`?): {start_net!r}")
         before = checks(g, box_doc, a)
         matched = []
         for f in (f for f in pinned if f["hop"] == hop):
@@ -371,12 +484,13 @@ def replay(route_path, box_id):
             h["net_kept"] = net == start_net
             # the release's newest kernel must be the one running (SPEC "Kernels and the bootloader"): an old kernel
             # under the new userland is what GRUB legacy did before the harness owned the boot entries
-            rc, kv = g.ssh("uname -r; rpm -q --qf '%{INSTALLTIME} %{VERSION}-%{RELEASE}.%{ARCH}\\n' kernel-core kernel "
-                           "2>/dev/null | grep -v 'is not installed' | sort -n | tail -n1 | cut -d' ' -f2")
+            rc, kv = g.ssh("uname -r; " + a["hop"]["kernel_newest"])
             lines = kv.split()
             h["kernel"] = lines[0] if lines else None
             running, newest = (lines + [None, None])[:2]
-            h["kernel_current"] = newest is None or newest in (running, (running or "").rsplit(".", 1)[0])
+            h["kernel_newest"] = newest
+            # every VM box has a kernel: no answer from the query is a failure, never a pass
+            h["kernel_current"] = newest is not None and newest in (running, (running or "").rsplit(".", 1)[0])
             h["lost"] = lost
             h["failed_logs"] = {n: after_checks[n][1][-1500:] for n in lost}
             h["ok"] = ok and h["net_kept"] and not lost and h["kernel_current"]
@@ -392,13 +506,107 @@ def replay(route_path, box_id):
         if not h["ok"]:
             break
         prev = disk
+    if len(hops) == len(todo) and all(h["ok"] for h in hops) and route.get("finish", {}).get("prune_obsolete"):
+        hops += prune(a, w, route["to"], box_doc, out_dir, prev, key, port, hw, start_net)
+    complete = len(hops) == len(todo) + bool(route.get("finish", {}).get("prune_obsolete"))
     run = {"schema": "wend.vmrun/0", "route": check.content_id(route), "box": box_id, "from": route["from"],
-           "to": route["to"], "started": stamp, "result": "pass" if len(hops) == len(route["hops"]) and
-           all(h["ok"] for h in hops) else "fail", "hops": hops,
+           "to": route["to"], "started": stamp, "hops": hops,
+           "result": "pass" if complete and all(h["ok"] for h in hops) and not resume else
+           "partial-pass" if complete and all(h["ok"] for h in hops) else "fail",
            "runner": {"kind": "vm", "host": os.uname().nodename, "kernel": os.uname().release}}
+    if resume:
+        run["resumed"] = {"from_run": os.path.abspath(resume[0]), "at_hop": resume[1]}
     json.dump(run, open(os.path.join(out_dir, "run.json"), "w"), indent=1)
     log(f"{run['result'].upper()}: {box_id} on {route_path}; run and disks in {os.path.relpath(out_dir, ROOT)}")
     return 0 if run["result"] == "pass" else 1
+
+
+def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net):
+    """The route's finish step, as the chroot walk's prune (tools/walk.py): purge the packages the target release no
+    longer ships, then autoremove, splitting the set in halves whenever a step fails or a passing check is lost.
+    Every attempt runs on its own overlay of the last good disk and reboots; a kept attempt becomes the next base.
+    Returns its steps, each like a hop's."""
+    steps, base, n = [], [prev], [0]
+
+    def attempt(pkgs):
+        n[0] += 1
+        disk = os.path.join(out_dir, f"prune-{n[0]:02d}.qcow2")
+        sandbox.host(f"qemu-img create -q -f qcow2 -b {base[0]} -F qcow2 {disk}")
+        g = Guest(disk, key, port, hw)
+        g.start()
+        h = {"to": f"prune-{n[0]:02d}", "asked": pkgs, "packages": pkgs}
+        if not g.wait_ssh():  # the last good disk booted a moment ago: an infrastructure fault, not these packages'
+            g.kill()
+            raise RuntimeError(f"prune-{n[0]:02d}: the guest didn't come up from the last good disk")
+        rc, listed = g.ssh(a["hop"]["installed_list"])
+        if rc:
+            g.kill()
+            raise RuntimeError(f"prune-{n[0]:02d}: couldn't list the installed packages: {listed[-300:]}")
+        pkgs = h["packages"] = [p for p in pkgs if p in set(listed.split())]  # an earlier autoremove took the rest
+        if not pkgs:
+            g.stop()
+            h.update(ok=True, stage="already gone")
+            return h
+        before = checks(g, box_doc, a)
+        cmds = [check.compile_step({"op": "remove", "packages": pkgs, "purge": True}, a, to),
+                a["hop"]["autoremove"]]
+        ok, out = run_hop(g, cmds, [backends.fill(c, w.vars) for c in a["hop"].get("after", [])])
+        open(os.path.join(out_dir, f"prune-{n[0]:02d}.steps.log"), "w").write(out)
+        back, forced = g.reboot() if ok else (None, False)
+        h.update(commands_ok=ok, rebooted=back, reboot_forced=forced)
+        if back:
+            after = checks(g, box_doc, a)
+            h["lost"] = sorted(k for k, (good, _) in before.items() if good and not after.get(k, (False,))[0])
+            h["net_kept"] = g.ssh(NET)[1] == start_net
+            h["ok"] = ok and h["net_kept"] and not h["lost"]
+        else:
+            h["ok"] = False
+        g.stop()
+        if h["ok"]:
+            base[0] = disk
+        log(f"prune {len(pkgs)} packages: {'kept' if h['ok'] else 'dropped'}")
+        return h
+
+    def go(pkgs):
+        if not pkgs:
+            return
+        h = attempt(pkgs)
+        steps.append(h)
+        left = h["packages"]  # what was still installed when the attempt ran, as walk.prune splits
+        if not h["ok"] and len(left) > 1:
+            go(left[:len(left) // 2])
+            go(left[len(left) // 2:])
+
+    g = Guest(os.path.join(out_dir, "prune-00.qcow2"), key, port, hw)
+    sandbox.host(f"qemu-img create -q -f qcow2 -b {prev} -F qcow2 {g.disk}")
+    g.start()
+    if not g.wait_ssh():
+        g.kill()
+        return [{"to": "prune", "ok": False, "stage": "the guest didn't come up"}]
+    def obsolete(g):
+        (rc1, listed), (rc2, out) = g.ssh(a["hop"]["installed_list"]), g.ssh(a["hop"]["obsolete"])
+        if rc1 or rc2:  # an ssh failure must not read as "nothing to prune"
+            g.kill()
+            raise RuntimeError(f"couldn't read the obsolete packages for the prune: {(listed + out)[-300:]}")
+        return [p for p in out.split() if p in set(listed.split())]
+
+    try:
+        pkgs = obsolete(g)
+        g.stop()
+        log(f"prune: {len(pkgs)} obsolete packages")
+        go(pkgs)
+        g = Guest(os.path.join(out_dir, "prune-end.qcow2"), key, port, hw)  # what's left, as walk.prune reports it
+        sandbox.host(f"qemu-img create -q -f qcow2 -b {base[0]} -F qcow2 {g.disk}")
+        g.start()
+        if not g.wait_ssh():
+            g.kill()
+            return [{"to": "prune", "ok": False, "stage": "the guest didn't come up after the prune", "attempts": steps}]
+        left = obsolete(g)
+        g.stop()
+    except RuntimeError as e:  # recorded, so the run and its hop disks stay resumable
+        return [{"to": "prune", "ok": False, "stage": str(e)[:500], "attempts": steps}]
+    # the chroot walk keeps what it could and reports the rest; a step that was split and then kept in halves passed
+    return [{"to": "prune", "ok": True, "obsolete_before": len(pkgs), "obsolete_after": len(left), "attempts": steps}]
 
 
 def main(args):
@@ -407,6 +615,8 @@ def main(args):
         return 0
     if args[:1] == ["replay"] and len(args) == 3:
         return replay(args[1], args[2])
+    if args[:1] == ["replay"] and len(args) == 6 and args[3] == "--from":
+        return replay(args[1], args[2], (args[4], args[5]))
     return __doc__
 
 
