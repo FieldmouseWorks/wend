@@ -629,17 +629,17 @@ The files are read as `KEY=VALUE` lines and never executed; a value that isn't o
 - `ONBOOT`, `IPV6INIT` (else `/etc/sysconfig/network`'s), `IPV6_AUTOCONF` (`no` is `link-local`), as NetworkManager's
   booleans (`yes`, `true`, `t`, `y`, `1` and their opposites);
 - `NM_CONTROLLED` (`no` fails: EL9's NetworkManager left that device unmanaged, which a keyfile can't say);
-- `DHCPCLASS` is inert, and so is `USERCTL`, which must still be a boolean.
+- `DHCPCLASS` and `USERCTL` are inert (the plugin doesn't read them); wend still requires `USERCTL` to be a boolean.
 
 In `/etc/sysconfig/network`, `GATEWAY`, `GATEWAYDEV` and `IPV6INIT` are read as above, and `NETWORKING`,
 `NETWORKING_IPV6`, `HOSTNAME`, `NOZEROCONF` and `NISDOMAIN` are left as they are: none of them is part of a profile.
 
 Any other setting in either file (bridges, VLANs, bonds, aliases, IPv6 addresses, `RES_OPTIONS`), a keyfile of the
-same name already there, a `route-`, `route6-`, `rule-`, `rule6-` or `keys-` file beside a profile, or a value that
-isn't an address, MAC, boolean or plain name fails the step. Every profile is checked and serialized by `nmcli` before
-the first file is written, so a failure, including `nmcli` missing or refusing a profile, changes nothing. Reference:
-`python3 -` with the source in `tools/net_ifcfg_to_keyfile.py`, sent as a here-document; `tools/test_net_ifcfg.py`
-runs it on fixture roots.
+same name already there, two profiles that pin one name to different MACs or one MAC to different names, a `route-`,
+`route6-`, `rule-`, `rule6-` or `keys-` file beside a profile, or a value that isn't an address, MAC, boolean or plain
+name fails the step. Every profile is checked and serialized by `nmcli` before the first file is written, so a
+failure, including `nmcli` missing or refusing a profile, changes nothing. Reference: `python3 -` with the source in
+`tools/net_ifcfg_to_keyfile.py`, sent as a here-document; `tools/test_net_ifcfg.py` runs it on fixture roots.
 
 ### Argument specs
 

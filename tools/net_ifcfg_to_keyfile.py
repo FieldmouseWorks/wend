@@ -96,7 +96,7 @@ def plan(path, net, resolv):
     if v.get("TYPE", "Ethernet") != "Ethernet":
         fail(f"{path}: TYPE={v['TYPE']}: only Ethernet profiles are converted")
     hw = v.get("HWADDR", "").lower()
-    if not hw:  # without it nothing keeps the name: EL10 calls eth0 ens3, and a keyfile bound to eth0 never comes up
+    if not hw:  # the .link pin needs it: without one EL10 may call eth0 ens3, and a keyfile for eth0 never comes up
         fail(f"{path}: no HWADDR to pin {dev} to")
     if not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", hw):
         fail(f"{path}: HWADDR={hw} isn't a MAC address")
@@ -189,6 +189,11 @@ def main():
             elif w and w[0] in ("search", "domain"):  # resolv.conf(5): the last of the two wins
                 resolv["search"] = w[1:2] if w[0] == "domain" else w[1:]
     plans = [plan(f, net, resolv) for f in files]
+    pins = {}
+    for (c, dev, hw, args), f in zip(plans, files):  # one pin per name and per MAC (two profiles of one NIC agree)
+        for key, other in ((("dev", dev), hw), (("hw", hw), dev)):
+            if pins.setdefault(key, (other, f))[0] != other:
+                fail(f"{f} and {pins[key][1]} pin {key[1]} differently")
     keyfiles = []
     for (c, dev, hw, args), f in zip(plans, files):  # every keyfile serialized before anything is written
         try:

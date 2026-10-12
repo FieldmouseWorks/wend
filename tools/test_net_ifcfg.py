@@ -65,13 +65,18 @@ def run(profiles, net=NET, resolv=RESOLV, keyfiles=()):
             msg = f"EXCEPTION {e!r}"
         finally:
             os.environ["PATH"] = path
-        keyfiles = {}
+        keyfiles, links = {}, {}
+        if os.path.isdir(m.L):
+            for n in sorted(os.listdir(m.L)):
+                f = os.path.join(m.L, n)
+                links[n] = (oct(os.stat(f).st_mode & 0o777), open(f).read())
         if os.path.isdir(m.K):
             for n in sorted(os.listdir(m.K)):
                 f = os.path.join(m.K, n)
                 keyfiles[n] = (oct(os.stat(f).st_mode & 0o777), open(f).read().splitlines()[4:])  # after "[connection]", "--offline connection add"
         left = sorted(os.path.relpath(os.path.join(r, n), t).replace(t.lstrip("/") + "/", "")  # SAVED keeps the path
                       for r, _, ns in os.walk(t) for n in ns if not r.startswith(f"{t}/bin"))
+        run.links = links
         return msg, keyfiles, left, printed.getvalue()
 
 
@@ -98,7 +103,7 @@ msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-lo": "DEVICE=lo\nIPADDR=127.0
 case("a kickstart static profile becomes the exact keyfile, pinned by MAC, the ifcfg saved",
      msg is None and kf == {"eth0.nmconnection": ("0o600", STATIC + ["ipv6.method", "ignore",
                                                                      "connection.autoconnect", "yes"])}
-     and "etc/systemd/network/10-wend-eth0.link" in left
+     and run.links == {"10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\n\n[Link]\nName=eth0\n")}
      and "var/lib/wend/saved/etc/sysconfig/network-scripts/ifcfg-eth0" in left
      and "etc/sysconfig/network-scripts/ifcfg-eth0" not in left and "etc/sysconfig/network-scripts/ifcfg-lo" in left)
 msg, kf, left, out = run({"ifcfg-eth0": GUI})
@@ -184,7 +189,17 @@ msg, kf, left, out = run({"ifcfg-eth0": KS}, keyfiles=["eth0.nmconnection"])
 case("a keyfile already there is refused", refused(msg, "exists already") and "etc/sysconfig/network-scripts/ifcfg-eth0"
      in left and not any(x.startswith(("var/lib/wend", "etc/systemd")) for x in left))
 msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-eth1;5f3a9b2c9": KS})
-case("a ; and 9 hex digits isn't an rpm leftover, so it's read (and refused as a name)", refused(msg, "not a plain"))
+case("a ; and 9 hex digits isn't an rpm leftover, so it's read (and refused as a name)",
+     refused(msg, "not a plain") and not kf)
+OLD_NIC = KS.replace("12:34:56", "99:99:99").replace(".20", ".21")
+msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-eth0-old": OLD_NIC})
+case("two profiles pinning eth0 to different MACs are refused", refused(msg, "pin eth0 differently") and not kf
+     and not run.links)
+msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-eth1": KS.replace("DEVICE=eth0", "DEVICE=eth1").replace(".20", ".21")})
+case("two names pinned to one MAC are refused", refused(msg, "pin 52:54:00:12:34:56 differently") and not kf)
+msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-eth0-dhcp": "DEVICE=eth0\nHWADDR=52:54:00:12:34:56\nBOOTPROTO=dhcp\n"
+                          "ONBOOT=no\n"})
+case("two profiles for one NIC share its pin", msg is None and len(kf) == 2 and list(run.links) == ["10-wend-eth0.link"])
 msg, kf, left, out = run({"ifcfg-eth0": KS}, net=NET + "IPV6INIT=maybe\n")
 case("a bad boolean in /etc/sysconfig/network is refused, not a traceback",
      refused(msg, "IPV6INIT=maybe isn't yes or no") and not kf)
