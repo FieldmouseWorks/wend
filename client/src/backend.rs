@@ -101,7 +101,7 @@ pub struct Caps {
 
 pub const APT: Caps = Caps {
     name: "apt",
-    ops: &["apache.enable", "apache.disable"],
+    ops: &["apache.enable", "apache.disable", "dpkg.reinstall"],
     force: &["depends", "remove-essential"],
     pm_options: &["overwrite-conflicting-files"],
 };
@@ -240,6 +240,7 @@ fn apt_step(s: &Value, adapter: &Doc) -> Result<String, String> {
             str_of(s, "kind")?,
             str_of(s, "name")?
         ),
+        "dpkg.reinstall" => format!("apt-get install --reinstall {}", packages(s)?),
         _ => return Err(format!("the apt backend has no op {op:?}")),
     })
 }

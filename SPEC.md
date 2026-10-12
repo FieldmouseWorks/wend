@@ -143,7 +143,8 @@ The table is a summary. The [Op reference](#op-reference) has the arguments, eff
 Adapter ops are named `<tool>.<verb>`. The adapter declares which ones its family offers and each one's arguments
 (`[ops."<name>"].args`, see [Argument specs](#argument-specs)); the Op reference defines what they do.
 
-- Debian: `apache.enable` and `apache.disable` (`kind` = site/mod/conf, `name`) compile to `a2en*`/`a2dis*`.
+- Debian: `apache.enable` and `apache.disable` (`kind` = site/mod/conf, `name`) compile to `a2en*`/`a2dis*`;
+  `dpkg.reinstall` (`packages`) to `apt-get install --reinstall`.
 - EL: `rpm.bootstrap` (unpack EL6's rpm/yum stack over / with 7-Zip, because rpm 4.4 can't read xz payloads),
   `rpm.transit` (pass through EL8: EL8's rpm run from a staging dir, then a real distro-sync), `rpm.swap-release`
   (release packages by hand: epochs and vendor switches), `rpm.drop-arch` (multilib leftovers), `rpm.adopt-rpmnew`,
@@ -441,6 +442,12 @@ this hop only; the harness deletes the file after the post steps (step 6 of a ho
 **`apache.enable`, `apache.disable`** `kind` (`site`, `mod` or `conf`), `name` (`[A-Za-z0-9_.-]+`). Enables or
 disables one Apache site, module or config snippet. Reference: `a2en{kind} {name}` / `a2dis{kind} {name}`. Fails
 if it doesn't exist.
+
+**`dpkg.reinstall`** `packages` (a list of package names). Installs the current release's build of packages that are
+already installed, as they are. A package an older dpkg unpacked without an md5sums file (a transitional package
+whose .deb ships none, unpacked by squeeze's dpkg during the wheezy transaction) is flagged by wheezy's
+`dpkg --audit` as needing a reinstall, which fails the `pkgdb` check; reinstalling it under the release's own dpkg
+writes them. Fails if a package isn't available in the release. Reference: `apt-get install --reinstall {packages}`.
 
 ### EL ops
 

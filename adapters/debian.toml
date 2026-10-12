@@ -75,6 +75,10 @@ args = { kind = { enum = ["site", "mod", "conf"] }, name = { pattern = "[A-Za-z0
 summary = "a2dissite / a2dismod / a2disconf"
 args = { kind = { enum = ["site", "mod", "conf"] }, name = { pattern = "[A-Za-z0-9_.-]+" } }
 
+[ops."dpkg.reinstall"]
+summary = "apt-get install --reinstall: the release's own build again, which writes the md5sums an older dpkg left out"
+args = { packages = { list = "[a-z0-9][a-z0-9.+-]*" } }
+
 [checks]
 # Universal checks every box gets on this family. Boxes add their own roles (web, db, mail...).
 pkgdb = 'test -z "$(dpkg --audit 2>&1)" && apt-get check >/dev/null'
