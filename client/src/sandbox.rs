@@ -23,7 +23,7 @@ const ENV: &[(&str, &str)] = &[
 /// Every command runs in a UTS namespace of its own, named from inside the chroot by the root's own /etc/hostname
 /// (or EL's /etc/sysconfig/network), else wend-box.example.org: never the host's name, so nothing a hop writes
 /// depends on where it ran (wend#26). Byte for byte tools/sandbox.py's NAME_SELF; client/parity.py checks it.
-const NAME_SELF: &str = r#"n=$(head -n 1 /etc/hostname 2>/dev/null | tr -d ' \t\r'); [ -n "$n" ] || n=$(sed -n 's/^HOSTNAME=//p' /etc/sysconfig/network 2>/dev/null | tail -n 1 | tr -d "\"' "); case "$n" in ''|*[!A-Za-z0-9.-]*) n=wend-box.example.org;; esac; echo "$n" >/proc/sys/kernel/hostname 2>/dev/null || echo wend-box.example.org >/proc/sys/kernel/hostname; exec /bin/sh -c "$1""#;
+const NAME_SELF: &str = r#"n=$(head -n 1 /etc/hostname 2>/dev/null | tr -d ' \t\r'); [ -n "$n" ] || n=$(sed -n 's/^HOSTNAME=//p' /etc/sysconfig/network 2>/dev/null | tail -n 1 | tr -d "\"' "); case "$n" in ''|[!A-Za-z0-9]*|*[!A-Za-z0-9.-]*|*.|*..*) n=wend-box.example.org;; esac; printf '%s\n' "$n" >/proc/sys/kernel/hostname 2>/dev/null || echo wend-box.example.org >/proc/sys/kernel/hostname; exec /bin/sh -c "$1""#;
 
 pub fn tail(s: &str, n: usize) -> String {
     if s.len() <= n {
@@ -331,30 +331,7 @@ impl Root {
     }
 
     fn run_mounted(&self, cmd: &str, timeout: u64, isolated: bool) -> (i32, String) {
-        let root = self.dir.to_string_lossy().into_owned();
-        let mut argv: Vec<String> = vec![
-            "chroot".into(),
-            root,
-            "/bin/sh".into(),
-            "-c".into(),
-            NAME_SELF.into(),
-            "x".into(),
-            cmd.into(),
-        ];
-        let pre: &[&str] = if isolated {
-            &[
-                "unshare",
-                "-u",
-                "-n",
-                "sh",
-                "-c",
-                "ip link set lo up && exec \"$@\"",
-                "x",
-            ]
-        } else {
-            &["unshare", "-u"]
-        };
-        argv = pre.iter().map(|s| s.to_string()).chain(argv).collect();
+        let argv = chroot_argv(&self.dir.to_string_lossy(), cmd, isolated);
         // output to a file, not a pipe: a daemon a command leaves running would hold a pipe open forever
         let out = match tempfile() {
             Ok(f) => f,
@@ -526,8 +503,47 @@ pub fn work_dir(work: &Path, root: &Path) -> Result<PathBuf, String> {
     Ok(w)
 }
 
+/// What runs one command in a root: its own UTS namespace (and network namespace with only loopback when
+/// `isolated`), chroot, then NAME_SELF, which names the namespace and execs the command.
+fn chroot_argv(root: &str, cmd: &str, isolated: bool) -> Vec<String> {
+    let argv: Vec<String> = vec![
+        "chroot".into(),
+        root.into(),
+        "/bin/sh".into(),
+        "-c".into(),
+        NAME_SELF.into(),
+        "x".into(),
+        cmd.into(),
+    ];
+    let pre: &[&str] = if isolated {
+        &[
+            "unshare",
+            "-u",
+            "-n",
+            "sh",
+            "-c",
+            "ip link set lo up && exec \"$@\"",
+            "x",
+        ]
+    } else {
+        &["unshare", "-u"]
+    };
+    pre.iter().map(|s| s.to_string()).chain(argv).collect()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chroot_argv_names_the_box() {
+        let tail = ["chroot", "/r", "/bin/sh", "-c", super::NAME_SELF, "x", "echo hi"];
+        let a = super::chroot_argv("/r", "echo hi", false);
+        assert_eq!(a[..2], ["unshare", "-u"]);
+        assert_eq!(a[2..], tail);
+        let a = super::chroot_argv("/r", "echo hi", true);
+        assert_eq!(a[..3], ["unshare", "-u", "-n"]);
+        assert_eq!(a[a.len() - tail.len()..], tail);
+    }
+
     #[test]
     fn mounts_unescape() {
         assert_eq!(super::unescape("/a\\040b/c\\134d"), "/a b/c\\d");

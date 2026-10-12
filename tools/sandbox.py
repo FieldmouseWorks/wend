@@ -27,8 +27,8 @@ ENV = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "
 HOSTNAME = "wend-box.example.org"
 NAME_SELF = ("n=$(head -n 1 /etc/hostname 2>/dev/null | tr -d ' \\t\\r'); [ -n \"$n\" ] || "
              "n=$(sed -n 's/^HOSTNAME=//p' /etc/sysconfig/network 2>/dev/null | tail -n 1 | tr -d \"\\\"' \"); "
-             f"case \"$n\" in ''|*[!A-Za-z0-9.-]*) n={HOSTNAME};; esac; "
-             f"echo \"$n\" >/proc/sys/kernel/hostname 2>/dev/null || echo {HOSTNAME} >/proc/sys/kernel/hostname; "
+             f"case \"$n\" in ''|[!A-Za-z0-9]*|*[!A-Za-z0-9.-]*|*.|*..*) n={HOSTNAME};; esac; "
+             f"printf '%s\\n' \"$n\" >/proc/sys/kernel/hostname 2>/dev/null || echo {HOSTNAME} >/proc/sys/kernel/hostname; "
              'exec /bin/sh -c "$1"')
 
 
@@ -241,9 +241,14 @@ def build_el(root, box_doc, adapter):
 BUILDERS = {"debian": build_debian, "el": build_el}
 
 
+# Bump when what a build writes changes, so boxes cached before it rebuild. 1: the box's own /etc/hostname (wend#26).
+BUILD_VERSION = b"1"
+
+
 def build_box(box_id, box_doc, adapter, box_toml_bytes, adapter_bytes, log=print):
-    """Build a box once and cache it, keyed by the box file and the adapter. Returns the cached (read-only) Box."""
-    key = hashlib.sha256(box_toml_bytes + adapter_bytes).hexdigest()[:12]
+    """Build a box once and cache it, keyed by the box file, the adapter and BUILD_VERSION. Returns the cached
+    (read-only) Box."""
+    key = hashlib.sha256(box_toml_bytes + adapter_bytes + BUILD_VERSION).hexdigest()[:12]
     root = f"{WORK}/boxes/{box_id.replace('/', '_')}-{key}"
     if os.path.exists(f"{root}/.wend-ready"):
         return Box(root)
