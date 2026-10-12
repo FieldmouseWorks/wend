@@ -10,7 +10,8 @@ use std::collections::BTreeSet;
 pub const ADDED: &str = "/var/lib/wend/added-families";
 
 pub struct HopPlan {
-    /// steps 1 to 7: set the release, refresh, pre steps, the upgrade, post steps, pm-option cleanup, verify
+    /// steps 1 to 7: set the release, refresh, kernel_before, pre steps, the upgrade, kernel_after, post steps,
+    /// pm-option cleanup, verify
     pub commands: Vec<String>,
     /// step 8: run whatever happened above
     pub after: Vec<String>,
@@ -55,9 +56,18 @@ pub fn hop_plan(adapter: &Doc, hop: &str, fixes: &[&Doc]) -> Result<HopPlan, Str
         Some(_) => list_of(rel.unwrap(), "upgrade")?,
         None => list_of(h, "upgrade")?,
     };
+    // SPEC "Kernels and the bootloader": the harness's kernel handover, around the fixes' pre steps and the upgrade
+    let kernel = |k: &str| -> Result<Vec<String>, String> {
+        Ok(match get(h, k) {
+            Some(_) => list_of(h, k)?.iter().map(|c| fill(c, &v)).collect(),
+            None => vec![],
+        })
+    };
     let mut commands = vec![fill(str_of(h, "set_release")?, &v), fill(str_of(h, "refresh")?, &v)];
+    commands.extend(kernel("kernel_before")?);
     commands.extend(comp("pre")?);
     commands.extend(upgrade.iter().map(|c| fill(c, &v)));
+    commands.extend(kernel("kernel_after")?);
     commands.extend(comp("post")?);
     // SPEC "restores and adds": the families the fired fixes may introduce, for the services check
     let mut adds = BTreeSet::new();

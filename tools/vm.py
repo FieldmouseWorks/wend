@@ -68,6 +68,8 @@ def guest_adapter(family):
     return a
 
 
+FORCED_RESET = ("sleep 2; kill -TERM -1; sleep 10; kill -KILL -1; sleep 3; sync; echo 1 > /proc/sys/kernel/sysrq; "
+                "echo s > /proc/sysrq-trigger; sleep 2; echo u > /proc/sysrq-trigger; sleep 3; echo b > /proc/sysrq-trigger\n")
 GUESTS = []  # every qemu this run started: killed on the way out, whatever happened
 
 
@@ -136,10 +138,13 @@ class Guest:
                 return False, False
         if last == before:  # the old boot still answers after two minutes: `reboot` did nothing
             forced = True
-            self.ssh("sync; echo 1 > /proc/sys/kernel/sysrq; echo s > /proc/sysrq-trigger; sleep 2; "
-                     "echo u > /proc/sysrq-trigger; sleep 2; (sleep 1; echo b > /proc/sysrq-trigger) >/dev/null 2>&1 &",
-                     timeout=30)
-            time.sleep(20)
+            # Stop every process first, while the old kernel still runs: a reset with the daemons up leaves every
+            # replaced library and socket as an orphan inode, and EL7's kernel, cleaning those up at its first mount
+            # of the ext3 root, leaves extended-attribute refcounts too high (EL9's fsck then stops the boot).
+            # Only PID 1's own files stay orphaned. A detached script: the kill takes this ssh session too.
+            self.ssh("cat > /root/.wend-reset", stdin=FORCED_RESET)
+            self.ssh("setsid nohup sh /root/.wend-reset >/dev/null 2>&1 </dev/null &", timeout=30)
+            time.sleep(40)
         return self.wait_ssh() and self.boot_id() not in (None, before), forced
 
     def stop(self):
@@ -337,13 +342,26 @@ def replay(route_path, box_id):
             if rc == 0:
                 matched.append(f)
         log(f"hop to {hop}: {[f['meta']['name'] for f in matched]}")
-        cmds = walk.Walk.hop_cmds(w, hop, matched)
+        first, second = walk.Walk.hop_parts(w, hop, matched)
         after = [backends.fill(c, w.vars) for c in a["hop"].get("after", [])]
         t0 = time.time()
-        ok, steps = run_hop(g, cmds, after)
+        h = {"to": hop, "fired_names": [f["meta"]["name"] for f in matched]}
+        if (a["releases"].get(hop) or {}).get("reboot") == "before-post":
+            # boot the new kernel before the post steps run the release's binaries (SPEC "Kernels and the bootloader")
+            ok, steps = run_hop(g, first, [])  # hop.after runs once, after everything (SPEC "How a hop runs")
+            if not ok:  # ...whatever happened
+                steps += run_hop(g, [], after)[1]
+            if ok:
+                back, forced = g.reboot()
+                h["mid_reboot"], h["mid_reboot_forced"] = back, forced
+                ok = back
+                if back:
+                    ok, rest = run_hop(g, second, after)
+                    steps += "\n##### after the reboot into the new kernel\n" + rest
+        else:
+            ok, steps = run_hop(g, first + second, after)
         open(os.path.join(out_dir, f"{hop}.steps.log"), "w").write(steps)
-        h = {"to": hop, "fired_names": [f["meta"]["name"] for f in matched], "commands_ok": ok,
-             "seconds": round(time.time() - t0)}
+        h["commands_ok"], h["seconds"] = ok, round(time.time() - t0)
         back, forced = g.reboot() if ok else (None, False)  # None: commands failed, no reboot tried
         h["rebooted"], h["reboot_forced"] = back, forced
         if back:
@@ -351,9 +369,17 @@ def replay(route_path, box_id):
             after_checks = checks(g, box_doc, a)
             lost = sorted(n for n, (good, _) in before.items() if good and not after_checks.get(n, (False,))[0])
             h["net_kept"] = net == start_net
+            # the release's newest kernel must be the one running (SPEC "Kernels and the bootloader"): an old kernel
+            # under the new userland is what GRUB legacy did before the harness owned the boot entries
+            rc, kv = g.ssh("uname -r; rpm -q --qf '%{INSTALLTIME} %{VERSION}-%{RELEASE}.%{ARCH}\\n' kernel-core kernel "
+                           "2>/dev/null | grep -v 'is not installed' | sort -n | tail -n1 | cut -d' ' -f2")
+            lines = kv.split()
+            h["kernel"] = lines[0] if lines else None
+            running, newest = (lines + [None, None])[:2]
+            h["kernel_current"] = newest is None or newest in (running, (running or "").rsplit(".", 1)[0])
             h["lost"] = lost
             h["failed_logs"] = {n: after_checks[n][1][-1500:] for n in lost}
-            h["ok"] = ok and h["net_kept"] and not lost
+            h["ok"] = ok and h["net_kept"] and not lost and h["kernel_current"]
             if not h["net_kept"]:
                 h["net"] = {"start": start_net, "now": net}
         else:

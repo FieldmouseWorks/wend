@@ -55,6 +55,9 @@ major = 6
 pm = "yum"
 repos = { base = "vault.centos.org/6.10/os/x86_64", updates = "vault.centos.org/6.10/updates/x86_64" }
 upgrade = ["yum -y upgrade"]
+# EL6 binaries can't run on the EL5 kernel (EL6's apr asks for SOCK_CLOEXEC): on a real machine, boot the new kernel
+# before the post steps run them (SPEC "Kernels and the bootloader")
+reboot = "before-post"
 
 [releases.centos6.bootstrap]
 # rpm.bootstrap: EL6's rpm, yum and python stack, unpacked over / with 7-Zip from archived EPEL 5
@@ -124,6 +127,23 @@ after = [
   "{pm} clean packages",
 ]
 installed_list = "rpm -qa --qf '%{NAME}\\n' | sort -u"
+# A real machine's kernel (SPEC "Kernels and the bootloader"). A chroot box has none, and these do nothing there. The
+# old release's kernel can't stay in the rpm database: EL5's needs mkinitrd, EL6's /sbin/new-kernel-pkg, and dnf won't
+# remove the running one. So before the transaction its records go (its files stay: the running kernel and its boot
+# entry are the fallback), and the files of kernels no package owns and that aren't running go too, so the release's
+# kernel fits (CentOS 5's /boot is 200 MB). After it the release's own kernel is installed, and GRUB legacy, which can't read EL8+'s BLS
+# entries and which GRUB2 can't replace on a sector-63 disk, gets an entry for the new kernel as its default. Only
+# vmlinuz entries are touched (memtest, Xen and chainloader entries stay). Nothing is removed unless the machine is
+# booted from this root: in a chroot of someone's disk, uname -r is the host's kernel, not the box's.
+kernel_before = [
+  "[ / -ef /proc/1/root ] || { echo \"not booted from this root: kernel records left as they are\"; exit 0; }; K=$(for p in kernel kernel-core kernel-modules kernel-modules-core kernel-modules-extra; do rpm -q $p 2>/dev/null | grep -v 'is not installed'; done); if [ -n \"$K\" ]; then mkdir -p /var/lib/wend && echo $K > /var/lib/wend/kernel-handover && rpm -e --justdb --nodeps --noscripts --notriggers $K && echo \"kernel records dropped, files kept: $K\"; fi",
+  "[ / -ef /proc/1/root ] || { echo \"not booted from this root: the running kernel isn't its own, nothing removed\"; exit 0; }; R=$(uname -r); G=/boot/grub/grub.conf; D=\"\"; [ -f $G ] && D=$(awk -F= '/^default=/ {d = $2} /^title/ {t++} t - 1 == d && $0 ~ /vmlinuz-/ {sub(/.*vmlinuz-/, \"\"); sub(/[ \\t].*/, \"\"); print; exit}' $G); for f in /boot/vmlinuz-*; do [ -e \"$f\" ] || continue; v=${f#/boot/vmlinuz-}; [ -n \"$v\" ] || continue; case \"$v\" in 0-rescue-*|\"$R\"|\"$D\") continue;; esac; rpm -qf \"$f\" >/dev/null 2>&1 && continue; echo \"removing an old kernel no package owns: $v\"; rm -f \"/boot/vmlinuz-$v\" \"/boot/.vmlinuz-$v.hmac\" \"/boot/System.map-$v\" \"/boot/config-$v\" \"/boot/symvers-$v.gz\" \"/boot/initrd-$v.img\" \"/boot/initramfs-$v.img\" \"/etc/ld.so.conf.d/kernel-$v.conf\"; rm -rf \"/lib/modules/$v\"; done; df -h /boot | tail -n1",
+]
+kernel_after = [
+  "[ / -ef /proc/1/root ] || exit 0; [ -e /var/lib/wend/kernel-handover ] || exit 0; {clean_repos}; rm -f /var/lib/rpm/__db.*; rpm --rebuilddb; if command -v dnf >/dev/null 2>&1; then dnf -y {dnf_opts} install kernel; else yum -y install kernel; fi && rpm -q kernel && rm -f /var/lib/wend/kernel-handover",
+  "[ / -ef /proc/1/root ] || exit 0; G=/boot/grub/grub.conf; [ -f $G ] || exit 0; V=$(rpm -q --qf '%{INSTALLTIME} %{VERSION}-%{RELEASE}.%{ARCH}\\n' kernel-core kernel 2>/dev/null | grep -v 'is not installed' | sort -n | tail -n1 | cut -d' ' -f2); [ -n \"$V\" ] || exit 0; [ -f \"/boot/vmlinuz-$V\" ] || V=${V%.*}; [ -f \"/boot/vmlinuz-$V\" ] || { echo \"no /boot/vmlinuz for the installed kernel $V\"; exit 1; }; if ! grep -q \"vmlinuz-$V[[:space:]]\" $G; then E=$(awk -F= '/^default=/ {d = $2} /^title/ {t++} $1 ~ /^[ \\t]*kernel / && $0 ~ /vmlinuz-/ {if (!f) f = $0; if (t - 1 == d) {print; x = 1; exit}} END {if (!x) print f}' $G | sed 's/^[ \\t]*//'); P=$(echo \"$E\" | awk '{sub(/vmlinuz-.*/, \"\", $2); print $2}'); A=$(echo \"$E\" | awk '{for (i = 3; i <= NF; i++) printf \"%s \", $i}'); R=$(awk -F= '/^default=/ {d = $2} /^title/ {t++; r = \"\"} $1 ~ /^[ \\t]*root[ \\t]/ {r = $0} $1 ~ /^[ \\t]*kernel / && $0 ~ /vmlinuz-/ {if (!f) {f = 1; q = r} if (t - 1 == d) {print r; x = 1; exit}} END {if (!x) print q}' $G | sed 's/^[ \\t]*//'); [ -n \"$E\" ] && [ -n \"$R\" ] || { echo \"no kernel entry in $G to copy the root and arguments from\"; exit 1; }; I=initramfs-$V.img; [ -f \"/boot/$I\" ] || I=initrd-$V.img; awk -v v=\"$V\" -v p=\"$P\" -v a=\"$A\" -v r=\"$R\" -v i=\"$I\" 'BEGIN {d = 0} /^title/ && !d {print \"title \" v; print \"\\t\" r; print \"\\tkernel \" p \"vmlinuz-\" v \" \" a; print \"\\tinitrd \" p i; d = 1} {print}' $G > $G.wend && cat $G.wend > $G && rm -f $G.wend || exit 1; fi; awk 'function flush() {if (n && keep) printf \"%s\", b; b = \"\"; n = 0; keep = 1} /^title/ {flush(); n = 1} n && $1 == \"kernel\" && $2 ~ /vmlinuz-/ {f = $2; sub(/.*vmlinuz-/, \"/boot/vmlinuz-\", f); if (system(\"test -e \" f) != 0) keep = 0} n {b = b $0 \"\\n\"; next} {print} END {flush()}' $G > $G.wend && cat $G.wend > $G && rm -f $G.wend || exit 1; D=$(awk -v v=\"vmlinuz-$V\" '/^title/ {t++} $1 == \"kernel\" && index($2, v) {print t - 1; exit}' $G); [ -n \"$D\" ] || { echo \"no entry for $V in $G\"; exit 1; }; awk -v d=\"$D\" '/^default=/ {print \"default=\" d; next} {print}' $G > $G.wend && cat $G.wend > $G && rm -f $G.wend || exit 1; grep -E '^(default|title)' $G",
+]
+
 
 [predicates]
 # "installed" is rpm -q: EL has no removed-but-configured state. Multiple versions (kernels) still count as installed.

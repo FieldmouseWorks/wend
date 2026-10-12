@@ -267,4 +267,26 @@ for name, vm, want in (("the web box's own [vm]", web.get("vm", {}), False),
     errs = check.check_box({**web, "vm": vm}, adapters, "boxes/el/centos5-web/box.toml")
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
+# the kernel handover's place in a hop (SPEC "Kernels and the bootloader"): right after refresh, and right after the
+# upgrade; Debian has none. Parity holds the client to the same order.
+import walk as _walk  # noqa: E402
+for fam, hop in (("el", "centos6"), ("debian", "squeeze")):
+    w_ = type("W", (), {})()
+    w_.adapter = adapters[fam]
+    pre = [{**el_good, "hop": hop, "pre": [{"op": "kv.set", "path": "/etc/vsftpd/vsftpd.conf", "values": {"listen": "YES"}}],
+            "post": []}] if fam == "el" else []
+    first, second = _walk.Walk.hop_parts(w_, hop, pre)
+    h_ = adapters[fam]["hop"]
+    kb = [_walk.fill(c, w_.vars) for c in h_.get("kernel_before", [])]
+    ka = [_walk.fill(c, w_.vars) for c in h_.get("kernel_after", [])]
+    rel = adapters[fam]["releases"].get(hop)
+    up = [_walk.fill(c, w_.vars) for c in (rel["upgrade"] if isinstance(rel, dict) and "upgrade" in rel
+                                            else h_["upgrade"])]
+    if fam == "el":  # kernel_before before the pre steps: rpm.transit (a pre step) needs the kernel records gone
+        ok = bool(kb) and bool(ka) and first[2:2 + len(kb)] == kb and "vsftpd" in first[2 + len(kb)] and \
+            first[-len(ka):] == ka and first[-len(ka) - len(up):-len(ka)] == up
+    else:
+        ok = not kb and not ka
+    print(("passed  " if ok else "WRONG   ") + f"{fam} {hop}: kernel steps right after refresh and right after the upgrade")
+    bad += not ok
 sys.exit(1 if bad else 0)
