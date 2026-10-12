@@ -679,8 +679,9 @@ harness, not to fixes, because the release's own tools can't carry them up the l
   where wend drops records and keeps files. Fixes can't, because a fix doing it could fake `pkgdb`. It then removes
   the files of kernels that no package owns and that aren't running or GRUB's default, so the release's kernel fits
   in `/boot` (CentOS 5's default is 200 MB). This is how the previous hop's kernel, once a reboot has moved off it,
-  finally goes. It removes nothing unless the machine is booted from this root: in a chroot of someone's disk,
-  `uname -r` is the host's kernel, not the box's. The fallback the running kernel's entry gives is a manual one:
+  finally goes. None of the kernel steps acts unless the machine is booted from this root (`/` is PID 1's root): in
+  a chroot of someone's disk the records, files and boot entries are left as they are, since `uname -r` there is the
+  host's kernel, not the box's. The fallback the running kernel's entry gives is a manual one:
   GRUB legacy has no `fallback=` set, so a hop that fails between the two halves leaves the default on the running
   kernel's entry, which still boots.
 - **The release's kernel is installed after the transaction** (`hop.kernel_after`), since the transaction itself only
