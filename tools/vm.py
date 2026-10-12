@@ -405,19 +405,20 @@ def replay(route_path, box_id, resume=None):
     pinned = [fixes[r["id"]] for r in route["fixes"]]
     w = type("W", (), {})()  # the harness's own hop_cmds (tools/walk.py), on a walk with no chroot box
     w.adapter = a
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    out_dir = os.path.join(ROOT, ".wend", "vm", f"{stamp}-{box_id.replace('/', '_')}-{os.getpid()}")
-    os.makedirs(out_dir)
     key, prev = os.path.join(d, "key"), os.path.join(d, "base.qcow2")
     todo = route["hops"]
     if resume:
-        i = route["hops"].index(resume[1])
-        if i:  # only from a hop that passed, on the same box: a failed hop's disk would make lost checks vacuous
-            src = json.load(open(os.path.join(resume[0], "run.json")))
-            done = {h["to"]: h for h in src["hops"]}
-            if src["box"] != box_id or not done.get(route["hops"][i - 1], {}).get("ok"):
-                raise SystemExit(f"{resume[0]} has no passing {route['hops'][i - 1]} hop on {box_id} to resume from")
-            prev = os.path.abspath(os.path.join(resume[0], f"{route['hops'][i - 1]}.qcow2"))
+        i = route["hops"].index(resume[1]) if resume[1] in route["hops"] else 0
+        if not i:
+            raise SystemExit(f"--from needs a hop after the first of {route['hops']}; for the whole route, replay")
+        # only from a hop that passed, on the same box: a failed hop's disk would make lost checks vacuous
+        if not os.path.exists(os.path.join(resume[0], "run.json")):
+            raise SystemExit(f"{resume[0]} has no run.json to say its hops passed")
+        src = json.load(open(os.path.join(resume[0], "run.json")))
+        done = {h["to"]: h for h in src["hops"]}
+        if src["box"] != box_id or not done.get(route["hops"][i - 1], {}).get("ok"):
+            raise SystemExit(f"{resume[0]} has no passing {route['hops'][i - 1]} hop on {box_id} to resume from")
+        prev = os.path.abspath(os.path.join(resume[0], f"{route['hops'][i - 1]}.qcow2"))
         todo = route["hops"][i:]
         if not os.path.exists(prev):
             raise SystemExit(f"no disk to resume from: {prev}")
@@ -425,6 +426,9 @@ def replay(route_path, box_id, resume=None):
         chain = json.loads(subprocess.run(["qemu-img", "info", "-U", "--backing-chain", "--output=json", prev],
                                           capture_output=True, text=True, check=True).stdout)
         key = os.path.join(os.path.dirname(chain[-1]["filename"]), "key")
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    out_dir = os.path.join(ROOT, ".wend", "vm", f"{stamp}-{box_id.replace('/', '_')}-{os.getpid()}")
+    os.makedirs(out_dir)
     port = box_doc.get("vm", {}).get("ssh_port", 22)
     hw = hardware(a, route["from"])
     g = Guest(prev, key, port, hw)
@@ -530,7 +534,7 @@ def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net):
         sandbox.host(f"qemu-img create -q -f qcow2 -b {base[0]} -F qcow2 {disk}")
         g = Guest(disk, key, port, hw)
         g.start()
-        h = {"to": f"prune-{n[0]:02d}", "packages": pkgs}
+        h = {"to": f"prune-{n[0]:02d}", "asked": pkgs, "packages": pkgs}
         if not g.wait_ssh():
             g.kill()
             h.update(ok=False, stage="the guest didn't come up")
@@ -569,9 +573,10 @@ def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net):
             return
         h = attempt(pkgs)
         steps.append(h)
-        if not h["ok"] and len(pkgs) > 1:
-            go(pkgs[:len(pkgs) // 2])
-            go(pkgs[len(pkgs) // 2:])
+        left = h["packages"]  # what was still installed when the attempt ran, as walk.prune splits
+        if not h["ok"] and len(left) > 1:
+            go(left[:len(left) // 2])
+            go(left[len(left) // 2:])
 
     g = Guest(os.path.join(out_dir, "prune-00.qcow2"), key, port, hw)
     sandbox.host(f"qemu-img create -q -f qcow2 -b {prev} -F qcow2 {g.disk}")
@@ -586,18 +591,21 @@ def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net):
             raise RuntimeError(f"couldn't read the obsolete packages for the prune: {(listed + out)[-300:]}")
         return [p for p in out.split() if p in set(listed.split())]
 
-    pkgs = obsolete(g)
-    g.stop()
-    log(f"prune: {len(pkgs)} obsolete packages")
-    go(pkgs)
-    g = Guest(os.path.join(out_dir, "prune-end.qcow2"), key, port, hw)  # what's left, as walk.prune reports it
-    sandbox.host(f"qemu-img create -q -f qcow2 -b {base[0]} -F qcow2 {g.disk}")
-    g.start()
-    if not g.wait_ssh():
-        g.kill()
-        return [{"to": "prune", "ok": False, "stage": "the guest didn't come up after the prune"}]
-    left = obsolete(g)
-    g.stop()
+    try:
+        pkgs = obsolete(g)
+        g.stop()
+        log(f"prune: {len(pkgs)} obsolete packages")
+        go(pkgs)
+        g = Guest(os.path.join(out_dir, "prune-end.qcow2"), key, port, hw)  # what's left, as walk.prune reports it
+        sandbox.host(f"qemu-img create -q -f qcow2 -b {base[0]} -F qcow2 {g.disk}")
+        g.start()
+        if not g.wait_ssh():
+            g.kill()
+            return [{"to": "prune", "ok": False, "stage": "the guest didn't come up after the prune", "attempts": steps}]
+        left = obsolete(g)
+        g.stop()
+    except RuntimeError as e:  # recorded, so the run and its hop disks stay resumable
+        return [{"to": "prune", "ok": False, "stage": str(e)[:500], "attempts": steps}]
     # the chroot walk keeps what it could and reports the rest; a step that was split and then kept in halves passed
     return [{"to": "prune", "ok": True, "obsolete_before": len(pkgs), "obsolete_after": len(left), "attempts": steps}]
 
