@@ -5,7 +5,9 @@ family = "debian"
 release = "etch"
 arch = "amd64"
 summary = "etch web server: Apache 2.2 + mod_php5 vhost, postfix, ssh on 2222, cron"
-packages = ["openssh-server", "apache2", "libapache2-mod-php5", "php5-cli", "postfix", "cron", "rsync", "sudo", "python", "perl", "curl", "ntp", "logrotate", "less"]
+packages = ["openssh-server", "apache2", "libapache2-mod-php5", "php5-cli", "postfix", "cron", "rsync", "sudo", "python", "perl", "curl", "ntp", "logrotate", "less",
+            # what a real etch install (debian-installer) has and debootstrap's minbase doesn't: each one breaks a hop (wend#13)
+            "dhcp3-client", "module-init-tools"]
 customize = '''
 set -e
 touch /etc/apache2/httpd.conf

@@ -13,6 +13,14 @@ id = "sha256:0a151144716a224dbd63d842b6f436a119b07c5436b5712de58d66f66182ead0"
 name = "purge-stale-libdb4"
 
 [[fixes]]
+id = "sha256:118ae140c4d2811057fe5893e82d599d9548e77167ff0af39055400c90866123"
+name = "wheezy-purge-dhcp3-transitional"
+
+[[fixes]]
+id = "sha256:c9b66b3801b09b1f4bc784727ce649d583e84bb6322eb7d1b46ecefdecf27d3a"
+name = "wheezy-reinstall-module-init-tools"
+
+[[fixes]]
 id = "sha256:1f2441873bf8fcd47e6ab8cd32904ac94ee40ff6c6295c6a0fc148259ea49ca0"
 name = "apache24-site-conf"
 

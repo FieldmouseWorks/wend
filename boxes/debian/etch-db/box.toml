@@ -5,7 +5,9 @@ family = "debian"
 release = "etch"
 arch = "amd64"
 summary = "etch database server: MySQL 5.0 with a real table, BIND master zone, Exim"
-packages = ["openssh-server", "mysql-server", "bind9", "exim4", "cron", "rsync", "sudo", "python", "perl", "curl", "logrotate", "less"]
+packages = ["openssh-server", "mysql-server", "bind9", "exim4", "cron", "rsync", "sudo", "python", "perl", "curl", "logrotate", "less",
+            # what a real etch install (debian-installer) has and debootstrap's minbase doesn't: each one breaks a hop (wend#13)
+            "dhcp3-client", "module-init-tools"]
 customize = '''
 set -e
 cat > /etc/bind/db.example.org <<'EOF'
