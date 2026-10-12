@@ -1,0 +1,112 @@
+# The Ubuntu adapter: the Debian adapter's apt/dpkg engine on Ubuntu's LTS ladder. Everything apt/dpkg-specific that
+# fixes may not say for themselves lives here. See SPEC.md, "Adapters".
+schema = "wend.adapter/0"
+family = "ubuntu"
+backend = "apt"
+force = ["depends", "remove-essential"]
+release_file = "/etc/lsb-release"    # /etc/debian_version on Ubuntu names Debian's testing ("jessie/sid"), not the release
+
+# LTS to LTS, the way do-release-upgrade goes: one hop = one LTS. Interim releases are never stops.
+ladder = ["trusty", "xenial", "bionic", "focal", "jammy", "noble", "resolute"]
+
+harness_owned = ["/etc/apt/sources.list", "/etc/apt/sources.list.d/", "/etc/apt/apt.conf.d/00wend"]
+
+# Same allowlist as Debian, for the same reasons (see adapters/debian.toml).
+writable = [
+  "/etc/apache2/sites-available/*.conf",
+  "/etc/apache2/conf-available/*.conf",
+  "/etc/mysql/conf.d/*.cnf",
+  "/etc/mysql/mariadb.conf.d/*.cnf",
+  "/etc/mysql/mysql.conf.d/*.cnf",
+]
+
+[releases]
+# Ubuntu moves a release to old-releases.ubuntu.com some time after its support ends; every LTS from trusty on is
+# still on the main archive (ESM keeps them there). The release pocket only: it is frozen at release time, so a hop's
+# pinned Release file stays good. -updates and -security move, and a route that read them couldn't be replayed.
+archive = "http://old-releases.ubuntu.com/ubuntu"
+current = "http://archive.ubuntu.com/ubuntu"
+current_from = "trusty"
+
+[releases.xenial]
+# mysql-server-5.7's postinst runs mysql_upgrade against the server it has just started, then stops it, runs an init
+# file through a bootstrap server, and starts it again. On a real machine the init script does all that; in the
+# sandbox policy-rc.d keeps every daemon down, so the configure fails. Only then, and only for MySQL, the harness
+# finishes the configure with a stand-in policy-rc.d that starts and stops 5.7's own mysqld itself (socket only, no
+# TCP, no inherited descriptors) whenever the postinst asks for mysql, and still denies the init script. The server
+# is down and the box's own policy-rc.d is back before the hop goes on. Boxes without MySQL never get here.
+upgrade = ['''apt-get dist-upgrade || {
+dpkg-query -W -f '${Status}' mysql-server-5.7 2>/dev/null | grep -q half-configured || exit 1
+cp -p /usr/sbin/policy-rc.d /tmp/wend-policy-rc.d
+cat > /usr/sbin/policy-rc.d <<'WEND_EOF'
+#!/bin/sh
+case " $* " in *" mysql "*) ;; *) exit 101;; esac
+case " $* " in *stop*|*restart*)
+  mysqladmin --defaults-file=/etc/mysql/debian.cnf shutdown >/dev/null 2>&1
+  i=0; while pgrep -x mysqld >/dev/null && [ $i -lt 120 ]; do sleep 1; i=$((i+1)); done;;
+esac
+case " $* " in *start*)
+  mkdir -p /var/run/mysqld && chown mysql:mysql /var/run/mysqld
+  /usr/sbin/mysqld --user=mysql --skip-networking </dev/null >/dev/null 2>&1 &
+  i=0; while [ $i -lt 120 ] && ! mysqladmin --defaults-file=/etc/mysql/debian.cnf ping >/dev/null 2>&1; do sleep 1; i=$((i+1)); done;;
+esac
+exit 101
+WEND_EOF
+dpkg --configure -a; rc=$?
+/usr/sbin/policy-rc.d mysql stop
+pkill -x mysqld; i=0; while pgrep -x mysqld >/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done
+cp -p /tmp/wend-policy-rc.d /usr/sbin/policy-rc.d && rm -f /tmp/wend-policy-rc.d
+[ $rc = 0 ] && apt-get dist-upgrade
+}''', "apt-get autoremove --purge"]
+
+[releases.jammy]
+# Noble needs a merged /usr: its libc6 preinst diverts /lib64 and fails ("cannot divert directories") while /lib64
+# is still a real directory, and every box that came up the ladder from trusty has one. Noble no longer ships
+# usrmerge, so the merge happens on arrival at jammy, with jammy's own usrmerge, like do-release-upgrade's quirk.
+# A box that is already merged gets a no-op. prune_obsolete purges usrmerge once a release no longer ships it.
+upgrade = ["apt-get dist-upgrade", "apt-get autoremove --purge", "apt-get install usrmerge"]
+
+[box]
+# Debian's debootstrap knows every Ubuntu release as the "gutsy" script, but Ubuntu 24.04's own package (the CI
+# runner's) only links it for lunar and later. Named explicitly, so building a trusty box doesn't depend on the host.
+debootstrap_script = "gutsy"
+
+[hop]
+set_release = "printf 'deb {mirror} {release} main restricted universe multiverse\\n' > /etc/apt/sources.list && rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources"
+refresh = "apt-get update"
+upgrade = ["apt-get dist-upgrade", "apt-get autoremove --purge"]
+verify = "grep -qx 'DISTRIB_CODENAME={release}' /etc/lsb-release"
+autoremove = "apt-get autoremove --purge"
+after = ["apt-get clean"]
+obsolete = "apt-get update >/dev/null 2>&1; apt list '?obsolete' 2>/dev/null | grep / | cut -d/ -f1"
+installed_list = "dpkg-query -W -f '${Status} ${Package}\\n' | awk '$3==\"installed\"{print $4}'"
+apt_conf = """APT::Get::Assume-Yes "true";
+APT::Get::force-yes "true";
+APT::Get::AllowUnauthenticated "true";
+Acquire::Check-Valid-Until "false";
+Acquire::AllowInsecureRepositories "true";
+Dpkg::Options { "--force-confdef"; "--force-confold"; };
+"""
+
+[predicates]
+installed = "dpkg-query -W -f '${Status}' {pkg} 2>/dev/null | grep -q 'ok installed'"
+file = "test -f {path}"
+file-contains = "grep -qF '{text}' {path}"
+mysql-option = '''g=$( (mysqld --verbose --help || /usr/sbin/mysqld --verbose --help || mariadbd --verbose --help || /usr/sbin/mariadbd --verbose --help) 2>/dev/null | sed -n 's/^The following groups are read: //p' | head -n 1); [ -n "$g" ] && my_print_defaults --defaults-file={path} $g 2>/dev/null | awk -v k='--{key}' -v v='{value}' -v any={any} '{ n = $0; sub(/=.*/, "", n); gsub(/_/, "-", n); if (n == k) { f = 1; x = $0; sub(/^[^=]*=?/, "", x) } } END { exit !(f && (any || x == v)) }''''
+
+[pm_options.overwrite-conflicting-files]
+path = "/etc/apt/apt.conf.d/50overwrite"
+content = "Dpkg::Options { \"--force-overwrite\"; };\n"
+
+[ops."apache.enable"]
+summary = "a2ensite / a2enmod / a2enconf"
+args = { kind = { enum = ["site", "mod", "conf"] }, name = { pattern = "[A-Za-z0-9_.-]+" } }
+
+[ops."apache.disable"]
+summary = "a2dissite / a2dismod / a2disconf"
+args = { kind = { enum = ["site", "mod", "conf"] }, name = { pattern = "[A-Za-z0-9_.-]+" } }
+
+[checks]
+pkgdb = 'test -z "$(dpkg --audit 2>&1)" && apt-get check >/dev/null'
+current = "every binary a service runs comes from a package the release in sources.list still ships (apt-cache madison); the box lists the binaries"
+services = "no explicitly installed, non-required package that ships an init script or unit belongs to a name family the box did not have at the start"

@@ -158,8 +158,12 @@ def ensure_mirror(adapter):
 
 def build_debian(root, box_doc, adapter):
     rel = box_doc["release"]
+    script = adapter.get("box", {}).get("debootstrap_script", "")  # Ubuntu: see adapters/ubuntu.toml
+    if script and not script.isalnum():
+        raise ValueError(f"debootstrap_script must be a bare script name, not {script!r}")
+    script = f" /usr/share/debootstrap/scripts/{script}" if script else ""
     rc, log = host(f"debootstrap --no-check-gpg --arch={box_doc.get('arch', 'amd64')} --variant=minbase {rel} {root} "
-                   f"{mirror(adapter, rel)}")
+                   f"{mirror(adapter, rel)}{script}")
     if rc:
         raise RuntimeError("debootstrap failed:\n" + tail(log, 2000))
     with open(f"{root}/usr/sbin/policy-rc.d", "w") as f:
@@ -172,10 +176,9 @@ def build_debian(root, box_doc, adapter):
             f.write(f"127.0.0.1\tlocalhost\n127.0.1.1\t{HOSTNAME} {HOSTNAME.split('.')[0]}\n")
     with open(f"{root}/etc/apt/apt.conf.d/00wend", "w") as f:
         f.write(adapter["hop"]["apt_conf"])
-    with open(f"{root}/etc/apt/sources.list", "w") as f:
-        f.write(f"deb {mirror(adapter, rel)} {rel} main\n")
     b = Box(root)
-    rc, log = b.run("".join(f"echo '{d}' | debconf-set-selections && " for d in box_doc.get("debconf_selections", [])) +
+    rc, log = b.run(backends.fill(adapter["hop"]["set_release"], backends.Apt().hop_vars(adapter, rel)) + " && " +
+                    "".join(f"echo '{d}' | debconf-set-selections && " for d in box_doc.get("debconf_selections", [])) +
                     "apt-get update && apt-get install " + " ".join(box_doc["packages"]))
     if rc:
         raise RuntimeError("package install failed:\n" + tail(log, 2000))
@@ -238,7 +241,7 @@ def build_el(root, box_doc, adapter):
             raise RuntimeError(f"{what} failed:\n" + tail(log, 3000))
 
 
-BUILDERS = {"debian": build_debian, "el": build_el}
+BUILDERS = {"debian": build_debian, "ubuntu": build_debian, "el": build_el}
 
 
 # Bump when what a build writes changes, so boxes cached before it rebuild. 1: the box's own /etc/hostname (wend#26).

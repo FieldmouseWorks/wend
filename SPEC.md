@@ -363,6 +363,27 @@ See `adapters/debian.toml`. Notes that matter:
 - `current`: every binary a service runs comes from a package that the release in sources.list still ships
   (`apt-cache madison`). This closed the "PHP 5 still serving on trixie" hole, without per-release version tables.
 
+### Ubuntu (`ubuntu`, apt backend)
+
+See `adapters/ubuntu.toml`. The Debian adapter's engine on Ubuntu's own ladder. Notes that matter:
+
+- The ladder is LTS to LTS (`trusty xenial bionic focal jammy noble resolute`), the way do-release-upgrade goes.
+  Interim releases are never stops.
+- `release_file` is `/etc/lsb-release`: Ubuntu's `/etc/debian_version` names Debian testing, not the release. Each hop
+  `verify`s `DISTRIB_CODENAME`.
+- Only the release pocket, with all four components. It is frozen at release time, so a hop's pinned Release stays
+  good; `-updates` and `-security` move and couldn't be replayed. The harness owns `sources.list.d` as well.
+- Noble needs a merged `/usr` (its libc6 preinst diverts `/lib64`), and noble no longer ships `usrmerge`, so the jammy
+  hop installs jammy's `usrmerge` after its upgrade (`releases.jammy.upgrade`). A box is merged once, by the harness.
+- xenial's `mysql-server-5.7` postinst runs `mysql_upgrade` against the server it just started, and stops and
+  restarts it around an init file. Nothing starts in the sandbox, so when that configure fails, and only then, the
+  xenial hop (`releases.xenial.upgrade`) finishes it with a stand-in `policy-rc.d` that starts and stops 5.7's own
+  `mysqld` itself (socket only, `--skip-networking`) whenever the postinst asks for `mysql`, and still denies the init
+  script. The server is down and the box's `policy-rc.d` is back before the hop goes on. The one place the sandbox
+  runs a daemon during a transaction; a real machine never takes that branch.
+- debootstrap knows every Ubuntu release as its `gutsy` script, but Ubuntu 24.04's own debootstrap package only
+  links lunar and later, so the adapter names the script (`[box] debootstrap_script`).
+
 ### Enterprise Linux (`el`, rpm backend)
 
 See `adapters/el.toml`. Notes that matter:
@@ -675,14 +696,14 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `writable`, `managed` | the allowlists (globs) named by `write-file` (`writable`) and the `rpm.*` file ops (`managed`). Nothing under `/etc/wend/` is ever on either |
 | `[kv."<path>"]` | the files `kv.*` may touch: `keys` (the only keys it may set or unset; never one that grants access) and `set` (false for files with sections, which only take `kv.unset`) |
 | `force` | required: the `force-remove` flags this family allows, a subset of its backend's (apt: `depends`, `remove-essential`; rpm: `depends`, `scripts`) |
-| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`). rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader") |
+| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`), and optional `releases.<id>.upgrade` like rpm's. rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader") |
 | `[mirror]` | rpm: `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts) |
 | `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), `autoremove`, `obsolete`, `installed_list`; apt also `apt_conf`, the harness's apt config |
 | `[predicates]` | `installed`, `file`, `file-contains`, `mysql-option` command templates |
 | `[pm_options.<name>]` | `path`, `content`. apt: only `overwrite-conflicting-files`; rpm: none |
 | `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear. Whatever a `pattern`, `list` or `table` says, every value a fix passes through one must also match `[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*`: no quote, whitespace, backslash, glob character, `%`, any of `` $`;&|<>(){}~ ``, or leading `-` |
 | `[checks]` | universal health checks: `pkgdb` is a command; `current` and `services` are described in words and built by the harness from the box |
-| `[box]` | how to build a fresh box of this family (rpm: `seeds`, the packages to bootstrap a root from) |
+| `[box]` | how to build a fresh box of this family (rpm: `seeds`, the packages to bootstrap a root from; apt: optional `debootstrap_script`, a script name under the host's `/usr/share/debootstrap/scripts`) |
 
 These checks narrow what an adapter lets fixes do (ops, force flags, argument values). They don't judge an adapter's
 allowlists, hop commands or package lists: those are reviewed as spec changes, and CI never takes them from a PR.
