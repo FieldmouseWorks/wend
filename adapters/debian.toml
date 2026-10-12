@@ -37,6 +37,17 @@ refresh = "apt-get update"
 upgrade = ["apt-get dist-upgrade", "apt-get autoremove --purge"]
 autoremove = "apt-get autoremove --purge"   # after prune_obsolete removes packages
 after = ["apt-get clean"]
+# SPEC "Kernels and the bootloader": GRUB 2 arrives on squeeze as grub-pc, chained from GRUB legacy through a core.img
+# that no later grub-pc upgrade keeps current while grub-pc has no install device (an upgraded box has none): on
+# jessie the box stops after "Chainload into GRUB 2". So after every transaction, on a booted machine with grub-pc and
+# no install device that exists, the harness installs GRUB 2 to the disk /boot is on (the device grub-probe names,
+# then the disk whose /sys/block entry holds it: the running kernel may still be the previous release's, and 2.6.26
+# has no /sys/class/block) and, once that worked, records the disk (its /dev/disk/by-id name when it has one, as
+# grub-pc does) as the install device, so the release's own upgrades keep it current. A box whose install device is
+# set and present is left to grub-pc.
+kernel_after = [
+  "[ / -ef /proc/1/root ] || exit 0; dpkg-query -W -f '${Status}' grub-pc 2>/dev/null | grep -q 'ok installed' || exit 0; I=$(echo 'get grub-pc/install_devices' | debconf-communicate grub-pc 2>/dev/null | sed -n 's/^0 //p' | tr ',' ' '); for d in $I; do [ -e \"$d\" ] && { echo \"grub-pc keeps GRUB 2 on $I\"; exit 0; }; done; P=$(grub-probe -t device /boot) && [ -b \"$P\" ] || { echo \"can't find the device /boot is on\"; exit 1; }; B=$(basename \"$P\"); D=; for d in /sys/block/*; do [ -d \"$d/$B\" ] && D=/dev/$(basename \"$d\"); done; [ -n \"$D\" ] && [ -b \"$D\" ] || { echo \"can't find the disk /boot ($P) is on\"; exit 1; }; grub-install \"$D\" && update-grub || exit 1; R=$D; for l in /dev/disk/by-id/*; do case $l in *-part*) continue;; esac; [ \"$(readlink -f \"$l\")\" = \"$D\" ] && { R=$l; break; }; done; echo \"grub-pc grub-pc/install_devices multiselect $R\" | debconf-set-selections && echo \"GRUB 2 installed to $D, recorded as $R\"",
+]
 obsolete = "apt-get update >/dev/null 2>&1; apt list '?obsolete' 2>/dev/null | grep / | cut -d/ -f1"
 installed_list = "dpkg-query -W -f '${Status} ${Package}\\n' | awk '$3==\"installed\"{print $4}'"
 # Harness apt config, identical for every approach: old archive keys have expired, and local config files are kept.
