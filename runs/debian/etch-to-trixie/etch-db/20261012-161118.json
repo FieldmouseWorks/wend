@@ -5,8 +5,8 @@
  "from": "etch",
  "to": "trixie",
  "result": "pass",
- "started": "20261012-144601",
- "wall_seconds": 3017,
+ "started": "20261012-161118",
+ "wall_seconds": 2718,
  "start_fingerprint": "sha256:7c3fad791e637aab2e2644e2dd3f4328d2792686a79ebd086756e31ee959fc51",
  "runner": {
   "kind": "local",
@@ -19,7 +19,7 @@
    "fired": [],
    "fired_names": [],
    "ok": true,
-   "seconds": 81.1,
+   "seconds": 81.7,
    "sources": {
     "http://archive.debian.org/debian/dists/lenny/Release": "sha256:91c97659233014f2aa1395bee3ec90ef3d8ac63619215c0b8aeb04f7dd128664"
    }
@@ -33,7 +33,7 @@
     "reinstall-mysql-server-5.1-after-hop"
    ],
    "ok": true,
-   "seconds": 202.8,
+   "seconds": 203.8,
    "sources": {
     "http://archive.debian.org/debian/dists/squeeze/Release": "sha256:728c30b7d49a3c47a6652c7d89db403f47e0a51b5bc0c252ae4010c450431b26"
    }
@@ -53,7 +53,7 @@
     "restore-mysql-server-5.5-after-hop"
    ],
    "ok": true,
-   "seconds": 147.2,
+   "seconds": 140.9,
    "sources": {
     "http://archive.debian.org/debian/dists/wheezy/main/binary-amd64/Packages": "sha256:f3ea9ca44cc48cd4e033e8c62b40b25a200b6b17e0ccb6b9abd0741f0f786608"
    }
@@ -63,7 +63,7 @@
    "fired": [],
    "fired_names": [],
    "ok": true,
-   "seconds": 163.2,
+   "seconds": 151.7,
    "sources": {
     "http://archive.debian.org/debian/dists/jessie/Release": "sha256:f5b6409b287484bb612f6542a1ebd8cf046dcb0fdb4dcd8d677493d9aaf7d348"
    }
@@ -77,7 +77,7 @@
     "mysql55-to-mariadb"
    ],
    "ok": true,
-   "seconds": 536.0,
+   "seconds": 356.7,
    "sources": {
     "http://archive.debian.org/debian/dists/stretch/Release": "sha256:fe55c42941dd43102b9490af1678e7962ea1e257ccb8f942b43770475c336eb3"
    }
@@ -91,7 +91,7 @@
     "dpkg-overwrite-sysvinit-clash"
    ],
    "ok": true,
-   "seconds": 449.6,
+   "seconds": 385.4,
    "sources": {
     "http://archive.debian.org/debian/dists/buster/InRelease": "sha256:d2126c57347cfe5ca81d912ddfecc02e9a741c6e100d8d8295b735f979bc1a9d"
    }
@@ -101,7 +101,7 @@
    "fired": [],
    "fired_names": [],
    "ok": true,
-   "seconds": 445.3,
+   "seconds": 425.0,
    "sources": {
     "http://deb.debian.org/debian/dists/bullseye/InRelease": "sha256:7917d4598768bfc4a25776eb0f6bf2f7d1f13301c2dc1e16467ef170dd752d40"
    }
@@ -111,7 +111,7 @@
    "fired": [],
    "fired_names": [],
    "ok": true,
-   "seconds": 445.1,
+   "seconds": 435.6,
    "sources": {
     "http://deb.debian.org/debian/dists/bookworm/InRelease": "sha256:77737fa4b34f2693e982cc9ee35736816c35a7778fc2d326cc1bbf5b301fe1aa"
    }
@@ -125,7 +125,7 @@
     "drop-sysvinit-for-trixie"
    ],
    "ok": true,
-   "seconds": 383.0,
+   "seconds": 375.7,
    "sources": {
     "http://deb.debian.org/debian/dists/trixie/InRelease": "sha256:0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675"
    }
@@ -203,5 +203,5 @@
  "obsolete_before": 59,
  "obsolete_after": 0,
  "model_calls": 0,
- "log_sha256": "sha256:2e10522a29ca633f22d4c0a06514055e7d27e822bd505a8f8790fc6c70dab8ce"
+ "log_sha256": "sha256:05ba3cbe38384c538fc1c33133b0e2f9cd17399590c40dcf76ba92471e9a86fa"
 }
