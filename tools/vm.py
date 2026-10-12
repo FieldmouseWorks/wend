@@ -68,6 +68,8 @@ def guest_adapter(family):
     return a
 
 
+FORCED_RESET = ("sleep 2; kill -TERM -1; sleep 10; kill -KILL -1; sleep 3; sync; echo 1 > /proc/sys/kernel/sysrq; "
+                "echo s > /proc/sysrq-trigger; sleep 2; echo u > /proc/sysrq-trigger; sleep 3; echo b > /proc/sysrq-trigger\n")
 GUESTS = []  # every qemu this run started: killed on the way out, whatever happened
 
 
@@ -136,10 +138,13 @@ class Guest:
                 return False, False
         if last == before:  # the old boot still answers after two minutes: `reboot` did nothing
             forced = True
-            self.ssh("sync; echo 1 > /proc/sys/kernel/sysrq; echo s > /proc/sysrq-trigger; sleep 2; "
-                     "echo u > /proc/sysrq-trigger; sleep 2; (sleep 1; echo b > /proc/sysrq-trigger) >/dev/null 2>&1 &",
-                     timeout=30)
-            time.sleep(20)
+            # Stop every process first, while the old kernel still runs: a reset with the daemons up leaves every
+            # replaced library and socket as an orphan inode, and EL7's kernel, cleaning those up at its first mount
+            # of the ext3 root, leaves extended-attribute refcounts too high (EL9's fsck then stops the boot).
+            # Only PID 1's own files stay orphaned. A detached script: the kill takes this ssh session too.
+            self.ssh("cat > /root/.wend-reset", stdin=FORCED_RESET)
+            self.ssh("setsid nohup sh /root/.wend-reset >/dev/null 2>&1 </dev/null &", timeout=30)
+            time.sleep(40)
         return self.wait_ssh() and self.boot_id() not in (None, before), forced
 
     def stop(self):
