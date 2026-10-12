@@ -630,7 +630,7 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `writable`, `managed` | the allowlists (globs) named by `write-file` (`writable`) and the `rpm.*` file ops (`managed`). Nothing under `/etc/wend/` is ever on either |
 | `[kv."<path>"]` | the files `kv.*` may touch: `keys` (the only keys it may set or unset; never one that grants access) and `set` (false for files with sections, which only take `kv.unset`) |
 | `force` | required: the `force-remove` flags this family allows, a subset of its backend's (apt: `depends`, `remove-essential`; rpm: `depends`, `scripts`) |
-| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`). rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit` |
+| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`). rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer) |
 | `[mirror]` | rpm: `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts) |
 | `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `autoremove`, `obsolete`, `installed_list`; apt also `apt_conf`, the harness's apt config |
 | `[predicates]` | `installed`, `file`, `file-contains`, `mysql-option` command templates |
@@ -664,6 +664,47 @@ other brace syntax is touched, so `${...}` and `%{...}` pass through). Values fo
 - The harness sets umask 022 for itself before it touches a root (see "How a hop runs"), never taking the caller's.
 - A rollback restores the whole root from the pre-hop snapshot. Nothing from a failed hop survives.
 
+## VM tier (maintainer-run)
+
+A chroot can't test kernels, bootloaders, init or networking (open question 10). `tools/vm.py` replays a route on a
+box installed in a KVM guest by its release's own installer. The kickstart is made from `box.toml`: its packages,
+`customize` and `start_hook`, a static address and the release's kernel and bootloader. The box is then brought to
+the release's last packages, as the chroot build does. Each hop compiles exactly the commands the chroot harness
+runs (the same `hop_cmds`), runs them inside the running guest, and reboots it for real (checked by `boot_id`).
+After every hop:
+
+- the guest has to come back reachable over ssh on the box's port (`[vm].ssh_port`);
+- its addresses, default route and resolvers have to be the ones it booted with at the start;
+- the box's checks have to keep passing, running on the live box. Roles that start their own daemons are listed in
+  `[vm].skip`, and `[vm].live` gives their live forms, which ask the running services instead.
+
+A hop ends the replay when its commands fail, when the guest doesn't come back, when its network differs from the
+start, or when a check that passed before it fails after the reboot. Its disk and serial console are kept.
+
+The VM box differs from the chroot box in ways a replay can show: it has what the installer adds (`@core`, a kernel, a
+bootloader, a 200 MB `/boot`), SELinux is permissive and the firewall off (kickstart `selinux --permissive`,
+`firewall --disabled`), and `customize` runs before the release's last updates, not after. The kickstart is EL5's
+format for now. Its static address is not the one QEMU's DHCP hands out and the forwards point at it, so a box that
+falls back to DHCP is unreachable and fails the hop.
+
+The rules:
+
+- Maintainer-run only. It runs the guest on the host that runs it, needs `/dev/kvm`, and is never wired to a CI
+  runner that a pull request can trigger. Its runs go to `.wend/vm/` (schema `wend.vmrun/0`, `runner.kind = "vm"`),
+  not to `runs/`.
+- QEMU user-mode networking only: nothing on the host changes. The guest reaches the mirror shim at `10.0.2.2`, and its
+  ssh and http are forwarded to fixed ports on `127.0.0.1`, so a host runs one VM replay at a time.
+- Box: an optional `[vm]` table with `ssh_port` (default 22), `skip` (roles that start their own daemons, which a
+  running box already has) and `live` (role name to shell: the live forms of those checks; every skipped role needs
+  one, so skipping never drops a check). The checker holds it to that.
+- A route that ends with `prune_obsolete` is refused for now: the VM tier has no prune step, and won't report a pass
+  that skipped it.
+- Adapter: `releases.<id>.install` names a start release's installer: its `tree` through the shim and the `pxeboot`
+  dir in it. The shim answers single byte ranges, which the installer uses to read package headers.
+- A reboot is proven by a new `boot_id`. When `reboot` doesn't change it within two minutes (the first boot onto
+  systemd: PID 1 is still the old init, and the new release's `reboot` can't talk to it), the harness syncs,
+  remounts read-only and resets with sysrq, and records `reboot_forced`.
+
 ## Open questions
 
 Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them as follows; 7 to 12 are still open.
@@ -694,7 +735,8 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
     machine without a check that init is systemd. Do some fixes need a `requires_boot_check` flag that CI can't
     satisfy yet? Part answered for EL: what a chroot *can* see is which units are enabled. `service.record` and
     `service.enable` carry SysV runlevels onto systemd, and boxes check enablement offline (`systemctl is-enabled`,
-    `chkconfig --list` before EL7). Kernels, bootloaders and the first real boot are still untested.
+    `chkconfig --list` before EL7). Kernels, bootloaders and the first real boot are tested by the VM tier (see
+    "VM tier"), which the maintainer runs. What it found on the EL route is in wend#13.
 11. **The family map.** Move it from box checks into the adapter (a `[families]` table of renames), so a client can
     compute name families for its fingerprint hint and services check without a box? Probably yes; nothing reads it
     outside boxes yet.

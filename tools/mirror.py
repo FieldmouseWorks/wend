@@ -10,6 +10,7 @@ Started by tools/sandbox.py when an adapter has a [mirror] table. Standard libra
 import hashlib
 import http.server
 import os
+import re
 import shutil
 import sys
 import threading
@@ -44,6 +45,25 @@ def fetch(url, local, sha256=None):
             os.remove(tmp)
 
 
+def byte_range(header, size):
+    """A single bytes range (RFC 9110) as (start, end), "unsatisfiable", or None to serve the whole file (no header,
+    several ranges, another unit, or a header that isn't a valid range)."""
+    if not header.startswith("bytes=") or "," in header:
+        return None
+    a, dash, b = header[6:].strip().partition("-")
+    if not dash or not (a or b) or not re.fullmatch(r"[0-9]+", a + b):
+        return None
+    if a:
+        start, end = int(a), min(int(b), size - 1) if b else size - 1
+        if b and int(b) < start:
+            return None
+    elif int(b) == 0:
+        return "unsatisfiable"
+    else:
+        start, end = max(size - int(b), 0), size - 1
+    return "unsatisfiable" if start >= size else (start, end)
+
+
 class H(http.server.BaseHTTPRequestHandler):
     def _go(self, body):
         parts = self.path.lstrip("/").split("?")[0].split("/", 1)
@@ -76,8 +96,26 @@ class H(http.server.BaseHTTPRequestHandler):
                         break
             if err and not os.path.exists(local):  # a live mirror hiccup: serve the last good copy if there is one
                 return self.send_error(err.code if isinstance(err, urllib.error.HTTPError) else 502, str(err)[:100])
+        size = os.path.getsize(local)
+        r = byte_range(self.headers.get("Range", ""), size)  # anaconda (tools/vm.py) reads rpm headers this way
+        if r == "unsatisfiable":
+            self.send_response(416)
+            self.send_header("Content-Range", f"bytes */{size}")
+            self.end_headers()
+            return
+        if r:
+            start, end = r
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.send_header("Content-Length", str(end - start + 1))
+            self.end_headers()
+            if body:
+                with open(local, "rb") as f:
+                    f.seek(start)
+                    self.wfile.write(f.read(end - start + 1))
+            return
         self.send_response(200)
-        self.send_header("Content-Length", str(os.path.getsize(local)))
+        self.send_header("Content-Length", str(size))
         self.end_headers()
         if body:
             with open(local, "rb") as f:
