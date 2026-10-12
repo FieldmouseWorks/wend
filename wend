@@ -44,7 +44,7 @@ class Repo:
         self.boxes = {p[len("boxes/"):-len("/box.toml")]: d for p, d in load("boxes/").items()}
 
 
-HOST_TOOLS = {"debian": ["debootstrap"], "el": ["rpm2cpio", "cpio", "curl", "unshare", "ip"]}
+HOST_TOOLS = {"debian": ["debootstrap"], "el": ["rpm2cpio", "cpio", "curl", "ip"]}
 APT_NAMES = {"ip": "iproute2", "unshare": "util-linux"}
 
 
@@ -64,7 +64,7 @@ def need_root(families=("debian",)):
     if os.geteuid() != 0:
         sys.exit("the sandbox needs root (chroot, mount). Run with sudo, in a throwaway VM or CI runner.")
     import shutil
-    missing = [t for t in ["chroot", "rsync", "mount"] + [x for f in families for x in HOST_TOOLS.get(f, [])]
+    missing = [t for t in ["chroot", "rsync", "mount", "unshare"] + [x for f in families for x in HOST_TOOLS.get(f, [])]
                if not shutil.which(t)]
     if missing:
         sys.exit(f"missing on this host: {', '.join(missing)} (Debian/Ubuntu: apt-get install "

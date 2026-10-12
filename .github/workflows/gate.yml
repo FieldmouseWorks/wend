@@ -83,11 +83,11 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/local/share/boost
           df -h /
-      - name: box cache (built boxes are keyed by the box file and the adapter)
+      - name: box cache (built boxes are keyed by the box file, the adapter and the base's sandbox, which builds them)
         uses: actions/cache@v4
         with:
           path: /var/tmp/wend/boxes
-          key: box-${{ matrix.box }}-${{ hashFiles(format('boxes/{0}/box.toml', matrix.box), 'adapters/*.toml') }}
+          key: box-${{ matrix.box }}-${{ hashFiles(format('boxes/{0}/box.toml', matrix.box), 'adapters/*.toml', 'tools/sandbox.py') }}
       # the sandbox follows SPEC.md "Sandbox requirements": a per-chroot tmpfs /dev (never a bind of the host's),
       # and it unmounts and verifies before deleting anything.
       - name: replay (no model, no network beyond the release mirrors)
