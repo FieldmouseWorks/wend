@@ -344,6 +344,8 @@ def replay(route_path, box_id):
         if (a["releases"].get(hop) or {}).get("reboot") == "before-post":
             # boot the new kernel before the post steps run the release's binaries (SPEC "Kernels and the bootloader")
             ok, steps = run_hop(g, first, [])  # hop.after runs once, after everything (SPEC "How a hop runs")
+            if not ok:  # ...whatever happened
+                steps += run_hop(g, [], after)[1]
             if ok:
                 back, forced = g.reboot()
                 h["mid_reboot"], h["mid_reboot_forced"] = back, forced
@@ -362,9 +364,17 @@ def replay(route_path, box_id):
             after_checks = checks(g, box_doc, a)
             lost = sorted(n for n, (good, _) in before.items() if good and not after_checks.get(n, (False,))[0])
             h["net_kept"] = net == start_net
+            # the release's newest kernel must be the one running (SPEC "Kernels and the bootloader"): an old kernel
+            # under the new userland is what GRUB legacy did before the harness owned the boot entries
+            rc, kv = g.ssh("uname -r; rpm -q --qf '%{INSTALLTIME} %{VERSION}-%{RELEASE}.%{ARCH}\\n' kernel-core kernel "
+                           "2>/dev/null | grep -v 'is not installed' | sort -n | tail -n1 | cut -d' ' -f2")
+            lines = kv.split()
+            h["kernel"] = lines[0] if lines else None
+            running, newest = (lines + [None, None])[:2]
+            h["kernel_current"] = newest is None or newest in (running, (running or "").rsplit(".", 1)[0])
             h["lost"] = lost
             h["failed_logs"] = {n: after_checks[n][1][-1500:] for n in lost}
-            h["ok"] = ok and h["net_kept"] and not lost
+            h["ok"] = ok and h["net_kept"] and not lost and h["kernel_current"]
             if not h["net_kept"]:
                 h["net"] = {"start": start_net, "now": net}
         else:

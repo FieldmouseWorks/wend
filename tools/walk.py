@@ -55,7 +55,8 @@ class Walk:
         return self.box.run(f"{pred_sh(fix['when'], self.adapter)} >/dev/null 2>&1")[0] == 0
 
     def hop_cmds(self, hop, fixes):
-        """SPEC.md "How a hop runs": set the release, refresh, pre steps, the upgrade, post steps (then checks)."""
+        """SPEC.md "How a hop runs": set the release, refresh, the kernel handover's first half, pre steps, the upgrade,
+        its second half, post steps (then checks)."""
         first, second = Walk.hop_parts(self, hop, fixes)  # works on the bare walks parity.py and vm.py make
         return first + second
 

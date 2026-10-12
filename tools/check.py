@@ -105,6 +105,12 @@ def check_adapter(a, where):
         if not re.fullmatch(ETC_PATH, p) or not d.get("keys") or \
                 not all(re.fullmatch(r"[A-Za-z0-9_]+", k) for k in d["keys"]):
             errs.append(f"{where}: kv.{p!r} needs a path under /etc and plain keys")
+    for r, rel in a.get("releases", {}).items():  # SPEC "Kernels and the bootloader"
+        if isinstance(rel, dict) and rel.get("reboot", "before-post") != "before-post":
+            errs.append(f"{where}: releases.{r}.reboot can only be \"before-post\"")
+    for k in ("kernel_before", "kernel_after"):
+        if k in a.get("hop", {}) and not (isinstance(a["hop"][k], list) and all(isinstance(c, str) for c in a["hop"][k])):
+            errs.append(f"{where}: hop.{k} must be a list of commands")
     return errs
 
 

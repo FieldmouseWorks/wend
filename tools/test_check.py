@@ -273,16 +273,18 @@ import walk as _walk  # noqa: E402
 for fam, hop in (("el", "centos6"), ("debian", "squeeze")):
     w_ = type("W", (), {})()
     w_.adapter = adapters[fam]
-    first, second = _walk.Walk.hop_parts(w_, hop, [])
+    pre = [{**el_good, "hop": hop, "pre": [{"op": "kv.set", "path": "/etc/vsftpd/vsftpd.conf", "values": {"listen": "YES"}}],
+            "post": []}] if fam == "el" else []
+    first, second = _walk.Walk.hop_parts(w_, hop, pre)
     h_ = adapters[fam]["hop"]
     kb = [_walk.fill(c, w_.vars) for c in h_.get("kernel_before", [])]
     ka = [_walk.fill(c, w_.vars) for c in h_.get("kernel_after", [])]
     rel = adapters[fam]["releases"].get(hop)
     up = [_walk.fill(c, w_.vars) for c in (rel["upgrade"] if isinstance(rel, dict) and "upgrade" in rel
                                             else h_["upgrade"])]
-    if fam == "el":
-        ok = bool(kb) and bool(ka) and first[2:2 + len(kb)] == kb and first[-len(ka):] == ka and \
-            first[-len(ka) - len(up):-len(ka)] == up
+    if fam == "el":  # kernel_before before the pre steps: rpm.transit (a pre step) needs the kernel records gone
+        ok = bool(kb) and bool(ka) and first[2:2 + len(kb)] == kb and "vsftpd" in first[2 + len(kb)] and \
+            first[-len(ka):] == ka and first[-len(ka) - len(up):-len(ka)] == up
     else:
         ok = not kb and not ka
     print(("passed  " if ok else "WRONG   ") + f"{fam} {hop}: kernel steps right after refresh and right after the upgrade")

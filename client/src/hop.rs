@@ -10,7 +10,8 @@ use std::collections::BTreeSet;
 pub const ADDED: &str = "/var/lib/wend/added-families";
 
 pub struct HopPlan {
-    /// steps 1 to 7: set the release, refresh, pre steps, the upgrade, post steps, pm-option cleanup, verify
+    /// steps 1 to 7: set the release, refresh, kernel_before, pre steps, the upgrade, kernel_after, post steps,
+    /// pm-option cleanup, verify
     pub commands: Vec<String>,
     /// step 8: run whatever happened above
     pub after: Vec<String>,

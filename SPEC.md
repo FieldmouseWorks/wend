@@ -677,23 +677,29 @@ harness, not to fixes, because the release's own tools can't carry them up the l
   the installed kernel packages' records with `rpm -e --justdb --nodeps --noscripts` and keeps their files: the
   running kernel and its boot entry stay as the fallback. This is the one place, besides `rpm.transit`'s last step,
   where wend drops records and keeps files. Fixes can't, because a fix doing it could fake `pkgdb`. It then removes
-  the files of kernels that no package owns and that aren't running, so the release's kernel fits in `/boot`
-  (CentOS 5's default is 200 MB). This is how the previous hop's kernel, once a reboot has moved off it, finally
-  goes.
+  the files of kernels that no package owns and that aren't running or GRUB's default, so the release's kernel fits
+  in `/boot` (CentOS 5's default is 200 MB). This is how the previous hop's kernel, once a reboot has moved off it,
+  finally goes. It removes nothing unless the machine is booted from this root: in a chroot of someone's disk,
+  `uname -r` is the host's kernel, not the box's. The fallback the running kernel's entry gives is a manual one:
+  GRUB legacy has no `fallback=` set, so a hop that fails between the two halves leaves the default on the running
+  kernel's entry, which still boots.
 - **The release's kernel is installed after the transaction** (`hop.kernel_after`), since the transaction itself only
   syncs what the database lists.
 - **GRUB legacy stays.** From EL8 on, kernels only get BLS entries, which GRUB legacy can't read, and GRUB2 can't be
   installed on the sector-63 partition layout of CentOS 5's installer (a 31 KB gap; EL9's smallest `core.img` is
   33.9 KB). When `/boot/grub/grub.conf` exists, `hop.kernel_after` gives the newest installed kernel an entry there,
-  using the root and kernel arguments of the existing entries, makes it the default, and drops entries whose kernel
-  file is gone. EL6 and EL7 grubby still write their own entries.
+  using the root and kernel arguments of the current default entry, makes it the default, and drops the `vmlinuz`
+  entries whose kernel file is gone (memtest, Xen and chainloader entries stay). It fails if the new entry isn't
+  there afterwards. EL6 and EL7 grubby still write their own entries. After every reboot the VM tier checks that the
+  release's newest kernel is the one running.
 - **When to boot it.** EL6's binaries can't run on the EL5 kernel (EL6's apr asks for `SOCK_CLOEXEC`, so `httpd -t`
   fails), so on a real machine the `centos6` hop boots its new kernel between the transaction and the post steps
   (`releases.centos6.reboot = "before-post"`). Every other hop runs straight through, then reboots: on the hop to
   EL7, the post steps re-enable the boot services, which must happen before the first boot onto systemd.
 
 The VM tier proves these steps (it reboots where `reboot` says, and after every hop). A client running a route on a
-real machine must reboot at the same points.
+real machine must reboot at the same points; the client doesn't walk a live root yet, so it doesn't split a hop.
+The checker holds `reboot` to `"before-post"` and the kernel steps to lists of commands.
 
 ## VM tier (maintainer-run)
 
