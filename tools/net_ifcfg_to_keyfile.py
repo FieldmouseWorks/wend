@@ -188,8 +188,8 @@ def main():
             w = line.split()
             if len(w) >= 2 and w[0] == "nameserver" and len(resolv["nameserver"]) < 3:
                 resolv["nameserver"].append(w[1])
-            elif w and w[0] in ("search", "domain"):  # resolv.conf(5): the last of the two wins
-                resolv["search"] = w[1:2] if w[0] == "domain" else w[1:]
+            elif w and w[0] in ("search", "domain"):  # resolv.conf(5): the last of the two wins; "." is the root,
+                resolv["search"] = [d for d in (w[1:2] if w[0] == "domain" else w[1:]) if d != "."]  # no domain
     plans = [plan(f, net, resolv) for f in files]
     pins = {}
     for (c, dev, hw, args), f in zip(plans, files):  # one pin per name and per MAC (two profiles of one NIC agree)

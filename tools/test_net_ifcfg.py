@@ -147,6 +147,10 @@ case("bootp is dhcp", msg is None and arg(kf, "eth0.nmconnection", "ipv4.method"
 msg, kf, left, out = run({"ifcfg-eth0": KS}, resolv="nameserver 10.0.2.3\ndomain corp.example\n")
 case("resolv.conf's domain line is the search list",
      msg is None and arg(kf, "eth0.nmconnection", "ipv4.dns-search") == "corp.example")
+msg, kf, left, out = run({"ifcfg-eth0": KS}, resolv="nameserver 10.0.2.3\nsearch .\n")
+case("resolv.conf's search . (systemd-resolved's stub) is no search list",
+     msg is None and arg(kf, "eth0.nmconnection", "ipv4.dns-search") is None
+     and arg(kf, "eth0.nmconnection", "ipv4.dns") == "10.0.2.3")
 msg, kf, left, out = run({"ifcfg-eth0": KS + "IPV6_AUTOCONF=no\n"}, net=NET.replace("NETWORKING_IPV6=no", "IPV6INIT=yes"))
 case("IPV6INIT falls back to /etc/sysconfig/network", msg is None and arg(kf, "eth0.nmconnection", "ipv6.method")
      == "link-local")

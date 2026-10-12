@@ -624,8 +624,8 @@ The files are read as `KEY=VALUE` lines and never executed; a value that isn't o
   address;
 - `GATEWAYDEV` in `/etc/sysconfig/network`: every other device's profile gets `ipv4.never-default`;
 - `DNS1`, `DNS2` (only after `DNS1`), `DOMAIN`, with any method, and `PEERDNS=no` as `ipv4.ignore-auto-dns`. A static
-  profile with no `DNS1`/`DNS2` takes the resolvers, and the search list (or `domain`) unless `DOMAIN` is set, from
-  `/etc/resolv.conf`, which is where CentOS 5's installer put them;
+  profile with no `DNS1`/`DNS2` takes the resolvers, and the search list (or `domain`; `.` is none) unless `DOMAIN` is
+  set, from `/etc/resolv.conf`, which is where CentOS 5's installer put them;
 - `ONBOOT`, `IPV6INIT` (else `/etc/sysconfig/network`'s), `IPV6_AUTOCONF` (`no` is `link-local`), as NetworkManager's
   booleans (`yes`, `true`, `t`, `y`, `1` and their opposites);
 - `NM_CONTROLLED` (`no` fails: EL9's NetworkManager left that device unmanaged, which a keyfile can't say);
