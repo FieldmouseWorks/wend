@@ -124,6 +124,10 @@ id = "sha256:556ad7e8b1bfbbabb4c90f12396901dee97680bbb101e0854b1a31e628c1783d"
 name = "el9-enable-php-fpm"
 
 [[fixes]]
+id = "sha256:c1fb16715be095a9c4da5f4d1d32632118e80929ab1ef9d5e6bf9b1ccc85b768"
+name = "el10-network-keyfiles"
+
+[[fixes]]
 id = "sha256:78137ec7ec6f5a60306d6a0e9fc96233b3c27300458e41ff1e13ca6e00ddd207"
 name = "mariadb-slow-shutdown-alma10"
 
@@ -142,4 +146,4 @@ name = "php81-mysqli-report-off"
 [meta]
 name = "centos5-to-alma10"
 summary = "CentOS 5.11 (2007 lineage) to AlmaLinux 10, through EL8 in one hop, proven on a web/database box and a DNS/FTP box"
-note = "Proven in chroots, userland only. Boot-time enablement is carried for httpd, mariadb, php-fpm, named, vsftpd, sshd, postfix and crond wherever they started in runlevel 3 on CentOS 5 (el7-carry-boot-services, el9-carry-boot-services, el9-enable-php-fpm), and checked offline. NetworkManager is installed and enabled on EL9 (el9-networkmanager) and reads the EL7 ifcfg files, but no chroot check covers networking, and EL10's NetworkManager has no ifcfg support: a static ifcfg config is not carried to AlmaLinux 10 yet (#13). Not carried and not checked: the iptables firewall and other base services. No kernel, bootloader or real reboot is tested (#13)."
+note = "Proven in chroots (userland) and, for el/centos5-web, in a real VM. Boot-time enablement is carried for httpd, mariadb, php-fpm, named, vsftpd, sshd, postfix and crond wherever they started in runlevel 3 on CentOS 5 (el7-carry-boot-services, el9-carry-boot-services, el9-enable-php-fpm), and checked offline. NetworkManager is installed and enabled on EL9 (el9-networkmanager) and reads the EL7 ifcfg files; before the AlmaLinux 10 hop, el10-network-keyfiles turns them into keyfiles pinned to the NIC's MAC, since EL10's NetworkManager has no ifcfg support. The boxes' network role checks the static address on every hop. Not carried and not checked: the iptables firewall and other base services. Kernels, the bootloader, real reboots and the network are proven by tools/vm.py on a real CentOS 5.11 install (el/centos5-web, #13), which a maintainer runs; CI's chroot replays can't see them."
