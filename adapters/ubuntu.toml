@@ -77,7 +77,7 @@ debootstrap_script = "gutsy"
 [hop]
 # Third-party sources (PPAs) are set aside, not deleted, the way do-release-upgrade disables them: a PPA built for the
 # old release would pull packages across the hop. They stay in sources.list.d as *.wend-disabled for the admin.
-set_release = "printf 'deb {mirror} {release} main restricted universe multiverse\\n' > /etc/apt/sources.list && for f in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do [ -f \"$f\" ] && mv \"$f\" \"$f.wend-disabled\"; done; true"
+set_release = "printf 'deb {mirror} {release} main restricted universe multiverse\\n' > /etc/apt/sources.list && for f in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do [ ! -f \"$f\" ] || mv \"$f\" \"$f.wend-disabled\" || exit 1; done"
 refresh = "apt-get update"
 upgrade = ["apt-get dist-upgrade", "apt-get autoremove --purge"]
 verify = "grep -qx 'DISTRIB_CODENAME={release}' /etc/lsb-release"
