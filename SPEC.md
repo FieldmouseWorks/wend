@@ -609,27 +609,27 @@ in any case, `.bak`, `~`, `.orig`, `.rej`, `.rpmnew`, `.augnew`, `.augtmp`, or a
 digits). Effect, for each:
 - the profile becomes a NetworkManager keyfile in `/etc/NetworkManager/system-connections/`, mode 0600, written by
   NetworkManager's own serializer (`nmcli --offline connection add`, which needs no daemon);
-- when it names a `HWADDR`, `/etc/systemd/network/10-wend-<DEVICE>.link` pins the interface name to that MAC. Once
-  the ifcfg file is gone, nothing else keeps an `eth0` from becoming `ens3`, and the keyfile is bound to the old
-  name. (Renaming several NICs to kernel names like `eth1` can race the kernel; only single-NIC boxes are proven.)
+- `/etc/systemd/network/10-wend-<DEVICE>.link` pins the interface name to the profile's `HWADDR`. Once the ifcfg
+  file is gone, nothing else keeps an `eth0` from becoming `ens3`, and the keyfile is bound to the old name and the
+  MAC. (Renaming several NICs to kernel names like `eth1` can race the kernel; only single-NIC boxes are proven.)
 - the ifcfg file moves to `SAVED`.
 
-The files are read as `KEY=VALUE` lines and never executed; a value with `$`, a backquote or `#` fails, and an empty
-value is an unset key. Each key has the meaning the ifcfg-rh plugin gives it:
-- `DEVICE` (required), `HWADDR`, `TYPE` (`Ethernet` only), `NAME` (the profile's name, else `System <name>`), `UUID`
-  (the profile's uuid);
+The files are read as `KEY=VALUE` lines and never executed; a value that isn't one word, or holds `$`, a backquote or
+`#`, fails, and an empty value is an unset key. Each key has the meaning the ifcfg-rh plugin gives it:
+- `DEVICE` and `HWADDR` (both required), `TYPE` (`Ethernet` only), `NAME` (the profile's name, else `System <name>`),
+  `UUID` (the profile's uuid);
 - `BOOTPROTO`: `static`, `none` or empty with `IPADDR` and `PREFIX` or `NETMASK` (a real netmask), plus `GATEWAY` (or
   `/etc/sysconfig/network`'s); `dhcp` or `bootp` (read as `dhcp`) with none of those;
 - `BROADCAST` and `NETWORK`, which the installer writes and NetworkManager derives: accepted only when they match the
   address;
 - `GATEWAYDEV` in `/etc/sysconfig/network`: every other device's profile gets `ipv4.never-default`;
 - `DNS1`, `DNS2` (only after `DNS1`), `DOMAIN`, with any method, and `PEERDNS=no` as `ipv4.ignore-auto-dns`. A static
-  profile with no `DNS1`/`DNS2` takes the resolvers and search list (or `domain`) from `/etc/resolv.conf`, which is
-  where CentOS 5's installer put them;
+  profile with no `DNS1`/`DNS2` takes the resolvers, and the search list (or `domain`) unless `DOMAIN` is set, from
+  `/etc/resolv.conf`, which is where CentOS 5's installer put them;
 - `ONBOOT`, `IPV6INIT` (else `/etc/sysconfig/network`'s), `IPV6_AUTOCONF` (`no` is `link-local`), as NetworkManager's
   booleans (`yes`, `true`, `t`, `y`, `1` and their opposites);
 - `NM_CONTROLLED` (`no` fails: EL9's NetworkManager left that device unmanaged, which a keyfile can't say);
-- `DHCPCLASS` and `USERCTL` are inert.
+- `DHCPCLASS` is inert, and so is `USERCTL`, which must still be a boolean.
 
 In `/etc/sysconfig/network`, `GATEWAY`, `GATEWAYDEV` and `IPV6INIT` are read as above, and `NETWORKING`,
 `NETWORKING_IPV6`, `HOSTNAME`, `NOZEROCONF` and `NISDOMAIN` are left as they are: none of them is part of a profile.

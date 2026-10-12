@@ -96,7 +96,9 @@ def plan(path, net, resolv):
     if v.get("TYPE", "Ethernet") != "Ethernet":
         fail(f"{path}: TYPE={v['TYPE']}: only Ethernet profiles are converted")
     hw = v.get("HWADDR", "").lower()
-    if hw and not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", hw):
+    if not hw:  # without it nothing keeps the name: EL10 calls eth0 ens3, and a keyfile bound to eth0 never comes up
+        fail(f"{path}: no HWADDR to pin {dev} to")
+    if not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", hw):
         fail(f"{path}: HWADDR={hw} isn't a MAC address")
     name = v.get("NAME") or f"System {c}"
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_. -]*", name):
@@ -106,13 +108,11 @@ def plan(path, net, resolv):
     boolean(path, v, "USERCTL", "no")
     if os.path.exists(os.path.join(K, f"{c}.nmconnection")):
         fail(f"{path}: {K}/{c}.nmconnection exists already")
-    args = ["type", "ethernet", "con-name", name, "ifname", dev]
+    args = ["type", "ethernet", "con-name", name, "ifname", dev, "ethernet.mac-address", hw]
     if "UUID" in v:  # the plugin's connection.uuid
         if not re.fullmatch(r"[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}", v["UUID"]):
             fail(f"{path}: UUID={v['UUID']} isn't a UUID")
         args += ["connection.uuid", v["UUID"].lower()]
-    if hw:
-        args += ["ethernet.mac-address", hw]
     proto = v.get("BOOTPROTO", "none").lower()
     if proto in ("dhcp", "bootp"):  # the plugin reads bootp as dhcp
         for key in ("IPADDR", "PREFIX", "NETMASK", "GATEWAY"):
@@ -204,13 +204,12 @@ def main():
     for (c, dev, hw, args), f, text in zip(plans, files, keyfiles):
         kf = os.path.join(K, f"{c}.nmconnection")
         write(kf, text, 0o600)
-        if hw:
-            write(os.path.join(L, f"10-wend-{dev}.link"), f"[Match]\nMACAddress={hw}\n\n[Link]\nName={dev}\n", 0o644)
+        write(os.path.join(L, f"10-wend-{dev}.link"), f"[Match]\nMACAddress={hw}\n\n[Link]\nName={dev}\n", 0o644)
         if os.path.exists(SAVED + f):  # SAVED keeps the owner's original, whatever later hops do (SPEC)
             os.remove(f)
         else:
             os.replace(f, SAVED + f)
-        print(f"{f} -> {kf}" + (f", {dev} pinned to {hw}" if hw else ""))
+        print(f"{f} -> {kf}, {dev} pinned to {hw}")
 
 
 def write(path, text, mode):

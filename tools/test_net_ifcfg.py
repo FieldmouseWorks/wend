@@ -29,7 +29,7 @@ STATIC = ["type", "ethernet", "con-name", "System eth0", "ifname", "eth0", "ethe
           "ipv4.dns-search", "example.org"]
 
 
-def run(profiles, net=NET, resolv=RESOLV):
+def run(profiles, net=NET, resolv=RESOLV, keyfiles=()):
     """Run the converter on a fresh root; return (exit message or None, {keyfile: nmcli args}, files left, printed)."""
     loader = importlib.machinery.SourceFileLoader("net_ifcfg_to_keyfile", SRC)
     m = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
@@ -38,6 +38,9 @@ def run(profiles, net=NET, resolv=RESOLV):
         for k in ("D", "K", "L", "SAVED", "NETWORK", "RESOLV"):
             setattr(m, k, t + getattr(m, k))
         os.makedirs(m.D)
+        for n in keyfiles:
+            os.makedirs(m.K, exist_ok=True)
+            open(os.path.join(m.K, n), "w").close()
         os.makedirs(os.path.dirname(m.NETWORK), exist_ok=True)
         for name, text in profiles.items():
             with open(os.path.join(m.D, name), "w") as out:
@@ -112,16 +115,17 @@ msg, kf, left, out = run({"ifcfg-eth0": KS, **{n: KS.replace(".20", ".99") for n
 case("backups and rpm leftovers NetworkManager ignores (any case) are left alone",
      msg is None and list(kf) == ["eth0.nmconnection"]
      and all(f"etc/sysconfig/network-scripts/{n}" in left for n in LEFTOVERS))
-msg, kf, left, out = run({"ifcfg-eth0": "DEVICE=eth0\nBOOTPROTO=dhcp\nPEERDNS=no\nDNS1=10.0.0.53\nDOMAIN=corp.example\n"})
+msg, kf, left, out = run({"ifcfg-eth0": "DEVICE=eth0\nHWADDR=52:54:00:12:34:57\nBOOTPROTO=dhcp\nPEERDNS=no\nDNS1=10.0.0.53\nDOMAIN=corp.example\n"})
 case("DHCP keeps its pinned resolvers and search domain, and ignores the server's",
      msg is None and kf["eth0.nmconnection"][1] == [
-         "type", "ethernet", "con-name", "System eth0", "ifname", "eth0", "ipv4.method", "auto", "ipv4.dns",
+         "type", "ethernet", "con-name", "System eth0", "ifname", "eth0", "ethernet.mac-address", "52:54:00:12:34:57",
+         "ipv4.method", "auto", "ipv4.dns",
          "10.0.0.53", "ipv4.dns-search", "corp.example", "ipv4.ignore-auto-dns", "yes", "ipv6.method", "ignore",
          "connection.autoconnect", "yes"])
-msg, kf, left, out = run({"ifcfg-eth0": "DEVICE=eth0\nBOOTPROTO=dhcp\n"})
+msg, kf, left, out = run({"ifcfg-eth0": "DEVICE=eth0\nHWADDR=52:54:00:12:34:57\nBOOTPROTO=dhcp\n"})
 case("plain DHCP takes the server's resolvers, not resolv.conf's",
      msg is None and "ipv4.dns" not in kf["eth0.nmconnection"][1])
-msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-eth1": "DEVICE=eth1\nIPADDR=192.168.9.5\nPREFIX=24\n"
+msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-eth1": "DEVICE=eth1\nHWADDR=52:54:00:12:34:57\nIPADDR=192.168.9.5\nPREFIX=24\n"
                           "GATEWAY=192.168.9.1\nDNS1=192.168.9.1\n"}, net=NET + "GATEWAYDEV=eth0\n")
 case("only GATEWAYDEV gets the default route",
      msg is None and arg(kf, "eth0.nmconnection", "ipv4.never-default") is None
@@ -132,7 +136,7 @@ case("an empty GATEWAYDEV is unset", msg is None and arg(kf, "eth0.nmconnection"
 msg, kf, left, out = run({"ifcfg-eth0": KS + "UUID=5FB06BD0-0BB0-7FFB-45F1-D6EDD65F3E03\n"})
 case("UUID becomes the profile's uuid",
      msg is None and arg(kf, "eth0.nmconnection", "connection.uuid") == "5fb06bd0-0bb0-7ffb-45f1-d6edd65f3e03")
-msg, kf, left, out = run({"ifcfg-eth0": "DEVICE=eth0\nBOOTPROTO=bootp\n"})
+msg, kf, left, out = run({"ifcfg-eth0": "DEVICE=eth0\nHWADDR=52:54:00:12:34:57\nBOOTPROTO=bootp\n"})
 case("bootp is dhcp", msg is None and arg(kf, "eth0.nmconnection", "ipv4.method") == "auto")
 msg, kf, left, out = run({"ifcfg-eth0": KS}, resolv="nameserver 10.0.2.3\ndomain corp.example\n")
 case("resolv.conf's domain line is the search list",
@@ -142,7 +146,7 @@ case("IPV6INIT falls back to /etc/sysconfig/network", msg is None and arg(kf, "e
      == "link-local")
 msg, kf, left, out = run({"ifcfg-eth0": KS.replace("ONBOOT=yes", "ONBOOT=T")})
 case("t is a yes", msg is None and arg(kf, "eth0.nmconnection", "connection.autoconnect") == "yes")
-msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-eth1": "DEVICE=eth1\nIPADDR=192.168.9.5\nPREFIX=24\nNAME=refuse-me\n"})
+msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-eth1": "DEVICE=eth1\nHWADDR=52:54:00:12:34:57\nIPADDR=192.168.9.5\nPREFIX=24\nNAME=refuse-me\n"})
 case("nmcli refusing the second profile changes nothing, not even the first",
      refused(msg, "refused") and not kf and "etc/sysconfig/network-scripts/ifcfg-eth0" in left
      and not any(x.startswith(("var/lib/wend", "etc/systemd")) for x in left))
@@ -167,12 +171,20 @@ for name, text, why in (
         ("a bridge", KS + "BRIDGE=br0\n", "doesn't convert: ['BRIDGE']"),
         ("a host mask", KS.replace("255.255.255.0", "0.0.0.255"), "isn't a netmask"),
         ("a prefix past 32", KS.replace("NETMASK=255.255.255.0", "PREFIX=40"), "isn't 0 to 32"),
-        ("a static address on DHCP", "DEVICE=eth0\nBOOTPROTO=dhcp\nIPADDR=10.0.2.20\n", "IPADDR beside"),
+        ("a static address on DHCP", "DEVICE=eth0\nHWADDR=52:54:00:12:34:57\nBOOTPROTO=dhcp\nIPADDR=10.0.2.20\n", "IPADDR beside"),
+        ("no HWADDR", KS.replace("HWADDR=52:54:00:12:34:56\n", ""), "no HWADDR to pin eth0 to"),
         ("a dot as the device", KS.replace("DEVICE=eth0", "DEVICE=.."), "not a plain interface"),
         ("an alias", KS, "not a plain interface")):
     profiles = {"ifcfg-eth0:1" if name == "an alias" else "ifcfg-eth0": text}
     msg, kf, left, out = run(profiles)
     case(f"{name} is refused before anything changes", refused(msg, why) and not kf and len(left) == 3)
+msg, kf, left, out = run({"ifcfg-eth0": KS.replace("12:34:56", "AB:CD:EF")})
+case("HWADDR is lower-cased", msg is None and arg(kf, "eth0.nmconnection", "ethernet.mac-address") == "52:54:00:ab:cd:ef")
+msg, kf, left, out = run({"ifcfg-eth0": KS}, keyfiles=["eth0.nmconnection"])
+case("a keyfile already there is refused", refused(msg, "exists already") and "etc/sysconfig/network-scripts/ifcfg-eth0"
+     in left and not any(x.startswith(("var/lib/wend", "etc/systemd")) for x in left))
+msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-eth1;5f3a9b2c9": KS})
+case("a ; and 9 hex digits isn't an rpm leftover, so it's read (and refused as a name)", refused(msg, "not a plain"))
 msg, kf, left, out = run({"ifcfg-eth0": KS}, net=NET + "IPV6INIT=maybe\n")
 case("a bad boolean in /etc/sysconfig/network is refused, not a traceback",
      refused(msg, "IPV6INIT=maybe isn't yes or no") and not kf)
