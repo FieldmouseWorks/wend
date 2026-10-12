@@ -741,6 +741,17 @@ harness, not to fixes, because the release's own tools can't carry them up the l
   entries whose kernel file is gone (memtest, Xen and chainloader entries stay). It fails if the new entry isn't
   there afterwards. EL6 and EL7 grubby still write their own entries. After every reboot the VM tier checks that the
   release's newest kernel is the one running.
+- **Debian keeps GRUB 2 installed** (`hop.kernel_after`). Debian's own packages carry its kernels and their boot
+  entries up the ladder; its bootloader they don't. On squeeze `grub` becomes grub-pc, which leaves GRUB legacy in the
+  MBR and chains a `core.img` ("Chainload into GRUB 2"). While grub-pc has no install device (an upgraded box has
+  none), nothing keeps the image GRUB legacy chains current, and on jessie the box stops after the chainload. After
+  every transaction on a booted machine with grub-pc whose install device is empty or names no existing device, the
+  harness installs GRUB 2 to the disk `/boot` is on (`grub-probe -t device /boot`, then the disk whose `/sys/block`
+  entry holds that partition; squeeze's grub-probe has no `-t disk`, and lenny's kernel, still running then, no
+  `/sys/class/block`). Once that worked it records the disk, by its `/dev/disk/by-id` name when it has one, as
+  grub-pc's install device, so the release's own upgrades keep it current. A box whose install device is set and
+  present is left to grub-pc. It fails if `/boot` isn't on a partition of a disk it can find (md, LVM: nothing is
+  installed or recorded) or `grub-install` fails.
 - **When to boot it.** EL6's binaries can't run on the EL5 kernel (EL6's apr asks for `SOCK_CLOEXEC`, so `httpd -t`
   fails), so on a real machine the `centos6` hop boots its new kernel between the transaction and the post steps
   (`releases.centos6.reboot = "before-post"`). Every other hop runs straight through, then reboots: on the hop to
