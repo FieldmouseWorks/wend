@@ -24,6 +24,7 @@ import sys
 D = "/etc/sysconfig/network-scripts"
 K = "/etc/NetworkManager/system-connections"
 L = "/etc/systemd/network"
+LINK_DIRS = (L, "/run/systemd/network", "/usr/lib/systemd/network", "/lib/systemd/network")  # systemd.link(5)
 SAVED = "/var/lib/wend/saved"
 NETWORK = "/etc/sysconfig/network"
 RESOLV = "/etc/resolv.conf"
@@ -108,8 +109,13 @@ def plan(path, net, resolv):
     boolean(path, v, "USERCTL", "no")
     if os.path.lexists(os.path.join(K, f"{c}.nmconnection")):
         fail(f"{path}: {K}/{c}.nmconnection exists already")
-    if os.path.lexists(os.path.join(L, f"10-wend-{dev}.link")):  # someone's pin for this name: never replaced
-        fail(f"{path}: {L}/10-wend-{dev}.link exists already")
+    pin = f"10-wend-{dev}.link"
+    if os.path.lexists(os.path.join(L, pin)):  # someone's pin for this name: never replaced
+        fail(f"{path}: {L}/{pin} exists already")
+    for d in LINK_DIRS:  # systemd applies only the first .link (by file name, over all its directories) that matches
+        for n in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+            if n.endswith(".link") and n < pin:
+                fail(f"{path}: {d}/{n} comes before {pin}, and systemd uses the first .link that matches")
     args = ["type", "ethernet", "con-name", name, "ifname", dev, "ethernet.mac-address", hw]
     if "UUID" in v:  # the plugin's connection.uuid
         if not re.fullmatch(r"[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}", v["UUID"]):

@@ -29,7 +29,7 @@ STATIC = ["type", "ethernet", "con-name", "System eth0", "ifname", "eth0", "ethe
           "ipv4.dns-search", "example.org"]
 
 
-def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=()):
+def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=()):
     """Run the converter on a fresh root; return (exit message or None, {keyfile: nmcli args}, files left, printed)."""
     loader = importlib.machinery.SourceFileLoader("net_ifcfg_to_keyfile", SRC)
     m = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
@@ -37,8 +37,9 @@ def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=()):
     with tempfile.TemporaryDirectory() as t:
         for k in ("D", "K", "L", "SAVED", "NETWORK", "RESOLV"):
             setattr(m, k, t + getattr(m, k))
+        m.LINK_DIRS = tuple(t + d for d in m.LINK_DIRS)
         os.makedirs(m.D)
-        for d, names in ((m.K, keyfiles), (m.L, links)):
+        for d, names in ((m.K, keyfiles), (m.L, links), (m.LINK_DIRS[2], vendor_links)):
             for n in names:
                 os.makedirs(d, exist_ok=True)
                 open(os.path.join(d, n), "w").close()
@@ -210,6 +211,13 @@ msg, kf, left, out = run({"ifcfg-a": KS, "ifcfg-b": KS.replace("DEVICE=eth0", "D
                           "ifcfg-c": OLD_NIC})
 case("a conflict between profiles that aren't next to each other is refused",
      refused(msg, "ifcfg-c and") and "pin eth0 differently" in msg and not kf and not run.links)
+msg, kf, left, out = run({"ifcfg-eth0": KS}, links=["10-admin.link"])
+case("an earlier .link, which systemd would apply instead, is refused",
+     refused(msg, "10-admin.link comes before 10-wend-eth0.link") and not kf)
+msg, kf, left, out = run({"ifcfg-eth0": KS}, vendor_links=["05-vendor.link"])
+case("an earlier .link in /usr/lib/systemd/network is refused too", refused(msg, "05-vendor.link comes before") and not kf)
+msg, kf, left, out = run({"ifcfg-eth0": KS}, links=["70-later.link"], vendor_links=["99-default.link"])
+case("later .link files (99-default) don't stand in the way", msg is None and list(kf) == ["eth0.nmconnection"])
 msg, kf, left, out = run({"ifcfg-eth0": KS}, links=["10-wend-eth0.link"])
 case("a pin already there is refused, not replaced", refused(msg, "10-wend-eth0.link exists already") and not kf
      and [(n, t) for n, (_, t) in run.links.items()] == [("10-wend-eth0.link", "")])
