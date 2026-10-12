@@ -29,7 +29,7 @@ STATIC = ["type", "ethernet", "con-name", "System eth0", "ifname", "eth0", "ethe
           "ipv4.dns-search", "example.org"]
 
 
-def run(profiles, net=NET, resolv=RESOLV, keyfiles=()):
+def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=()):
     """Run the converter on a fresh root; return (exit message or None, {keyfile: nmcli args}, files left, printed)."""
     loader = importlib.machinery.SourceFileLoader("net_ifcfg_to_keyfile", SRC)
     m = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
@@ -38,9 +38,10 @@ def run(profiles, net=NET, resolv=RESOLV, keyfiles=()):
         for k in ("D", "K", "L", "SAVED", "NETWORK", "RESOLV"):
             setattr(m, k, t + getattr(m, k))
         os.makedirs(m.D)
-        for n in keyfiles:
-            os.makedirs(m.K, exist_ok=True)
-            open(os.path.join(m.K, n), "w").close()
+        for d, names in ((m.K, keyfiles), (m.L, links)):
+            for n in names:
+                os.makedirs(d, exist_ok=True)
+                open(os.path.join(d, n), "w").close()
         os.makedirs(os.path.dirname(m.NETWORK), exist_ok=True)
         for name, text in profiles.items():
             with open(os.path.join(m.D, name), "w") as out:
@@ -199,7 +200,15 @@ msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-eth1": KS.replace("DEVICE=eth
 case("two names pinned to one MAC are refused", refused(msg, "pin 52:54:00:12:34:56 differently") and not kf)
 msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-eth0-dhcp": "DEVICE=eth0\nHWADDR=52:54:00:12:34:56\nBOOTPROTO=dhcp\n"
                           "ONBOOT=no\n"})
-case("two profiles for one NIC share its pin", msg is None and len(kf) == 2 and list(run.links) == ["10-wend-eth0.link"])
+case("two profiles for one NIC share its pin", msg is None and len(kf) == 2 and run.links == {
+    "10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\n\n[Link]\nName=eth0\n")})
+msg, kf, left, out = run({"ifcfg-a": KS, "ifcfg-b": KS.replace("DEVICE=eth0", "DEVICE=eth1").replace("12:34:56", "12:34:57"),
+                          "ifcfg-c": OLD_NIC})
+case("a conflict between profiles that aren't next to each other is refused",
+     refused(msg, "ifcfg-c and") and "pin eth0 differently" in msg and not kf and not run.links)
+msg, kf, left, out = run({"ifcfg-eth0": KS}, links=["10-wend-eth0.link"])
+case("a pin already there is refused, not replaced", refused(msg, "10-wend-eth0.link exists already") and not kf
+     and [(n, t) for n, (_, t) in run.links.items()] == [("10-wend-eth0.link", "")])
 msg, kf, left, out = run({"ifcfg-eth0": KS}, net=NET + "IPV6INIT=maybe\n")
 case("a bad boolean in /etc/sysconfig/network is refused, not a traceback",
      refused(msg, "IPV6INIT=maybe isn't yes or no") and not kf)

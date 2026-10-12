@@ -106,8 +106,10 @@ def plan(path, net, resolv):
     if not boolean(path, v, "NM_CONTROLLED", "yes"):  # EL9's NetworkManager left it unmanaged; a keyfile can't say so
         fail(f"{path}: NM_CONTROLLED=no isn't converted")
     boolean(path, v, "USERCTL", "no")
-    if os.path.exists(os.path.join(K, f"{c}.nmconnection")):
+    if os.path.lexists(os.path.join(K, f"{c}.nmconnection")):
         fail(f"{path}: {K}/{c}.nmconnection exists already")
+    if os.path.lexists(os.path.join(L, f"10-wend-{dev}.link")):  # someone's pin for this name: never replaced
+        fail(f"{path}: {L}/10-wend-{dev}.link exists already")
     args = ["type", "ethernet", "con-name", name, "ifname", dev, "ethernet.mac-address", hw]
     if "UUID" in v:  # the plugin's connection.uuid
         if not re.fullmatch(r"[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}", v["UUID"]):
