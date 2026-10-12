@@ -12,8 +12,8 @@
                                             writes .wend/pr-evidence.md for the PR body                 (root)
 
 ROUTE is a path like routes/debian/etch-to-trixie.toml; BOX is an id like debian/etch-web.
-Python 3.11+, standard library only. The sandbox needs root, chroot and rsync, plus debootstrap for Debian boxes or
-rpm2cpio, cpio, curl, unshare and ip (iproute2) for EL boxes.
+Python 3.11+, standard library only. The sandbox needs root, chroot, unshare and rsync, plus debootstrap for Debian
+boxes or rpm2cpio, cpio, curl and ip (iproute2) for EL boxes.
 """
 import contextlib
 import glob

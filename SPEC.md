@@ -703,6 +703,11 @@ other brace syntax is touched, so `${...}` and `%{...}` pass through). Values fo
   chroot its own tmpfs `/dev` containing only `null`, `zero`, `random`, `urandom` and `tty` (created with mknod),
   plus a `devpts` mounted with `newinstance`.
 - `/proc` and `/sys` are per-chroot mounts as well, never recursive binds.
+- Every command in a box runs in a UTS namespace of its own (`unshare -u`), named by the root's own `/etc/hostname`
+  (EL5: `HOSTNAME=` in `/etc/sysconfig/network`), else `wend-box.example.org`, read inside the chroot. A box never
+  sees the host's name, so a run doesn't depend on where it ran: etch's postfix postinst built `myhostname` from a
+  bare host name and resolv.conf's `search .` and refused the result (wend#26). A Debian box build sets
+  `/etc/hostname` to `wend-box.example.org` (debootstrap copies the host's) and writes an `/etc/hosts` for it.
 - **Unmount and verify before any cleanup.** Before deleting or rsync-restoring a box root, unmount everything under
   it and check `/proc/self/mountinfo` for leftovers. If anything is still mounted, refuse to delete.
 - Daemons never start on their own (`policy-rc.d` on Debian). Health checks start what they need and stop it again.
