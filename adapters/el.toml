@@ -127,6 +127,8 @@ after = [
   "{pm} clean packages",
 ]
 installed_list = "rpm -qa --qf '%{NAME}\\n' | sort -u"
+# tools/vm.py: the newest installed kernel, as `uname -r` would name it; after every reboot it has to be the running one
+kernel_newest = "rpm -q --qf '%{INSTALLTIME} %{VERSION}-%{RELEASE}.%{ARCH}\\n' kernel-core kernel 2>/dev/null | grep -v 'is not installed' | sort -n | tail -n1 | cut -d' ' -f2"
 # A real machine's kernel (SPEC "Kernels and the bootloader"). A chroot box has none, and these do nothing there. The
 # old release's kernel can't stay in the rpm database: EL5's needs mkinitrd, EL6's /sbin/new-kernel-pkg, and dnf won't
 # remove the running one. So before the transaction its records go (its files stay: the running kernel and its boot
