@@ -604,9 +604,9 @@ chroot. Reference: `systemctl enable {unit}`, then `systemctl is-enabled {unit}`
 **`net.ifcfg-to-keyfile`** (no arguments). EL10's NetworkManager can't read the initscripts profiles
 (`/etc/sysconfig/network-scripts/ifcfg-*`) that EL9's still does. Without this op, a box with a static address comes
 up on EL10 with NetworkManager's automatic DHCP profile, or with no address at all. The profiles converted are the
-ones EL9's NetworkManager loads: every `ifcfg-*` except `ifcfg-lo` and the names its ifcfg-rh plugin ignores (ending
-`.bak`, `~`, `.orig`, `.rej`, `.rpmnew`, `.augnew`, `.augtmp`, or an rpm temp suffix `;` and 8 hex digits). Effect,
-for each:
+ones EL9's NetworkManager loads: every `ifcfg-*` except `ifcfg-lo` and the names its ifcfg-rh plugin ignores (ending,
+in any case, `.bak`, `~`, `.orig`, `.rej`, `.rpmnew`, `.augnew`, `.augtmp`, or an rpm temp suffix `;` and 8 hex
+digits). Effect, for each:
 - the profile becomes a NetworkManager keyfile in `/etc/NetworkManager/system-connections/`, mode 0600, written by
   NetworkManager's own serializer (`nmcli --offline connection add`, which needs no daemon);
 - when it names a `HWADDR`, `/etc/systemd/network/10-wend-<DEVICE>.link` pins the interface name to that MAC. Once
@@ -614,27 +614,32 @@ for each:
   name. (Renaming several NICs to kernel names like `eth1` can race the kernel; only single-NIC boxes are proven.)
 - the ifcfg file moves to `SAVED`.
 
-The files are read as `KEY=VALUE` lines and never executed; a value with `$`, a backquote or `#` fails. Each key has
-the meaning the ifcfg-rh plugin gives it:
-- `DEVICE`, `HWADDR`, `TYPE` (`Ethernet` only), `NAME` (the profile's name, else `System <name>`);
+The files are read as `KEY=VALUE` lines and never executed; a value with `$`, a backquote or `#` fails, and an empty
+value is an unset key. Each key has the meaning the ifcfg-rh plugin gives it:
+- `DEVICE` (required), `HWADDR`, `TYPE` (`Ethernet` only), `NAME` (the profile's name, else `System <name>`), `UUID`
+  (the profile's uuid);
 - `BOOTPROTO`: `static`, `none` or empty with `IPADDR` and `PREFIX` or `NETMASK` (a real netmask), plus `GATEWAY` (or
   `/etc/sysconfig/network`'s); `dhcp` or `bootp` (read as `dhcp`) with none of those;
 - `BROADCAST` and `NETWORK`, which the installer writes and NetworkManager derives: accepted only when they match the
   address;
 - `GATEWAYDEV` in `/etc/sysconfig/network`: every other device's profile gets `ipv4.never-default`;
-- `DNS1`, `DNS2`, `DOMAIN`, with any method, and `PEERDNS=no` as `ipv4.ignore-auto-dns`. A static profile with no
-  `DNS1`/`DNS2` takes the resolvers and search list from `/etc/resolv.conf`, which is where CentOS 5's installer put
-  them;
+- `DNS1`, `DNS2` (only after `DNS1`), `DOMAIN`, with any method, and `PEERDNS=no` as `ipv4.ignore-auto-dns`. A static
+  profile with no `DNS1`/`DNS2` takes the resolvers and search list (or `domain`) from `/etc/resolv.conf`, which is
+  where CentOS 5's installer put them;
 - `ONBOOT`, `IPV6INIT` (else `/etc/sysconfig/network`'s), `IPV6_AUTOCONF` (`no` is `link-local`), as NetworkManager's
   booleans (`yes`, `true`, `t`, `y`, `1` and their opposites);
-- `UUID`, `DHCPCLASS`, `USERCTL` are inert, and so is `NM_CONTROLLED`: EL9 left an `NM_CONTROLLED=no` device to the
-  network service, which EL10 doesn't have, so its address survives only in a profile NetworkManager manages.
+- `NM_CONTROLLED` (`no` fails: EL9's NetworkManager left that device unmanaged, which a keyfile can't say);
+- `DHCPCLASS` and `USERCTL` are inert.
 
-Any other setting (bridges, VLANs, bonds, aliases, IPv6 addresses), a `route-`, `route6-`, `rule-`, `rule6-` or
-`keys-` file beside a profile, or a value that isn't an address, MAC, boolean or plain name fails the step. Every
-profile is checked and serialized by `nmcli` before the first file is written, so a failure, including `nmcli`
-missing or refusing a profile, changes nothing. Reference: `python3 -` with the source in
-`tools/net_ifcfg_to_keyfile.py`, sent as a here-document; `tools/test_net_ifcfg.py` runs it on fixture roots.
+In `/etc/sysconfig/network`, `GATEWAY`, `GATEWAYDEV` and `IPV6INIT` are read as above, and `NETWORKING`,
+`NETWORKING_IPV6`, `HOSTNAME`, `NOZEROCONF` and `NISDOMAIN` are left as they are: none of them is part of a profile.
+
+Any other setting in either file (bridges, VLANs, bonds, aliases, IPv6 addresses, `RES_OPTIONS`), a keyfile of the
+same name already there, a `route-`, `route6-`, `rule-`, `rule6-` or `keys-` file beside a profile, or a value that
+isn't an address, MAC, boolean or plain name fails the step. Every profile is checked and serialized by `nmcli` before
+the first file is written, so a failure, including `nmcli` missing or refusing a profile, changes nothing. Reference:
+`python3 -` with the source in `tools/net_ifcfg_to_keyfile.py`, sent as a here-document; `tools/test_net_ifcfg.py`
+runs it on fixture roots.
 
 ### Argument specs
 

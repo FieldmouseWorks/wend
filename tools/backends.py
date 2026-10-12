@@ -526,7 +526,8 @@ def net_ifcfg_to_keyfile():
     """SPEC.md, net.ifcfg-to-keyfile: the converter runs on the box as a here-document, so no file of wend's is
     needed there. The client embeds the same source (include_str!), and parity compares the two."""
     src = open(NET_IFCFG_TO_KEYFILE).read()
-    assert "WEND_PY" not in src
+    if "WEND_PY" in src:  # the here-document would end early (an assert goes away under python -O)
+        raise ValueError(f"{NET_IFCFG_TO_KEYFILE} holds the here-document marker")
     return f"python3 - <<'WEND_PY'\n{src}WEND_PY"
 
 

@@ -30,8 +30,11 @@ RESOLV = "/etc/resolv.conf"
 KEYS = {"DEVICE", "HWADDR", "BOOTPROTO", "IPADDR", "NETMASK", "PREFIX", "BROADCAST", "NETWORK", "GATEWAY", "DNS1",
         "DNS2", "DOMAIN", "PEERDNS", "ONBOOT", "IPV6INIT", "IPV6_AUTOCONF", "TYPE", "NAME", "UUID", "NM_CONTROLLED",
         "DHCPCLASS", "USERCTL"}
-# names NetworkManager's ifcfg-rh plugin never loads (nms-ifcfg-rh-utils.c, utils_should_ignore_file): backups, rpm
-# and augeas leftovers. EL9 ran the box with exactly the other ifcfg-* files, so those are the ones carried over.
+# /etc/sysconfig/network: what the plugin reads there and this op converts (GATEWAY, GATEWAYDEV, IPV6INIT), and what
+# NetworkManager doesn't read at all; anything else it reads there (RES_OPTIONS, IPV6_DEFAULTGW...) fails the step
+NET_KEYS = {"GATEWAY", "GATEWAYDEV", "IPV6INIT", "NETWORKING", "NETWORKING_IPV6", "HOSTNAME", "NOZEROCONF", "NISDOMAIN"}
+# names NetworkManager's ifcfg-rh plugin never loads (nms-ifcfg-rh-utils.c, utils_should_ignore_file, which compares
+# the suffixes ignoring case): backups, rpm and augeas leftovers. EL9 ran the box with exactly the other ifcfg-* files, so those are the ones carried over.
 IGNORED = (".bak", "~", ".orig", ".rej", ".rpmnew", ".augnew", ".augtmp")
 # files the plugin reads beside a profile; this op converts none of them, so their presence fails the step
 SIDE = ("route-", "route6-", "rule-", "rule6-", "keys-")
@@ -43,7 +46,7 @@ def fail(msg):
     sys.exit(f"{msg}, nothing changed")
 
 
-def read(path, allowed=None):
+def read(path, allowed):
     out = {}
     for n, line in enumerate(open(path), 1):
         line = line.strip()
@@ -59,7 +62,8 @@ def read(path, allowed=None):
         if len(words) > 1 or "#" in m.group(2) or "$" in m.group(2) or "`" in m.group(2):
             fail(f"{path}:{n}: {m.group(1)} isn't one plain value")
         out[m.group(1)] = words[0] if words else ""
-    if allowed is not None and set(out) - allowed:
+    out = {k: x for k, x in out.items() if x}  # an empty value is an unset key, as svGetValueStr reads it
+    if set(out) - allowed:
         fail(f"{path}: settings this op doesn't convert: {sorted(set(out) - allowed)}")
     return out
 
@@ -68,7 +72,7 @@ def boolean(path, v, key, default):
     s = v.get(key, default).lower()
     if s in YES or s in NO:
         return s in YES
-    fail(f"{path}: {key}={v[key]} isn't yes or no")
+    fail(f"{path}: {key}={s} isn't yes or no")
 
 
 def addr(path, key, s):
@@ -81,7 +85,9 @@ def addr(path, key, s):
 def plan(path, net, resolv):
     c = path[len(D) + len("/ifcfg-"):]
     v = read(path, KEYS)
-    dev = v.get("DEVICE", c)
+    dev = v.get("DEVICE")
+    if not dev:  # the plugin then binds the profile to no interface, and GATEWAYDEV can't name it
+        fail(f"{path}: no DEVICE")
     if not re.fullmatch(NAME, c) or not re.fullmatch(NAME, dev) or len(dev) > 15:
         fail(f"{path}: not a plain interface or connection name")
     for side in SIDE:
@@ -95,11 +101,16 @@ def plan(path, net, resolv):
     name = v.get("NAME") or f"System {c}"
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_. -]*", name):
         fail(f"{path}: NAME={name} isn't a plain name")
-    # NM_CONTROLLED=no: EL9's NetworkManager left the device to the network service, which EL10 doesn't have, so the
-    # only way the address survives is a profile NetworkManager manages (SPEC says so)
-    boolean(path, v, "NM_CONTROLLED", "yes")
+    if not boolean(path, v, "NM_CONTROLLED", "yes"):  # EL9's NetworkManager left it unmanaged; a keyfile can't say so
+        fail(f"{path}: NM_CONTROLLED=no isn't converted")
     boolean(path, v, "USERCTL", "no")
+    if os.path.exists(os.path.join(K, f"{c}.nmconnection")):
+        fail(f"{path}: {K}/{c}.nmconnection exists already")
     args = ["type", "ethernet", "con-name", name, "ifname", dev]
+    if "UUID" in v:  # the plugin's connection.uuid
+        if not re.fullmatch(r"[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}", v["UUID"]):
+            fail(f"{path}: UUID={v['UUID']} isn't a UUID")
+        args += ["connection.uuid", v["UUID"].lower()]
     if hw:
         args += ["ethernet.mac-address", hw]
     proto = v.get("BOOTPROTO", "none").lower()
@@ -135,7 +146,9 @@ def plan(path, net, resolv):
         args += ["ipv4.gateway", str(addr(path, "GATEWAY", gw))]
     if net.get("GATEWAYDEV", dev) != dev:  # the plugin: only GATEWAYDEV gets the default route
         args += ["ipv4.never-default", "yes"]
-    dns = [v[k] for k in ("DNS1", "DNS2") if v.get(k)]
+    if "DNS2" in v and "DNS1" not in v:  # the plugin stops at the first missing DNSn
+        fail(f"{path}: DNS2 with no DNS1")
+    dns = [v[k] for k in ("DNS1", "DNS2") if k in v]
     search = v.get("DOMAIN", "").split()
     if proto not in ("dhcp", "bootp") and not dns:  # CentOS 5's installer put a static box's resolvers only here
         dns, search = resolv["nameserver"], search or resolv["search"]
@@ -157,7 +170,7 @@ def plan(path, net, resolv):
 
 
 def ignored(n):
-    return n.endswith(IGNORED) or re.search(r";[0-9a-fA-F]{8}$", n) is not None
+    return n.lower().endswith(IGNORED) or re.search(r";[0-9a-fA-F]{8}\Z", n) is not None
 
 
 def main():
@@ -166,15 +179,15 @@ def main():
     if not files:
         print("no ifcfg profiles: nothing to convert")
         return
-    net = read(NETWORK) if os.path.exists(NETWORK) else {}
+    net = read(NETWORK, NET_KEYS) if os.path.exists(NETWORK) else {}
     resolv = {"nameserver": [], "search": []}
     if os.path.exists(RESOLV):
         for line in open(RESOLV):
             w = line.split()
             if len(w) >= 2 and w[0] == "nameserver" and len(resolv["nameserver"]) < 3:
                 resolv["nameserver"].append(w[1])
-            elif w and w[0] == "search":
-                resolv["search"] = w[1:]
+            elif w and w[0] in ("search", "domain"):  # resolv.conf(5): the last of the two wins
+                resolv["search"] = w[1:2] if w[0] == "domain" else w[1:]
     plans = [plan(f, net, resolv) for f in files]
     keyfiles = []
     for (c, dev, hw, args), f in zip(plans, files):  # every keyfile serialized before anything is written
