@@ -408,9 +408,9 @@ def replay(route_path, box_id, resume=None):
     key, prev = os.path.join(d, "key"), os.path.join(d, "base.qcow2")
     todo = route["hops"]
     if resume:
-        i = route["hops"].index(resume[1]) if resume[1] in route["hops"] else 0
-        if not i:
-            raise SystemExit(f"--from needs a hop after the first of {route['hops']}; for the whole route, replay")
+        if resume[1] not in route["hops"][1:]:
+            raise SystemExit(f"--from needs one of {route['hops'][1:]}; for the whole route, replay without it")
+        i = route["hops"].index(resume[1])
         # only from a hop that passed, on the same box: a failed hop's disk would make lost checks vacuous
         if not os.path.exists(os.path.join(resume[0], "run.json")):
             raise SystemExit(f"{resume[0]} has no run.json to say its hops passed")
@@ -535,14 +535,13 @@ def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net):
         g = Guest(disk, key, port, hw)
         g.start()
         h = {"to": f"prune-{n[0]:02d}", "asked": pkgs, "packages": pkgs}
-        if not g.wait_ssh():
+        if not g.wait_ssh():  # the last good disk booted a moment ago: an infrastructure fault, not these packages'
             g.kill()
-            h.update(ok=False, stage="the guest didn't come up")
-            return h
+            raise RuntimeError(f"prune-{n[0]:02d}: the guest didn't come up from the last good disk")
         rc, listed = g.ssh(a["hop"]["installed_list"])
         if rc:
             g.kill()
-            raise RuntimeError(f"couldn't list the installed packages for the prune: {listed[-300:]}")
+            raise RuntimeError(f"prune-{n[0]:02d}: couldn't list the installed packages: {listed[-300:]}")
         pkgs = h["packages"] = [p for p in pkgs if p in set(listed.split())]  # an earlier autoremove took the rest
         if not pkgs:
             g.stop()

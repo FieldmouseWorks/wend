@@ -794,7 +794,7 @@ The rules:
   no longer ships are purged and autoremoved, the set split in halves whenever a step fails or a check is lost, and
   each attempt first drops what an earlier autoremove already took. Each attempt runs on its own overlay of the last
   good disk and reboots; a kept attempt is the next base. As in the chroot walk, a removal the prune drops never fails
-  the run; a guest that doesn't come up, or a box it can't read, does. It records what was obsolete before and after.
+  the run; a guest that doesn't come up from the last good disk, or a box it can't read, does. It records what was obsolete before and after.
 - Adapter: `releases.<id>.install` names a start release's installer. EL: its `tree` through the shim and the
   `pxeboot` dir in it (the shim answers single byte ranges, which anaconda uses to read package headers). Debian: the
   `netboot` dir under the archive, `preseed` (the version's own preseed lines) and `late` (shell the installer runs at
