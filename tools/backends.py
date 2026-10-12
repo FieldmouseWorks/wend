@@ -157,7 +157,7 @@ class Rpm:
     OPS = {"rpm.swap-release", "rpm.drop-arch", "rpm.bootstrap", "rpm.transit", "rpm.adopt-rpmnew",
            "rpm.set-aside-unowned", "fs.layout", "kv.set", "kv.unset", "mysql.set-password", "mysql.clean-shutdown",
            "mysql.upgrade-data", "ssh.generate-host-keys", "httpd.drop-missing-modules", "php.mysqli-report-off",
-           "service.record", "service.enable"}
+           "service.record", "service.enable", "net.ifcfg-to-keyfile"}
     # no --justdb for fixes: dropping a package from the database while its files stay is how a fix would fake the
     # pkgdb check. rpm.transit uses it internally, on the previous release's leftovers only.
     FORCE = {"depends", "scripts"}
@@ -505,6 +505,9 @@ class Rpm:
                 f"mkdir -p /var/lib/wend && ls /etc/rc.d/rc$L.d | sed -n 's/^S[0-9][0-9]//p' | sort -u > {r}.new && "
                 f"mv {r}.new {r} && echo \"runlevel $L starts: $(tr '\\n' ' ' < {r})\"")
 
+    def op_net_ifcfg_to_keyfile(self, s, adapter, release, v, rel):
+        return net_ifcfg_to_keyfile()
+
     def op_service_enable(self, s, adapter, release, v, rel):
         """Enable a systemd unit at boot if the service it replaces or follows was: one of `like` is in the SysV
         record, or is an enabled unit now. Never disables anything; a unit nothing it follows started is left as is."""
@@ -515,6 +518,18 @@ class Rpm:
                 f"systemctl enable {u} || exit 1; S=$(systemctl is-enabled {u} 2>/dev/null); "
                 f"[ \"$S\" = enabled ] || {{ echo \"{u} is $S after systemctl enable, not enabled\"; exit 1; }}; "
                 f"echo \"{u} enabled, like $W\"")
+
+NET_IFCFG_TO_KEYFILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "net_ifcfg_to_keyfile.py")
+
+
+def net_ifcfg_to_keyfile():
+    """SPEC.md, net.ifcfg-to-keyfile: the converter runs on the box as a here-document, so no file of wend's is
+    needed there. The client embeds the same source (include_str!), and parity compares the two."""
+    src = open(NET_IFCFG_TO_KEYFILE).read()
+    if "WEND_PY" in src:  # the here-document would end early (an assert goes away under python -O)
+        raise ValueError(f"{NET_IFCFG_TO_KEYFILE} holds the here-document marker")
+    return f"python3 - <<'WEND_PY'\n{src}WEND_PY"
+
 
 BACKENDS = {"apt": Apt(), "rpm": Rpm()}
 

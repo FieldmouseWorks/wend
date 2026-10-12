@@ -126,6 +126,7 @@ pub const RPM: Caps = Caps {
         "php.mysqli-report-off",
         "service.record",
         "service.enable",
+        "net.ifcfg-to-keyfile",
     ],
     // no --justdb for fixes: dropping a package from the database while its files stay is how a fix would fake
     // the pkgdb check. rpm.transit uses it internally, on the previous release's leftovers only.
@@ -438,6 +439,13 @@ fn rpm_step(s: &Value, adapter: &Doc, release: &str) -> Result<String, String> {
         "httpd.drop-missing-modules" => HTTPD_DROP_MISSING_MODULES.into(),
         "php.mysqli-report-off" => php_mysqli_report_off(),
         "service.record" => service_record(),
+        "net.ifcfg-to-keyfile" => {
+            // SPEC.md, net.ifcfg-to-keyfile: the same converter source the Python engine sends
+            format!(
+                "python3 - <<'WEND_PY'\n{}WEND_PY",
+                include_str!("../../tools/net_ifcfg_to_keyfile.py")
+            )
+        }
         "service.enable" => {
             let (like, u) = (list_of(s, "like")?.join(" "), str_of(s, "unit")?);
             [
