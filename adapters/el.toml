@@ -111,9 +111,30 @@ repos = { baseos = "repo.almalinux.org/almalinux/9/BaseOS/x86_64/os", appstream 
 # EL8 module streams don't exist on EL9: reset them, and tell dnf which platform it is on (a chroot has no os-release
 # it trusts yet). EL9's rpm only reads EL8's Berkeley DB read-only, so the database is rebuilt (as sqlite) before any
 # fix installs anything.
-upgrade = ["rm -f /etc/dnf/modules.d/*.module",
-           "{clean_repos}; dnf -y {dnf_opts} --nobest --setopt=module_platform_id=platform:el9 distro-sync",
-           "/usr/sbin/ldconfig; rm -f /var/lib/rpm/__db.*; rpmdb --rebuilddb && rpm -q rpm"]
+#
+# On a live box (wend#75) the transaction runs offline, as it does in a chroot, and can't reach PID 1 at all. Without
+# that, systemd's %post re-executes PID 1 as EL9's systemd on the old release's kernel (EL7's 3.10), which never sees a
+# stopped unit's cgroup empty, and a scriptlet that starts or restarts a service (audit's) hangs the transaction.
+# SYSTEMD_OFFLINE=1 (systemctl has read it since systemd 237) turns the scriptlets' own systemctl calls into no-ops
+# ("Running in chroot, ignoring"), but `service` runs legacy actions under `env -i`, which drops it: EL8 audit's
+# %postun `service auditd condrestart` still ran `systemctl start auditd` and hung (remi, wend#79). So dnf runs in a
+# private mount namespace with tmpfs over /run/systemd and /run/dbus: no systemctl, busctl or D-Bus client in any
+# scriptlet can find PID 1, whatever environment it was given (systemctl says "System has not been booted with
+# systemd", and the scriptlets ignore it; audit's condrestart sees no active state and leaves auditd running). The old
+# daemons, and EL7's PID 1, keep running until the reboot that ends the hop. sshd is the exception: the running
+# listener re-executes /usr/sbin/sshd for every new connection, and an older listener can't hand its state to a newer
+# binary, so once rpm.transit or the transaction replaces it nobody can log in. A watcher outside the namespace
+# restarts it as soon as the transaction swaps the binary (once sshd -t accepts it), so ssh stays usable even if the
+# transaction then stalls; and it is restarted after rpm.transit and after the transaction (its config checked with
+# sshd -t first), and that step fails unless a new connection gets the ssh greeting. Only `systemctl
+# is-active` saying inactive, failed or unknown skips it (a socket-activated sshd execs per connection already); a
+# bus error counts as running, so it fails the step rather than skipping it. A chroot box runs no sshd and skips
+# both.
+upgrade = ["[ / -ef /proc/1/root ] && [ -d /run/systemd/system ] && case $(systemctl is-active sshd 2>/dev/null) in inactive|failed|unknown) false;; esac || { echo \"sshd: not a running systemd service on this root, left alone\"; exit 0; }; /usr/sbin/sshd -t || { echo \"the installed sshd rejects its configuration: restarting it would lock ssh out\"; exit 1; }; timeout 120 systemctl restart sshd || { echo \"systemctl restart sshd failed or hung\"; exit 1; }; L=$(/usr/sbin/sshd -T 2>/dev/null | awk '$1 == \"listenaddress\" {print $2}'); A=$(echo \"$L\" | grep -v '^\\[' | head -n1); [ -n \"$A\" ] || A=$(echo \"$L\" | head -n1); H=${A%:*}; P=${A##*:}; H=${H#[}; H=${H%]}; case \"$H\" in 0.0.0.0|\"\") H=127.0.0.1;; ::) H=::1;; esac; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do timeout 5 bash -c \"exec 3<>/dev/tcp/$H/${P:-22} && head -c 4 <&3\" 2>/dev/null | grep -q '^SSH-' && { echo \"sshd restarted: a new connection to $H port ${P:-22} gets its greeting\"; exit 0; }; sleep 1; done; echo \"sshd restarted, but a new connection to $H port ${P:-22} gets no greeting\"; exit 1",
+           "rm -f /etc/dnf/modules.d/*.module",
+           "{clean_repos}; set -- dnf -y {dnf_opts} --nobest --setopt=module_platform_id=platform:el9 distro-sync; [ / -ef /proc/1/root ] && [ -d /run/systemd/system ] || { SYSTEMD_OFFLINE=1 \"$@\"; exit; }; W=; case $(systemctl is-active sshd 2>/dev/null) in inactive|failed|unknown) ;; *) ( I=$(stat -c %i /usr/sbin/sshd); while sleep 10; do J=$(stat -c %i /usr/sbin/sshd 2>/dev/null) || continue; [ \"$J\" = \"$I\" ] && continue; /usr/sbin/sshd -t >/dev/null 2>&1 || continue; timeout 60 systemctl restart sshd && I=$J && echo \"sshd was replaced mid-transaction: restarted it\"; done ) & W=$!;; esac; unshare -m sh -c 'mount --make-rprivate / && mount -t tmpfs -o mode=755 wend-offline /run/systemd && { [ ! -d /run/dbus ] || mount -t tmpfs -o mode=755 wend-offline /run/dbus; } && exec \"$@\"' sh env SYSTEMD_OFFLINE=1 \"$@\"; rc=$?; [ -z \"$W\" ] || kill $W; exit $rc",
+           "/usr/sbin/ldconfig; rm -f /var/lib/rpm/__db.*; rpmdb --rebuilddb && rpm -q rpm",
+           "[ / -ef /proc/1/root ] && [ -d /run/systemd/system ] && case $(systemctl is-active sshd 2>/dev/null) in inactive|failed|unknown) false;; esac || { echo \"sshd: not a running systemd service on this root, left alone\"; exit 0; }; /usr/sbin/sshd -t || { echo \"the installed sshd rejects its configuration: restarting it would lock ssh out\"; exit 1; }; timeout 120 systemctl restart sshd || { echo \"systemctl restart sshd failed or hung\"; exit 1; }; L=$(/usr/sbin/sshd -T 2>/dev/null | awk '$1 == \"listenaddress\" {print $2}'); A=$(echo \"$L\" | grep -v '^\\[' | head -n1); [ -n \"$A\" ] || A=$(echo \"$L\" | head -n1); H=${A%:*}; P=${A##*:}; H=${H#[}; H=${H%]}; case \"$H\" in 0.0.0.0|\"\") H=127.0.0.1;; ::) H=::1;; esac; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do timeout 5 bash -c \"exec 3<>/dev/tcp/$H/${P:-22} && head -c 4 <&3\" 2>/dev/null | grep -q '^SSH-' && { echo \"sshd restarted: a new connection to $H port ${P:-22} gets its greeting\"; exit 0; }; sleep 1; done; echo \"sshd restarted, but a new connection to $H port ${P:-22} gets no greeting\"; exit 1"]
 
 [releases.alma10]
 major = 10
@@ -148,6 +169,12 @@ after = [
   "D=$(rpm --eval '%{_dbpath}'); if [ \"$D\" != /var/lib/rpm ] && [ ! -L /var/lib/rpm ] && [ -s /var/lib/rpm/rpmdb.sqlite ] && [ ! -s \"$D/rpmdb.sqlite\" ]; then mkdir -p \"$D\" && cp -a /var/lib/rpm/. \"$D\"/ && rm -rf /var/lib/rpm && ln -s \"$D\" /var/lib/rpm; fi",
   "rm -f /var/lib/rpm/__db.*; rpm --rebuilddb",
   "{pm} clean packages",
+  # hop.kernel_before holds the release's rescue image back while the hop runs; the machine's next kernel update
+  # builds it
+  "rm -f /etc/dracut.conf.d/99-wend-no-rescue.conf",
+  # wend#75: a hop to EL9 that fails between rpm.transit and its last sshd restart leaves the old listener exec'ing the
+  # new sshd, so nobody can log in to see why. `after` runs whatever happened (releases.alma9 explains the restart).
+  "[ / -ef /proc/1/root ] && [ -d /run/systemd/system ] && case $(systemctl is-active sshd 2>/dev/null) in inactive|failed|unknown) false;; esac || { echo \"sshd: not a running systemd service on this root, left alone\"; exit 0; }; /usr/sbin/sshd -t || { echo \"the installed sshd rejects its configuration: restarting it would lock ssh out\"; exit 1; }; timeout 120 systemctl restart sshd || { echo \"systemctl restart sshd failed or hung\"; exit 1; }; L=$(/usr/sbin/sshd -T 2>/dev/null | awk '$1 == \"listenaddress\" {print $2}'); A=$(echo \"$L\" | grep -v '^\\[' | head -n1); [ -n \"$A\" ] || A=$(echo \"$L\" | head -n1); H=${A%:*}; P=${A##*:}; H=${H#[}; H=${H%]}; case \"$H\" in 0.0.0.0|\"\") H=127.0.0.1;; ::) H=::1;; esac; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do timeout 5 bash -c \"exec 3<>/dev/tcp/$H/${P:-22} && head -c 4 <&3\" 2>/dev/null | grep -q '^SSH-' && { echo \"sshd restarted: a new connection to $H port ${P:-22} gets its greeting\"; exit 0; }; sleep 1; done; echo \"sshd restarted, but a new connection to $H port ${P:-22} gets no greeting\"; exit 1",
 ]
 installed_list = "rpm -qa --qf '%{NAME}\\n' | sort -u"
 # tools/vm.py: the newest installed kernel, as `uname -r` would name it; after every reboot it has to be the running one
@@ -155,14 +182,22 @@ kernel_newest = "rpm -q --qf '%{INSTALLTIME} %{VERSION}-%{RELEASE}.%{ARCH}\\n' k
 # A real machine's kernel (SPEC "Kernels and the bootloader"). A chroot box has none, and these do nothing there. The
 # old release's kernel can't stay in the rpm database: EL5's needs mkinitrd, EL6's /sbin/new-kernel-pkg, and dnf won't
 # remove the running one. So before the transaction its records go (its files stay: the running kernel and its boot
-# entry are the fallback), and the files of kernels no package owns and that aren't running go too, so the release's
-# kernel fits (CentOS 5's /boot is 200 MB). After it the release's own kernel is installed, and GRUB legacy, which can't read EL8+'s BLS
-# entries and which GRUB2 can't replace on a sector-63 disk, gets an entry for the new kernel as its default. Only
-# vmlinuz entries are touched (memtest, Xen and chainloader entries stay). Nothing is removed unless the machine is
-# booted from this root: in a chroot of someone's disk, uname -r is the host's kernel, not the box's.
+# entry are the fallback), and the files of kernels no package owns and that aren't running or GRUB's default go too, so
+# the release's kernel fits (the VM tier's CentOS 5 /boot is 200 MiB). After it the release's own kernel is installed,
+# and GRUB legacy, which can't read EL8+'s BLS entries and which GRUB2 can't replace on a sector-63 disk, gets an entry
+# for the new kernel as its default. Only vmlinuz entries are touched (memtest, Xen and chainloader entries stay). A
+# removed kernel's kdump image goes with it. The rescue image goes on every hop too, unless it is or may be GRUB's
+# default (GRUB legacy's `default=saved`; GRUB 2's default, `saved_entry` or `GRUB_DEFAULT` resolved against grub.cfg's
+# menu or a BLS entry, not a kernel's entry): it is the old release's kernel with a generic initramfs (EL7's pair is 62
+# MiB), and EL9's 51-dracut-rescue.install, finding no BLS entry for it, copies its own vmlinuz over the old one and
+# keeps the old initramfs (an EL9 kernel with EL7's modules). The release's kernel install doesn't build a new one
+# during the hop (`dracut_rescue_image="no"` in a drop-in hop.after removes), since a 54 to 65 MiB generic image per hop
+# doesn't fit the VM tier's 200 MiB CentOS 5 /boot beside two kernels; the machine's next kernel update builds one for
+# the release it runs, as EL does when none exists. Nothing is removed unless the machine is booted from this root: in a
+# chroot of someone's disk, uname -r is the host's kernel, not the box's.
 kernel_before = [
   "[ / -ef /proc/1/root ] || { echo \"not booted from this root: kernel records left as they are\"; exit 0; }; K=$(for p in kernel kernel-core kernel-modules kernel-modules-core kernel-modules-extra; do rpm -q $p 2>/dev/null | grep -v 'is not installed'; done); if [ -n \"$K\" ]; then mkdir -p /var/lib/wend && echo $K > /var/lib/wend/kernel-handover && rpm -e --justdb --nodeps --noscripts --notriggers $K && echo \"kernel records dropped, files kept: $K\"; fi",
-  "[ / -ef /proc/1/root ] || { echo \"not booted from this root: the running kernel isn't its own, nothing removed\"; exit 0; }; R=$(uname -r); G=/boot/grub/grub.conf; D=\"\"; [ -f $G ] && D=$(awk -F= '/^default=/ {d = $2} /^title/ {t++} t - 1 == d && $0 ~ /vmlinuz-/ {sub(/.*vmlinuz-/, \"\"); sub(/[ \\t].*/, \"\"); print; exit}' $G); for f in /boot/vmlinuz-*; do [ -e \"$f\" ] || continue; v=${f#/boot/vmlinuz-}; [ -n \"$v\" ] || continue; case \"$v\" in 0-rescue-*|\"$R\"|\"$D\") continue;; esac; rpm -qf \"$f\" >/dev/null 2>&1 && continue; echo \"removing an old kernel no package owns: $v\"; rm -f \"/boot/vmlinuz-$v\" \"/boot/.vmlinuz-$v.hmac\" \"/boot/System.map-$v\" \"/boot/config-$v\" \"/boot/symvers-$v.gz\" \"/boot/initrd-$v.img\" \"/boot/initramfs-$v.img\" \"/etc/ld.so.conf.d/kernel-$v.conf\"; rm -rf \"/lib/modules/$v\"; done; df -h /boot | tail -n1",
+  "[ / -ef /proc/1/root ] || { echo \"not booted from this root: the running kernel isn't its own, nothing removed\"; exit 0; }; R=$(uname -r); G=/boot/grub/grub.conf; D=\"\"; [ -f $G ] && D=$(awk -F= '/^default=/ {d = $2} /^title/ {t++} t - 1 == d && $0 ~ /vmlinuz-/ {sub(/.*vmlinuz-/, \"\"); sub(/[ \\t].*/, \"\"); print; exit}' $G); E=$(sed -n 's/^GRUB_DEFAULT=//p' /etc/default/grub 2>/dev/null | tail -n1 | tr -d \"\\\"'\\r\"); S=$(sed -n 's/^saved_entry=//p' /boot/grub2/grubenv 2>/dev/null | tail -n1); case \"$E\" in ''|saved) T=${S:-'#0'};; 0) T='#0';; *) T=$E;; esac; P=; for c in /boot/grub2/grub.cfg /boot/grub2/grubenv /boot/efi/EFI/*/grub.cfg; do [ -f \"$c\" ] && P=1; done; X=; if [ -f \"/boot/loader/entries/$T.conf\" ]; then X=$(awk '$1 == \"linux\" {print $2; exit}' \"/boot/loader/entries/$T.conf\"); else for c in /boot/grub2/grub.cfg /boot/efi/EFI/*/grub.cfg; do [ -f \"$c\" ] || continue; X=$(awk -v t=\"$T\" '/^[ \\t]*menuentry[ \\t]/ {n++; q = index($0, \"\\047\"); r = substr($0, q + 1); if (t == \"#0\") m = (n == 1); else m = (q > 0 && substr(r, 1, index(r, \"\\047\") - 1) == t); next} m && $1 ~ /^linux(16|efi)?$/ {print $2; exit}' \"$c\"); [ -n \"$X\" ] && break; done; fi; K=${X##*/vmlinuz-}; case \"$K\" in */*|0-rescue-*) K=;; esac; for f in /boot/vmlinuz-*; do [ -e \"$f\" ] || continue; v=${f#/boot/vmlinuz-}; [ -n \"$v\" ] || continue; case \"$v\" in 0-rescue-*|\"$R\"|\"$D\"|\"$K\") continue;; esac; rpm -qf \"$f\" >/dev/null 2>&1 && continue; echo \"removing an old kernel no package owns: $v\"; rm -f \"/boot/vmlinuz-$v\" \"/boot/.vmlinuz-$v.hmac\" \"/boot/System.map-$v\" \"/boot/config-$v\" \"/boot/symvers-$v.gz\" \"/boot/initrd-$v.img\" \"/boot/initramfs-$v.img\" \"/boot/initramfs-${v}kdump.img\" \"/boot/initrd-${v}kdump.img\" \"/etc/ld.so.conf.d/kernel-$v.conf\"; rm -rf \"/lib/modules/$v\"; done; mkdir -p /etc/dracut.conf.d && echo 'dracut_rescue_image=\"no\"' > /etc/dracut.conf.d/99-wend-no-rescue.conf || exit 1; case \"$D\" in 0-rescue-*) echo \"GRUB's default is the rescue image: left as it is\";; '') if [ -f $G ]; then echo \"GRUB's default (default=saved, or no such entry) may be the rescue image: left as it is\"; else D=none; fi;; esac; if [ -n \"$P\" ] && [ -z \"$K\" ]; then echo \"GRUB 2's default ($T) isn't the menu entry of a kernel, so it may be the rescue image: left as it is\"; D=''; fi; case \"$D\" in 0-rescue-*|'') ;; *) for f in /boot/vmlinuz-0-rescue-* /boot/.vmlinuz-0-rescue-*.hmac /boot/initramfs-0-rescue-*.img /boot/loader/entries/*-0-rescue.conf; do [ -e \"$f\" ] || continue; echo \"removing the old release's rescue image: $f\"; rm -f \"$f\"; done;; esac; df -h /boot | tail -n1",
 ]
 kernel_after = [
   "[ / -ef /proc/1/root ] || exit 0; [ -e /var/lib/wend/kernel-handover ] || exit 0; {clean_repos}; rm -f /var/lib/rpm/__db.*; rpm --rebuilddb; if command -v dnf >/dev/null 2>&1; then dnf -y {dnf_opts} install kernel; else yum -y install kernel; fi && rpm -q kernel && rm -f /var/lib/wend/kernel-handover",
@@ -469,14 +504,12 @@ set = false
 # adapters/drivers/el/<release>.txt, the PCI disk controllers and network cards the release's kernel drives
 # and the filesystems it mounts (tools/hwdata.py builds it from the kernel package itself).
 # `boot_mib`, the space the release's kernel takes in /boot: its package's /boot files (vmlinuz, System.map, config,
-# symvers; measured) and a host-only initramfs. centos7: measured on the VM tier's centos7-lamp (3.10.0-1160.119.1:
-# 28.3 MiB without its kdump image, 17.7 of it the initramfs) plus 3 MiB for an LVM or md root. centos6, alma9 and
-# alma10: estimates (a container can't build a host-only initramfs for real hardware; CentOS 6's dracut builds a
-# generic one); alma9's package files are 24.1 MiB, alma10's 24.9. alma9's also holds 8 MiB for the rescue image: the
-# first kernel a BLS release installs finds no rescue loader entry, so dracut-config-rescue's 51-dracut-rescue.install
-# copies its own vmlinuz (14.5 MiB) over an EL7 box's vmlinuz-0-rescue (6.5 MiB) and keeps the EL7 rescue initramfs
-# it finds; from then on the entry exists and alma10 adds nothing. `old_kernels = "running"`: hop.kernel_before removes every kernel but the running one
-# (and GRUB's default) before the hop installs its own, so the new kernel sits beside one other.
+# symvers; measured) and a host-only initramfs. centos7: measured on the VM tier's centos7-lamp (3.10.0-1160.119.1: 28.3
+# MiB without its kdump image, 17.7 of it the initramfs) plus 3 MiB for an LVM or md root. centos6, alma9 and alma10:
+# estimates (a container can't build a host-only initramfs for real hardware; CentOS 6's dracut builds a generic one);
+# alma9's package files are 24.1 MiB, alma10's 24.9. None holds a rescue image: hop.kernel_before drops the machine's
+# and no hop builds one. `old_kernels = "running"`: hop.kernel_before removes every kernel but the running one (and
+# GRUB's default) before the hop installs its own, so the new kernel sits beside one other.
 boot = ["bios"]
 old_kernels = "running"
 
@@ -498,7 +531,7 @@ drivers = "sha256:965df193dc31f5ed07b8bf88088d8f88371058bdf99fef77c3dfe749654033
 cpu = "x86-64-v2"
 ram_mib = 1536
 disk_mib = 4096
-boot_mib = 78
+boot_mib = 70
 drivers = "sha256:7f5cd70e88962874ef8a0bb5143f617b54bdd77d874ce0a09e68911a0957eb28"
 
 [hardware.alma10]
