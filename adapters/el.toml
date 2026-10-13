@@ -251,3 +251,39 @@ set = true
 [kv."/etc/my.cnf"]
 keys = ["old_passwords"]
 set = false
+
+[hardware]
+# SPEC "Hardware preflight": what a machine needs before a route boots it into each release, checked before the first
+# hop touches anything. `boot` is the firmware wend's kernel steps are proven to carry a real machine through (the VM
+# tier boots its guests by BIOS); a UEFI machine is refused until a UEFI replay proves it. Per release: `cpu`, the
+# release's x86-64 level (its glibc refuses anything lower: "Fatal glibc error: CPU does not support x86-64-v2");
+# `ram_mib`, the release's documented minimum (Red Hat's "RHEL technology capabilities and limits"); `disk_mib`, an estimate of the free space on / the hop needs (its downloads and the release's
+# growth; walking a copy of the machine first measures the real need); `drivers`, the sha256 of
+# adapters/drivers/el/<release>.txt, the PCI disk controllers and network cards the release's kernel drives
+# (tools/hwdata.py builds it from the kernel package itself).
+boot = ["bios"]
+
+[hardware.centos6]
+cpu = "x86-64"
+ram_mib = 1024
+disk_mib = 2048
+drivers = "sha256:e28f49c288939833f28c345a9dd94c3177ef767b0c7d765e5778113c026f1b71"
+
+[hardware.centos7]
+cpu = "x86-64"
+ram_mib = 1024
+disk_mib = 2048
+drivers = "sha256:d757df3fcde59d846e471d0c2908a8286e3ed699c652f48008094dbbbe1d9fdd"
+
+[hardware.alma9]
+cpu = "x86-64-v2"
+ram_mib = 1536
+disk_mib = 4096
+drivers = "sha256:7ad88dca445a1c7e16b20214c2f7a0aba3d81b23bcd709d693d97bd96c6c9bd5"
+
+[hardware.alma10]
+cpu = "x86-64-v3"
+ram_mib = 2048
+disk_mib = 4096
+drivers = "sha256:005a32d661cc840df36d29089b8b0ca4010f4e388c50976d68366e2e03734c82"
+note = "AlmaLinux 10 has a separate x86_64_v2 build for older CPUs, but no wend route lands on it yet, so an x86-64-v2 machine stops at alma9"

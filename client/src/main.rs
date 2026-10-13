@@ -8,6 +8,7 @@ mod backend;
 mod canon;
 mod check;
 mod fetch;
+mod hardware;
 mod hop;
 mod sandbox;
 mod walk;
@@ -33,6 +34,12 @@ wend: walk a proven upgrade route on a machine. No model, no network beyond your
                                     and the walk stops. FILE has [roles] (shell checks), like a CI box file.
                                     --run: the repos only serve what that run's pinned sources vouch for,
                                     from the cache, each --source (laid out host/path), then the origin
+  wend facts                        what preflight reads about this machine: CPU level features, firmware, memory,
+                                    free disk, PCI devices and their drivers (JSON)
+  wend preflight ROUTE [--facts FILE] [--json]
+                                    can this machine land on every release the route boots it into? CPU level,
+                                    firmware, memory, disk, and the disk and network drivers each release's
+                                    kernel has. Says the furthest release it can land on; exits 1 short of the end
   wend parity INPUT.json            machine output for client/parity.py (the Python engine must agree)
 
 Options: --atlas DIR (default: the current directory, laid out like the wend repo).
@@ -52,6 +59,14 @@ fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let root = PathBuf::from(opt(&mut args, "--atlas").unwrap_or_else(|| ".".into()));
     let fired = opt(&mut args, "--fired");
+    let facts = opt(&mut args, "--facts");
+    let as_json = match args.iter().position(|a| a == "--json") {
+        Some(i) => {
+            args.remove(i);
+            true
+        }
+        None => false,
+    };
     let walk_opts = WalkOpts {
         root: opt(&mut args, "--root"),
         checks: opt(&mut args, "--checks"),
@@ -78,6 +93,11 @@ fn main() -> ExitCode {
         println!("{USAGE}");
         return ExitCode::SUCCESS;
     }
+    if cmd == "facts" && args.len() == 1 {
+        // no atlas needed: run it on the machine, judge the file anywhere (`preflight --facts`)
+        println!("{}", serde_json::to_string_pretty(&hardware::gather()).unwrap());
+        return ExitCode::SUCCESS;
+    }
     let atlas = match Atlas::load(&root) {
         Ok(a) => a,
         Err(e) => {
@@ -92,6 +112,7 @@ fn main() -> ExitCode {
         ("hop", [route, hop]) => cmd_hop(&atlas, route, hop, fired.as_deref()),
         ("parity", [input]) => cmd_parity(&atlas, input),
         ("walk", [route]) => cmd_walk(&atlas, route, &walk_opts),
+        ("preflight", [route]) => cmd_preflight(&atlas, route, facts.as_deref(), as_json),
         _ => Err(format!(
             "unknown command or wrong arguments: {}\n\n{USAGE}",
             args.join(" ")
@@ -138,6 +159,24 @@ fn cmd_check(atlas: &Atlas) -> Result<bool, String> {
         }
     );
     Ok(errs.is_empty())
+}
+
+/// SPEC "Hardware preflight". Reads this machine, or a facts file (`wend facts` on the machine, judged elsewhere).
+fn cmd_preflight(atlas: &Atlas, route: &str, facts: Option<&str>, as_json: bool) -> Result<bool, String> {
+    preflight(atlas)?;
+    let (_, r) = atlas.route(route)?;
+    let f = match facts {
+        Some(p) => serde_json::from_str(&std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?)
+            .map_err(|e| format!("{p}: {e}"))?,
+        None => hardware::gather(),
+    };
+    let v = hardware::evaluate(atlas, r, &f)?;
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+    } else {
+        print!("{}", hardware::report(&v));
+    }
+    Ok(v["ok"] == true)
 }
 
 fn cmd_ids(atlas: &Atlas) -> Result<bool, String> {

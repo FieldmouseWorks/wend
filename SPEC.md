@@ -716,6 +716,7 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `[pm_options.<name>]` | `path`, `content`. apt: only `overwrite-conflicting-files`; rpm: none |
 | `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear. Whatever a `pattern`, `list` or `table` says, every value a fix passes through one must also match `[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*`: no quote, whitespace, backslash, glob character, `%`, any of `` $`;&|<>(){}~ ``, or leading `-` |
 | `[checks]` | universal health checks: `pkgdb` is a command; `current` and `services` are described in words and built by the harness from the box |
+| `[hardware]` | required: what a machine needs before a route boots it into each release (see "Hardware preflight"): `boot`, and a table per release a route can boot into |
 | `[box]` | how to build a fresh box of this family (rpm: `seeds`, the packages to bootstrap a root from; apt: optional `debootstrap_script`, a script name under the host's `/usr/share/debootstrap/scripts`) |
 
 These checks narrow what an adapter lets fixes do (ops, force flags, argument values). They don't judge an adapter's
@@ -795,6 +796,59 @@ harness, not to fixes, because the release's own tools can't carry them up the l
 The VM tier proves these steps (it reboots where `reboot` says, and after every hop). A client running a route on a
 real machine must reboot at the same points; the client doesn't walk a live root yet, so it doesn't split a hop.
 The checker holds `reboot` to `"before-post"` and the kernel steps to lists of commands.
+
+## Hardware preflight
+
+A route that reaches its last hop on a CI box can still brick a real machine halfway: the new release's glibc
+refuses the CPU, or its kernel no longer drives the disk controller the root is on. So before the first hop touches
+anything, a client walking a real machine checks that the machine can land on every release the route boots it into,
+and refuses, or names the furthest release it can land on, when it can't. `wend preflight ROUTE` does this.
+
+**Facts.** `wend facts` reads the machine (schema `wend.hardware/0`): the kernel's architecture (`uname -m`) and
+the userland's word size (the ELF class of `/bin/sh`); the CPU's x86-64 level features from CPUID itself, never
+`/proc/cpuinfo`, since an old kernel doesn't name features newer than itself (2.6.18 has no `avx2`), and the XSAVE
+bit, not OSXSAVE, since the old kernel may not have turned it on and the new one will; CPUID's hypervisor bit;
+firmware (`/sys/firmware/efi` means UEFI); `MemTotal`; free space on `/`; and every PCI device's slot, class, the
+modalias its ID files make (`pci:v…d…sv…sd…bc…sc…i…`) and the driver bound to it now. Facts can be gathered on the
+machine and judged anywhere (`--facts FILE`).
+
+**Requirements.** The adapter's `[hardware]` table holds them. `boot` lists the firmware modes wend's kernel steps
+are proven to carry a machine through; the VM tier boots its guests by BIOS, so every adapter says `["bios"]` until a
+UEFI replay proves more. Every release a route can boot into (the ladder after its first release, less `may_skip`)
+has a `[hardware.<release>]` table:
+
+| key | meaning |
+|---|---|
+| `cpu` | `x86-64`, `x86-64-v2` or `x86-64-v3`: the release's level. The levels are the psABI's: v2 adds `cx16`, `lahf_lm`, `popcnt`, `sse3`, `sse4_1`, `sse4_2`, `ssse3`; v3 adds `avx`, `avx2`, `bmi1`, `bmi2`, `f16c`, `fma`, `lzcnt`, `movbe`, `xsave`. EL9 is v2 and EL10 v3 (its glibc stops a lower CPU at the first exec: "Fatal glibc error: CPU does not support x86-64-v2") |
+| `ram_mib` | optional: the release's documented minimum memory without a desktop. Absent when the vendor publishes none (Ubuntu 16.04 to 22.04) |
+| `disk_mib` | an estimate of the free space on `/` the hop needs: its downloads and the release's growth. Walking a copy of the machine first (open question 12) measures the real need |
+| `drivers` | the sha256 of `adapters/drivers/<family>/<release>.txt`, the release's driver table |
+| `note` | optional: said when the CPU check fails (where a machine that falls short can go instead) |
+
+**Driver tables.** A driver table lists every `alias=pci:` pattern of the storage and network modules (the kernel's
+`drivers/` `scsi`, `ata`, `nvme`, `block`, `md`, `message`, `ide`, `net` and `virtio`) in the kernel package the
+hop installs, one `<module> <pattern>` per line, plus `builtin <module>` for those built in whose aliases an old
+kernel doesn't record (before Linux 5.2). `tools/hwdata.py` makes it from the package itself: it finds the kernel in
+the release's index, checks the download against the index's sha256, and reads each module's `.modinfo` section.
+The table's header names the packages and their hashes. Built from the release's own kernel, not from a vendor's
+list of what it deprecated: AlmaLinux 9's kernel still drives the LSI SAS1078 (PERC 6) and SAS2008 HBAs that RHEL
+dropped in 8, and RHEL 7 dropped `sym53c8xx` (the LSI 53C895A that QEMU emulates and the VM tier gives etch), which
+every Debian kernel keeps. The checker holds each table to its pinned hash.
+
+**The verdict.** Refused outright, before the first hop, when the architecture isn't the route's (`amd64` and
+`x86_64` are one) or the userland is 32-bit, or the firmware isn't in `boot`. Otherwise each hop fails when the CPU
+is below the release's level, memory below `ram_mib`, free space below `disk_mib`, or a disk controller or network
+card (PCI class `0x01` or `0x02`) bound to a driver now matches no pattern in the release's table and its driver
+isn't listed as built in: the machine would come up without it. The same device with no driver bound is a note, not
+a failure. The machine can land on the last release before the first failing hop. The client says which, says how to
+raise a VM's CPU model when the CPU is the problem and CPUID's hypervisor bit is set (most old fleets are VMs now),
+and exits non-zero unless the whole route fits. A client walking a booted machine must run preflight first and stop
+before the first hop that fails it. A walk may stop early at the release preflight names; it never starts a hop it
+fails.
+
+Not checked yet: `/boot`'s size (CentOS 5's 200 MB is proven by the VM tier), drivers from outside the release's
+kernel (ELRepo's `kmod-*`, DKMS), firmware files a driver loads, and the kernel flavour a machine runs (Ubuntu's
+tables are `linux-image-generic` with its extra modules; a machine on `linux-virtual` has fewer).
 
 ## VM tier (maintainer-run)
 
