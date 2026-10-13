@@ -10,10 +10,13 @@ resolves after the reboot. Noble no longer ships resolvconf at all.
 Typed, not a guess: ifupdown says which interfaces it has up and reads its own configuration. The op runs on the
 live box before the hop's reboot, so `ifquery --state` lists each interface ifup brought up, as `PHYSICAL=LOGICAL`
 (the stanza it used: `auto eth0=work` and mapping patterns name the logical stanza there, not the physical one), and
-`ifquery -- PHYSICAL=LOGICAL` prints that stanza's options as ifupdown parsed them (sourced files, comments,
-continuations, misplaced options, inherits) without running mapping scripts; a configuration ifupdown can't read
-fails the step. An interface whose ifup failed, or that was never brought up, isn't in the state; a box with no
-state (a chroot) carries nothing.
+`ifquery --no-mappings -- PHYSICAL=LOGICAL` prints that stanza's options as ifupdown parsed them (sourced files,
+comments, continuations, misplaced options, inherits); without --no-mappings ifquery would run the admin's mapping
+scripts again from the logical name and could land on another stanza. A configuration ifupdown can't read fails the
+step. What the state says is what the op carries, in bring-up order: an interface whose ifup failed (even one family
+of it), that was never brought up, or that was taken down by hand isn't in it; one brought up by hand is; a box with
+no state (a chroot, or a live box whose /run/network/ifstate is gone) carries nothing. Options given with `ifup -o`
+aren't in the configuration, so the configuration's value is carried.
 ifquery prints `name: value` per option, and an option given twice is one value joined by a newline (config.c), so a
 line without ": " (or with whitespace in its name) continues the value before it, and a value is split into words
 as a hook's shell splits it (space, tab, newline; nothing else). Each option name is turned into the name ifupdown's
@@ -81,7 +84,7 @@ def server(iface, key, v):
 
 def plan():
     names = []
-    for n in ifquery("--state"):
+    for n in reversed(ifquery("--state")):  # ifupdown lists its state last first; this is bring-up order
         phys, eq, logical = n.partition("=")
         if not eq or not re.fullmatch(NAME, phys) or not re.fullmatch(NAME, logical):
             fail(f"ifquery's state has {n!r}, which isn't 'interface=stanza'")
@@ -90,7 +93,7 @@ def plan():
     dns, search = [], []
     for iface in names:
         options, spelled = [], {}
-        for line in ifquery("--", iface):
+        for line in ifquery("--no-mappings", "--", iface):
             key, sep, value = line.partition(": ")
             if sep and key and not re.search(SPACE, key):
                 options.append([key, value])

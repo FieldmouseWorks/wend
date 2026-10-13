@@ -485,9 +485,13 @@ resolved's stub, and resolved has no upstream server, so nothing resolves after 
 resolute in a VM, wend#13). noble ships no resolvconf at all. ifupdown says which interfaces it has up and reads its
 own configuration. The op runs on the live box before the hop's reboot: `ifquery --state` lists each interface ifup
 brought up as `PHYSICAL=LOGICAL`, the stanza it used (`auto eth0=work` and mapping patterns name the logical stanza),
-and `ifquery -- PHYSICAL=LOGICAL` prints that stanza's options as ifupdown parsed them (inet and inet6 stanzas,
-`inherits`, sourced files) without running mapping scripts. An interface whose ifup failed, or that was never brought
-up, isn't in the state, and a box with no state (a chroot replay) carries nothing. A configuration ifupdown can't read fails the step, and so does a state line whose interface or stanza name starts with `-` or holds anything
+and `ifquery --no-mappings -- PHYSICAL=LOGICAL` prints that stanza's options as ifupdown parsed them (inet and inet6
+stanzas, `inherits`, sourced files); without `--no-mappings` ifquery would run the admin's `mapping` scripts again
+from the logical name and could land on another stanza. What the state says is what the op carries, in bring-up
+order: an interface whose ifup failed (even for one address family), that was never brought up, or that was taken
+down by hand isn't in it, and one brought up by hand is. A box with no state (a chroot replay, or a live box whose
+`/run/network/ifstate` is gone) carries nothing. A value given with `ifup -o` isn't in the configuration, so the
+configuration's value is carried. A configuration ifupdown can't read fails the step, and so does a state line whose interface or stanza name starts with `-` or holds anything
 but `[A-Za-z0-9_.:@-]`. ifquery prints `name: value` per option, and ifupdown keeps an option given twice as one value
 joined by a newline, so a line without `: ` (or with whitespace in its name) continues the value before it (only a
 newline ends a line), and a value is split into words as a hook's shell splits it (space, tab, newline). Each option

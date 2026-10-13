@@ -24,12 +24,12 @@ if q.get("fail"):
 a = sys.argv[1:]
 if a == ["--state"]:
     print("\\n".join(q["state"]))
-elif a[:1] == ["--"] and "raw" in q:
+elif a[:2] == ["--no-mappings", "--"] and "raw" in q:
     sys.stdout.buffer.write(bytes.fromhex(q["raw"]))
-elif a[:1] == ["--"]:
-    print("\\n".join(q["ifaces"].get(a[1], [])))
+elif a[:2] == ["--no-mappings", "--"]:
+    print("\\n".join(q["ifaces"].get(a[2], [])))
 else:
-    sys.stderr.write("ifquery: an interface name not after --\\n"); sys.exit(1)
+    sys.stderr.write("ifquery: not --no-mappings -- NAME\\n"); sys.exit(1)
 """
 ETH0 = ["address: 10.0.2.20", "netmask: 255.255.255.0", "gateway: 10.0.2.2", "dns-nameservers: 10.0.2.3",
         "dns-search: example.org"]
@@ -105,6 +105,11 @@ msg, out, left, mode = run({"state": ["lo=lo", "eth0=work"], "ifaces": {"lo=lo":
 case("an interface up from a mapped stanza (auto eth0=work) is read from that stanza", msg is None and out == WANT)
 msg, out, left, mode = run({"state": ["lo=lo"], "ifaces": {"lo=lo": [], "eth0=eth0": ETH0}})
 case("an interface ifupdown doesn't have up is left out", msg is None and out is None and left == [])
+msg, out, left, mode = run({"state": ["eth1=eth1", "eth0=eth0", "lo=lo"],
+                            "ifaces": {"lo=lo": [], "eth0=eth0": ["dns-nameservers: 10.6.6.6"],
+                                       "eth1=eth1": ["dns-nameservers: 10.6.6.7"]}})
+case("servers in bring-up order (ifupdown lists its state last first)",
+     msg is None and out is not None and "DNS=10.6.6.6 10.6.6.7\n" in out)
 msg, out, left, mode = run(with_eth0([x.replace("dns-nameservers", "dns-nameserver") for x in ETH0]))
 case("dns-nameserver (singular), which resolvconf's and ifupdown's hooks read too", msg is None and out == WANT)
 msg, out, left, mode = run(with_eth0([x.replace("dns-nameservers", "d.ns_Nameservers") for x in ETH0]))
