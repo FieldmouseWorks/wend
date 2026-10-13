@@ -235,11 +235,18 @@ fn boot_dir(dir: &Path, running: &str) -> Value {
         "rescue_default": match fs::read_to_string(dir.join("grub/grub.conf")) {
             Ok(g) => grub_default_is_rescue(&g),
             Err(e) => e.kind() != std::io::ErrorKind::NotFound,
-        } || grub2_default_may_be_rescue(
-            read_maybe(&dir.parent().unwrap_or(Path::new("/")).join("etc/default/grub")),
-            read_maybe(&dir.join("grub2/grubenv")),
-            &files,
-        ),
+        } || grub2_default_may_be_rescue(&|rel: &str| {
+            let path = if let Some(r) = rel.strip_prefix("/etc/") {
+                dir.parent().unwrap_or(Path::new("/")).join("etc").join(r)
+            } else {
+                dir.join(rel)
+            };
+            match fs::read_to_string(&path) {
+                Ok(t) => Ok(Some(t)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(_) => Err(()),
+            }
+        }, &efi_grub_cfgs(dir)),
     })
 }
 
@@ -274,20 +281,35 @@ fn grub_default_is_rescue(conf: &str) -> bool {
     true
 }
 
-/// A file's text, `Some("")` when it isn't there, `None` when it is but can't be read.
-fn read_maybe(path: &Path) -> Option<String> {
-    match fs::read_to_string(path) {
-        Ok(t) => Some(t),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(String::new()),
-        Err(_) => None,
-    }
+/// GRUB 2's `grub.cfg` under the ESP (`efi/EFI/<vendor>/grub.cfg`, relative to /boot), sorted as a shell glob is.
+fn efi_grub_cfgs(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = fs::read_dir(dir.join("efi/EFI"))
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| e.file_name().to_str().map(|n| format!("efi/EFI/{n}/grub.cfg")))
+                .filter(|c| dir.join(c).is_file())
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    v
 }
 
-/// Whether GRUB 2's default may boot the rescue image, read as EL's kernel_before reads it: `GRUB_DEFAULT` (quotes
-/// dropped) is anything but `saved`, unset or 0; or grubenv's `saved_entry` names the rescue image, or anything that
-/// isn't an installed kernel's menu title (EL7: `... (<version>) ...`) or BLS id (`<machine id>-<version>`), such as a
-/// menu number. No saved entry boots entry 0, the newest kernel. A file that can't be read may say either.
-fn grub2_default_may_be_rescue(default_grub: Option<String>, grubenv: Option<String>, files: &[(String, u64)]) -> bool {
+/// Whether GRUB 2's default may boot the rescue image, resolved as EL's kernel_before resolves it. `read` takes a
+/// path relative to /boot (or `/etc/default/grub`) and gives its text, `Ok(None)` when it isn't there, `Err` when it
+/// can't be read (which may say anything). No GRUB 2 (no grub.cfg or grubenv): not this bootloader's question. The
+/// default is grubenv's `saved_entry` when `GRUB_DEFAULT` (quotes dropped) is `saved` or unset, the first menu entry
+/// when that is empty or `GRUB_DEFAULT` is 0, else `GRUB_DEFAULT` itself. It is a BLS id when
+/// `loader/entries/<it>.conf` exists (its `linux` line), else a menu title in grub.cfg (the `linux`, `linux16` or
+/// `linuxefi` line under `menuentry '<it>'`). Only a default resolving to a kernel other than the rescue image's
+/// lets the rescue image go: a menu number, a submenu path, or a title nothing has may be it.
+fn grub2_default_may_be_rescue(read: &dyn Fn(&str) -> Result<Option<String>, ()>, efi_cfgs: &[String]) -> bool {
+    let mut cfgs = vec!["grub2/grub.cfg".to_string()];
+    cfgs.extend(efi_cfgs.iter().cloned());
+    let present = |p: &str| !matches!(read(p), Ok(None));
+    if !cfgs.iter().any(|c| present(c)) && !present("grub2/grubenv") {
+        return false;
+    }
     let last = |text: &str, key: &str| {
         text.lines()
             .filter_map(|l| l.strip_prefix(key))
@@ -295,22 +317,63 @@ fn grub2_default_may_be_rescue(default_grub: Option<String>, grubenv: Option<Str
             .map(str::to_string)
             .unwrap_or_default()
     };
-    let Some(dg) = default_grub else { return true };
-    match last(&dg, "GRUB_DEFAULT=").replace(['"', '\''], "").as_str() {
-        "" | "saved" => {
-            let Some(env) = grubenv else { return true };
-            let s = last(&env, "saved_entry=");
-            !s.is_empty()
-                && (s.contains("0-rescue")
-                    || !files
-                        .iter()
-                        .filter_map(|(n, _)| n.strip_prefix("vmlinuz-"))
-                        .filter(|v| !v.starts_with("0-rescue-"))
-                        .any(|v| s.contains(&format!("({v})")) || s.ends_with(&format!("-{v}"))))
+    let (Ok(dg), Ok(env)) = (read("/etc/default/grub"), read("grub2/grubenv")) else {
+        return true;
+    };
+    let e = last(&dg.unwrap_or_default(), "GRUB_DEFAULT=").replace(['"', '\'', '\r'], "");
+    let s = last(&env.unwrap_or_default(), "saved_entry=");
+    let t = match e.as_str() {
+        "" | "saved" if !s.is_empty() => s,
+        "" | "saved" | "0" => "#0".to_string(),
+        _ => e,
+    };
+    let mut x = String::new();
+    match if t.contains('/') {
+        Ok(None)
+    } else {
+        read(&format!("loader/entries/{t}.conf"))
+    } {
+        Err(()) => return true,
+        Ok(Some(bls)) => {
+            if let Some(l) = bls.lines().find(|l| l.split_whitespace().next() == Some("linux")) {
+                x = l.split_whitespace().nth(1).unwrap_or("").to_string();
+            }
         }
-        "0" => false,
-        _ => true,
+        Ok(None) => {
+            for c in &cfgs {
+                let text = match read(c) {
+                    Err(()) => return true,
+                    Ok(None) => continue,
+                    Ok(Some(text)) => text,
+                };
+                let (mut n, mut m) = (0, false);
+                for line in text.lines() {
+                    let f: Vec<&str> = line.split_whitespace().collect();
+                    let entry = line.trim_start_matches([' ', '\t']);
+                    if entry
+                        .strip_prefix("menuentry")
+                        .is_some_and(|r| r.starts_with([' ', '\t']))
+                    {
+                        n += 1;
+                        m = if t == "#0" {
+                            n == 1
+                        } else {
+                            line.split_once('\'')
+                                .is_some_and(|(_, r)| r.split_once('\'').map_or("", |(title, _)| title) == t)
+                        };
+                    } else if m && matches!(f.first(), Some(&("linux" | "linux16" | "linuxefi"))) {
+                        x = f.get(1).unwrap_or(&"").to_string();
+                        break;
+                    }
+                }
+                if !x.is_empty() {
+                    break;
+                }
+            }
+        }
     }
+    let k = x.rsplit_once("/vmlinuz-").map_or(x.as_str(), |(_, k)| k);
+    k.is_empty() || k.contains('/') || k.starts_with("0-rescue-")
 }
 
 /// The MiB the rescue image (`vmlinuz-0-rescue-<machine id>`, its `.hmac` and initramfs) takes, rounded up.
@@ -1715,37 +1778,63 @@ mod tests {
         // no default= line: GRUB boots entry 0
         let first = "title rescue\n\tkernel /vmlinuz-0-rescue-ab ro\ntitle CentOS\n\tkernel /vmlinuz-2.6.32 ro\n";
         assert!(grub_default_is_rescue(first));
-        // GRUB 2: grubenv's saved_entry, or GRUB_DEFAULT when it isn't `saved`
-        let files = vec![
-            ("vmlinuz-3.10.0-1160.el7.x86_64".to_string(), 1),
-            ("vmlinuz-0-rescue-ab".to_string(), 1),
-            ("vmlinuz-3.10.0-957.el7.x86_64".to_string(), 1),
-        ];
-        let g2 = |d: &str, e: &str| grub2_default_may_be_rescue(Some(d.into()), Some(e.into()), &files);
-        let saved = "GRUB_DEFAULT=saved\n";
+        // GRUB 2: the default resolved against grub.cfg or a BLS entry
+        let cfg = "### BEGIN /etc/grub.d/10_linux ###\n\
+            menuentry 'CentOS Linux (3.10.0-1160.el7.x86_64) 7 (Core)' --class centos {\n\
+            \tlinux16 /vmlinuz-3.10.0-1160.el7.x86_64 root=/dev/sda1 ro\n}\n\
+            menuentry 'CentOS Linux (0-rescue-ab) 7 (Core)' --class centos {\n\
+            \tlinux16 /vmlinuz-0-rescue-ab root=/dev/sda1 ro\n}\n\
+            menuentry 'Recovery-3.10.0-1160.el7.x86_64' {\n\tlinux16 /boot/vmlinuz-0-rescue-ab ro\n}\n";
+        let g2 = |dg: Option<&str>, env: Option<&str>, with_cfg: bool| {
+            let files: std::collections::HashMap<&str, String> = [
+                ("/etc/default/grub", dg.map(|d| format!("{d}\n"))),
+                ("grub2/grubenv", env.map(|e| format!("saved_entry={e}\n"))),
+                ("grub2/grub.cfg", with_cfg.then(|| cfg.to_string())),
+                (
+                    "loader/entries/abc-5.14.0-570.el9.x86_64.conf",
+                    Some("title x\nlinux /vmlinuz-5.14.0-570.el9.x86_64\n".into()),
+                ),
+                (
+                    "loader/entries/abc-0-rescue.conf",
+                    Some("title r\nlinux /vmlinuz-0-rescue-ab\n".into()),
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(k, v)| v.map(|v| (k, v)))
+            .collect();
+            grub2_default_may_be_rescue(&|p: &str| Ok(files.get(p).cloned()), &[])
+        };
+        let saved = Some("GRUB_DEFAULT=saved");
+        let el7 = Some("CentOS Linux (3.10.0-1160.el7.x86_64) 7 (Core)");
+        assert!(!g2(saved, el7, true));
+        assert!(g2(saved, Some("CentOS Linux (0-rescue-ab) 7 (Core)"), true));
+        // a custom title on the rescue image, a menu number, a title nothing has
+        assert!(g2(saved, Some("Recovery-3.10.0-1160.el7.x86_64"), true));
+        assert!(g2(saved, Some("2"), true));
+        assert!(g2(saved, Some("CentOS Linux (3.10.0-862.el7.x86_64) 7 (Core)"), true));
+        // no saved entry, or GRUB_DEFAULT=0: the first menu entry
+        assert!(!g2(saved, Some(""), true));
         assert!(!g2(
-            saved,
-            "saved_entry=CentOS Linux (3.10.0-1160.el7.x86_64) 7 (Core)\n"
+            Some("GRUB_DEFAULT=\"0\""),
+            Some("Recovery-3.10.0-1160.el7.x86_64"),
+            true
         ));
-        assert!(g2(saved, "saved_entry=CentOS Linux (0-rescue-ab) 7 (Core)\n"));
-        // a renamed entry, or one whose kernel is gone, may be the rescue image
-        assert!(g2(saved, "saved_entry=Rescue\n"));
-        assert!(g2(saved, "saved_entry=CentOS Linux (3.10.0-862.el7.x86_64) 7 (Core)\n"));
-        // updated but not rebooted: the saved default is an installed kernel that isn't running, which
-        // kernel_before keeps, so the rescue image goes
         assert!(!g2(
-            saved,
-            "saved_entry=CentOS Linux (3.10.0-957.el7.x86_64) 7 (Core)\n"
+            Some("GRUB_DEFAULT='CentOS Linux (3.10.0-1160.el7.x86_64) 7 (Core)'"),
+            None,
+            true
         ));
-        assert!(g2(saved, "saved_entry=2\n"));
-        assert!(g2(saved, "saved_entry=1>2\n"));
-        assert!(!g2(saved, "saved_entry=3f2a9c-3.10.0-1160.el7.x86_64\n"));
-        assert!(!g2(saved, "saved_entry=\n"));
-        assert!(!g2("", ""));
-        assert!(!g2("GRUB_DEFAULT=\"0\"\n", "saved_entry=2\n"));
-        assert!(g2("GRUB_DEFAULT='2'\n", ""));
-        assert!(grub2_default_may_be_rescue(Some(saved.into()), None, &files));
-        assert!(grub2_default_may_be_rescue(None, Some(String::new()), &files));
+        assert!(!g2(Some("GRUB_DEFAULT=saved\r"), el7, true));
+        // BLS ids (EL8 on)
+        assert!(!g2(saved, Some("abc-5.14.0-570.el9.x86_64"), false));
+        assert!(g2(saved, Some("abc-0-rescue"), false));
+        // no GRUB 2 at all: GRUB legacy's question, answered above
+        assert!(!g2(None, None, false));
+        // unreadable
+        assert!(grub2_default_may_be_rescue(
+            &|p: &str| if p == "grub2/grubenv" { Err(()) } else { Ok(None) },
+            &[]
+        ));
     }
 
     /// Debian's apt autoremoves no kernel before jessie's: on the hop to jessie every kernel is still there.
