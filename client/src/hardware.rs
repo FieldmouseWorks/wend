@@ -248,8 +248,9 @@ const KERNEL_FILE_PREFIXES: &[&str] = &[
     "retpoline-",
 ];
 
-/// Whether GRUB legacy's default entry boots the rescue image: EL's kernel_before keeps it then. Read as its awk
-/// reads grub.conf: `default=` and `title` at the line's start, entry 0 when nothing says otherwise.
+/// Whether GRUB legacy's default entry may boot the rescue image: EL's kernel_before keeps it then. Read as its awk
+/// reads grub.conf: `default=` and `title` at the line's start, entry 0 when nothing says otherwise; a default it
+/// can't resolve to a kernel (`default=saved`, an entry that isn't there) may be the rescue image.
 fn grub_default_is_rescue(conf: &str) -> bool {
     let mut default = Some(0);
     let mut title: Option<usize> = None;
@@ -262,7 +263,7 @@ fn grub_default_is_rescue(conf: &str) -> bool {
             return line.contains("vmlinuz-0-rescue-");
         }
     }
-    false
+    true
 }
 
 /// The MiB the rescue image (`vmlinuz-0-rescue-<machine id>`, its `.hmac` and initramfs) takes, rounded up.
@@ -1662,7 +1663,8 @@ mod tests {
             "default=1\ntitle CentOS\n\tkernel /vmlinuz-2.6.32 ro\ntitle rescue\n\tkernel /vmlinuz-0-rescue-ab ro\n";
         assert!(grub_default_is_rescue(conf));
         assert!(!grub_default_is_rescue(&conf.replace("default=1", "default=0")));
-        assert!(!grub_default_is_rescue(&conf.replace("default=1", "default=saved")));
+        assert!(grub_default_is_rescue(&conf.replace("default=1", "default=saved")));
+        assert!(grub_default_is_rescue(&conf.replace("default=1", "default=5")));
         // no default= line: GRUB boots entry 0
         let first = "title rescue\n\tkernel /vmlinuz-0-rescue-ab ro\ntitle CentOS\n\tkernel /vmlinuz-2.6.32 ro\n";
         assert!(grub_default_is_rescue(first));
