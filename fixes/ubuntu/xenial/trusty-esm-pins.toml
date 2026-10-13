@@ -2,7 +2,11 @@
 schema = "wend.fix/0"
 family = "ubuntu"
 hop = "xenial"
-when = { file-contains = { path = "/etc/apt/preferences.d/ubuntu-esm-infra-trusty", text = "Pin-Priority: never" } }
+# u-a-t 19.7's name, and the one earlier u-a-t releases used (19.7's postinst renames it); the op takes both
+when = { any = [
+  { file-contains = { path = "/etc/apt/preferences.d/ubuntu-esm-infra-trusty", text = "Pin-Priority: never" } },
+  { file-contains = { path = "/etc/apt/preferences.d/ubuntu-esm-trusty", text = "Pin-Priority: never" } },
+] }
 restores = ["pkgdb"]
 adds = []
 

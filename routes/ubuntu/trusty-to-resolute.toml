@@ -40,5 +40,5 @@ id = "sha256:0fd0f96ea39f6ebd216caef47c8bba4a059fe1054b76f41697f8c1245608dc59"
 name = "jammy-ifupdown-dns-to-resolved"
 
 [[fixes]]
-id = "sha256:b3112f4708515f991fa742b15f6495ecd29712e6aaa2dd600219872bfee4e711"
+id = "sha256:3652e40d8bbaffe17276a73c2f699db7c260784461f4a8a1ac90ba30b9f8a8d7"
 name = "trusty-esm-pins"
