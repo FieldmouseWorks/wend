@@ -2,10 +2,9 @@
 behaviour: every package of a kernel older than the running one goes, in one dpkg call, and nothing else does (the
 running kernel, a newer one not booted yet, the metapackages, linux-firmware, removed-but-configured leftovers, an
 old kernel on hold or one dpkg would refuse to purge because something still depends on it, and every kernel while
-the running one isn't Ubuntu's), and a kept kernel stops the hop when the release's kernel (its boot_mib) won't fit
-beside it. It runs
-the PR's own adapter text, so the gate's schema job (which judges a PR with the base branch's tools and never runs the
-PR's code) doesn't run it: `wend check` and the client job do.
+the running one isn't Ubuntu's), and the hop stops when what stays leaves too little room for the release's kernel
+(its boot_mib). It runs the PR's own adapter text, so the gate's schema job (which judges a PR with the base branch's
+tools and never runs the PR's code) doesn't run it: `wend check` and the client job do.
 python3 tools/test_kernels_apt.py"""
 import os
 import subprocess
@@ -37,9 +36,11 @@ if not step.startswith(GUARD):
 T13 = [q for q in OLD if "3.13.0-24" in q]
 BOOT = int(a["hardware"]["bionic"]["boot_mib"])  # the room bionic's kernel needs, filled in as {boot_mib}
 for name, running, refuse, held, free, dpkg_rc, want_rc, want in (
-        ("kernels older than the running one go, with all their packages", "4.4.0-21-generic", [], [], 1, 0, 0,
+        ("kernels older than the running one go, with all their packages", "4.4.0-21-generic", [], [], BOOT, 0, 0,
          sorted(OLD)),
-        ("nothing older than the running kernel: dpkg isn't called", "3.13.0-24-generic", [], [], 1, 0, 0, None),
+        ("nothing older than the running kernel: dpkg isn't called", "3.13.0-24-generic", [], [], BOOT, 0, 0, None),
+        ("nothing kept, but a newer kernel waiting for a reboot leaves too little room: the hop stops",
+         "4.4.0-21-generic", [], [], BOOT - 1, 0, 1, sorted(OLD)),
         ("a metapackage still on an old kernel: that kernel stays, the others go", "4.4.0-21-generic",
          ["linux-image-3.13.0-24-generic"], [], BOOT, 0, 0, sorted(set(OLD) - set(T13))),
         ("an old kernel on hold stays, the others go", "4.4.0-21-generic", [], ["linux-headers-3.13.0-24"], BOOT, 0, 0,
