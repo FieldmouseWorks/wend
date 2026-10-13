@@ -408,6 +408,30 @@ See `adapters/el.toml`. Notes that matter:
 - `current`: the service binaries come from a package whose dist tag is the running major (`[._]el$MAJOR`).
 - Boxes can name roles that start daemons in `isolate`; those checks run in a network namespace of their own.
 
+#### Add-on repositories
+
+Most real EL machines carry more than the vendor's repos: EPEL above all (EPEL's own mirror statistics are how the
+stuck EL7 fleet is counted). The adapter's `[addons.<name>]` tables name the ones the harness knows how to carry:
+`marker` (the package whose presence means the box uses it, EPEL: `epel-release`), `vendor` (the rpm `VENDOR` of its
+packages, EPEL: `Fedora Project`) and `repos` (release id = host/path, through the shim, like `releases.*.repos`).
+
+- Every hop's `set_release` appends `{addons}`: for each add-on with a repo for the release being entered, the add-on's
+  repo goes into the harness's repo file as `[<release>-<name>]` if its marker is installed at that moment. A box
+  without the marker never sees the repo: no hop's repos or `rpm.transit`'s `new` repos ship a marker, so no fix can
+  pull add-on packages onto it. On a box with the marker, a fix's `install` can pull any of the add-on's packages
+  (unsigned, like the vendor's: `gpgcheck=0` behind the shim).
+- `rpm.transit` lets the add-on vendor's packages through its refusal when the marker is installed, and then requires,
+  before it changes anything, that each of them has a package of the same name in the release's repos or the
+  release's add-on repos (renames don't count). Anything without one is named and the op fails: a fix on the same hop
+  has to remove or replace it first, the same way it would for the vendor's own dropped packages. After the download
+  it checks again that each of them was actually fetched.
+- The add-on repos' metadata is pinned in the hop's `sources` like the vendor's (repo ids `<release>-<name>` and, for
+  `rpm.transit`'s `new`, the same `<release>-<name>`). The transit's `old` repos (used only to install EL7's dnf)
+  get no add-on repos.
+- An adapter with `[addons]` must put `{addons}` in `hop.set_release`, or it would carry an add-on through the
+  transit and then drop it from the hops after.
+- Software Collections, vendor SIG repos and other third-party repos are not add-ons: `rpm.transit` still refuses them.
+
 ## Op reference
 
 Every op below is defined by its arguments, its effect, and when it fails. A failing step fails the hop, and the
@@ -519,18 +543,24 @@ reach: rpm 4.11 (EL7) can't install packages with rich dependencies. Effect: eve
 `release`'s version of it, installed by `release`'s own rpm; `reinstall` is installed again (the release's first
 distro-sync erases some packages the box needs); the package manager is `release`'s dnf with a `yum` front end;
 nothing from older releases is left in the rpm database (their files stay, unowned). So it refuses, before
-touching anything, if any installed package (gpg-pubkey aside) has a vendor other than `remove`'s, or is one of that
+touching anything, if any installed package (gpg-pubkey aside) has a vendor other than `remove`'s (or an installed
+add-on's: see "Add-on repositories", which also says what it then requires of those packages), or is one of that
 vendor's add-on repos (EL: names starting `rh-`, `devtoolset-` or `centos-release-`, except the base
-`centos-release-notes`; that is, Software Collections and SIGs). EPEL, vendor, SIG and locally built RPMs would
-otherwise lose their package records. Fails if the box doesn't say it is `release` afterwards.
+`centos-release-notes`; that is, Software Collections and SIGs). EPEL without its marker, vendor, SIG and locally
+built RPMs would otherwise lose their package records. The vendor is read last in each line, so a vendor string
+containing the separator can't pass as another package's. Fails if the box doesn't say it is `release` afterwards.
 A fix with a non-empty `reinstall` must pass the install rule. Reference, with work dir `/var/lib/wend/boot`, and
 repos kept in private `reposdir`s so `/etc/yum.repos.d` stays the harness's:
 1. Write a repo file for `transit.from`'s repos plus `transit.extra_repos` (`old`), and one for `release`'s repos
-   (`new`).
+   (`new`). Installed add-ons add their repo for `release` to `new`. Before that, if any add-on vendor's package is
+   installed: read the package names in the primary metadata (gzip or xz) of `release`'s repos and its add-on repos,
+   and refuse, naming them, if any of those packages has no package of the same name there. Only the work dir has
+   changed at that point.
 2. `yum install dnf` from `old` (CentOS 7 extras ships an EL7 dnf).
 3. With that dnf and `new`: `--downloadonly` distro-sync into the work dir, `--releasever` = the release's major,
    `--allowerasing --setopt=best=False` (EL7's dnf 4.0 has no `--nobest`), no weak deps, no protected packages. Its exit code is ignored; the step fails if
-   `rpm`, `rpm-libs`, `glibc`, `dnf` or `python3-dnf` wasn't downloaded. Also fetch `transit.release_package` from
+   `rpm`, `rpm-libs`, `glibc`, `dnf` or `python3-dnf` wasn't downloaded, or any of the add-on packages wasn't (as
+   with the first five, EL7's dnf is still installed when that fails). Also fetch `transit.release_package` from
    `PKGLIST(BASE)` if the sync didn't.
 4. `rpm -e dnf` (the EL7 one), rebuild the database, and unpack every downloaded package into a staging dir.
 5. `rpm -e --nodeps --noscripts {remove}` (the old release package), then run the staged rpm through the staged
@@ -623,10 +653,17 @@ wins, and an empty value or `none`, `off`, `no`, `false`, `null` (any case) mean
 systemd: the old packages' scriptlets delete their runlevel links when the new ones replace them, and systemd's
 presets leave most units disabled (on EL, every one but a few base services). Effect: `/var/lib/wend/sysv-enabled`
 lists, one per line, every service with an `S` link in the default runlevel (`initdefault` in `/etc/inittab`, else 3).
+On a box that already runs systemd (`systemctl` exists), it lists the box's enabled service units instead, by unit
+name (`systemctl list-unit-files --type=service --state=enabled`): EL7 boxes need it before the EL8 pass-through,
+whose distro-sync erases module-stream packages (httpd, mariadb, php) along with their enablement links.
 Only the first record is kept: if the file exists, it is left as it is, so it always holds the box's own state. It
 is only allowed in `pre` (after the upgrade the links are gone), and it stays on the box afterwards: a later route
-that uses `service.enable` reads the same record, which is what the box ran under SysV, not what it runs today. That
-is why `service.enable` also accepts a `like` service that is enabled now. Fails if `/etc/rc.d/rc<L>.d` doesn't exist. Reference: `ls /etc/rc.d/rc$L.d | sed -n 's/^S[0-9][0-9]//p' | sort -u`.
+that uses `service.enable` reads the same record, which is what the box ran at its first record, not what it runs
+today. That is why `service.enable` also accepts a `like` service that is enabled now. SysV: fails if
+`/etc/rc.d/rc<L>.d` doesn't exist; reference `ls /etc/rc.d/rc$L.d | sed -n 's/^S[0-9][0-9]//p' | sort -u`. systemd:
+fails if the list is empty (nothing is recorded then); reference `systemctl list-unit-files --type=service
+--state=enabled --no-legend`, first column without `.service`. On EL7, SysV-script services enabled with chkconfig
+(`network`) are not in that list.
 
 **`service.enable`** `unit` (`[A-Za-z0-9][A-Za-z0-9_.-]*`, so `NetworkManager`), `like` (a list of the same, at least one). Enables `unit` at
 boot if any service in `like` started at boot: it is in the SysV record, or `systemctl is-enabled` says `enabled`
@@ -710,6 +747,7 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `[kv."<path>"]` | the files `kv.*` may touch: `keys` (the only keys it may set or unset; never one that grants access) and `set` (false for files with sections, which only take `kv.unset`) |
 | `force` | required: the `force-remove` flags this family allows, a subset of its backend's (apt: `depends`, `remove-essential`; rpm: `depends`, `scripts`) |
 | `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`), and optional `releases.<id>.upgrade` like rpm's. rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader"). apt: a start release may have `releases.<id>.install` too |
+| `[addons.<name>]` | rpm: `marker`, `vendor`, `repos` (see "Add-on repositories") |
 | `[mirror]` | rpm: `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts) |
 | `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), `autoremove`, `obsolete`, `installed_list`, `kernel_newest` (the VM tier's newest-kernel query); apt also `apt_conf`, the harness's apt config |
 | `[predicates]` | `installed`, `file`, `file-contains`, `mysql-option` command templates |
@@ -727,7 +765,8 @@ other brace syntax is touched, so `${...}` and `%{...}` pass through). Values fo
 
 - apt: `{mirror}` (archive or current, see `[releases]`), `{release}`.
 - rpm: `{release}`, `{major}`, `{shim}`, `{repofile}` (a yum repo file with one section `[<release>-<name>]` per repo,
-  `baseurl=SHIM/<repo>/`, `gpgcheck=0`, newlines as `\n` for printf), `{pm}` (`dnf` if installed, else `yum`),
+  `baseurl=SHIM/<repo>/`, `gpgcheck=0`, newlines as `\n` for printf), `{addons}` (the shell that appends each installed
+  add-on's repo for the release to `/etc/yum.repos.d/ladder.repo`; `true` if none has one), `{pm}` (`dnf` if installed, else `yum`),
   `{clean_repos}` (`CLEAN_REPOS`), `{dnf_opts}` (`--releasever={major} --allowerasing
   --setopt=install_weak_deps=False --setopt=protected_packages=`).
 

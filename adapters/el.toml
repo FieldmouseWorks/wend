@@ -111,10 +111,20 @@ upgrade = ["rm -f /etc/dnf/modules.d/*.module",
            "{clean_repos}; O='{dnf_opts} --nobest --setopt=module_platform_id=platform:el10 --setopt=retries=10'; dnf -y $O --downloadonly distro-sync >/tmp/wend-dl.log 2>&1 || dnf -y $O --downloadonly distro-sync",
            "dnf -y {dnf_opts} --nobest --setopt=module_platform_id=platform:el10 distro-sync"]
 
+# Add-on repositories (SPEC "Add-on repositories"). A box with the marker package installed keeps the add-on along the
+# route: every hop's repo file also lists the add-on's repo for the release it enters, and rpm.transit lets the
+# vendor's packages through, but only if each one has a package of the same name in the next release's repos or
+# add-on repos. Anything else still stops the transit before it changes the box, so a fix has to remove or replace it.
+# EPEL's own key and repo files come with epel-release; the harness owns /etc/yum.repos.d like the vendor's.
+[addons.epel]
+marker = "epel-release"
+vendor = "Fedora Project"
+repos = { centos7 = "archives.fedoraproject.org/pub/archive/epel/7/x86_64", alma8 = "dl.fedoraproject.org/pub/epel/8/Everything/x86_64", alma9 = "dl.fedoraproject.org/pub/epel/9/Everything/x86_64", alma10 = "dl.fedoraproject.org/pub/epel/10/Everything/x86_64" }
+
 [hop]
 # What the harness runs for every hop, around the fixes' pre and post steps. {placeholders} come from the release
 # being entered (SPEC.md, "Adapter format"); fixes can't change any of it.
-set_release = "rm -f /etc/yum.repos.d/*.repo && printf '{repofile}' > /etc/yum.repos.d/ladder.repo"
+set_release = "rm -f /etc/yum.repos.d/*.repo && printf '{repofile}' > /etc/yum.repos.d/ladder.repo && {addons}"
 refresh = "rm -f /var/lib/rpm/__db.*; rpm --rebuilddb && {pm} clean all"
 upgrade = ["{pm} -y distro-sync"]
 verify = "grep -q 'release {major}[. ]' /etc/redhat-release"
@@ -225,7 +235,7 @@ summary = "PHP 8.1+ throws from mysqli where it used to warn; restore the old de
 args = {}
 
 [ops."service.record"]
-summary = "write down which SysV services start in the default runlevel, before the hop that brings systemd (the first record is kept)"
+summary = "write down which services start at boot (SysV: the default runlevel's, before the hop that brings systemd; a systemd box: its enabled service units), before a hop that loses them; the first record is kept"
 args = {}
 
 [ops."net.ifcfg-to-keyfile"]

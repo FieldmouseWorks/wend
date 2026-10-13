@@ -17,7 +17,8 @@ import threading
 import urllib.error
 import urllib.request
 
-ALLOWED = {"vault.centos.org", "repo.almalinux.org", "vault.almalinux.org", "archives.fedoraproject.org"}
+ALLOWED = {"vault.centos.org", "repo.almalinux.org", "vault.almalinux.org", "archives.fedoraproject.org",
+           "dl.fedoraproject.org"}
 CACHE = sys.argv[2] if len(sys.argv) > 2 else "/var/tmp/wend/mirror"
 
 
