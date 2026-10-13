@@ -103,6 +103,10 @@ repos = { baseos = "repo.almalinux.org/almalinux/8/BaseOS/x86_64/os", appstream 
 from = "centos7"
 extra_repos = { extras = "vault.centos.org/7.9.2009/extras/x86_64" }
 release_package = "almalinux-release"
+# The EL8 kernel the transit installs stays in /boot beside the running EL7 one and EL9's until the next hop's
+# kernel_before removes it; the hardware preflight counts it on the hop that runs the transit. Measured on the VM
+# tier (4.18.0-553 after the alma9 hop: 34.5 MiB with a host-only initramfs) plus 3 MiB for an LVM or md root.
+boot_mib = 38
 
 [releases.alma9]
 major = 9
@@ -125,14 +129,14 @@ repos = { baseos = "repo.almalinux.org/almalinux/9/BaseOS/x86_64/os", appstream 
 # listener re-executes /usr/sbin/sshd for every new connection, and an older listener can't hand its state to a newer
 # binary, so once rpm.transit or the transaction replaces it nobody can log in. A watcher outside the namespace
 # restarts it as soon as the transaction swaps the binary (once sshd -t accepts it), so ssh stays usable even if the
-# transaction then stalls; and it is restarted after rpm.transit and after the transaction (its config checked with
-# sshd -t first), and that step fails unless a new connection gets the ssh greeting. Only `systemctl
-# is-active` saying inactive, failed or unknown skips it (a socket-activated sshd execs per connection already); a
-# bus error counts as running, so it fails the step rather than skipping it. A chroot box runs no sshd and skips
-# both.
+# transaction then stalls (each try also goes to the journal, `journalctl -t wend`, for a run cut off mid-step); and
+# it is restarted after rpm.transit and after the transaction (its config checked with sshd -t first), and that step
+# fails unless a new connection gets the ssh greeting. Only `systemctl is-active` saying inactive, failed or unknown
+# skips it (a socket-activated sshd execs per connection already); a bus error counts as running, so it fails the step
+# rather than skipping it. A chroot box runs no sshd and skips both.
 upgrade = ["[ / -ef /proc/1/root ] && [ -d /run/systemd/system ] && case $(systemctl is-active sshd 2>/dev/null) in inactive|failed|unknown) false;; esac || { echo \"sshd: not a running systemd service on this root, left alone\"; exit 0; }; /usr/sbin/sshd -t || { echo \"the installed sshd rejects its configuration: restarting it would lock ssh out\"; exit 1; }; timeout 120 systemctl restart sshd || { echo \"systemctl restart sshd failed or hung\"; exit 1; }; L=$(/usr/sbin/sshd -T 2>/dev/null | awk '$1 == \"listenaddress\" {print $2}'); A=$(echo \"$L\" | grep -v '^\\[' | head -n1); [ -n \"$A\" ] || A=$(echo \"$L\" | head -n1); H=${A%:*}; P=${A##*:}; H=${H#[}; H=${H%]}; case \"$H\" in 0.0.0.0|\"\") H=127.0.0.1;; ::) H=::1;; esac; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do timeout 5 bash -c \"exec 3<>/dev/tcp/$H/${P:-22} && head -c 4 <&3\" 2>/dev/null | grep -q '^SSH-' && { echo \"sshd restarted: a new connection to $H port ${P:-22} gets its greeting\"; exit 0; }; sleep 1; done; echo \"sshd restarted, but a new connection to $H port ${P:-22} gets no greeting\"; exit 1",
            "rm -f /etc/dnf/modules.d/*.module",
-           "{clean_repos}; set -- dnf -y {dnf_opts} --nobest --setopt=module_platform_id=platform:el9 distro-sync; [ / -ef /proc/1/root ] && [ -d /run/systemd/system ] || { SYSTEMD_OFFLINE=1 \"$@\"; exit; }; W=; case $(systemctl is-active sshd 2>/dev/null) in inactive|failed|unknown) ;; *) ( I=$(stat -c %i /usr/sbin/sshd); while sleep 10; do J=$(stat -c %i /usr/sbin/sshd 2>/dev/null) || continue; [ \"$J\" = \"$I\" ] && continue; /usr/sbin/sshd -t >/dev/null 2>&1 || continue; timeout 60 systemctl restart sshd && I=$J && echo \"sshd was replaced mid-transaction: restarted it\"; done ) & W=$!;; esac; unshare -m sh -c 'mount --make-rprivate / && mount -t tmpfs -o mode=755 wend-offline /run/systemd && { [ ! -d /run/dbus ] || mount -t tmpfs -o mode=755 wend-offline /run/dbus; } && exec \"$@\"' sh env SYSTEMD_OFFLINE=1 \"$@\"; rc=$?; [ -z \"$W\" ] || kill $W; exit $rc",
+           "{clean_repos}; set -- dnf -y {dnf_opts} --nobest --setopt=module_platform_id=platform:el9 distro-sync; [ / -ef /proc/1/root ] && [ -d /run/systemd/system ] || { SYSTEMD_OFFLINE=1 \"$@\"; exit; }; W=; case $(systemctl is-active sshd 2>/dev/null) in inactive|failed|unknown) ;; *) ( I=$(stat -c %i /usr/sbin/sshd); while sleep 10; do J=$(stat -c %i /usr/sbin/sshd 2>/dev/null) || continue; [ \"$J\" = \"$I\" ] && continue; /usr/sbin/sshd -t >/dev/null 2>&1 || continue; M=\"sshd was replaced mid-transaction: restarted it\"; timeout 60 systemctl restart sshd && I=$J || M=\"sshd was replaced mid-transaction: restarting it failed, retrying\"; echo \"$M\"; logger -t wend \"$M\" 2>/dev/null; done ) & W=$!;; esac; unshare -m sh -c 'mount --make-rprivate / && mount -t tmpfs -o mode=755 wend-offline /run/systemd && { [ ! -d /run/dbus ] || mount -t tmpfs -o mode=755 wend-offline /run/dbus; } && exec \"$@\"' sh env SYSTEMD_OFFLINE=1 \"$@\"; rc=$?; [ -z \"$W\" ] || kill $W; exit $rc",
            "/usr/sbin/ldconfig; rm -f /var/lib/rpm/__db.*; rpmdb --rebuilddb && rpm -q rpm",
            "[ / -ef /proc/1/root ] && [ -d /run/systemd/system ] && case $(systemctl is-active sshd 2>/dev/null) in inactive|failed|unknown) false;; esac || { echo \"sshd: not a running systemd service on this root, left alone\"; exit 0; }; /usr/sbin/sshd -t || { echo \"the installed sshd rejects its configuration: restarting it would lock ssh out\"; exit 1; }; timeout 120 systemctl restart sshd || { echo \"systemctl restart sshd failed or hung\"; exit 1; }; L=$(/usr/sbin/sshd -T 2>/dev/null | awk '$1 == \"listenaddress\" {print $2}'); A=$(echo \"$L\" | grep -v '^\\[' | head -n1); [ -n \"$A\" ] || A=$(echo \"$L\" | head -n1); H=${A%:*}; P=${A##*:}; H=${H#[}; H=${H%]}; case \"$H\" in 0.0.0.0|\"\") H=127.0.0.1;; ::) H=::1;; esac; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do timeout 5 bash -c \"exec 3<>/dev/tcp/$H/${P:-22} && head -c 4 <&3\" 2>/dev/null | grep -q '^SSH-' && { echo \"sshd restarted: a new connection to $H port ${P:-22} gets its greeting\"; exit 0; }; sleep 1; done; echo \"sshd restarted, but a new connection to $H port ${P:-22} gets no greeting\"; exit 1"]
 
@@ -421,6 +425,10 @@ args = { release = { enum = ["alma8"] }, remove = { pattern = "[A-Za-z0-9][A-Za-
 [ops."rpm.swap-release"]
 summary = "replace the release package by hand (rpm -e --nodeps old, rpm -i new from the hop's repo): epochs and vendor switches block yum"
 args = { remove = { pattern = "[a-z0-9][a-z0-9.+-]*-release" }, install = { pattern = "[a-z0-9][a-z0-9.+-]*-release" } }
+
+[ops."rpm.drop-unneeded"]
+summary = "remove these packages together (rpm -e) only if nothing else installed requires them; otherwise keep them all and say what needs them"
+args = { packages = { list = "[A-Za-z0-9][A-Za-z0-9._+-]*", min = 1 } }
 
 [ops."rpm.adopt-rpmnew"]
 summary = "where rpm left the packaged config as FILE.rpmnew, use it; the old file is kept under /var/lib/wend/saved"
