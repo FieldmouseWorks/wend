@@ -50,12 +50,13 @@ wend preflight centos5-to-alma10 --facts box.json --json    # ...and judge it an
 ```
 
 SPEC "Hardware preflight". It reads the CPU's x86-64 level features from CPUID (not `/proc/cpuinfo`, which an old
-kernel under-reports), the firmware, memory, free space on `/`, and every PCI device's IDs and bound driver, and holds
-them to the adapter's `[hardware]` table: each release's CPU level, memory and disk, and its driver table
-(`adapters/drivers/<family>/<release>.txt`, made by `tools/hwdata.py` from the release's own kernel package). It
-prints each hop, what would break there (a CPU the release's glibc refuses, a disk controller or network card in use
-that the release's kernel no longer drives), and the furthest release the machine can land on, and exits 1 unless
-the whole route fits. On a VM whose CPU model is too low it says how to raise it. It touches nothing.
+kernel under-reports), the firmware, memory, free space on `/`, what `/boot` holds, the modules the machine
+blacklists, and every PCI device's IDs, bound driver and whether that driver comes from outside the kernel (ELRepo's
+kmods, DKMS), and holds them to the adapter's `[hardware]` table: each release's CPU level, memory, disk and `/boot`
+footprint, and its driver table (`adapters/drivers/<family>/<release>.txt`, made by `tools/hwdata.py` from the
+release's own kernel package). It prints each hop, what would break there (a CPU the release's glibc refuses, a disk
+controller or network card in use that the release's kernel doesn't drive, a kernel that won't fit in `/boot` beside
+the ones the hop keeps), and the furthest release the machine can land on, and exits 1 unless the whole route fits. On a VM whose CPU model is too low it says how to raise it. It touches nothing.
 
 ### Verified fetching (`--run`)
 

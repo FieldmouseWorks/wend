@@ -38,7 +38,8 @@ ADAPTER_KEYS = {"schema", "family", "backend", "release_file", "ladder", "may_sk
                 "managed", "force", "releases", "mirror", "hop", "predicates", "pm_options", "box", "ops", "checks",
                 "kv", "hardware"}
 CPU_LEVELS = ("x86-64", "x86-64-v2", "x86-64-v3")  # SPEC "Hardware preflight"
-HARDWARE_KEYS = {"cpu", "ram_mib", "disk_mib", "drivers", "note"}
+HARDWARE_KEYS = {"cpu", "ram_mib", "disk_mib", "boot_mib", "drivers", "note"}
+OLD_KERNELS = ("running", "autoremove")
 
 
 def family(pkg):
@@ -133,8 +134,10 @@ def check_hardware(a, where):
     boot = h.get("boot")
     if not (isinstance(boot, list) and boot and all(b in ("bios", "uefi") for b in boot)):
         errs.append(f"{where}: hardware.boot must list the firmware modes proven, from bios and uefi")
+    if h.get("old_kernels") not in OLD_KERNELS:
+        errs.append(f"{where}: hardware.old_kernels must be one of {list(OLD_KERNELS)}")
     for r, t in h.items():
-        if r == "boot":
+        if r in ("boot", "old_kernels"):
             continue
         if not isinstance(a.get("ladder"), list) or r not in a["ladder"] or not isinstance(t, dict):
             errs.append(f"{where}: hardware.{r} must be a table named for a release on the ladder")
@@ -143,8 +146,8 @@ def check_hardware(a, where):
             errs.append(f"{where}: hardware.{r} has unknown keys {sorted(set(t) - HARDWARE_KEYS)}")
         if t.get("cpu") not in CPU_LEVELS:
             errs.append(f"{where}: hardware.{r}.cpu must be one of {list(CPU_LEVELS)}")
-        for k in ("ram_mib", "disk_mib"):  # ram_mib is optional: some releases publish no minimum
-            if (k == "disk_mib" or k in t) and (type(t.get(k)) is not int or t[k] < 1):
+        for k in ("ram_mib", "disk_mib", "boot_mib"):  # ram_mib is optional: some releases publish no minimum
+            if (k != "ram_mib" or k in t) and (type(t.get(k)) is not int or t[k] < 1):
                 errs.append(f"{where}: hardware.{r}.{k} must be a whole number of MiB")
         if not isinstance(t.get("drivers"), str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", t["drivers"]):
             errs.append(f"{where}: hardware.{r}.drivers must be the sha256 of its driver table")
@@ -161,7 +164,7 @@ def driver_table_errors(fam, a, where):
     errs = []
     h = a.get("hardware")
     for r, t in (h if isinstance(h, dict) else {}).items():
-        if r == "boot" or not isinstance(t, dict) or not isinstance(t.get("drivers"), str):
+        if r in ("boot", "old_kernels") or not isinstance(t, dict) or not isinstance(t.get("drivers"), str):
             continue
         p = f"{ROOT}/adapters/drivers/{fam}/{r}.txt"
         got = "sha256:" + hashlib.sha256(open(p, "rb").read()).hexdigest() if os.path.isfile(p) else None

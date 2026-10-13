@@ -17,7 +17,7 @@ const LEVEL_FEATURES: [&[&str]; 2] = [
 
 // ---------- gathering facts ----------
 
-/// What preflight knows about this machine (schema `wend.hardware/0`). Read from the hardware and /proc and /sys,
+/// What preflight knows about this machine (schema `wend.hardware/1`). Read from the hardware and /proc and /sys,
 /// never from the distro's tools, so it reads the same on CentOS 5 as on trixie.
 pub fn gather() -> Value {
     let mut uts: libc::utsname = unsafe { std::mem::zeroed() };
@@ -36,6 +36,10 @@ pub fn gather() -> Value {
         Some(2) => json!(64),
         _ => Value::Null,
     };
+    // SAFETY: uname NUL-terminates release.
+    let release = unsafe { std::ffi::CStr::from_ptr(uts.release.as_ptr()) }
+        .to_string_lossy()
+        .into_owned();
     let cpuinfo = fs::read_to_string("/proc/cpuinfo").unwrap_or_default();
     let model = cpuinfo
         .lines()
@@ -54,15 +58,156 @@ pub fn gather() -> Value {
         })
         .map_or(Value::Null, |kb| json!(kb / 1024));
     json!({
-        "schema": "wend.hardware/0",
+        "schema": "wend.hardware/1",
         "arch": arch,
         "userland_bits": userland,
         "cpu": {"model": model, "features": features, "hypervisor": hypervisor},
         "boot": if Path::new("/sys/firmware/efi").exists() { "uefi" } else { "bios" },
         "ram_mib": ram_mib,
         "free_mib": free_mib("/").map_or(Value::Null, |m| json!(m)),
-        "pci": pci_devices(Path::new("/sys/bus/pci/devices")),
+        "boot_dir": boot_dir(Path::new("/boot"), &release),
+        "blacklisted": blacklisted(),
+        "pci": pci_devices(Path::new("/sys/bus/pci/devices"), &module_files(&release)),
     })
+}
+
+/// What `/boot` holds: whether it is a filesystem of its own, its size and free space as a package install sees them
+/// (reserved blocks left out), and each kernel in it with the space its files take (`vmlinuz`, its initramfs and
+/// kdump image, `System.map`, `config` and the rest named for its version; rescue images count as other files).
+fn boot_dir(dir: &Path, running: &str) -> Value {
+    use std::os::unix::fs::MetadataExt;
+    let dev = |p: &Path| fs::metadata(p).ok().map(|m| m.dev());
+    let separate = matches!((dev(dir), dev(Path::new("/"))), (Some(a), Some(b)) if a != b);
+    let (total, free) = statvfs_mib(&dir.to_string_lossy()).unwrap_or((0, 0));
+    let mut files: Vec<(String, u64)> = vec![];
+    if let Ok(rd) = fs::read_dir(dir) {
+        for e in rd.flatten() {
+            if let (Ok(m), Some(n)) = (e.metadata(), e.file_name().to_str()) {
+                if m.is_file() {
+                    files.push((n.to_string(), m.len()));
+                }
+            }
+        }
+    }
+    json!({
+        "separate": separate,
+        "total_mib": total,
+        "free_mib": free,
+        "kernels": boot_kernels(&files, running),
+    })
+}
+
+const KERNEL_FILE_PREFIXES: &[&str] = &[
+    "vmlinuz-",
+    ".vmlinuz-",
+    "initrd-",
+    "initramfs-",
+    "initrd.img-",
+    "System.map-",
+    "config-",
+    "symvers-",
+    "abi-",
+    "retpoline-",
+];
+
+/// The kernels among `/boot`'s files (name, bytes): one per `vmlinuz-<version>`, rescue images aside, each with the
+/// MiB its files take, rounded up.
+fn boot_kernels(files: &[(String, u64)], running: &str) -> Vec<Value> {
+    let mut versions: Vec<&str> = files
+        .iter()
+        .filter_map(|(n, _)| n.strip_prefix("vmlinuz-"))
+        .filter(|v| !v.is_empty() && !v.starts_with("0-rescue-"))
+        .collect();
+    versions.sort();
+    let mut bytes = vec![0u64; versions.len()];
+    for (n, size) in files {
+        let Some(rest) = KERNEL_FILE_PREFIXES.iter().find_map(|p| n.strip_prefix(p)) else {
+            continue;
+        };
+        // the longest version the name is for: `initramfs-<v>.img`, `initrd-<v>kdump.img`, `.vmlinuz-<v>.hmac`
+        let owner = versions
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| {
+                rest.strip_prefix(**v)
+                    .is_some_and(|t| t.is_empty() || t.starts_with('.') || t.starts_with("kdump"))
+            })
+            .max_by_key(|(_, v)| v.len());
+        if let Some((i, _)) = owner {
+            bytes[i] += size;
+        }
+    }
+    versions
+        .iter()
+        .zip(bytes)
+        .map(|(v, b)| json!({"version": v, "mib": b.div_ceil(1024 * 1024), "running": *v == running}))
+        .collect()
+}
+
+/// Modules the machine keeps from loading by their aliases (`blacklist m`, or `install m /bin/false`): a release's
+/// driver for a device doesn't count when it is one of these.
+fn blacklisted() -> Vec<String> {
+    let mut confs = vec![std::path::PathBuf::from("/etc/modprobe.conf")];
+    for d in ["/etc/modprobe.d", "/lib/modprobe.d", "/usr/lib/modprobe.d"] {
+        if let Ok(rd) = fs::read_dir(d) {
+            let mut v: Vec<_> = rd.flatten().map(|e| e.path()).collect();
+            v.sort();
+            confs.extend(v.into_iter().filter(|p| p.extension().is_some_and(|e| e == "conf")));
+        }
+    }
+    let mut out = vec![];
+    for c in confs {
+        out.extend(blacklist_lines(&fs::read_to_string(c).unwrap_or_default()));
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn blacklist_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|l| {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            match w.as_slice() {
+                ["blacklist", m, ..] => Some(m.replace('-', "_")),
+                ["install", m, cmd, ..]
+                    if matches!(*cmd, "/bin/false" | "/bin/true" | "/usr/bin/false" | "/usr/bin/true") =>
+                {
+                    Some(m.replace('-', "_"))
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// Where each of the running kernel's modules lives under /lib/modules/<release> (modules.dep; EL5's names it by
+/// its full path).
+fn module_files(release: &str) -> std::collections::HashMap<String, String> {
+    let base = format!("/lib/modules/{release}/");
+    let mut out = std::collections::HashMap::new();
+    for l in fs::read_to_string(format!("{base}modules.dep"))
+        .unwrap_or_default()
+        .lines()
+    {
+        let Some((path, _)) = l.split_once(':') else { continue };
+        let rel = path.strip_prefix(&base).unwrap_or(path);
+        let name = rel.rsplit('/').next().unwrap_or(rel);
+        let Some(stem) = name.split(".ko").next().filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        out.entry(stem.replace('-', "_")).or_insert_with(|| rel.to_string());
+    }
+    out
+}
+
+/// A module from outside the kernel's own package: the kernel marks one built out of tree (taint `O`, since 3.2),
+/// and kmod packages (ELRepo's `kmod-*`, under `extra/` or `weak-updates/`) and DKMS (`updates/dkms/`) install
+/// theirs outside `kernel/`.
+fn out_of_tree(module: &str, file: Option<&str>) -> bool {
+    let taint = fs::read_to_string(format!("/sys/module/{module}/taint")).unwrap_or_default();
+    taint.contains('O')
+        || file.is_some_and(|f| ["extra/", "updates/", "weak-updates/"].iter().any(|p| f.starts_with(p)))
 }
 
 /// The level features the CPU itself reports (CPUID), not /proc/cpuinfo: an old kernel's cpuinfo doesn't name
@@ -112,18 +257,30 @@ fn cpu_features() -> (Vec<&'static str>, bool) {
 }
 
 fn free_mib(path: &str) -> Option<u64> {
+    statvfs_mib(path).map(|(_, free)| free)
+}
+
+/// A filesystem's size and free space as a package install sees them: root's reserved blocks left out of both.
+fn statvfs_mib(path: &str) -> Option<(u64, u64)> {
     let c = std::ffi::CString::new(path).ok()?;
     let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
     // SAFETY: statvfs fills the struct it is given.
     if unsafe { libc::statvfs(c.as_ptr(), &mut s) } != 0 {
         return None;
     }
-    Some(s.f_bavail as u64 * s.f_frsize as u64 / (1024 * 1024))
+    let (blocks, bfree, bavail, frsize) = (
+        s.f_blocks as u64,
+        s.f_bfree as u64,
+        s.f_bavail as u64,
+        s.f_frsize as u64,
+    );
+    let mib = |b: u64| b * frsize / (1024 * 1024);
+    Some((mib(blocks.saturating_sub(bfree) + bavail), mib(bavail)))
 }
 
 /// Every PCI device: its slot, class, modalias (built from the ID files, which every kernel since 2.6 has, in the
 /// form a kernel's module aliases match) and the driver bound to it now.
-fn pci_devices(dir: &Path) -> Vec<Value> {
+fn pci_devices(dir: &Path, files: &std::collections::HashMap<String, String>) -> Vec<Value> {
     let mut out = vec![];
     let Ok(rd) = fs::read_dir(dir) else { return out };
     let mut slots: Vec<_> = rd.flatten().map(|e| e.path()).collect();
@@ -148,6 +305,8 @@ fn pci_devices(dir: &Path) -> Vec<Value> {
         };
         // a driver's own name isn't always its module's (lenny's ide_pci_generic registers as PCI_IDE)
         let (driver, module) = (link("driver"), link("driver/module"));
+        let file = module.as_ref().and_then(|m| files.get(&m.replace('-', "_")).cloned());
+        let oot = module.as_ref().is_some_and(|m| out_of_tree(m, file.as_deref()));
         out.push(json!({
             "slot": d.file_name().unwrap().to_string_lossy(),
             "class": format!("0x{class:06x}"),
@@ -159,6 +318,8 @@ fn pci_devices(dir: &Path) -> Vec<Value> {
             ),
             "driver": driver,
             "module": module,
+            "module_file": file,
+            "out_of_tree": oot,
         }));
     }
     out
@@ -252,9 +413,24 @@ const CLASS_ONLY_MAYBE: &[&str] = &["ata_generic", "ide_pci_generic", "pata_acpi
 
 /// Facts from a file are held to the shape `gather` writes: a check whose input is missing never passes by default.
 pub fn check_facts(f: &Value) -> Result<(), String> {
-    let bad = |what: &str| Err(format!("not a wend.hardware/0 facts file: {what}"));
-    if f["schema"] != "wend.hardware/0" {
+    let bad = |what: &str| Err(format!("not a wend.hardware/1 facts file: {what}"));
+    if f["schema"] != "wend.hardware/1" {
         return bad("schema");
+    }
+    let b = &f["boot_dir"];
+    if !(b["separate"].is_boolean() && b["total_mib"].is_u64() && b["free_mib"].is_u64())
+        || !b["kernels"].as_array().is_some_and(|a| {
+            a.iter()
+                .all(|k| k["version"].is_string() && k["mib"].is_u64() && k["running"].is_boolean())
+        })
+    {
+        return bad("boot_dir");
+    }
+    if !f["blacklisted"]
+        .as_array()
+        .is_some_and(|a| a.iter().all(Value::is_string))
+    {
+        return bad("blacklisted");
     }
     for k in ["arch", "boot"] {
         if !f[k].is_string() {
@@ -289,11 +465,25 @@ pub fn check_facts(f: &Value) -> Result<(), String> {
             })
             && (d["driver"].is_string() || d["driver"].is_null())
             && (d["module"].is_string() || d["module"].is_null())
+            && (d["module_file"].is_string() || d["module_file"].is_null())
+            && d["out_of_tree"].is_boolean()
     };
     if !f["pci"].as_array().is_some_and(|a| a.iter().all(dev_ok)) {
         return bad("pci");
     }
     Ok(())
+}
+
+/// Where an out-of-tree module came from, by where it is installed.
+fn source_of(file: Option<&str>) -> String {
+    match file {
+        Some(f) if f.contains("/dkms/") || f.starts_with("updates/dkms") => "DKMS".into(),
+        Some(f) if f.starts_with("extra/") || f.starts_with("weak-updates/") => {
+            format!("a kmod package such as ELRepo's ({f})")
+        }
+        Some(f) => format!("outside the kernel package ({f})"),
+        None => "outside the kernel package".into(),
+    }
 }
 
 fn vm_hint(level: usize) -> String {
@@ -365,6 +555,48 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
         None
     };
     let mut blocked = !machine.is_empty();
+
+    // /boot, which a hop fills with its kernel beside the ones it keeps (`hardware.old_kernels`)
+    let keep = get(hw, "old_kernels")
+        .and_then(Value::as_str)
+        .ok_or(format!("adapters/{fam}.toml has no hardware.old_kernels"))?;
+    let bd = &facts["boot_dir"];
+    let separate = bd["separate"] == json!(true);
+    let (total, free) = (
+        bd["total_mib"].as_u64().unwrap_or(0),
+        bd["free_mib"].as_u64().unwrap_or(0),
+    );
+    let box_all: Vec<(String, u64)> = bd["kernels"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|k| {
+            (
+                format!("its kernel {}", k["version"].as_str().unwrap_or("?")),
+                k["mib"].as_u64().unwrap_or(0),
+            )
+        })
+        .collect();
+    let mut box_running: Vec<(String, u64)> = bd["kernels"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|k| k["running"] == json!(true))
+        .map(|k| {
+            (
+                format!("the running kernel {}", k["version"].as_str().unwrap_or("?")),
+                k["mib"].as_u64().unwrap_or(0),
+            )
+        })
+        .collect();
+    if box_running.is_empty() {
+        // the running kernel isn't in /boot: every kernel there may be the one GRUB boots
+        box_running = box_all.clone();
+    }
+    let other = (total.saturating_sub(free)).saturating_sub(box_all.iter().map(|k| k.1).sum());
+    let mut route_kernels: Vec<(String, u64)> = vec![];
+    let blacklist: Vec<String> = crate::atlas::strings(&facts["blacklisted"]).unwrap_or_default();
+
     for h in &hops {
         let mut problems: Vec<String> = vec![];
         let mut notes: Vec<String> = vec![];
@@ -410,6 +642,41 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
                 ));
             }
         }
+        let need_boot = get(t, "boot_mib")
+            .and_then(Value::as_u64)
+            .ok_or(format!("adapters/{fam}.toml has no hardware.{h}.boot_mib"))?;
+        let k = route_kernels.len();
+        let kept: Vec<(String, u64)> = match (keep, k) {
+            ("running", 0) => box_running.clone(),
+            ("running", _) => route_kernels[k - 1..].to_vec(),
+            ("autoremove", 0) => box_all.clone(),
+            ("autoremove", 1) => [box_running.clone(), route_kernels.clone()].concat(),
+            ("autoremove", _) => route_kernels[k - 2..].to_vec(),
+            _ => return Err(format!("adapters/{fam}.toml: unknown hardware.old_kernels {keep:?}")),
+        };
+        let kept_mib: u64 = kept.iter().map(|k| k.1).sum();
+        let room = total.saturating_sub(other + kept_mib);
+        if separate && room < need_boot {
+            let beside = if kept.is_empty() {
+                "nothing".to_string()
+            } else {
+                kept.iter()
+                    .map(|(n, m)| format!("{n} ({m} MiB)"))
+                    .collect::<Vec<_>>()
+                    .join(" and ")
+            };
+            let fix = if k == 0 && keep == "autoremove" && box_all.len() > 1 {
+                "remove the kernels this machine doesn't run, or grow /boot"
+            } else {
+                "grow /boot"
+            };
+            problems.push(format!(
+                "the hop to {h} puts its kernel (about {need_boot} MiB) in /boot beside {beside}; /boot holds \
+                 {total} MiB with {other} MiB of other files, leaving {room}: {fix}"
+            ));
+        }
+        route_kernels.push((format!("{h}'s kernel"), need_boot));
+
         let want = get(t, "drivers").and_then(Value::as_str).unwrap_or("");
         let bytes = atlas
             .drivers
@@ -428,26 +695,66 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
             let alias = d["modalias"].as_str().unwrap_or("");
             let driver = d["driver"].as_str();
             let norm = d["module"].as_str().or(driver).map(|d| d.replace('-', "_"));
-            let hit = table.aliases.iter().find(|(m, p)| {
+            let matches = |m: &String, p: &String| {
                 alias_match(p.as_bytes(), alias.as_bytes())
                     && (!CLASS_ONLY_MAYBE.contains(&m.as_str()) || norm.as_deref() == Some(m.as_str()))
-            });
+            };
+            // a module the machine blacklists won't load for the device (kmod-r8168 blacklists r8169), unless the
+            // machine loads it some other way and it drives the device now
+            let barred_m = |m: &String| blacklist.contains(m) && norm.as_deref() != Some(m.as_str());
+            let hit = table.aliases.iter().find(|(m, p)| matches(m, p) && !barred_m(m));
+            let barred = table
+                .aliases
+                .iter()
+                .find(|(m, p)| matches(m, p) && barred_m(m))
+                .map(|(m, _)| m.clone());
+            let oot = d["out_of_tree"] == json!(true);
             // by name only when the kernel recorded no IDs for that built-in driver (older kernels record
             // none; EL9's built-in virtio_pci has none)
             let built_in = norm
                 .as_ref()
                 .is_some_and(|dr| table.builtin.contains(dr) && !table.aliases.iter().any(|(m, _)| m == dr));
-            if hit.is_some() || built_in {
-                continue;
-            }
             let ids = alias.get(4..23).unwrap_or(alias);
             let slot = d["slot"].as_str().unwrap_or("?");
+            let module = norm.clone().unwrap_or_default();
+            let origin = || source_of(d["module_file"].as_str());
+            if let Some((m, _)) = hit {
+                if oot && driver.is_some() {
+                    notes.push(format!(
+                        "{module}, from {}, drives the {kind} at {slot} now and won't follow to {h}'s kernel; \
+                         that kernel's own {m} takes the device over",
+                        origin()
+                    ));
+                }
+                continue;
+            }
+            if built_in {
+                continue;
+            }
             match driver {
-                Some(dr) => problems.push(format!(
-                    "{h}'s kernel {} has no driver for the {kind} at {slot} ({ids}), which {dr} drives now: \
-                     it would come up without it",
-                    table.kernel
-                )),
+                Some(dr) => problems.push(match (&barred, oot) {
+                    (Some(m), _) => format!(
+                        "{h}'s kernel drives the {kind} at {slot} ({ids}) with {m}, which this machine blacklists \
+                         (/etc/modprobe.d){}: it would come up without it",
+                        if oot {
+                            format!(", and {module}, from {}, which drives it now, won't follow", origin())
+                        } else {
+                            String::new()
+                        }
+                    ),
+                    (None, true) => format!(
+                        "{h}'s kernel {} has no driver for the {kind} at {slot} ({ids}). {module} drives it now, \
+                         but it comes from {}, outside the kernel, and won't follow to {h}'s kernel: it would \
+                         come up without it",
+                        table.kernel,
+                        origin()
+                    ),
+                    (None, false) => format!(
+                        "{h}'s kernel {} has no driver for the {kind} at {slot} ({ids}), which {dr} drives now: \
+                         it would come up without it",
+                        table.kernel
+                    ),
+                }),
                 None => notes.push(format!(
                     "{h}'s kernel has no driver for the unused {kind} at {slot} ({ids})"
                 )),
@@ -543,13 +850,28 @@ mod tests {
     }
 
     fn dev(slot: &str, class: &str, alias: &str, driver: Option<&str>) -> Value {
-        json!({"slot": slot, "class": class, "modalias": alias, "driver": driver})
+        json!({"slot": slot, "class": class, "modalias": alias, "driver": driver, "module_file": null,
+               "out_of_tree": false})
     }
 
     fn machine(features: &[&str], vm: bool, pci: Vec<Value>) -> Value {
-        json!({"schema": "wend.hardware/0", "arch": "x86_64", "userland_bits": 64,
+        json!({"schema": "wend.hardware/1", "arch": "x86_64", "userland_bits": 64,
                "cpu": {"model": "test", "features": features, "hypervisor": vm}, "boot": "bios",
-               "ram_mib": 4096, "free_mib": 20000, "pci": pci})
+               "ram_mib": 4096, "free_mib": 20000,
+               "boot_dir": {"separate": false, "total_mib": 20000, "free_mib": 20000, "kernels": []},
+               "blacklisted": [], "pci": pci})
+    }
+
+    /// A separate /boot of `total` MiB holding `kernels` (version, MiB; the last one running) and 4 MiB of other files.
+    fn with_boot(mut m: Value, total: u64, kernels: &[(&str, u64)]) -> Value {
+        let used: u64 = kernels.iter().map(|k| k.1).sum::<u64>() + 4;
+        let ks: Vec<Value> = kernels
+            .iter()
+            .enumerate()
+            .map(|(i, (v, mib))| json!({"version": v, "mib": mib, "running": i + 1 == kernels.len()}))
+            .collect();
+        m["boot_dir"] = json!({"separate": true, "total_mib": total, "free_mib": total - used, "kernels": ks});
+        m
     }
 
     fn verdict(route: &str, facts: &Value) -> Value {
@@ -692,7 +1014,15 @@ mod tests {
         let mut odd = machine(&full, false, vec![]);
         odd["userland_bits"] = json!(33);
         assert!(evaluate(&a, r, &odd).is_err());
-        for k in ["pci", "ram_mib", "free_mib", "schema", "userland_bits"] {
+        for k in [
+            "pci",
+            "ram_mib",
+            "free_mib",
+            "schema",
+            "userland_bits",
+            "boot_dir",
+            "blacklisted",
+        ] {
             let mut bad = machine(&full, false, vec![]);
             bad.as_object_mut().unwrap().remove(k);
             assert!(evaluate(&a, r, &bad).is_err(), "{k}");
@@ -753,5 +1083,130 @@ mod tests {
         let v = verdict("etch-to-trixie", &small);
         assert_eq!(v["lands_on"], "etch");
         assert!(report(&v).contains("can't take the first hop"));
+    }
+
+    /// A hop puts its kernel in /boot beside the ones it keeps. EL keeps only the running kernel: CentOS 5's 200 MB
+    /// /boot (the VM tier's) takes the whole route, a 100 MB one stops before alma9.
+    #[test]
+    fn a_small_boot_stops_the_route_before_the_kernel_that_doesnt_fit() {
+        let full: Vec<&str> = LEVEL_FEATURES.concat();
+        let c5 = [("2.6.18-398.el5", 6)];
+        let v = verdict("centos5-to-alma10", &with_boot(machine(&full, true, vec![]), 190, &c5));
+        assert_eq!(v["ok"], true, "{v:#}");
+        let v = verdict("centos5-to-alma10", &with_boot(machine(&full, true, vec![]), 95, &c5));
+        assert_eq!(v["lands_on"], "centos7", "{v:#}");
+        let p = v["hops"][2]["problems"][0].as_str().unwrap();
+        assert!(
+            p.contains("/boot") && p.contains("centos7's kernel") && p.contains("grow /boot"),
+            "{p}"
+        );
+        // /boot on / is the disk check's business
+        let mut flat = with_boot(machine(&full, true, vec![]), 95, &c5);
+        flat["boot_dir"]["separate"] = json!(false);
+        assert_eq!(verdict("centos5-to-alma10", &flat)["ok"], true);
+    }
+
+    /// apt keeps every kernel through the first transaction and two afterwards: trusty's 243 MB LVM /boot fills up
+    /// on the way to jammy, and one with five old kernels can't take the first hop until they go.
+    #[test]
+    fn apt_keeps_two_kernels_beside_the_new_one() {
+        let full: Vec<&str> = LEVEL_FEATURES.concat();
+        let one = [("3.13.0-170-generic", 35)];
+        let v = verdict(
+            "trusty-to-resolute",
+            &with_boot(machine(&full, false, vec![]), 230, &one),
+        );
+        assert_eq!(v["lands_on"], "focal", "{v:#}");
+        let p = v["hops"][3]["problems"][0].as_str().unwrap();
+        assert!(
+            p.contains("bionic's kernel (64 MiB) and focal's kernel (88 MiB)"),
+            "{p}"
+        );
+        let five = [
+            ("3.13.0-160-generic", 35),
+            ("3.13.0-162-generic", 35),
+            ("3.13.0-165-generic", 35),
+            ("3.13.0-168-generic", 35),
+            ("3.13.0-170-generic", 35),
+        ];
+        let v = verdict(
+            "trusty-to-resolute",
+            &with_boot(machine(&full, false, vec![]), 230, &five),
+        );
+        assert_eq!(v["lands_on"], "trusty", "{v:#}");
+        assert!(v["hops"][0]["problems"][0]
+            .as_str()
+            .unwrap()
+            .contains("remove the kernels this machine doesn't run"));
+    }
+
+    /// A Realtek NIC on ELRepo's kmod-r8168: every release's own r8169 takes it over, unless the machine blacklists
+    /// r8169 (kmod-r8168 does). A disk on a DKMS driver no release's kernel has stops the route at the first hop.
+    #[test]
+    fn out_of_tree_drivers_and_blacklists() {
+        let full: Vec<&str> = LEVEL_FEATURES.concat();
+        let mut nic = dev(
+            "0000:02:00.0",
+            "0x020000",
+            "pci:v000010ECd00008168sv00001043sd00008432bc02sc00i00",
+            Some("r8168"),
+        );
+        nic["module"] = json!("r8168");
+        nic["module_file"] = json!("extra/r8168/r8168.ko");
+        nic["out_of_tree"] = json!(true);
+        let mut m = machine(&full, false, vec![nic]);
+        let v = verdict("centos5-to-alma10", &m);
+        assert_eq!(v["ok"], true, "{v:#}");
+        let n = v["hops"][0]["notes"][0].as_str().unwrap();
+        assert!(
+            n.contains("ELRepo") && n.contains("own r8169 takes the device over"),
+            "{n}"
+        );
+        m["blacklisted"] = json!(["r8169"]);
+        let v = verdict("centos5-to-alma10", &m);
+        assert_eq!(v["lands_on"], "centos5", "{v:#}");
+        assert!(v["hops"][0]["problems"][0]
+            .as_str()
+            .unwrap()
+            .contains("which this machine blacklists"));
+        let mut disk = dev(
+            "0000:03:00.0",
+            "0x010400",
+            "pci:v0000FFFEd00000001sv00000000sd00000000bc01sc04i00",
+            Some("vendor_raid"),
+        );
+        disk["module_file"] = json!("updates/dkms/vendor_raid.ko");
+        disk["out_of_tree"] = json!(true);
+        let v = verdict("etch-to-trixie", &machine(&full, false, vec![disk]));
+        assert_eq!(v["lands_on"], "etch", "{v:#}");
+        let p = v["hops"][0]["problems"][0].as_str().unwrap();
+        assert!(p.contains("DKMS, outside the kernel"), "{p}");
+    }
+
+    #[test]
+    fn boot_files_and_blacklists_are_read_like_the_tools_write_them() {
+        let f = |n: &str, mib: u64| (n.to_string(), mib * 1024 * 1024);
+        let files = [
+            f("vmlinuz-3.10.0-1160.el7.x86_64", 7),
+            f("initramfs-3.10.0-1160.el7.x86_64.img", 20),
+            f("initramfs-3.10.0-1160.el7.x86_64kdump.img", 15),
+            f(".vmlinuz-3.10.0-1160.el7.x86_64.hmac", 0),
+            f("System.map-3.10.0-1160.el7.x86_64", 3),
+            f("vmlinuz-0-rescue-0123", 7),
+            f("initramfs-0-rescue-0123.img", 50),
+            f("vmlinuz-2.6.32-754.el6.x86_64", 4),
+            f("initramfs-2.6.32-754.el6.x86_64.img", 16),
+        ];
+        let k = boot_kernels(&files, "3.10.0-1160.el7.x86_64");
+        assert_eq!(
+            k,
+            vec![
+                json!({"version": "2.6.32-754.el6.x86_64", "mib": 20, "running": false}),
+                json!({"version": "3.10.0-1160.el7.x86_64", "mib": 45, "running": true}),
+            ]
+        );
+        let b =
+            blacklist_lines("# r8168\nblacklist r8169\ninstall pata-acpi /bin/false\ninstall foo /sbin/modprobe bar\n");
+        assert_eq!(b, vec!["r8169", "pata_acpi"]);
     }
 }
