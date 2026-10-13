@@ -28,6 +28,27 @@ archive = "http://old-releases.ubuntu.com/ubuntu"
 current = "http://archive.ubuntu.com/ubuntu"
 current_from = "trusty"
 
+[releases.trusty]
+# tools/vm.py installs a VM box with trusty's own debian-installer: its netboot kernel and initrd under the mirror.
+# trusty's 3.13 knows virtio, so the machine is the default one. The preseed lines are trusty's installer's own
+# spellings, with no security or updates service. The installer still adds -updates, so tools/vm.py gives it a mirror
+# that offers the release pocket only (release_pocket_only): the box is the release pocket's, as the chroot box is and
+# as the route's hops read. GRUB 2 gets the serial console on the kernel command line.
+install = { netboot = "dists/trusty/main/installer-amd64/current/images/netboot/ubuntu-installer/amd64", release_pocket_only = true, preseed = [
+  "d-i keyboard-configuration/xkb-keymap select us",
+  "d-i console-setup/ask_detect boolean false",
+  "d-i mirror/country string manual",
+  "d-i apt-setup/services-select-ubuntu multiselect",
+  "d-i base-installer/kernel/image string linux-generic",
+  "d-i partman-auto/disk string /dev/vda",
+  "d-i partman-auto/choose_recipe select atomic",
+  "d-i partman/choose_partition select finish",
+  "d-i partman/confirm_nooverwrite boolean true",
+  "d-i grub-installer/bootdev string /dev/vda",
+  "d-i pkgsel/update-policy select none",
+  "d-i pkgsel/upgrade select none",
+], late = "in-target sed -i 's/^GRUB_CMDLINE_LINUX=\"/GRUB_CMDLINE_LINUX=\"console=tty0 console=ttyS0,115200 /' /etc/default/grub; in-target update-grub" }
+
 [releases.xenial]
 # mysql-server-5.7's postinst runs mysql_upgrade against the server it has just started, then stops it, runs an init
 # file through a bootstrap server, and starts it again. On a real machine the init script does all that; in the
@@ -98,6 +119,10 @@ autoremove = "apt-get autoremove --purge"
 after = ["apt-get clean"]
 obsolete = "apt-get update >/dev/null 2>&1; apt list '?obsolete' 2>/dev/null | grep / | cut -d/ -f1"
 installed_list = "dpkg-query -W -f '${Status} ${Package}\\n' | awk '$3==\"installed\"{print $4}'"
+# tools/vm.py: the newest installed kernel, as `uname -r` names it (the package name after linux-image-, compared by its
+# numbers); after every reboot it has to be the running one. The signed image is linux-image-*, the unsigned one
+# linux-image-unsigned-*, which the pattern leaves out.
+kernel_newest = "dpkg-query -W -f '${Status} ${Package}\\n' 'linux-image-[0-9]*' 2>/dev/null | awk '$3 == \"installed\" && $4 !~ /-dbg$/ {v = $4; sub(/^linux-image-/, \"\", v); split(v, n, /[.-]/); k = sprintf(\"%05d%05d%05d%05d\", n[1], n[2], n[3], n[4]); if (k > best) {best = k; out = v}} END {if (out != \"\") print out}'"
 apt_conf = """APT::Get::Assume-Yes "true";
 APT::Get::force-yes "true";
 APT::Get::AllowUnauthenticated "true";
@@ -123,6 +148,14 @@ args = { kind = { enum = ["site", "mod", "conf"] }, name = { pattern = "[A-Za-z0
 [ops."apache.disable"]
 summary = "a2dissite / a2dismod / a2disconf"
 args = { kind = { enum = ["site", "mod", "conf"] }, name = { pattern = "[A-Za-z0-9_.-]+" } }
+
+[ops."net.ifupdown-dns-to-resolved"]
+summary = "give systemd-resolved the resolvers and search domains ifupdown names for the interfaces it has up (ifquery --state; a resolved.conf.d drop-in); fails, changing nothing, on any dns option or value it can't carry"
+args = {}
+
+[ops."apt.drop-esm-pins"]
+summary = "remove the apt pins ubuntu-advantage-tools wrote for the release being left (Pin-Priority: never, which apt 1.2 on rejects); only unowned plain files in u-a-t's exact shape"
+args = { release = { pattern = "[a-z]+" } }
 
 [checks]
 pkgdb = 'test -z "$(dpkg --audit 2>&1)" && apt-get check >/dev/null'

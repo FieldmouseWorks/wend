@@ -43,6 +43,12 @@ jobs:
       - name: the EL op net.ifcfg-to-keyfile, by behaviour (runs the PR's own converter, so not in the gate)
         working-directory: .
         run: python3 -B tools/test_net_ifcfg.py
+      - name: the Ubuntu op net.ifupdown-dns-to-resolved, by behaviour (runs the PR's own converter, so not in the gate)
+        working-directory: .
+        run: python3 -B tools/test_net_ifupdown.py
+      - name: the Ubuntu op apt.drop-esm-pins, by behaviour (runs the PR's own step text, so not in the gate)
+        working-directory: .
+        run: python3 -B tools/test_esm_pins.py
       - name: the atlas passes the client's own check
         working-directory: .
         run: client/target/x86_64-unknown-linux-musl/release/wend check

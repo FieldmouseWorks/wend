@@ -65,7 +65,7 @@ class Apt:
     name = "apt"
     # Everything an adapter may declare for this backend. check.py holds adapters to these lists, so an adapter
     # can narrow what fixes may do but never widen it past what this file implements.
-    OPS = {"apache.enable", "apache.disable", "dpkg.reinstall"}
+    OPS = {"apache.enable", "apache.disable", "dpkg.reinstall", "net.ifupdown-dns-to-resolved", "apt.drop-esm-pins"}
     FORCE = {"depends", "remove-essential"}
     PM_OPTIONS = {"overwrite-conflicting-files"}
 
@@ -113,6 +113,10 @@ class Apt:
             return f"a2{'en' if op == 'apache.enable' else 'dis'}{s['kind']} {s['name']}"
         if op == "dpkg.reinstall":
             return "apt-get install --reinstall --only-upgrade " + " ".join(s["packages"])
+        if op == "net.ifupdown-dns-to-resolved":
+            return here_doc(NET_IFUPDOWN_DNS_TO_RESOLVED)
+        if op == "apt.drop-esm-pins":
+            return ESM_PINS.replace("{release}", s["release"])
         raise ValueError(f"the apt backend has no op {op!r}")
 
 
@@ -588,15 +592,32 @@ class Rpm:
                 f"echo \"{u} enabled, like $W\"")
 
 NET_IFCFG_TO_KEYFILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "net_ifcfg_to_keyfile.py")
+# SPEC.md, apt.drop-esm-pins: ubuntu-advantage-tools' own file names and lines, nothing else
+ESM_PINS = ("for f in /etc/apt/preferences.d/ubuntu-esm-{release} /etc/apt/preferences.d/ubuntu-esm-*-{release}; do "
+            "[ -e \"$f\" ] || [ -L \"$f\" ] || continue; "
+            "if [ -L \"$f\" ] || [ ! -f \"$f\" ]; then echo \"$f: not a plain file, left\"; continue; fi; "
+            "if dpkg -S \"$f\" >/dev/null 2>&1; then echo \"$f: a package owns it, left\"; continue; fi; "
+            "if grep -qvxE '(Package: [*]|Pin: release o=UbuntuESM[A-Za-z]*, n={release}|Pin-Priority: never|#.*|"
+            "[[:space:]]*)' \"$f\" || ! grep -qx 'Package: [*]' \"$f\" || "
+            "! grep -qxE 'Pin: release o=UbuntuESM[A-Za-z]*, n={release}' \"$f\" || ! grep -qx 'Pin-Priority: never' \"$f\"; "
+            "then "
+            "echo \"$f: not an ubuntu-advantage-tools ESM pin, left\"; continue; fi; "
+            "rm -f \"$f\" || exit 1; echo \"$f: ubuntu-advantage-tools' ESM pin for {release}, removed\"; done")
+NET_IFUPDOWN_DNS_TO_RESOLVED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "net_ifupdown_dns_to_resolved.py")
+
+
+def here_doc(path):
+    """An op whose reference is a Python file runs on the box as a here-document, so no file of wend's is needed
+    there. The client embeds the same source (include_str!), and parity compares the two."""
+    src = open(path).read()
+    if "WEND_PY" in src:  # the here-document would end early (an assert goes away under python -O)
+        raise ValueError(f"{path} holds the here-document marker")
+    return f"python3 - <<'WEND_PY'\n{src}WEND_PY"
 
 
 def net_ifcfg_to_keyfile():
-    """SPEC.md, net.ifcfg-to-keyfile: the converter runs on the box as a here-document, so no file of wend's is
-    needed there. The client embeds the same source (include_str!), and parity compares the two."""
-    src = open(NET_IFCFG_TO_KEYFILE).read()
-    if "WEND_PY" in src:  # the here-document would end early (an assert goes away under python -O)
-        raise ValueError(f"{NET_IFCFG_TO_KEYFILE} holds the here-document marker")
-    return f"python3 - <<'WEND_PY'\n{src}WEND_PY"
+    """SPEC.md, net.ifcfg-to-keyfile."""
+    return here_doc(NET_IFCFG_TO_KEYFILE)
 
 
 BACKENDS = {"apt": Apt(), "rpm": Rpm()}
