@@ -106,6 +106,7 @@ pub const APT: Caps = Caps {
         "apache.disable",
         "dpkg.reinstall",
         "net.ifupdown-dns-to-resolved",
+        "apt.drop-esm-pins",
     ],
     force: &["depends", "remove-essential"],
     pm_options: &["overwrite-conflicting-files"],
@@ -264,6 +265,8 @@ fn apt_step(s: &Value, adapter: &Doc) -> Result<String, String> {
                 include_str!("../../tools/net_ifupdown_dns_to_resolved.py")
             )
         }
+        // SPEC.md, apt.drop-esm-pins: ubuntu-advantage-tools' own file names and lines, nothing else
+        "apt.drop-esm-pins" => ESM_PINS.replace("{release}", str_of(s, "release")?),
         _ => return Err(format!("the apt backend has no op {op:?}")),
     })
 }
@@ -895,3 +898,5 @@ fn service_record() -> String {
     ]
     .concat()
 }
+
+const ESM_PINS: &str = r#"for f in /etc/apt/preferences.d/ubuntu-esm-{release} /etc/apt/preferences.d/ubuntu-esm-*-{release}; do [ -e "$f" ] || [ -L "$f" ] || continue; if [ -L "$f" ] || [ ! -f "$f" ]; then echo "$f: not a plain file, left"; continue; fi; if dpkg -S "$f" >/dev/null 2>&1; then echo "$f: a package owns it, left"; continue; fi; if grep -qvxE '(Package: [*]|Pin: release o=UbuntuESM[A-Za-z]*, n={release}|Pin-Priority: never|#.*|[[:space:]]*)' "$f" || ! grep -qx 'Package: [*]' "$f" || ! grep -qxE 'Pin: release o=UbuntuESM[A-Za-z]*, n={release}' "$f" || ! grep -qx 'Pin-Priority: never' "$f"; then echo "$f: not an ubuntu-advantage-tools ESM pin, left"; continue; fi; rm -f "$f" || exit 1; echo "$f: ubuntu-advantage-tools' ESM pin for {release}, removed"; done"#;
