@@ -1456,7 +1456,8 @@ The steps, in order, each a list of scripts that run inside the booted machine a
   after that are the new root's); entry 1 loads the old config as it was. The stub keeps its own variables in the old
   `/boot`'s `grubenv`, never the configs' `saved_entry` or `next_entry`: `wend_next`, if 0 or 1, is a one-shot boot
   GRUB clears before taking it; otherwise `wend_default`, and the old root unless it says 0. If entry 0 fails inside
-  GRUB, it falls back to entry 1 (`fallback=1`), so a remote machine doesn't sit at a menu. The flip leaves the old
+  GRUB, it falls back to entry 1 (`fallback=1`), which first puts `root` and `prefix` back to the old `/boot` as GRUB
+  found it (a failed entry 0 may have moved them), so a remote machine doesn't sit at a menu. The flip leaves the old
   root the default, arms the trial (`wend_next=0`) as its last write, then freezes and thaws `/boot` so the XFS log
   is written home (GRUB doesn't replay it). Nothing on the old root changes.
 - `release` unmounts everything under `/run/wend` and checks nothing is left. `cleanup` does the same after a failure,

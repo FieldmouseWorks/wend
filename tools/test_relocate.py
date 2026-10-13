@@ -187,7 +187,9 @@ else:
                 ("GRUB parses the stub", chk.returncode == 0),
                 ("the stub's entry 0 goes to the new root by its UUID and sets the prefix there",
                  f"search --no-floppy --fs-uuid --set=root {UUID}" in stub and "set prefix=($root)/boot/grub2" in stub),
-                ("the stub's entry 1 is the old config", "configfile /grub2/grub.cfg.wend-old" in stub),
+                ("the stub's entry 1 is the old config, from the old /boot even after a failed entry 0",
+                 "set wend_boot=$root\nset wend_prefix=$prefix\n" in stub and
+                 "set root=$wend_boot\n  set prefix=$wend_prefix\n  configfile /grub2/grub.cfg.wend-old" in stub),
                 ("the stub never touches the configs' own saved_entry or next_entry",
                  "saved_entry" not in stub and "next_entry" not in stub),
                 ("the stub falls back to the old root unless wend_default says 0",
