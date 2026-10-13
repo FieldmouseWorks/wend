@@ -241,8 +241,9 @@ name = "purge-stale-libdb4"                  # must agree with the fix's meta.na
 ```
 
 `hops` lists every release on the ladder after `from`, up to `to`. The one exception is a release the adapter
-lists in `may_skip`: a route may cross it inside one hop. EL lists `alma8`, because the box only ever passes through
-EL8 (`rpm.transit`) on the hop to EL9. No health check runs on a release the route skips.
+lists in `may_skip`: a route may leave it out. EL lists `alma8`, because the box only ever passes through EL8
+(`rpm.transit`) on the hop to EL9, and `centos8`, where boxes start but no route lands. No health check runs on a
+release the route skips. `wend discover` leaves `may_skip` releases out of a new route's hops.
 
 A route is a **map, not a playlist**. It pins a *set* of fixes by id, and the client applies whichever ones hold on
 each hop. In dep-lab, stitching fixes from three different runs into one map beat replaying any single run, and the
@@ -393,8 +394,9 @@ See `adapters/ubuntu.toml`. The Debian adapter's engine on Ubuntu's own ladder. 
 
 See `adapters/el.toml`. Notes that matter:
 
-- The ladder crosses vendors: `centos5 centos6 centos7 alma8 alma9 alma10`. A family isn't a distro; release ids
-  carry the vendor.
+- The ladder crosses vendors: `centos5 centos6 centos7 centos8 alma8 alma9 alma10`. A family isn't a distro; release
+  ids carry the vendor. CentOS 8 and AlmaLinux 8 sit side by side: routes from EL7 and earlier skip both (EL8 is
+  crossed inside the hop to EL9), and a route from CentOS 8 goes straight to EL9 with its own dnf.
 - The package manager changes mid-ladder (yum through 7, dnf from 8), and so does the upgrade verb: `upgrade` on EL6,
   `distro-sync` from EL7 (EL6's grep is newer than EL7's). Each release can set its own `upgrade` in the adapter.
 - The harness owns `/etc/yum.repos.d` and clears the vendor .repo files every release package drops (they point at
@@ -742,7 +744,7 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `schema`, `family`, `backend` | `wend.adapter/0`; the family's name; `apt` or `rpm` (required) |
 | `release_file` | the file whose content names the running release (shown in runs and checks) |
 | `ladder` | every release in order; a hop goes one step along it |
-| `may_skip` | releases a route may cross inside one hop (see Route) |
+| `may_skip` | releases a route may leave out of its hops (see Route) |
 | `harness_owned` | path prefixes no fix may write |
 | `writable`, `managed` | the allowlists (globs) named by `write-file` (`writable`) and the `rpm.*` file ops (`managed`). Nothing under `/etc/wend/` is ever on either |
 | `[kv."<path>"]` | the files `kv.*` may touch: `keys` (the only keys it may set or unset; never one that grants access) and `set` (false for files with sections, which only take `kv.unset`) |
@@ -1020,7 +1022,8 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
    files no package owns any more.
 4. **The `installed` predicate.** Plain `rpm -q` was enough on both boxes. No qualifier until a box needs one.
 5. **Release ids across vendors.** One ladder, vendor in the release id. A route may skip a release the adapter lists
-   in `may_skip` (EL8, crossed inside one hop by `rpm.transit`).
+   in `may_skip` (EL8, crossed inside one hop by `rpm.transit`; CentOS 8, where boxes start but no route lands).
+   Two vendors at one major version are two ladder entries, in the order a route could pass them.
 6. **Ordering and interaction.** Yes, once: on the hop to EL9, the database password rehash and the slow shutdown
    have to run on EL7, before `rpm.transit` replaces the server. Route order handles it (pre steps run in the order
    the route pins fixes), and the route says so. No fix needs to see another fix's effect in its `when`.
