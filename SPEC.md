@@ -796,10 +796,12 @@ harness, not to fixes, because the release's own tools can't carry them up the l
   one the hop brings. A kernel newer than the running one, installed but not booted yet, stays. So does an old kernel
   that is on hold, or that something still depends on (a metapackage still pinned to it while the machine runs an
   `-updates` or HWE kernel): each is tried with `dpkg --no-act --purge` first and, if dpkg would refuse, kept and
-  named, so the machine still takes the hop with that kernel in `/boot`. A machine running a kernel that isn't
-  Ubuntu's (`uname -r` not shaped `X.Y.Z-N-flavour`, a provider's) keeps every kernel. Preflight counts none of these
-  kept kernels, nor a newer kernel waiting for a reboot. The purge is `dpkg --purge`, never apt, so nothing else goes
-  with it.
+  named. Preflight can't see those, so when one is kept the hop goes on only if `/boot` still has the room the
+  release's kernel needs (its `hardware.<release>.boot_mib`, which apt adapters' hop steps get as `{boot_mib}`), and
+  otherwise stops there, before its transaction, naming what to take off hold or remove. A machine running a kernel
+  that isn't Ubuntu's (`uname -r` not shaped `X.Y.Z-N-flavour`, a provider's) keeps every kernel. Preflight counts
+  neither that case nor a newer kernel waiting for a reboot. The purge is `dpkg --purge`, never apt, so nothing else
+  goes with it.
 - **When to boot it.** EL6's binaries can't run on the EL5 kernel (EL6's apr asks for `SOCK_CLOEXEC`, so `httpd -t`
   fails), so on a real machine the `centos6` hop boots its new kernel between the transaction and the post steps
   (`releases.centos6.reboot = "before-post"`). Every other hop runs straight through, then reboots: on the hop to

@@ -89,7 +89,9 @@ class Apt:
     def hop_vars(self, adapter, release):
         lad, r = adapter["ladder"], adapter["releases"]
         mirror = r["current"] if lad.index(release) >= lad.index(r["current_from"]) else r["archive"]
-        return {"mirror": mirror, "release": release}
+        hw = adapter.get("hardware", {}).get(release)  # the room the release's kernel needs in /boot (0: none known)
+        return {"mirror": mirror, "release": release,
+                "boot_mib": str(hw.get("boot_mib", 0) if isinstance(hw, dict) else 0)}
 
     def step(self, s, adapter, release=None):
         op = s["op"]

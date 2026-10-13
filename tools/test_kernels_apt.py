@@ -2,7 +2,8 @@
 behaviour: every package of a kernel older than the running one goes, in one dpkg call, and nothing else does (the
 running kernel, a newer one not booted yet, the metapackages, linux-firmware, removed-but-configured leftovers, an
 old kernel on hold or one dpkg would refuse to purge because something still depends on it, and every kernel while
-the running one isn't Ubuntu's). It runs
+the running one isn't Ubuntu's), and a kept kernel stops the hop when the release's kernel (its boot_mib) won't fit
+beside it. It runs
 the PR's own adapter text, so the gate's schema job (which judges a PR with the base branch's tools and never runs the
 PR's code) doesn't run it: `wend check` and the client job do.
 python3 tools/test_kernels_apt.py"""
@@ -34,17 +35,21 @@ if not step.startswith(GUARD):
     print("WRONG   the purge doesn't start with the live-root guard")
     bad += 1
 T13 = [q for q in OLD if "3.13.0-24" in q]
-for name, running, refuse, held, dpkg_rc, want_rc, want in (
-        ("kernels older than the running one go, with all their packages", "4.4.0-21-generic", [], [], 0, 0,
+BOOT = int(a["hardware"]["bionic"]["boot_mib"])  # the room bionic's kernel needs, filled in as {boot_mib}
+for name, running, refuse, held, free, dpkg_rc, want_rc, want in (
+        ("kernels older than the running one go, with all their packages", "4.4.0-21-generic", [], [], 1, 0, 0,
          sorted(OLD)),
-        ("nothing older than the running kernel: dpkg isn't called", "3.13.0-24-generic", [], [], 0, 0, None),
+        ("nothing older than the running kernel: dpkg isn't called", "3.13.0-24-generic", [], [], 1, 0, 0, None),
         ("a metapackage still on an old kernel: that kernel stays, the others go", "4.4.0-21-generic",
-         ["linux-image-3.13.0-24-generic"], [], 0, 0, sorted(set(OLD) - set(T13))),
-        ("an old kernel on hold stays, the others go", "4.4.0-21-generic", [], ["linux-headers-3.13.0-24"], 0, 0,
+         ["linux-image-3.13.0-24-generic"], [], BOOT, 0, 0, sorted(set(OLD) - set(T13))),
+        ("an old kernel on hold stays, the others go", "4.4.0-21-generic", [], ["linux-headers-3.13.0-24"], BOOT, 0, 0,
          sorted(set(OLD) - set(T13))),
-        ("every old kernel refused: dpkg purges nothing", "4.4.0-21-generic", OLD, [], 0, 0, None),
-        ("a provider's kernel is running: every Ubuntu kernel stays", "6.1.10-x86_64-linode158", [], [], 0, 0, None),
-        ("the purge itself fails: the hop fails", "4.4.0-21-generic", [], [], 2, 1, sorted(OLD))):
+        ("a kept kernel leaves too little room for the hop's: the hop stops before its transaction",
+         "4.4.0-21-generic", [], ["linux-headers-3.13.0-24"], BOOT - 1, 0, 1, sorted(set(OLD) - set(T13))),
+        ("every old kernel refused: dpkg purges nothing", "4.4.0-21-generic", OLD, [], BOOT, 0, 0, None),
+        ("a provider's kernel is running: every Ubuntu kernel stays", "6.1.10-x86_64-linode158", [], [], 1, 0, 0,
+         None),
+        ("the purge itself fails: the hop fails", "4.4.0-21-generic", [], [], BOOT, 2, 1, sorted(OLD))):
     with tempfile.TemporaryDirectory() as t:
         os.makedirs(f"{t}/bin")
         listing = ([f"{'hold' if p in held else 'install'} ok installed {p}" for p in OLD + KEEP] +
@@ -55,7 +60,8 @@ for name, running, refuse, held, dpkg_rc, want_rc, want in (
                  "dpkg": (f"if [ \"$1\" = --no-act ]; then for q in \"$@\"; do case ' {' '.join(refuse)} ' in "
                           f"*\" $q \"*) echo \" linux-image-generic depends on $q.\" >&2; exit 1;; esac; done; exit 0; "
                           f"fi; echo \"$@\" > {t}/dpkg-args; exit {dpkg_rc}"),
-                 "df": "echo '/dev/sda1 236M 120M 104M 54% /boot'"}
+                 "df": f"echo 'Filesystem 1048576-blocks Used Available Capacity Mounted on'; "
+                       f"echo '/dev/sda1 236 120 {free} 54% /boot'"}
         for tool, body in shims.items():
             with open(f"{t}/bin/{tool}", "w") as out:
                 out.write(f"#!/bin/sh\n{body}\n")

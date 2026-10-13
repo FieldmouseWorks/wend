@@ -158,9 +158,16 @@ pub fn hop_vars(adapter: &Doc, release: &str) -> Result<Vars, String> {
             } else {
                 str_of(r, "archive")?
             };
+            // the room the release's kernel needs in /boot (0: none known)
+            let boot_mib = get(adapter, "hardware")
+                .and_then(|h| get(h, release))
+                .and_then(|t| get(t, "boot_mib"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
             Ok(vec![
                 ("mirror".into(), mirror.into()),
                 ("release".into(), release.into()),
+                ("boot_mib".into(), boot_mib.to_string()),
             ])
         }
         "rpm" => {
