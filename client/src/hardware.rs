@@ -231,6 +231,7 @@ fn boot_dir(dir: &Path, running: &str) -> Value {
         "free_mib": free,
         "kernels": boot_kernels(&files, running),
         "rescue_mib": rescue_mib(&files),
+        "rescue_default": fs::read_to_string(dir.join("grub/grub.conf")).is_ok_and(|g| grub_default_is_rescue(&g)),
     })
 }
 
@@ -248,6 +249,22 @@ const KERNEL_FILE_PREFIXES: &[&str] = &[
 ];
 
 /// The MiB the rescue image (`vmlinuz-0-rescue-<machine id>`, its `.hmac` and initramfs) takes, rounded up.
+/// Whether GRUB legacy's default entry boots the rescue image: EL's kernel_before keeps it then.
+fn grub_default_is_rescue(conf: &str) -> bool {
+    let mut default = None;
+    let mut title: Option<usize> = None;
+    for line in conf.lines().map(str::trim) {
+        if let Some(d) = line.strip_prefix("default=") {
+            default = d.trim().parse::<usize>().ok();
+        } else if line.starts_with("title") {
+            title = Some(title.map_or(0, |t| t + 1));
+        } else if title.is_some() && title == default && line.contains("vmlinuz-") {
+            return line.contains("vmlinuz-0-rescue-");
+        }
+    }
+    false
+}
+
 fn rescue_mib(files: &[(String, u64)]) -> u64 {
     files
         .iter()
@@ -760,8 +777,9 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
         // the running kernel isn't in /boot: every kernel there may be the one GRUB boots
         box_running = box_all.clone();
     }
-    // EL's kernel_before drops the rescue image before the first hop's transaction, and no hop builds another
-    let rescue = if keep == "running" {
+    // EL's kernel_before drops the rescue image before the first hop's transaction, unless GRUB legacy boots it by
+    // default, and no hop builds another
+    let rescue = if keep == "running" && bd["rescue_default"] != json!(true) {
         bd["rescue_mib"].as_u64().unwrap_or(0)
     } else {
         0
@@ -1635,6 +1653,15 @@ mod tests {
         assert_eq!(v["lands_on"], "alma9", "{v:#}");
         let p = v["hops"][1]["problems"][0].as_str().unwrap();
         assert!(p.contains("with 4 MiB of other files"), "{p}");
+        // GRUB legacy boots the rescue image by default: kernel_before keeps it
+        let mut kept = rescued(149);
+        kept["boot_dir"]["rescue_default"] = json!(true);
+        assert_eq!(verdict("centos7-to-alma10", &kept)["lands_on"], "centos7");
+        let conf =
+            "default=1\ntitle CentOS\n\tkernel /vmlinuz-2.6.32 ro\ntitle rescue\n\tkernel /vmlinuz-0-rescue-ab ro\n";
+        assert!(grub_default_is_rescue(conf));
+        assert!(!grub_default_is_rescue(&conf.replace("default=1", "default=0")));
+        assert!(!grub_default_is_rescue(&conf.replace("default=1", "default=saved")));
     }
 
     /// Debian's apt autoremoves no kernel before jessie's: on the hop to jessie every kernel is still there.
