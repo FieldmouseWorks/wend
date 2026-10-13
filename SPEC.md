@@ -1134,3 +1134,9 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
       (wend#19). Until runs carry `sources`, integrity rests on TLS to the
       mirrors and the shim's cache: EL repos run with `gpgcheck=0` (CentOS 5's keys can't check what comes later), and the shim
       keeps only complete downloads and checks hash-named metadata against its name.
+13. **A machine the route can't carry in place.** Some machines can't take a route on their own disk: CentOS 7
+    installed from 7.0 to 7.2 media has XFS v4 everywhere, which AlmaLinux 10's kernel can't mount and nothing
+    converts. Proposed: a second root beside the old one (rebuild and carry), done first as **relocate** (copy the
+    root onto a fresh filesystem, flip the boot with a one-shot trial, keep the old root as rollback, then walk the
+    existing route), with state movers for a fresh target root second. Design in `docs/rebuild-and-carry.md`; each
+    piece moves into this document in the PR that builds it.
