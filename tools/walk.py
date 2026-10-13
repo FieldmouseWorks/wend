@@ -14,6 +14,7 @@ import time
 import backends
 import check
 import sandbox
+import shelter
 from backends import fill, pred_sh
 from sandbox import Box, safe_rm, tail
 
@@ -28,6 +29,8 @@ class Walk:
         self.box_doc = repo.boxes[box_id]
         self.checks = sandbox.checks_for(self.box_doc, self.adapter)
         self.isolate = set(self.box_doc.get("isolate", []))
+        self.shelter_plan = self.box_doc.get("shelter", {})  # SPEC "Sheltering an app": the owner's confirmed plan
+        self.shelter_steps, self.shelters = {}, []
         self.vars = {}
         self.t0 = time.time()
         sandbox.ensure_mirror(self.adapter)
@@ -46,6 +49,9 @@ class Walk:
         self.steps, self.hops = [], []
 
     def check_health(self):
+        if self.shelter_plan and shelter.has_shelter(self.box, self.shelter_plan):
+            with shelter.standin(self.box):  # chroot tier: the podman stand-in, only while the checks run
+                return self.box.health(self.checks, self.adapter["release_file"], self.isolate)
         return self.box.health(self.checks, self.adapter["release_file"], self.isolate)
 
     def log(self, msg):
@@ -67,6 +73,8 @@ class Walk:
         a, h = self.adapter, self.adapter["hop"]
         self.vars = v = backends.of(a).hop_vars(a, hop)
         comp = lambda ph: [check.compile_step(s, a, hop) for f in fixes for s in f.get(ph, [])]
+        # SPEC "Sheltering an app": on the hop that drops Python 2, stop-native first in pre, start last in post
+        sh_pre, sh_post = getattr(self, "shelter_steps", {}).get(hop, ([], []))
         opts = {s["option"] for f in fixes for s in f.get("pre", []) + f.get("post", []) if s["op"] == "pm-option"}
         cleanup = [f"rm -f {a['pm_options'][o]['path']}" for o in sorted(opts)]  # pm-options are hop-scoped
         rel = a["releases"].get(hop)
@@ -84,8 +92,9 @@ class Walk:
                                  "don't install")
         declare = [f"mkdir -p /var/lib/wend && printf '{''.join(x + chr(92) + 'n' for x in adds)}' >> {ADDED}"] if adds else []
         kernel = lambda k: [fill(c, v) for c in h.get(k, [])]  # noqa: E731 (SPEC "Kernels and the bootloader")
-        return ([fill(h["set_release"], v), fill(h["refresh"], v)] + kernel("kernel_before") + comp("pre") +
-                [fill(c, v) for c in upgrade] + kernel("kernel_after"), comp("post") + declare + cleanup + verify)
+        return ([fill(h["set_release"], v), fill(h["refresh"], v)] + kernel("kernel_before") + sh_pre + comp("pre") +
+                [fill(c, v) for c in upgrade] + kernel("kernel_after"),
+                comp("post") + sh_post + declare + cleanup + verify)
 
     def execute(self, commands, why):
         """Run commands in order; keep the step only if all succeed and no passing check is lost."""
@@ -134,7 +143,10 @@ class Walk:
 
     def walk(self, discoverer=None):
         pinned = [self.repo.fixes_by_id[r["id"]] for r in self.route["fixes"]]
+        drop = shelter.drop_hop(self.adapter, self.route) if self.shelter_plan else None
         for hop in self.route["hops"]:
+            if hop == drop and not self.shelter_before(hop):
+                break
             matched = [f for f in pinned if f["hop"] == hop and self.holds(f)]
             names = [f["meta"]["name"] for f in matched]
             ok = self.execute(self.hop_cmds(hop, matched), f"hop to {hop} with {names}")
@@ -148,6 +160,10 @@ class Walk:
                               "seconds": round(sum(s["seconds"] for s in self.steps[-1:]), 1)})
             if ok:  # SPEC.md "Pinned sources"
                 self.hops[-1]["sources"] = backends.of(self.adapter).sources(self.box.root, self.adapter, hop)
+            if ok and hop == drop:  # the id range shelter.start reserved, for the run (not the build's lock)
+                for rec in self.shelters:
+                    rec["subuid"] = self.box.run(f"awk -F: '$1 == \"wend-{rec['app']}\" {{print $2 \":\" $3}}' "
+                                                 "/etc/subuid")[1].strip()
             if not ok:
                 break
         extra = self.prune() if self.route.get("finish", {}).get("prune_obsolete") and all(
@@ -163,8 +179,40 @@ class Walk:
                 "failed_stage": next((s["stage"] for s in reversed(self.steps) if not s["ok"]), "") if not complete else "",
                 "final": {"release": final["release"], "passed": final["passed"], "failed": failed,
                           "failed_logs": {c: tail(final["checks"][c]["log"], 1500) for c in failed}},
+                **({"shelters": self.shelters} if self.shelter_plan else {}),
                 **extra, **(discoverer.summary() if discoverer else {"model_calls": 0}),
                 "log_sha256": "sha256:" + hashlib.sha256(json.dumps(self.steps, sort_keys=True).encode()).hexdigest()}
+
+    def shelter_before(self, hop):
+        """SPEC "Sheltering an app": before the hop that leaves keeps_runtimes_on, build and prove each app's shelter
+        on the box as it is (on that release), and queue stop-native and start on the hop. If either fails, the walk
+        stops here: the box stays on keeps_runtimes_on with its app running natively (the "stop" option)."""
+        keeps = shelter.keeps_runtimes_on(self.adapter, self.route)
+        roles = {k: v for k, v in self.checks.items() if k in self.box_doc["roles"]}
+        for app, plan in sorted(self.shelter_plan.items()):
+            t0 = time.time()
+            try:
+                rec = shelter.build(self.box, self.adapter, keeps, app, plan, f"{self.dir}/shelter-scratch", self.log)
+                h = shelter.prove(self.box, app, plan, keeps, roles, self.isolate, self.adapter["release_file"],
+                                  self.health["passed"], f"{self.dir}/shelter-scratch", self.log)
+            except shelter.Refused as e:
+                self.steps.append({"why": f"shelter {app} on {keeps}", "ok": False,
+                                   "stage": f"shelter {app}: {str(e).splitlines()[0]}",
+                                   "outputs": [{"cmd": "shelter.build; shelter.prove", "rc": 1, "out": tail(str(e), 4000)}],
+                                   "health_after": self.health, "seconds": round(time.time() - t0, 1)})
+                self.log(f"REFUSED shelter {app} on {keeps}: {tail(str(e), 800)}")
+                return False
+            self.shelters.append({k: rec[k] for k in ("app", "release", "lock_sha256", "image", "tier",
+                                                      "confinement_proved")})
+            self.steps.append({"why": f"shelter {app} on {keeps}", "ok": True, "stage": "ok",
+                               "outputs": [{"cmd": "shelter.build; shelter.prove", "rc": 0,
+                                            "out": f"{rec['packages']} packages; carried: {rec['carried']}"}],
+                               "health_after": h, "seconds": round(time.time() - t0, 1)})
+            self.log(f"KEPT shelter {app}: built on {keeps} and proved ({rec['packages']} packages)")
+            pre, post = self.shelter_steps.setdefault(hop, ([], []))
+            pre += shelter.stop_native(app, plan)
+            post += shelter.start(app, plan, self.adapter, hop, keeps)
+        return True
 
     def close(self, keep=False):
         if not keep:

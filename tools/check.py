@@ -476,6 +476,86 @@ def check_box(doc, adapters, where):
             not set(vm.get("skip", [])) <= set(vm.get("live", {})):
         errs.append(f"{where}: [vm] needs an integer ssh_port, skip naming roles the box has, and a live shell string "
                     "for every skipped role")
+    if "shelter" in doc:
+        errs += check_shelter(doc["shelter"], f"{where}: shelter")
+    return errs
+
+
+# SPEC "Sheltering an app": a box's [shelter.<app>] tables, the owner's confirmed plan. Every value lands in commands
+# tools/shelter.py writes and runs as root, and in unit files, so each is held to a plain shape here.
+SHELTER_APP = r"[a-z][a-z0-9]{0,30}"
+SHELTER_KEYS = {"code", "data", "user", "unit", "cron", "sockets", "ports", "egress"}
+ABS_PATH = r"(/[A-Za-z0-9_+-][A-Za-z0-9_.+-]*)+"  # no segment starts with a dot: no "." or "..", nothing hidden
+USER = r"[a-z_][a-z0-9_-]{0,31}"
+SERVICE_UNIT = r"[A-Za-z0-9][A-Za-z0-9_.@-]*\.service"
+CRON_LINE = r"[A-Za-z0-9_./=:@,*+-]+( [A-Za-z0-9_./=:@,*+-]+)+"  # single spaces; no %, quotes, $ or redirects
+CODE_UNDER = ("/opt/", "/srv/", "/home/", "/var/", "/usr/local/")
+DATA_UNDER = ("/opt/", "/srv/", "/home/", "/var/")
+PUBLISH = r"(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}):(\d{1,5})"
+
+
+def check_shelter(sh, where):
+    import shelter  # tools/shelter.py: the same cron translation start runs
+    if not isinstance(sh, dict) or not sh:
+        return [f"{where} must be a table of apps, [shelter.<app>]"]
+    errs = []
+    for app, p in sh.items():
+        w = f"{where}.{app}"
+        if not re.fullmatch(SHELTER_APP, app):
+            errs.append(f"{w}: an app's name is lowercase letters and digits ({SHELTER_APP})")
+        if not isinstance(p, dict):
+            errs.append(f"{w} must be a table")
+            continue
+        if set(p) - SHELTER_KEYS or not {"code", "data", "user", "unit"} <= set(p):
+            errs.append(f"{w} takes code, data, user and unit, and optionally cron, sockets, ports and egress; "
+                        f"got {sorted(p)}")
+            continue
+        path = lambda x, under: isinstance(x, str) and re.fullmatch(ABS_PATH, x) and x.startswith(under)  # noqa: E731
+        if not path(p["code"], CODE_UNDER):
+            errs.append(f"{w}.code must be a plain absolute path under {', '.join(CODE_UNDER)}")
+        if not isinstance(p["data"], list) or not all(path(x, DATA_UNDER) for x in p["data"]):
+            errs.append(f"{w}.data must list plain absolute paths under {', '.join(DATA_UNDER)}")
+        elif isinstance(p["code"], str) and any(x == p["code"] or x.startswith(p["code"] + "/") or
+                                                p["code"].startswith(x + "/") for x in p["data"]):
+            errs.append(f"{w}.data overlaps the code tree, which is mounted read-only")
+        if not isinstance(p["user"], str) or not re.fullmatch(USER, p["user"]) or p["user"] == "root":
+            errs.append(f"{w}.user must be the app's own user ({USER}), not root")
+        if not isinstance(p["unit"], str) or not re.fullmatch(SERVICE_UNIT, p["unit"]) or \
+                p["unit"].startswith("wend-"):
+            errs.append(f"{w}.unit must name the app's own service unit ({SERVICE_UNIT})")
+        cron = p.get("cron", [])
+        if not isinstance(cron, list) or not all(isinstance(c, dict) and set(c) == {"user", "line"} for c in cron):
+            errs.append(f"{w}.cron must be a list of {{ user, line }} tables")
+        else:
+            for i, c in enumerate(cron):
+                if not isinstance(c["user"], str) or not re.fullmatch(USER, c["user"]):
+                    errs.append(f"{w}.cron[{i}].user must be a user name ({USER})")
+                elif c["user"] != p.get("user"):  # one identity per shelter: discovery and the timer run as it
+                    errs.append(f"{w}.cron[{i}].user must be the app's user ({p.get('user')!r}); "
+                                "shelter another user's jobs as an app of their own")
+                if not isinstance(c["line"], str) or not re.fullmatch(CRON_LINE, c["line"]):
+                    errs.append(f"{w}.cron[{i}].line must be the crontab line exactly, in plain words ({CRON_LINE})")
+                    continue
+                try:
+                    _, cmd = shelter.cron_calendar(c["line"])
+                except ValueError as e:
+                    errs.append(f"{w}.cron[{i}].line: its schedule doesn't translate exactly to a timer ({e})")
+                    continue
+                if not re.fullmatch(shelter.CMD, cmd):
+                    errs.append(f"{w}.cron[{i}].line: the command must start with an absolute interpreter path")
+        socks = p.get("sockets", [])
+        if not isinstance(socks, list) or not all(isinstance(x, str) and re.fullmatch(ABS_PATH, x) for x in socks):
+            errs.append(f"{w}.sockets must list plain absolute paths")
+        elif len({os.path.dirname(x) for x in socks}) != len(socks):
+            errs.append(f"{w}.sockets: one socket per directory (each directory is mounted from its own proxy)")
+        ports = p.get("ports", [])
+        m = [re.fullmatch(PUBLISH, x) if isinstance(x, str) else None for x in ports] if isinstance(ports, list) else [None]
+        if not all(x and all(int(o) < 256 for o in x.groups()[:4]) and 0 < int(x.group(5)) < 65536 for x in m):
+            errs.append(f"{w}.ports must list address:port strings (127.0.0.1:8080)")
+        egress = p.get("egress", [])  # the TCP destinations the owner opted in to (SPEC: private by default)
+        m = [re.fullmatch(PUBLISH, x) if isinstance(x, str) else None for x in egress] if isinstance(egress, list) else [None]
+        if not all(x and all(int(o) < 256 for o in x.groups()[:4]) and 0 < int(x.group(5)) < 65536 for x in m):
+            errs.append(f"{w}.egress must list address:port strings (192.0.2.10:443)")
     return errs
 
 
