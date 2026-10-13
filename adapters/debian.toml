@@ -124,9 +124,12 @@ services = "no explicitly installed, non-required package that ships an init scr
 # (initramfs-tools' MODULES=most, with lvm2 and mdadm: built from the release's packages in a container for buster to
 # trixie, estimated before). `old_kernels = "autoremove"`: the transaction installs the new kernel beside every kernel
 # already there, and autoremove only afterwards takes the old ones, keeping the running kernel and the newest, so from
-# the third hop on the new kernel sits beside the two before it.
+# the third hop on the new kernel sits beside the two before it. Before apt 1.0 that never happened: lenny's to
+# wheezy's apt never autoremove a kernel (01autoremove's `NeverAutoRemove "^linux-image.*"`), so through the hop to
+# jessie, whose apt brings the running-and-newest rule, every kernel stays (`autoremove_from`).
 boot = ["bios"]
 old_kernels = "autoremove"
+autoremove_from = "jessie"
 
 [hardware.lenny]
 cpu = "x86-64"

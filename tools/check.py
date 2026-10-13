@@ -136,8 +136,13 @@ def check_hardware(a, where):
         errs.append(f"{where}: hardware.boot must list the firmware modes proven, from bios and uefi")
     if h.get("old_kernels") not in OLD_KERNELS:
         errs.append(f"{where}: hardware.old_kernels must be one of {list(OLD_KERNELS)}")
+    if "autoremove_from" in h and not (h.get("old_kernels") == "autoremove" and isinstance(a.get("ladder"), list)
+                                       and h["autoremove_from"] in a["ladder"]
+                                       and isinstance(h["autoremove_from"], str)):
+        errs.append(f"{where}: hardware.autoremove_from must name a release on the ladder, with old_kernels = "
+                    f"\"autoremove\"")
     for r, t in h.items():
-        if r in ("boot", "old_kernels"):
+        if r in ("boot", "old_kernels", "autoremove_from"):
             continue
         if not isinstance(a.get("ladder"), list) or r not in a["ladder"] or not isinstance(t, dict):
             errs.append(f"{where}: hardware.{r} must be a table named for a release on the ladder")
@@ -164,7 +169,7 @@ def driver_table_errors(fam, a, where):
     errs = []
     h = a.get("hardware")
     for r, t in (h if isinstance(h, dict) else {}).items():
-        if r in ("boot", "old_kernels") or not isinstance(t, dict) or not isinstance(t.get("drivers"), str):
+        if r in ("boot", "old_kernels", "autoremove_from") or not isinstance(t, dict) or not isinstance(t.get("drivers"), str):
             continue
         p = f"{ROOT}/adapters/drivers/{fam}/{r}.txt"
         got = "sha256:" + hashlib.sha256(open(p, "rb").read()).hexdigest() if os.path.isfile(p) else None

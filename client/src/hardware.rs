@@ -73,7 +73,8 @@ pub fn gather() -> Value {
 
 /// What `/boot` holds: whether it is a filesystem of its own, its size and free space as a package install sees them
 /// (reserved blocks left out), and each kernel in it with the space its files take (`vmlinuz`, its initramfs and
-/// kdump image, `System.map`, `config` and the rest named for its version; rescue images count as other files).
+/// `System.map`, `config` and the rest named for its version; rescue and kdump images count as other files, since
+/// they stay when the kernel's other files go).
 fn boot_dir(dir: &Path, running: &str) -> Value {
     use std::os::unix::fs::MetadataExt;
     let dev = |p: &Path| fs::metadata(p).ok().map(|m| m.dev());
@@ -116,21 +117,25 @@ fn boot_kernels(files: &[(String, u64)], running: &str) -> Vec<Value> {
     let mut versions: Vec<&str> = files
         .iter()
         .filter_map(|(n, _)| n.strip_prefix("vmlinuz-"))
-        .filter(|v| !v.is_empty() && !v.starts_with("0-rescue-"))
+        .filter(|v| !v.is_empty() && !v.starts_with("0-rescue-") && !v.ends_with(".efi.signed"))
         .collect();
     versions.sort();
     let mut bytes = vec![0u64; versions.len()];
     for (n, size) in files {
+        // kdump images stay when a kernel's other files go (EL's kernel_before leaves them): other files
+        if n.contains("kdump") {
+            continue;
+        }
         let Some(rest) = KERNEL_FILE_PREFIXES.iter().find_map(|p| n.strip_prefix(p)) else {
             continue;
         };
-        // the longest version the name is for: `initramfs-<v>.img`, `initrd-<v>kdump.img`, `.vmlinuz-<v>.hmac`
+        // the longest version the name is for: `initramfs-<v>.img`, `.vmlinuz-<v>.hmac`, `vmlinuz-<v>.efi.signed`
         let owner = versions
             .iter()
             .enumerate()
             .filter(|(_, v)| {
                 rest.strip_prefix(**v)
-                    .is_some_and(|t| t.is_empty() || t.starts_with('.') || t.starts_with("kdump"))
+                    .is_some_and(|t| t.is_empty() || t.starts_with('.'))
             })
             .max_by_key(|(_, v)| v.len());
         if let Some((i, _)) = owner {
@@ -152,7 +157,9 @@ fn blacklisted() -> Vec<String> {
         if let Ok(rd) = fs::read_dir(d) {
             let mut v: Vec<_> = rd.flatten().map(|e| e.path()).collect();
             v.sort();
-            confs.extend(v.into_iter().filter(|p| p.extension().is_some_and(|e| e == "conf")));
+            // every file, not only *.conf: EL5's and lenny's module-init-tools read `blacklist` and
+            // `blacklist-compat` too (reading more only refuses more)
+            confs.extend(v.into_iter().filter(|p| p.is_file()));
         }
     }
     let mut out = vec![];
@@ -465,7 +472,7 @@ pub fn check_facts(f: &Value) -> Result<(), String> {
             })
             && (d["driver"].is_string() || d["driver"].is_null())
             && (d["module"].is_string() || d["module"].is_null())
-            && (d["module_file"].is_string() || d["module_file"].is_null())
+            && d.get("module_file").is_some_and(|m| m.is_string() || m.is_null())
             && d["out_of_tree"].is_boolean()
     };
     if !f["pci"].as_array().is_some_and(|a| a.iter().all(dev_ok)) {
@@ -594,18 +601,45 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
         box_running = box_all.clone();
     }
     let other = (total.saturating_sub(free)).saturating_sub(box_all.iter().map(|k| k.1).sum());
+    // EL's kernel_before drops only kernel, kernel-core and kernel-modules* records: a kernel another package owns
+    // (EL5's kernel-xen, kernel-PAE, kernel-debug; ELRepo's kernel-lt and kernel-ml; Oracle's UEK) keeps its files
+    // on every hop
+    let other_owned: Vec<(String, u64)> = bd["kernels"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|k| k["running"] != json!(true))
+        .filter_map(|k| {
+            let v = k["version"].as_str().unwrap_or("");
+            let flavour = ["xen", "PAE", "debug"].iter().any(|f| v.ends_with(f))
+                || ["elrepo", "uek"].iter().any(|f| v.contains(f));
+            flavour.then(|| (format!("its kernel {v}"), k["mib"].as_u64().unwrap_or(0)))
+        })
+        .collect();
+    // apt before 1.0 (Debian to wheezy) never autoremoves a kernel (`APT::NeverAutoRemove "^linux-image.*"`): up to
+    // and including the hop to `autoremove_from`, every kernel stays
+    let ladder: Vec<String> = get(a, "ladder").and_then(crate::atlas::strings).unwrap_or_default();
+    let pos = |r: &str| ladder.iter().position(|x| x == r);
+    let keep_all_to = match get(hw, "autoremove_from") {
+        None => None,
+        Some(r) => Some(r.as_str().and_then(pos).ok_or(format!(
+            "adapters/{fam}.toml: hardware.autoremove_from isn't on the ladder"
+        ))?),
+    };
     let mut route_kernels: Vec<(String, u64)> = vec![];
     let blacklist: Vec<String> = crate::atlas::strings(&facts["blacklisted"]).unwrap_or_default();
 
     for h in &hops {
         let mut problems: Vec<String> = vec![];
         let mut notes: Vec<String> = vec![];
-        let Some(t) = get(hw, h) else {
-            if booted.contains(h) {
-                return Err(format!("adapters/{fam}.toml has no hardware.{h} table"));
-            }
+        // a release the route only passes through (may_skip) installs no kernel and is never booted, even
+        // when its adapter has a table for it
+        if !booted.contains(h) {
             out_hops.push(json!({"to": h, "ok": true, "problems": [], "notes": ["not booted on this route"]}));
             continue;
+        }
+        let Some(t) = get(hw, h) else {
+            return Err(format!("adapters/{fam}.toml has no hardware.{h} table"));
         };
         let need = get(t, "cpu").and_then(Value::as_str).unwrap_or("x86-64");
         let need_level = CPU_LEVELS.iter().position(|c| *c == need).unwrap_or(0) + 1;
@@ -646,9 +680,11 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
             .and_then(Value::as_u64)
             .ok_or(format!("adapters/{fam}.toml has no hardware.{h}.boot_mib"))?;
         let k = route_kernels.len();
+        let keeps_all = keep == "autoremove" && keep_all_to.is_some_and(|to| pos(h).is_some_and(|i| i <= to));
         let kept: Vec<(String, u64)> = match (keep, k) {
-            ("running", 0) => box_running.clone(),
-            ("running", _) => route_kernels[k - 1..].to_vec(),
+            _ if keeps_all => [box_all.clone(), route_kernels.clone()].concat(),
+            ("running", 0) => [box_running.clone(), other_owned.clone()].concat(),
+            ("running", _) => [other_owned.clone(), route_kernels[k - 1..].to_vec()].concat(),
             ("autoremove", 0) => box_all.clone(),
             ("autoremove", 1) => [box_running.clone(), route_kernels.clone()].concat(),
             ("autoremove", _) => route_kernels[k - 2..].to_vec(),
@@ -1195,6 +1231,7 @@ mod tests {
             f("vmlinuz-0-rescue-0123", 7),
             f("initramfs-0-rescue-0123.img", 50),
             f("vmlinuz-2.6.32-754.el6.x86_64", 4),
+            f("vmlinuz-3.10.0-1160.el7.x86_64.efi.signed", 7),
             f("initramfs-2.6.32-754.el6.x86_64.img", 16),
         ];
         let k = boot_kernels(&files, "3.10.0-1160.el7.x86_64");
@@ -1202,11 +1239,59 @@ mod tests {
             k,
             vec![
                 json!({"version": "2.6.32-754.el6.x86_64", "mib": 20, "running": false}),
-                json!({"version": "3.10.0-1160.el7.x86_64", "mib": 45, "running": true}),
+                json!({"version": "3.10.0-1160.el7.x86_64", "mib": 37, "running": true}),
             ]
         );
         let b =
             blacklist_lines("# r8168\nblacklist r8169\ninstall pata-acpi /bin/false\ninstall foo /sbin/modprobe bar\n");
         assert_eq!(b, vec!["r8169", "pata_acpi"]);
+    }
+
+    /// EL's kernel_before keeps a kernel another package owns (kernel-xen) and every kdump image; a release the route
+    /// only passes through installs no kernel, even with a table of its own.
+    #[test]
+    fn el_keeps_other_packages_kernels_and_skipped_releases_install_none() {
+        let full: Vec<&str> = LEVEL_FEATURES.concat();
+        let plain = [("2.6.18-398.el5", 6)];
+        let with_xen = [("2.6.18-398.el5xen", 9), ("2.6.18-398.el5", 6)];
+        let v = verdict(
+            "centos5-to-alma10",
+            &with_boot(machine(&full, true, vec![]), 85, &plain),
+        );
+        assert_eq!(v["lands_on"], "centos7", "{v:#}");
+        let v = verdict(
+            "centos5-to-alma10",
+            &with_boot(machine(&full, true, vec![]), 85, &with_xen),
+        );
+        assert_eq!(v["lands_on"], "centos6", "{v:#}");
+        let p = v["hops"][1]["problems"][0].as_str().unwrap();
+        assert!(p.contains("its kernel 2.6.18-398.el5xen (9 MiB)"), "{p}");
+
+        let mut a = atlas();
+        let (_, r) = a.route("centos5-to-alma10").unwrap();
+        let mut r = r.clone();
+        r["hops"] = json!(["centos6", "centos7", "alma8", "alma9", "alma10"]);
+        let el = a.adapters.get_mut("el").unwrap();
+        let mut alma8 = el["hardware"]["alma9"].clone();
+        alma8["boot_mib"] = json!(1);
+        el["hardware"]["alma8"] = alma8;
+        let m = with_boot(machine(&full, true, vec![]), 110, &plain);
+        let v = evaluate(&a, &r, &m).unwrap();
+        assert_eq!(v["hops"][2]["notes"][0], "not booted on this route");
+        let p = v["hops"][3]["problems"][0].as_str().unwrap();
+        assert!(p.contains("centos7's kernel (45 MiB)"), "{p}");
+    }
+
+    /// Debian's apt autoremoves no kernel before jessie's: on the hop to jessie every kernel is still there.
+    #[test]
+    fn debian_keeps_every_kernel_through_jessie() {
+        let full: Vec<&str> = LEVEL_FEATURES.concat();
+        let etch = [("2.6.18-6-amd64", 8)];
+        // etch 8 + lenny 12 + squeeze 16 + wheezy 20 + jessie 26 + 4 other = 86; stretch: wheezy 20 + jessie 26 + 32
+        let v = verdict("etch-to-trixie", &with_boot(machine(&full, false, vec![]), 85, &etch));
+        assert_eq!(v["lands_on"], "wheezy", "{v:#}");
+        let v = verdict("etch-to-trixie", &with_boot(machine(&full, false, vec![]), 86, &etch));
+        assert_eq!(v["hops"][3]["ok"], true, "{v:#}");
+        assert_eq!(v["hops"][4]["ok"], true, "{v:#}");
     }
 }

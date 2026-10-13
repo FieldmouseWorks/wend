@@ -349,8 +349,17 @@ fn check_hardware(a: &Doc, wh: &str) -> Vec<String> {
         errs.push(format!("{wh}: hardware.old_kernels must be one of {OLD_KERNELS:?}"));
     }
     let ladder = str_list(get(a, "ladder"));
+    if let Some(f) = h.get("autoremove_from") {
+        let ok = h.get("old_kernels").and_then(Value::as_str) == Some("autoremove")
+            && f.as_str().is_some_and(|f| ladder.iter().any(|r| r == f));
+        if !ok {
+            errs.push(format!(
+                "{wh}: hardware.autoremove_from must name a release on the ladder, with old_kernels = \"autoremove\""
+            ));
+        }
+    }
     for (r, t) in h {
-        if r == "boot" || r == "old_kernels" {
+        if r == "boot" || r == "old_kernels" || r == "autoremove_from" {
             continue;
         }
         let Some(tm) = t.as_object().filter(|_| ladder.contains(r)) else {
@@ -408,7 +417,7 @@ pub fn driver_table_errors(atlas: &Atlas, fam: &str, a: &Doc, wh: &str) -> Vec<S
         let Some(want) = get(t, "drivers").and_then(Value::as_str) else {
             continue;
         };
-        if r == "boot" || r == "old_kernels" {
+        if r == "boot" || r == "old_kernels" || r == "autoremove_from" {
             continue;
         }
         let got = atlas.drivers.get(&format!("{fam}/{r}")).map(|b| sha256_hex(b));

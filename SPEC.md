@@ -810,10 +810,11 @@ the userland's word size (the ELF class of `/bin/sh`); the CPU's x86-64 level fe
 bit, not OSXSAVE, since the old kernel may not have turned it on and the new one will; CPUID's hypervisor bit;
 firmware (`/sys/firmware/efi` means UEFI); `MemTotal`; free space on `/`; `/boot`: whether it is a filesystem of its
 own, its size and free space as a package install sees them (root's reserved blocks left out of both), and each
-kernel in it (one per `vmlinuz-<version>`, rescue images aside) with the MiB its files take (`vmlinuz`, initramfs and
-kdump image, `System.map`, `config` and the rest named for that version) and whether it is the running one; the
-modules the machine blacklists (`blacklist m`, or `install m /bin/false`, in `/etc/modprobe.d`, `/etc/modprobe.conf`
-and the distro's own `modprobe.d`); and every PCI device's slot, class, the modalias its ID files make
+kernel in it (one per `vmlinuz-<version>`, rescue images aside) with the MiB its files take (`vmlinuz`, initramfs,
+`System.map`, `config` and the rest named for that version; kdump images count as other files, since EL's
+`hop.kernel_before` leaves them) and whether it is the running one; the modules the machine blacklists (`blacklist
+m`, or `install m /bin/false`, in every file of `/etc/modprobe.d`, since EL5's and lenny's are named `blacklist`
+without `.conf`, `/etc/modprobe.conf` and the distro's own `modprobe.d`); and every PCI device's slot, class, the modalias its ID files make
 (`pci:v…d…sv…sd…bc…sc…i…`), the driver bound to it now, that driver's module and where the module's file is under
 `/lib/modules/<release>` (from `modules.dep`), and whether the module is from outside the kernel's own package: the
 kernel marks one built out of tree (taint `O`, from Linux 3.2), and kmod packages (ELRepo's `kmod-*`, in `extra/` and
@@ -823,10 +824,14 @@ taint flag, shows one. Facts can be gathered on the machine and judged anywhere 
 **Requirements.** The adapter's `[hardware]` table holds them. `boot` lists the firmware modes wend's kernel steps
 are proven to carry a machine through; the VM tier boots its guests by BIOS, so every adapter says `["bios"]` until a
 UEFI replay proves more. `old_kernels` says which kernels sit in `/boot` beside the one a hop installs: `"running"`
-(EL: `hop.kernel_before` removes every kernel but the running one first) or `"autoremove"` (apt: the transaction
-installs the new kernel beside every kernel already there, and `autoremove` only afterwards takes old ones, keeping
-the running kernel and the newest, so from the third hop on the new kernel sits beside the two before it). Every
-release a route can boot into (the ladder after its first release, less `may_skip`)
+(EL: `hop.kernel_before` removes every kernel but the running one first, and only those of `kernel`,
+`kernel-core` and `kernel-modules*`: a kernel another package owns, such as EL5's `kernel-xen`, `kernel-PAE` and
+`kernel-debug`, ELRepo's `kernel-lt` and `kernel-ml`, or Oracle's UEK, which preflight knows by its version's
+suffix, stays on every hop) or `"autoremove"` (apt: the transaction installs the new kernel beside every kernel
+already there, and `autoremove` only afterwards takes old ones, keeping the running kernel and the newest, so from
+the third hop on the new kernel sits beside the two before it). With `"autoremove"`, an optional `autoremove_from`
+names the release whose apt first does that: before apt 1.0, `NeverAutoRemove "^linux-image.*"` kept every kernel,
+so on Debian every kernel stays through the hop to jessie. Every release a route can boot into (the ladder after its first release, less `may_skip`)
 has a `[hardware.<release>]` table:
 
 | key | meaning |
@@ -862,9 +867,10 @@ r8169). A module from outside the kernel's package never follows to the release'
 that kernel's own drivers, and when it has one the verdict notes which takes over. A hop also fails when its kernel
 doesn't fit in a separate `/boot`: `boot_mib` must fit in `/boot`'s size less its other files (what isn't a
 kernel's) and the kernels the hop keeps (`old_kernels`). Those are the machine's running kernel on the first hop with
-`"running"`, and every kernel it has with `"autoremove"`; then the previous release's kernel with `"running"`, and with
-`"autoremove"` the two before it (the machine's running kernel and the first release's, on the second hop). A
-`/boot` on `/` is left to `disk_mib`. `ata_generic`'s,
+`"running"` (with any kernel another package owns, on every hop), and every kernel it has with `"autoremove"`; then
+the previous release's kernel with `"running"`, and with `"autoremove"` the two before it (the machine's running
+kernel and the first release's, on the second hop), or every kernel so far up to `autoremove_from`. A release a route
+only passes through (`may_skip`) installs no kernel. A `/boot` on `/` is left to `disk_mib`. `ata_generic`'s,
 `ide_pci_generic`'s and `pata_acpi`'s class-wide IDE patterns count only for a device that module drives now, since their probes decline
 controllers they don't know. Facts read from a file must have every field `wend facts` writes. The same device with no driver bound is a note, not
 a failure. The machine can land on the last release before the first failing hop. The client says which, says how to
@@ -877,7 +883,8 @@ Not checked yet: firmware files a driver loads; the kernel flavour a machine run
 `linux-image-generic` with its extra modules; a machine on `linux-virtual` has fewer); a DKMS module that would
 rebuild for the new kernel (it isn't counted, so such a device is refused when no in-kernel driver has it); and in
 `/boot`, a GRUB default that isn't the running kernel (EL keeps it too), kdump images the new kernels get once kdump
-starts, and kernels an admin marked manual, which `autoremove` never takes.
+starts, kernels an admin marked manual, which `autoremove` never takes, and a kmod package's blacklist that goes when
+the hop removes the package (it is counted as staying, so such a machine may be refused when it would have landed).
 
 ## VM tier (maintainer-run)
 
