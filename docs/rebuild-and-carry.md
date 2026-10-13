@@ -5,12 +5,12 @@ asks (spec before ops). Background: the "defunct to living" notes (option 2) and
 
 ## The problem this case brings
 
-Every default (anaconda) CentOS 7 install from 7.0, 7.1 or 7.2 media has XFS in the old v4 format (`crc=0`, and `ftype=0`)
-on `/` and `/boot`, and on any other XFS volume made then (`/home` on a default install with a big disk). Updates
-never convert it, and XFS has no in-place v4 to v5 conversion: `xfs_admin` can't add CRCs, and XFS can't shrink, so
-there's no make-room-and-reformat trick either. AlmaLinux 10's kernel is built without `XFS_SUPPORT_V4`, so it can't
-mount any of those filesystems. Preflight (wend#67) therefore stops these machines at Alma 9. Those were the 2014-2016
-installs, which is a lot of the ~1.6M EL7 machines EPEL still counts.
+Every default (anaconda) CentOS 7 install from 7.0, 7.1 or 7.2 media has XFS in the old v4 format (`crc=0`, and
+`ftype=0`) on `/` and `/boot`, and on any other XFS volume made then (`/home` on a default install with a big disk).
+Updates never convert it, and XFS has no in-place v4 to v5 conversion: `xfs_admin` can't add CRCs, and XFS can't
+shrink, so there's no make-room-and-reformat trick either. AlmaLinux 10's kernel is built without `XFS_SUPPORT_V4`, so
+it can't mount any of those filesystems. Preflight (wend#67) therefore stops these machines at Alma 9. Those were the
+2014-2016 installs, which is a lot of the ~1.6M EL7 machines EPEL still counts.
 
 Nothing about their packages is wrong. The in-place route (centos7-lamp, 24 fixes) would carry their userland to
 Alma 10 fine. What they need is their bytes on a filesystem Alma 10 can read.
@@ -69,20 +69,21 @@ stays where it is and keeps its fstab line. A v4 filesystem that isn't mounted n
 and blocks: wend doesn't know what's on it.
 
 **Making the filesystem.** The new root is made by the **old** release's `mkfs.xfs` (EL7.9's xfsprogs 4.5: v5,
-`crc=1`, `ftype=1`, no `reflink`, `bigtime` or `inobtcount`). It has to mount under both the kernel that's running
-now (3.10, while the copy is made and on every rollback check) and every kernel the route boots; the oldest tool that
-must read it makes it. Alma 10 mounts that format (it warns that dates end in 2038; `xfs_admin -O bigtime=1` fixes that, but needs xfsprogs
-5.10+ and the filesystem unmounted, so only from rescue media, and it isn't part of relocate).
+`crc=1`, `ftype=1`, no `reflink`, `bigtime` or `inobtcount`). It has to mount under both the kernel that's running now
+(3.10, while the copy is made and on every rollback check) and every kernel the route boots; the oldest tool that must
+read it makes it. Alma 10 mounts that format (it warns that dates end in 2038; `xfs_admin -O bigtime=1` fixes that,
+but needs xfsprogs 5.10+ and the filesystem unmounted, so only from rescue media, and it isn't part of relocate).
 
 ## Refresh GRUB first (BIOS)
 
 EL7 updates never run `grub2-install`, so `core.img` in the MBR and the modules in `/boot/grub2/i386-pc` are whatever
-the machine was installed with. GRUB's XFS v5 reader is from mid-2015 (CentOS carries it as c7 grub2 patch 0170), so
-a 7.0 or 7.1 machine's GRUB can't read the new root at all, and 7.2's may not. So before anything else, the running
-7.9's own `grub2-install` goes onto the boot disk with the old `/boot/grub2` as its prefix (what leapp's grub core
-update does): same prefix, same config, a GRUB that reads v5. It is the only write to the MBR, it runs unconditionally
-(a 7.9-installed machine just gets the same GRUB again), and a failure here stops relocate before anything else
-changes, with the old config still booting.
+the machine was installed with. GRUB's XFS v5 reader is from mid-2015 (CentOS carries it as c7 grub2 patch 0170), so a
+7.0 or 7.1 machine's GRUB can't read the new root at all, and 7.2's may not. So once preflight passes and before
+anything else, the running 7.9's own `grub2-install` goes onto the boot disk with the old `/boot/grub2` as its prefix
+(what leapp's grub core update does): same prefix, same config, a GRUB that reads v5. It is the only write to the MBR,
+it runs unconditionally (a 7.9-installed machine just gets the same GRUB again), and a failure here stops relocate
+before anything else changes, with the old config still booting. If relocate stops later, the refresh is harmless: the
+refreshed GRUB reads the old config as it is.
 
 It runs before the copy so the new root's `/boot/grub2` carries the refreshed modules too. `core.img` and every module
 under whatever prefix is active must come from the same build: GRUB modules have no version check, and once the stub
@@ -143,14 +144,19 @@ after it), the stub, the renamed config and `grubenv`. Undoing the flip from a r
 back": the refreshed GRUB reads the old config as it is.
 
 **UEFI (shim, EL7's grubx64.efi).** The ESP (vfat) is mounted at `/boot/efi` on the old root and every kernel mounts
-it, so it stays where it is and both roots mount it. The new root gets its own GRUB config directory on the ESP
-(`EFI/centos/` is the old one's; the copy's goes to `EFI/wend/`, with its own `grub.cfg` pointing at the new root), a
-new NVRAM entry (`efibootmgr -c ... -L wend`), and `BootNext` set to it. Firmware clears `BootNext` on use, so the
-trial is the same one-shot as on BIOS, done by the firmware instead. Commit puts the new entry first in `BootOrder`.
-Two traps for when this is built: EL7's grubby and `grub2-mkconfig` write through `/etc/grub2-efi.cfg`, which points
-at `EFI/centos/grub.cfg`, so the copy's symlink must point at `EFI/wend/grub.cfg` or every kernel install in the new
-root rewrites the old root's config; and EL8+'s shim and GRUB install to `EFI/almalinux/`, so the route has to move
-the `wend` NVRAM entry when it gets there. Preflight keeps refusing UEFI until a UEFI VM proof (that's already the
+it, so it stays where it is and both roots mount it. No refresh is needed: `grubx64.efi` is a file of the `grub2-efi`
+package with every module built in, so 7.9's updates already put a GRUB that reads v5 on the ESP, and there are no
+loose modules to mismatch. A second loader directory with copied shim and GRUB plus `BootNext` looks like the natural
+trial, but EL7's `grubx64.efi` has its prefix built in (`/EFI/centos`), so a copy started from `EFI/wend/` would still
+read the old root's config. So UEFI uses the same stub as BIOS, in the place GRUB actually reads:
+`EFI/centos/grub.cfg` becomes the stub (the old config moves to `grub.cfg.wend-old` beside it), with the same
+`wend_default`/`wend_next` in `EFI/centos/grubenv` (GRUB writes `grubenv` on vfat), the same entry 0 into the new root
+and entry 1 into the old config. No NVRAM change at all, and the VFAT needs no log flush, just `sync`. In the copy,
+`/etc/grub2-efi.cfg` (which grubby and `grub2-mkconfig` write through, and which points at `EFI/centos/grub.cfg`) is
+repointed at the copy's own `/boot/grub2/grub.cfg`, or every kernel install in the new root would overwrite the stub.
+EL8+'s shim and GRUB install to `EFI/almalinux/` with that prefix, and nothing creates an NVRAM entry for them, so the
+in-place route needs a UEFI step there too (the counterpart of the BIOS GRUB reinstall below), and on a relocated box
+that step carries the rollback entry over. Preflight keeps refusing UEFI until a UEFI VM proof (that's already the
 rule for every route).
 
 **Afterwards, the route.** The in-place route walks the copy, booted, exactly as it walks any 7.3+ box. One gap shows
@@ -177,12 +183,11 @@ On a relocated box:
 The old root and old `/boot` are never written after the flip, except for `grubenv` on the old `/boot`.
 So:
 
-- **Before the trial boot passes**: reset. The trial was one-shot.
-- **After**: boot the "wend rollback" entry (`wend rollback` sets it as the next boot while the stub is in charge, and as the default once the EL8
-GRUB reinstall has moved the prefix onto LVM, see above). Data written on the new root
+- **Before the trial boot passes**: reset. The trial was one-shot, on BIOS and UEFI alike.
+- **After**: boot the "wend rollback" entry (`wend rollback` sets it as the next boot while the stub is in charge, and
+  as the default once the EL8 GRUB reinstall has moved the prefix onto LVM, see above). Data written on the new root
   since the flip stays there, readable from the old root only through the new LV (the old kernel mounts the new root
-  fine, it made it). The run says this in words: rollback loses what happened after the flip, unless you copy it
-  back.
+  fine, it made it). The run says this in words: rollback loses what happened after the flip, unless you copy it back.
 - **Commit** (`wend commit`, never automatic): drops the rollback entry and removes the old LVs that moved (`root`,
   and `home` or `var` if they were v4), or tells the owner which partitions are now free (wend never repartitions).
   On BIOS, if the route's GRUB reinstall hasn't already moved the prefix to the new root (a relocate committed before
@@ -241,15 +246,15 @@ The VM proof needs:
 
 - a box `el/centos7-lamp-xfsv4`: centos7-lamp's packages and checks, installed by kickstart from the 7.9 tree with
   every XFS made `-m crc=0 -n ftype=0` (exactly what 7.0 to 7.2's mkfs made; the format is the format), a 500 MB
-  `/boot`, LVM `root` and `swap` filling the disk as a default install does, and a second empty 30 GB disk. Its
-  GRUB is 7.9's, so it can't show the old-`core.img` failure the GRUB refresh exists for. The refresh is
-  unconditional for that reason, and a second VM case gets its `core.img` and modules from 7.0 media's grub2 (install
-  from 7.0's `pxeboot`, or put 7.0's `grub2-install` output on the disk before the update) and boots all the way to
-  the new root to prove the refresh. Today the EL7 kickstart (remi's, landing separately) is ext3: the box needs `[vm]` keys for the layout (`fs`, `mkfs_options`,
-  `lvm`, `extra_disks`), which is a VM-tier spec change in its own PR;
+  `/boot`, LVM `root` and `swap` filling the disk as a default install does, and a second empty 30 GB disk. Its GRUB
+  is 7.9's, so it can't show the old-`core.img` failure the GRUB refresh exists for. The refresh is unconditional for
+  that reason, and a second VM case gets its `core.img` and modules from 7.0 media's grub2 (install from 7.0's
+  `pxeboot`, or put 7.0's `grub2-install` output on the disk before the update) and boots all the way to the new root
+  to prove the refresh. Today the EL7 kickstart (remi's, landing separately) is ext3: the box needs `[vm]` keys for
+  the layout (`fs`, `mkfs_options`, `lvm`, `extra_disks`), which is a VM-tier spec change in its own PR;
 - relocate as a vm.py step before the first hop, a forced reset during the trial boot (it must come back on the old
-  root), the trial again, all the way to the new root's checks, and the commit-to-trial, then the route, rebooting as usual, and a rollback boot after the
-  last hop (the old root's checks pass, as they did at the start);
+  root), the trial again, all the way to the new root's checks, and the commit-to-trial, then the route, rebooting as
+  usual, and a rollback boot after the last hop (the old root's checks pass, as they did at the start);
 - the in-place centos7-lamp route's VM proof first (or alongside), because its GRUB reinstall gap is relocate's too,
   and it's the baseline the relocated box is compared against: same checks, same final package set, plus downtime
   and disk used.
@@ -264,5 +269,5 @@ The VM proof needs:
    commands, the initramfs rebuild), with its SPEC section. remi proves BIOS: relocate, trial reset, route, rollback.
 5. Preflight: the relocate verdict (room, boot layout, moving filesystems) in the Rust client; `wend commit` and
    `wend rollback` once the client walks live roots.
-6. UEFI: OVMF box, `BootNext` trial, remi proof.
+6. UEFI: OVMF box, the stub on the ESP, the EL8+ loader step, remi proof.
 7. Then movers, on Foresight or EL7 to Debian.
