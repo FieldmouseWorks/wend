@@ -7,11 +7,13 @@ ifupdown's own hook that hands an interface's dns-* options to resolved (/etc/ne
 ("mystatedir: not found"), resolvconf lists only resolved's stub, and resolved has no upstream server: nothing
 resolves after the reboot. Noble no longer ships resolvconf at all.
 
-Typed, not a guess: the files are read as interfaces(5) says (a "#" only at the start of a line, "\\" continuing a
-line, "source" globs and "source-directory" directories followed), only the dns-nameservers, dns-search and
-dns-domain options are read, every value must be an address or a plain domain name, and anything else about the
-file is left to ifupdown. The result is one resolved drop-in, /etc/systemd/resolved.conf.d/50-wend-ifupdown.conf,
-with DNS= and Domains=, written only when it is new or the same. Addresses and routes stay with ifupdown.
+Typed, not a guess: the files are read the way ifupdown reads them (a "#" line skipped before "\\" joins lines,
+"source" globs and "source-directory" directories followed), the dns options are named the way ifupdown hands them
+to its hooks (dns-nameservers, dns-nameserver, dns-search, dns-domain; "-" or "_"), every value must be a global
+address or a plain domain name, any other dns option, or one on an interface that isn't brought up at boot by name,
+fails the step, and anything else about the file is left to ifupdown. The result is one resolved drop-in,
+/etc/systemd/resolved.conf.d/50-wend-ifupdown.conf, with DNS= and Domains=, written only when it is new or the same.
+Addresses and routes stay with ifupdown.
 
 Run on the box by both engines as `python3 -` with this file as a here-document (tools/backends.py); this file is
 the source, and the client embeds the same text (client/parity.py compares them). tools/test_net_ifupdown.py runs it
@@ -33,32 +35,44 @@ def fail(msg):
     sys.exit(f"{msg}, nothing changed")
 
 
+def physical_to_logical(path):
+    """ifupdown's own reading (config.c): a line whose first non-blank is "#" is skipped as one physical line, then a
+    line ending in "\" takes the next physical line on, the "\" removed and nothing added."""
+    try:
+        raw = open(path, "rb").read().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        fail(f"{path}: {getattr(e, 'strerror', None) or e}")
+    phys, out, k = raw.split("\n"), [], 0
+    while k < len(phys):
+        line = phys[k]
+        k += 1
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        while line.endswith("\\") and k < len(phys):
+            line = line[:-1] + phys[k]
+            k += 1
+        out.append(line.strip())
+    return out
+
+
 def lines(path, seen, root=""):
-    """interfaces(5) logical lines of path and the files it sources, in order. root prefixes absolute names (tests)."""
+    """The logical lines of path and the files it sources, in order, as ifupdown reads them: a file already read is
+    skipped, a source pattern that matches nothing or a directory is skipped. root prefixes absolute names (tests)."""
     real = os.path.realpath(path)
     if real in seen:
-        fail(f"{path} is sourced twice")
+        return []
     seen.add(real)
-    try:
-        text = open(path).read()
-    except OSError as e:
-        fail(f"{path}: {e.strerror}")
-    logical = []
-    for raw in re.sub(r"\\\n", " ", text).split("\n"):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        logical.append(line)
     out = []
     base = os.path.dirname(path)
-    for line in logical:
+    for line in physical_to_logical(path):
         words = line.split()
         if words[0] == "source":
             for pattern in words[1:]:
                 where = os.path.join(base, pattern) if not pattern.startswith("/") else root + pattern
                 for f in sorted(glob.glob(where)):
-                    out += lines(f, seen, root)
-        elif words[0] in ("source-directory", "source-dir"):
+                    if os.path.isfile(f):
+                        out += lines(f, seen, root)
+        elif words[0].startswith("source-dir"):  # ifupdown takes any word starting so (header.h)
             for d in words[1:]:
                 d = os.path.join(base, d) if not d.startswith("/") else root + d
                 if os.path.isdir(d):
@@ -70,24 +84,45 @@ def lines(path, seen, root=""):
     return out
 
 
+def option(key):
+    """An option name as ifupdown hands it to the hooks: "-" becomes "_", upper case (execute.c setlocalenv)."""
+    return key.replace("-", "_").upper()
+
+
 def plan(root=""):
-    dns, search = [], []
+    dns, search, up, stanza, mapping = [], [], set(), None, False
+    found = []
     for path, words in lines(root + INTERFACES, set(), root):
         key, values = words[0], words[1:]
-        if key == "dns-nameservers":
+        if key == "auto" or key.startswith("allow-"):
+            up.update(values)
+        elif key == "iface":
+            stanza = values[0] if values else None
+        elif key == "mapping":
+            mapping, stanza = True, None
+        elif option(key).startswith("DNS_"):
+            found.append((path, stanza, option(key), key, values))
+    for path, stanza, opt, key, values in found:
+        if mapping or stanza not in up:  # resolvconf only took the dns-* options of interfaces that came up
+            fail(f"{path}: {key} on {stanza or 'a mapping'}, which isn't brought up at boot by name")
+        if opt in ("DNS_NAMESERVERS", "DNS_NAMESERVER"):  # what resolvconf's and ifupdown's hooks read
             for v in values:
                 try:
-                    a = str(ipaddress.ip_address(v))
+                    a = ipaddress.ip_address(v)
                 except ValueError:
-                    fail(f"{path}: dns-nameservers {v} isn't an address")
-                if a not in dns:
-                    dns.append(a)
-        elif key in ("dns-search", "dns-domain"):
+                    fail(f"{path}: {key} {v} isn't an address")
+                if "%" in v or a.is_link_local:
+                    fail(f"{path}: {key} {v} is scoped or link-local, which resolved can't use as a global server")
+                if str(a) not in dns:
+                    dns.append(str(a))
+        elif opt in ("DNS_SEARCH", "DNS_DOMAIN"):
             for v in values:
                 if not re.fullmatch(DOMAIN, v):
                     fail(f"{path}: {key} {v} isn't a plain domain name")
                 if v.rstrip(".") not in search:
                     search.append(v.rstrip("."))
+        else:
+            fail(f"{path}: {key} isn't carried to resolved")
     return dns, search
 
 
