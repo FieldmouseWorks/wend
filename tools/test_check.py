@@ -347,8 +347,10 @@ for hop in adapters["ubuntu"]["ladder"][1:]:
     first, _ = _walk.Walk.hop_parts(w_, hop, [])
     rel = adapters["ubuntu"]["releases"].get(hop)
     up = rel["upgrade"] if hop in ("xenial", "jammy") else adapters["ubuntu"]["hop"]["upgrade"]
+    kb = [_walk.fill(c, w_.vars) for c in adapters["ubuntu"]["hop"]["kernel_before"]]
     ok = first[-len(up):] == up and (("policy-rc.d" in "".join(first)) == (hop == "xenial")) and \
-        (("usrmerge" in "".join(first)) == (hop == "jammy"))
-    print(("passed  " if ok else "WRONG   ") + f"ubuntu {hop}: the hop's own upgrade, and only xenial's and jammy's extras")
+        (("usrmerge" in "".join(first)) == (hop == "jammy")) and first[2:2 + len(kb)] == kb
+    print(("passed  " if ok else "WRONG   ") + f"ubuntu {hop}: old kernels purged after refresh, the hop's own upgrade, only xenial's and jammy's "
+          "extras")
     bad += not ok
 sys.exit(1 if bad else 0)
