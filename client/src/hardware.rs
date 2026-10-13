@@ -1719,6 +1719,7 @@ mod tests {
         let files = vec![
             ("vmlinuz-3.10.0-1160.el7.x86_64".to_string(), 1),
             ("vmlinuz-0-rescue-ab".to_string(), 1),
+            ("vmlinuz-3.10.0-957.el7.x86_64".to_string(), 1),
         ];
         let g2 = |d: &str, e: &str| grub2_default_may_be_rescue(Some(d.into()), Some(e.into()), &files);
         let saved = "GRUB_DEFAULT=saved\n";
@@ -1729,7 +1730,13 @@ mod tests {
         assert!(g2(saved, "saved_entry=CentOS Linux (0-rescue-ab) 7 (Core)\n"));
         // a renamed entry, or one whose kernel is gone, may be the rescue image
         assert!(g2(saved, "saved_entry=Rescue\n"));
-        assert!(g2(saved, "saved_entry=CentOS Linux (3.10.0-957.el7.x86_64) 7 (Core)\n"));
+        assert!(g2(saved, "saved_entry=CentOS Linux (3.10.0-862.el7.x86_64) 7 (Core)\n"));
+        // updated but not rebooted: the saved default is an installed kernel that isn't running, which
+        // kernel_before keeps, so the rescue image goes
+        assert!(!g2(
+            saved,
+            "saved_entry=CentOS Linux (3.10.0-957.el7.x86_64) 7 (Core)\n"
+        ));
         assert!(g2(saved, "saved_entry=2\n"));
         assert!(g2(saved, "saved_entry=1>2\n"));
         assert!(!g2(saved, "saved_entry=3f2a9c-3.10.0-1160.el7.x86_64\n"));
