@@ -1081,6 +1081,147 @@ script of its own; a Python 2 an add-on repository ships (EPEL's `python26` on E
 owner's own code (an rpm or deb the owner built counts as the distro's); a Python 2 built from source, whose shared
 libraries the hop may take away even though its files stay; and runtimes other than Python 2 (PHP 5, Java 6).
 
+## Sheltering an app (draft: not built yet)
+
+This section designs the **shelter** choice that runtime preflight offers. Nothing here is built yet; it lands op by
+op, each with its own PR, after a box with a Python 2 app of its own (`el/centos7-pyapp`) is on main.
+
+### What it is, and what it isn't
+
+Runtime preflight finds a machine's own Python 2 programs and tells the owner where the route leaves Python
+2 behind. Sheltering is the option that lets the route go all the way anyway. The host goes to the target release:
+kernel, glibc, openssl, sshd, the bootloader, every other service. Only the owner's Python 2 programs keep the old
+userland they run on now, in a container of their own, with their code and data mounted in from the host.
+
+It is a tourniquet. The app's Python 2 and every library it loads stay unpatched forever. wend says so in the
+verdict, in the run, and in the unit file it writes. It never patches them, rebuilds them, or carries old
+packages onto the host. Porting the app is the cure, and the shelter buys the time to do it.
+
+Scope of the first version:
+- `process` and `cron` users from runtime preflight. `embedded` (mod_wsgi, mod_python) comes next, because it means
+  splitting the box's httpd: a sheltered httpd on a loopback port, with the host's httpd proxying the vhost.
+- One shelter per app. An app is a code tree (the directory the programs live under, such as `/opt/billing`) with
+  its service and its cron jobs. The plan proposes the grouping, and the owner can rename or split it.
+- Only the machine's own programs. The distro's own Python 2 tools never get sheltered: the route carries them.
+
+### Where the userland comes from, and how it stays pinned
+
+It's built from the starting release's own packages, at the exact versions installed on the machine now, never by
+snapshotting the live `/usr`:
+
+1. **Package set.** Python 2 itself, plus the package that owns each file the app's processes have mapped
+   (`/proc/<pid>/maps`: shared libraries, `.so` modules) or open (its `.py`/`.pyc` imports under
+   `lib/python2.N`), plus their dependency closure in the old release. For a cron-only app, which isn't running
+   when facts are gathered, the plan runs the job's interpreter once in a sandbox copy with `-v` to list its
+   imports. It never runs the job on the real machine.
+2. **Fetch.** From the release's archive (vault.centos.org, archive.debian.org, old-releases.ubuntu.com), through
+   the same pinned metadata a run's `hops[].sources` already carry: the index's digest is pinned, and every package
+   is checked against the sha256 the index lists. A package whose bytes don't match is refused, and the shelter
+   isn't built (the "refuse before touching anything" rule).
+3. **Build.** Packages are unpacked and installed into `/var/lib/wend/shelter/<app>/root` by the old release's own
+   rpm or dpkg, in the sandbox wend already uses to build CI boxes (private tmpfs `/dev`, never the host's).
+4. **Carried files.** Files the app needs that no package owns (pip-installed site-packages, `/usr/local/lib/
+   python2.7`, a vendored module tree) are copied in as a separate layer. Each one is listed with its sha256, so
+   the owner sees exactly what came from outside the vendor's archive.
+5. **Lock.** `/var/lib/wend/shelter/<app>/shelter.lock` records the release, the pinned index digests, every
+   package with its version and sha256, every carried file with its sha256, and the built image's digest. The run
+   records the lock too.
+
+Why not snapshot `/usr`? It would be faithful, but it carries whatever the box has, compromised binaries
+included. It can't be checked against anything, and a second machine can't reproduce it. Packages from the pinned
+archive are verifiable byte for byte, and the carried layer names everything else.
+
+The honest limit: package scriptlets aren't bit-reproducible (timestamps, generated caches). So wend pins the
+inputs, records the output's digest, and runs the image by that digest. A rebuild re-verifies every input, not
+every output bit.
+
+**Until the archive (wend#19) exists**, "the release's archive" above means the vendor's own vault and nothing
+else. wend fetches from the vault and pins by the digests its index lists. If the vault is gone, or serves
+different bytes, it refuses before touching the box. That's the same rule a route follows (open
+question 12). There's no `--live` escape here, because there's nothing live to fall back to. Shelter depends on no
+unbuilt infrastructure. It just stops working the day a vault dies, which is why #19 matters more with shelters.
+
+Archive (wend#19) becomes more urgent with shelters. Once a vault dies, a shelter can't be rebuilt from anywhere
+else. Packages that a proven shelter's lock names should go into the pinned archive, like a route's.
+
+### How it runs on the host
+
+Podman, from the landing release's own repos (versions to be recorded per release in `[runtimes.<release>]`). Read
+from the indexes on 2026-10-13: every release where Python 2 drops has podman 4.3 or later. Those are alma9 and
+alma10 (5.8.2), bookworm (4.3.1), trixie (5.4.2), noble (4.9.3) and resolute (5.7.0). Bookworm has no quadlet,
+which is why wend writes a plain unit.
+The image is built locally, loaded with `podman load`, and run by digest. There's no registry.
+
+wend writes a plain systemd unit, not a quadlet, so it works on podman 4 and 5 alike:
+`/etc/systemd/system/wend-shelter-<app>.service` runs `podman run --rm --name wend-<app> ... <image digest>
+<the program's own command line>`. It's a harness-owned path, and the unit's header says what it is and that its
+userland is unpatched.
+
+Defaults, which the plan shows and the run records:
+- `--read-only` root, with a tmpfs `/tmp` and `/run`
+- `--userns=auto`, so the container's root is not the host's root; the program runs as the uid it runs as now
+- `--cap-drop=all` (plus `NET_BIND_SERVICE` only if it listens below 1024) and `--security-opt no-new-privileges`
+- podman's default seccomp profile and, on EL, its SELinux confinement (`container_t`)
+- no podman or docker socket, and no host `/dev` beyond podman's default
+- **Network:** private by default (every connection is an explicit opt-in). Runtime preflight records the TCP connections and listening sockets each
+  sheltered program actually has (`/proc/<pid>/net/tcp*` matched to its socket inodes, sampled while facts are
+  gathered), and the plan prefills the opt-ins from them. So a program already talking to MariaDB on
+  127.0.0.1:3306, or out to an API, gets exactly those routes proposed, and the owner confirms them. That way
+  "private" rarely breaks a working app. A connection that only happens at 3 a.m. won't be seen, and the plan says
+  so. Ports the program listens on now (`/proc/net/tcp*`, matched to its sockets)
+  are published on the same address. Unix sockets it has connected to (MariaDB's `mysql.sock`, which is what
+  MySQLdb's `host="localhost"` uses) are bind-mounted. An app that needs TCP to a host service or the internet
+  is named by the plan. The owner then opts in to `network = "host"`, and the run records it as an exception.
+- **Mounts:** the code tree read-only. Data directories read-write: the ones the program has open for writing,
+  or has as its working directory, under `/var`, `/srv`, `/home` or `/opt`. The plan lists them, and the owner
+  confirms them. Data is never copied, so the host and the shelter see the same bytes, and the box's backups keep
+  working.
+
+### The ops
+
+New typed ops (rpm and apt backends alike, no shell in fixes), each with preconditions and checks:
+
+| op | when | does |
+|---|---|---|
+| `shelter.build` | before the first hop | builds the root and the lock (above); needs the free space the plan computed |
+| `shelter.prove` | before the first hop | runs the app's checks against the shelter root in the sandbox, with the real data mounted read-only; refuses the route if the app doesn't run there |
+| `shelter.stop-native` | pre phase of the hop that drops Python 2 | stops and disables the app's own service unit; it's kept, not deleted, so rolling back restores it |
+| `shelter.move-cron` | same hop | comments out each cron line that runs a sheltered program, with a `# wend-shelter:<app>` marker (the original goes under `/var/lib/wend/saved`), and writes a systemd timer that runs the same command in the shelter; the precondition is the line's exact text |
+| `shelter.start` | post phase of that hop | installs podman (an `install` op of the landing release), loads the image, writes and enables the unit |
+
+The app is down from `stop-native` until `start`: one hop, including that hop's reboot. That's the same window the
+route itself causes.
+
+### Proof
+
+- **Box first** (its own PR): `el/centos7-pyapp` is a centos7-lamp sibling with a Python 2 service (a small
+  BaseHTTPServer JSON API reading MariaDB through MySQLdb over the socket, writing to `/var/lib/billing`), its
+  systemd unit, and a nightly cron job. Its `app` check fetches the row over HTTP. Its `cron` check runs the job
+  and reads what it wrote.
+- **CI (chroot tier):** chroots run no podman, so CI checks the shelter by chroot into the shelter root with the
+  same mounts. That's the same isolation tier as every other CI check. `site`, `app` and `cron` must stay green
+  at every hop.
+- **VM tier (remi):** the real thing. centos7-pyapp to alma10 under podman, with real reboots, and checks green
+  after each hop. The same goes for a Debian bullseye-to-trixie box later.
+
+### What preflight says
+
+`wend preflight ROUTE --shelter` turns the runtime verdict into a plan. For each app it gives the programs, the
+mounts, the published ports, the package count and the carried files, the disk the build needs, and the
+landing release's podman. It also says, in words: "the shelter keeps Python 2.7.5 and OpenSSL 1.0.2k, which get no
+security fixes; anything that reaches this program over the network reaches them too. Put TLS in front of it on the
+host if it serves the internet."
+
+The verdict is `ok` only when every own Python 2 user is in a shelter that `shelter.prove` passed.
+
+### Refused
+
+- shipping or patching Python 2, or carrying old packages onto the host
+- sheltering the whole box, or the distro's own programs
+- host networking or privileged containers, unless the owner opts in by name (and the run records it)
+- a shelter on a release whose own repos have no podman
+- building from anything but the pinned archive
+
 ## VM tier (maintainer-run)
 
 A chroot can't test kernels, bootloaders, init or networking (open question 10). `tools/vm.py` replays a route on a
