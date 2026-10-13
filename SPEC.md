@@ -487,11 +487,13 @@ own configuration. The op runs on the live box before the hop's reboot: `ifquery
 brought up as `PHYSICAL=LOGICAL`, the stanza it used (`auto eth0=work` and mapping patterns name the logical stanza),
 and `ifquery --no-mappings -- PHYSICAL=LOGICAL` prints that stanza's options as ifupdown parsed them (inet and inet6
 stanzas, `inherits`, sourced files); without `--no-mappings` ifquery would run the admin's `mapping` scripts again
-from the logical name and could land on another stanza. What the state says is what the op carries, in bring-up
-order: an interface whose ifup failed (even for one address family), that was never brought up, or that was taken
+from the logical name and could land on another stanza. What the state says is what the op carries, in the order ifup
+started each interface (its state line, written before the interface's own `up` commands run): an interface whose ifup failed (even for one address family), that was never brought up, or that was taken
 down by hand isn't in it, and one brought up by hand is. A box with no state (a chroot replay, or a live box whose
 `/run/network/ifstate` is gone) carries nothing. A value given with `ifup -o` isn't in the configuration, so the
-configuration's value is carried. A configuration ifupdown can't read fails the step, and so does a state line whose interface or stanza name starts with `-` or holds anything
+configuration's value is carried, as it is for a stanza edited since boot (the value the hop's reboot gives the
+hooks). A stanza deleted since boot fails the step, unless a mapping still matches its name: then ifquery prints
+nothing for it and nothing is carried, as the reboot would give its hooks nothing. A configuration ifupdown can't read fails the step, and so does a state line whose interface or stanza name starts with `-` or holds anything
 but `[A-Za-z0-9_.:@-]`. ifquery prints `name: value` per option, and ifupdown keeps an option given twice as one value
 joined by a newline, so a line without `: ` (or with whitespace in its name) continues the value before it (only a
 newline ends a line), and a value is split into words as a hook's shell splits it (space, tab, newline). Each option
@@ -500,7 +502,8 @@ upper case, anything else dropped), and two spellings of one `DNS_*` name on an 
 `DNS_NAMESERVERS` and `DNS_NAMESERVER` must be unicast addresses a resolver can be at (no scope, not link-local,
 multicast, loopback, unspecified, reserved, broadcast or IPv4-mapped); `DNS_SEARCH` and `DNS_DOMAIN` plain domain
 names; any other `DNS_*` option fails the step. The result is `/etc/systemd/resolved.conf.d/50-wend-ifupdown.conf`
-with `DNS=` and `Domains=`, written (mode 0644 in a 0755 directory, never through a symlink) only when it is new;
+with `DNS=` and `Domains=`, written (mode 0644 in a 0755 directory, never through a symlink, and `/etc`, `/etc/systemd` and the directory
+must not be symlinks either) only when it is new;
 one that is already there must be a plain file saying the same, and a `.wend` file beside it fails the step. Nothing
 is written when no interface ifupdown has up names a `dns-*` option, and every refusal comes before anything is
 written. Addresses and routes stay with ifupdown, and resolved reads the drop-in at the reboot that ends the hop.

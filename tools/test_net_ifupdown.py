@@ -155,6 +155,13 @@ for name, q, why, kw in (
         ("a file where the drop-in's directory goes", BOOT, "isn't a directory",
          {"prepare": lambda p: (os.makedirs(os.path.dirname(os.path.dirname(p))),
                                 open(os.path.dirname(p), "w").write("x"))}),
+        ("a symlinked resolved.conf.d", BOOT, "is a symlink",
+         {"prepare": lambda p: (os.makedirs(os.path.dirname(p) + ".real"),
+                                os.symlink(os.path.dirname(p) + ".real", os.path.dirname(p)))}),
+        ("a symlinked /etc/systemd", BOOT, "is a symlink",
+         {"prepare": lambda p: (os.makedirs(os.path.dirname(os.path.dirname(p)) + ".real"),
+                                os.symlink(os.path.dirname(os.path.dirname(p)) + ".real",
+                                           os.path.dirname(os.path.dirname(p))))}),
         ("a continuation before any option", with_eth0(["10.0.2.3"] + ETH0), "before any option", {}),
         ("a state interface that reads as an option", with_eth0(ETH0, ["lo=lo", "--help=eth0"]), "isn't 'interface=",
          {}),
@@ -169,6 +176,7 @@ for name, q, why, kw in (
         ("a directory where the drop-in goes", BOOT, "exists already", {"prepare": lambda p: os.makedirs(p)})):
     msg, out, left, mode = run(q, **kw)
     unchanged = left == ([DROP + ".wend"] if ".wend" in why else [os.path.dirname(DROP)] if "directory" in why else [])
+    unchanged = unchanged or ("symlink" in why and not any(n.endswith(".conf") for n in left))
     case(f"{name} is refused before anything changes", refused(msg, why) and out is None and unchanged)
 for name, q, why in (
         ("ifupdown failing to read its configuration", {"fail": True}, "misplaced option"),

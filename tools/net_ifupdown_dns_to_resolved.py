@@ -13,10 +13,13 @@ live box before the hop's reboot, so `ifquery --state` lists each interface ifup
 `ifquery --no-mappings -- PHYSICAL=LOGICAL` prints that stanza's options as ifupdown parsed them (sourced files,
 comments, continuations, misplaced options, inherits); without --no-mappings ifquery would run the admin's mapping
 scripts again from the logical name and could land on another stanza. A configuration ifupdown can't read fails the
-step. What the state says is what the op carries, in bring-up order: an interface whose ifup failed (even one family
+step. What the state says is what the op carries, in the order ifup started each interface (its state line, written
+before the interface's own `up` commands run): an interface whose ifup failed (even one family
 of it), that was never brought up, or that was taken down by hand isn't in it; one brought up by hand is; a box with
 no state (a chroot, or a live box whose /run/network/ifstate is gone) carries nothing. Options given with `ifup -o`
-aren't in the configuration, so the configuration's value is carried.
+aren't in the configuration, so the configuration's value is carried, as it is for a stanza edited since boot (the
+value the hop's reboot gives the hooks). A stanza deleted since boot fails the step, unless a mapping still matches
+its name: then ifquery prints nothing for it and nothing is carried, as the reboot would give its hooks nothing.
 ifquery prints `name: value` per option, and an option given twice is one value joined by a newline (config.c), so a
 line without ": " (or with whitespace in its name) continues the value before it, and a value is split into words
 as a hook's shell splits it (space, tab, newline; nothing else). Each option name is turned into the name ifupdown's
@@ -84,7 +87,7 @@ def server(iface, key, v):
 
 def plan():
     names = []
-    for n in reversed(ifquery("--state")):  # ifupdown lists its state last first; this is bring-up order
+    for n in reversed(ifquery("--state")):  # ifupdown lists its state last first; this is the order ifup started them
         phys, eq, logical = n.partition("=")
         if not eq or not re.fullmatch(NAME, phys) or not re.fullmatch(NAME, logical):
             fail(f"ifquery's state has {n!r}, which isn't 'interface=stanza'")
@@ -140,6 +143,9 @@ def main(root=""):
         return
     if os.path.lexists(path + ".wend"):
         fail(f"{DROPIN}.wend is in the way")
+    for d in ("/etc", "/etc/systemd", os.path.dirname(DROPIN)):  # O_NOFOLLOW guards only the last name
+        if os.path.islink(root + d):
+            fail(f"{d} is a symlink")
     if os.path.lexists(os.path.dirname(path)) and not os.path.isdir(os.path.dirname(path)):
         fail(f"{os.path.dirname(DROPIN)} isn't a directory")
     if not os.path.isdir(os.path.dirname(path)):
