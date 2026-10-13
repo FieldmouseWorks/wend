@@ -931,7 +931,7 @@ kernel in it (one per `vmlinuz-<version>`, rescue images aside) with the MiB its
 m`, or `install m /bin/false`, in every file of `/etc/modprobe.d`, since EL5's and lenny's are named `blacklist`
 without `.conf`, `/etc/modprobe.conf` and the distro's own `modprobe.d`); every mounted ext2, ext3, ext4, XFS, btrfs,
 reiserfs or JFS filesystem (from `/proc/mounts`, once each, bind mounts aside): its mount point, its device (the one
-the mount point's `st_dev` names in `/sys/dev/block`, since 2.6.18 and 2.6.32 list the root as `/dev/root`), its type,
+the mount point's `st_dev` names in `/sys/dev/block`, or `/sys/block` before 2.6.27, since 2.6.18 and 2.6.32 list the root as `/dev/root`; one filesystem listed twice counts once), its type,
 and from its superblock whether an XFS is the old v4 format (the low nibble of `sb_versionnum` is 5 on v5) and an
 ext2/3/4's inode size (null when the device can't be read); and every PCI device's slot, class, the modalias its ID files make
 (`pci:v…d…sv…sd…bc…sc…i…`), the driver bound to it now, that driver's module and where the module's file is under

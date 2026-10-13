@@ -91,21 +91,15 @@ fn mounts() -> Vec<Value> {
             continue;
         }
         let mnt = unescape_mount(mnt);
-        let st = fs::metadata(&mnt).ok().map(|m| m.dev());
-        if !seen.insert((st, fstype.to_string(), dev.to_string())) {
+        // /proc/mounts may name the root /dev/root (2.6.18, 2.6.32): the device is the one the mount's st_dev names.
+        // One filesystem listed again (a bind mount, another name for its device, a btrfs subvolume) counts once.
+        let device = fs::metadata(&mnt)
+            .ok()
+            .and_then(|m| block_device(m.dev()))
+            .unwrap_or_else(|| dev.to_string());
+        if !seen.insert((device.clone(), fstype.to_string())) {
             continue;
         }
-        // /proc/mounts may name the root /dev/root (2.6.18, 2.6.32): the device is the one the mount's st_dev names
-        let device = st
-            .and_then(|d| {
-                let (ma, mi) = (libc::major(d), libc::minor(d));
-                fs::read_to_string(format!("/sys/dev/block/{ma}:{mi}/uevent")).ok()
-            })
-            .and_then(|u| {
-                u.lines()
-                    .find_map(|l| l.strip_prefix("DEVNAME=").map(|n| format!("/dev/{n}")))
-            })
-            .unwrap_or_else(|| dev.to_string());
         let sb = superblock(&device);
         let (xfs_v4, inode_size) = match (*fstype, &sb) {
             ("xfs", Some(b)) => (json!(xfs_is_v4(b)), Value::Null),
@@ -118,6 +112,35 @@ fn mounts() -> Vec<Value> {
         );
     }
     out
+}
+
+/// The /dev path of the block device a st_dev names: `/sys/dev/block/<major>:<minor>` from Linux 2.6.27, before that
+/// the `dev` file of each disk and partition under `/sys/block` (where `cciss!c0d0` stands for `cciss/c0d0`).
+fn block_device(st_dev: u64) -> Option<String> {
+    let (ma, mi) = (libc::major(st_dev), libc::minor(st_dev));
+    if let Ok(u) = fs::read_to_string(format!("/sys/dev/block/{ma}:{mi}/uevent")) {
+        if let Some(n) = u.lines().find_map(|l| l.strip_prefix("DEVNAME=")) {
+            return Some(format!("/dev/{n}"));
+        }
+    }
+    let want = format!("{ma}:{mi}");
+    for disk in fs::read_dir("/sys/block").ok()?.flatten() {
+        let mut dirs = vec![disk.path()];
+        dirs.extend(
+            fs::read_dir(disk.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path()),
+        );
+        for d in dirs {
+            if fs::read_to_string(d.join("dev")).is_ok_and(|v| v.trim() == want) {
+                let name = d.file_name()?.to_string_lossy().replace('!', "/");
+                return Some(format!("/dev/{name}"));
+            }
+        }
+    }
+    None
 }
 
 /// /proc/mounts escapes a space, tab, newline and backslash in a path as octal (`\040`).
@@ -919,7 +942,7 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
             let without = if mnt == "/" {
                 "the machine wouldn't boot"
             } else {
-                "it would come up without it"
+                "the machine would come up without it, or stop booting where fstab doesn't mark it nofail"
             };
             if !FILESYSTEMS.contains(&fstype) {
                 continue;
@@ -1479,7 +1502,7 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(
-            p.contains("/srv (/dev/sdb1) is XFS in the old v4 format") && p.contains("come up without it"),
+            p.contains("/srv (/dev/sdb1) is XFS in the old v4 format") && p.contains("nofail"),
             "{p}"
         );
         // a v5 XFS goes all the way; one whose superblock couldn't be read can't be told apart
