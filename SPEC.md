@@ -1392,9 +1392,10 @@ The rules:
   run on UEFI (`/sys/firmware/efi`). A start release whose installer can't install on UEFI isn't built:
   `releases.<id>.install.uefi` says it can (trusty, CentOS 7; not etch or CentOS 5, whose installers predate UEFI on
   x86-64, so no machine running them boots that way). A run records its `firmware`, and resumes only a run on the same.
-- Disk layout: by default anaconda makes a 200 MB `/boot`, swap and `/` as plain partitions on one disk. Three install
-  choices, given before the command, change that for an EL7-and-later kickstart: `--root-fs` overrides the box's
-  `root_fs`; `--lvm` lays the disk out as EL7's own autopart does (a 500 MB `/boot`, then one PV in a volume group
+- Disk layout: by default anaconda makes `/boot` (the release's default size), swap and `/` as plain partitions on one
+  disk. Three install choices, given before the command, change that for an EL7-and-later kickstart: `--root-fs`
+  overrides the box's `root_fs` (one the installer makes); `--lvm` lays the disk out as EL7's own autopart does
+  (`/boot`, then one PV in a volume group
   `centos` holding `swap` and a `root` that fills it, so no extents are free); `--extra-disk GB` (repeatable) adds an
   empty disk on the same controller, which anaconda never touches (`ignoredisk --only-use`) and which carries its own
   overlay through every hop like the first. They are install choices, not boxes: a chroot box has no disks, so the box

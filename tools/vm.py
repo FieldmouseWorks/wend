@@ -21,7 +21,7 @@ not runs/ (runs/ holds what CI proved).
                                            and NVRAM, and after every boot the guest must still be running on UEFI
   --root-fs FS, --lvm, --extra-disk GB     (before the command, EL7 kickstart on) the box installed another way:
                                            FS overrides [vm].root_fs; --lvm puts / and swap on LVM in a VG `centos`
-                                           filling the disk, with a 500 MB /boot, as a default EL7 install does;
+                                           filling the disk, beside /boot, as a default EL7 install does;
                                            --extra-disk adds an empty disk of GB (repeatable). Its own box and runs
 
 Networking is QEMU user mode: nothing on the host changes. The guest reaches the mirror shim at 10.0.2.2. The guest's
