@@ -281,7 +281,7 @@ def kickstart(box_doc, adapter, key_pub):
     end = ["%end"] if inst.get("ks_end") else []
     fs = ROOT_FS[LAYOUT["root_fs"] or box_doc.get("vm", {}).get("root_fs", "ext3")]
     efi = ["part /boot/efi --fstype efi --size=200"] if FIRMWARE == "uefi" else []
-    boot = f"part /boot {fs} --size={inst.get('boot_mib', 200)}"
+    boot = f"part /boot {fs} --size={inst.get('boot_part_mib', 200)}"
     if LAYOUT["lvm"]:  # anaconda's EL7 autopart: /boot, then one PV with swap and a root that fills it
         parts = [boot, *efi, "part pv.01 --size=1 --grow", "volgroup centos pv.01",
                  "logvol swap --vgname=centos --name=swap --size=1024",
