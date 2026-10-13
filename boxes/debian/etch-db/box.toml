@@ -5,7 +5,9 @@ family = "debian"
 release = "etch"
 arch = "amd64"
 summary = "etch database server: MySQL 5.0 with a real table, BIND master zone, Exim"
-packages = ["openssh-server", "mysql-server", "bind9", "exim4", "cron", "rsync", "sudo", "python", "perl", "curl", "logrotate", "less"]
+packages = ["openssh-server", "mysql-server", "bind9", "exim4", "cron", "rsync", "sudo", "python", "perl", "curl", "logrotate", "less",
+            # what a real etch install (debian-installer) has and debootstrap's minbase doesn't: each one breaks a hop (wend#13)
+            "dhcp3-client", "module-init-tools"]
 customize = '''
 set -e
 cat > /etc/bind/db.example.org <<'EOF'
@@ -33,6 +35,7 @@ apt-get clean
 start_hook = "dpkg-query -W -f '${Package}\\n' | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 's/^mariadb$/mysql/' -e 's/^ntpsec$/ntp/' | sort -u > /var/lib/ol-expected-families; printf 'dbus\\nsystemd\\nutil\\n' >> /var/lib/ol-expected-families"
 
 [roles]
+dhcp = "S=/var/lib/apt/extended_states; for p in isc-dhcp-client dhcp3-client; do dpkg-query -W -f '${Status}' $p 2>/dev/null | grep -q 'ok installed' || continue; if [ -e $S ]; then [ -r $S ] || { echo \"can't read $S\"; exit 1; }; awk -v p=$p '$1==\"Package:\"{x=($2==p)} x&&$1==\"Auto-Installed:\"&&$2==1{f=1} END{exit f}' $S || continue; fi; exit 0; done; echo 'no manually installed DHCP client (a later autoremove could take it)'; exit 1"
 ssh = "mkdir -p /var/run/sshd /run/sshd; /usr/sbin/sshd -t && grep -q '^Port 2222' /etc/ssh/sshd_config"
 cron = "test -x /usr/sbin/cron && crontab -l -u alice | grep nightly-backup"
 python = "python3 -c 'print(6*7)' | grep 42 || python -c 'print 6*7' | grep 42"

@@ -1,0 +1,23 @@
+# Found replaying the route on a real etch install in a VM (wend#13).
+schema = "wend.fix/0"
+family = "debian"
+hop = "wheezy"
+when = { installed = "dhcp3-client" }
+restores = ["pkgdb"]
+adds = []
+
+[[post]]
+op = "install"
+packages = ["isc-dhcp-client"]
+
+[[post]]
+op = "remove"
+packages = ["dhcp3-client", "dhcp3-common"]
+purge = true
+
+[meta]
+name = "wheezy-purge-dhcp3-transitional"
+author = "claude (wend#13, hand-written from the VM replay)"
+source = "wend#13"
+note = "etch's installer brings dhcp3-client; squeeze turns it and dhcp3-common into transitional packages for isc-dhcp-client, and wheezy drops them. squeeze's dpkg unpacked them without md5sums, so wheezy's dpkg --audit says they need a reinstall, which wheezy can't do: they aren't in it any more. Purging the empty transitional packages is what the release expects (isc-dhcp-client replaces them), after installing isc-dhcp-client by name: it came in as dhcp3-client's dependency, so apt marked it automatic, and with dhcp3-client gone only a Recommends would keep a later autoremove from taking the box's DHCP client. Both etch boxes carry dhcp3-client, as a real etch install does."
+fires_on = ["debian/etch-db", "debian/etch-web"]
