@@ -29,8 +29,11 @@ import subprocess
 import sys
 import threading
 import time
+import re
 import tomllib
+import urllib.error
 import urllib.parse
+import urllib.request
 
 sys.dont_write_bytecode = True
 TOOLS = os.path.dirname(os.path.abspath(__file__))
@@ -62,7 +65,11 @@ NICS = {"virtio": "virtio-net-pci", "e1000": "e1000"}
 NET = ("(ip -o -4 addr 2>/dev/null || /sbin/ip -o -4 addr) | "
        "awk '$2 != \"lo\" {print $2, $4}' | sort; "
        "(ip route 2>/dev/null || /sbin/ip route) | awk '/^default/ {print $1, $2, $3}'; "
-       "grep '^nameserver' /etc/resolv.conf | sort")
+       # the resolvers: resolv.conf's, except systemd-resolved's local stub, which stands for the upstream servers
+       # resolved lists in its own /run/systemd/resolve/resolv.conf (bionic on); so the stub appearing isn't a change
+       "{ grep '^nameserver' /etc/resolv.conf | grep -vx 'nameserver 127.0.0.53'; "
+       "if grep -qx 'nameserver 127.0.0.53' /etc/resolv.conf; then grep '^nameserver' /run/systemd/resolve/resolv.conf; fi; "
+       "} 2>/dev/null | sort -u")
 
 
 def log(msg):
@@ -89,6 +96,9 @@ def hardware(adapter, release):
 
 FORCED_RESET = ("sleep 2; kill -TERM -1; sleep 10; kill -KILL -1; sleep 3; sync; echo 1 > /proc/sys/kernel/sysrq; "
                 "echo s > /proc/sysrq-trigger; sleep 2; echo u > /proc/sysrq-trigger; sleep 3; echo b > /proc/sysrq-trigger\n")
+# apt boxes: each installed package's version, unless `apt-cache madison` lists it from the box's sources (the release
+# pocket, set by set_release). A box with versions from elsewhere isn't the box the route starts from.
+OFF_POCKET = r"""dpkg-query -W -f '${Package} ${Version}\n' | while read p v; do apt-cache madison "$p" 2>/dev/null | awk -F'|' -v v="$v" '{gsub(/ /, "", $2); if ($2 == v) f = 1} END {exit !f}' || echo "$p $v"; done"""
 GUESTS = []  # every qemu this run started: killed on the way out, whatever happened
 
 
@@ -206,23 +216,25 @@ def post_install(box_doc, key_pub):
                       box_doc["customize"], box_doc.get("start_hook", ""), ""])
 
 
-def preseed(box_doc, adapter, inst):
+def preseed(box_doc, adapter, inst, proxy=None):
     """debian-installer's answers, read from the initrd (no network is needed to fetch them): a static address, the
     archive as the mirror, one root partition, the box's packages and debconf answers, and post_install() at the end.
-    inst["preseed"] holds the lines that differ by installer version (etch's devfs disk path and partman recipe names),
-    inst["late"] what the release's bootloader needs for a serial console."""
-    m = urllib.parse.urlsplit(adapter["releases"]["archive"])
+    inst["preseed"] holds the lines that differ by installer version (keymap, mirror country, disk path, partman names),
+    inst["packages"] what the install needs besides the box's own, inst["late"] what the release's bootloader needs for
+    a serial console. The mirror is the start release's own (the archive, or the current mirror)."""
+    m = urllib.parse.urlsplit(backends.of(adapter).hop_vars(adapter, box_doc["release"])["mirror"])
+    host = f"{GUEST_HOST}:{proxy.port}" if proxy else m.netloc  # the proxy serves the mirror host's paths
     late = "cp /wend-post.sh /target/root/wend-post.sh; in-target sh -c 'sh /root/wend-post.sh > /root/wend-post.log 2>&1'"
     return "\n".join([
-        "d-i debian-installer/locale string en_US", "d-i console-keymaps-at/keymap select us",
+        "d-i debian-installer/locale string en_US",
         # a static address, as servers have: the live checks compare the guest's addresses with it after every boot
         "d-i netcfg/choose_interface select eth0", "d-i netcfg/disable_dhcp boolean true",
         f"d-i netcfg/get_ipaddress string {ADDR}", "d-i netcfg/get_netmask string 255.255.255.0",
         f"d-i netcfg/get_gateway string {GUEST_HOST}", "d-i netcfg/get_nameservers string 10.0.2.3",
         "d-i netcfg/confirm_static boolean true", "d-i netcfg/get_hostname string wend-vm",
         "d-i netcfg/get_domain string example.org",
-        "d-i mirror/country string enter information manually", f"d-i mirror/http/hostname string {m.netloc}",
-        f"d-i mirror/http/directory string {m.path}", "d-i mirror/http/proxy string",
+        f"d-i mirror/http/hostname string {host}", f"d-i mirror/http/directory string {m.path}",
+        "d-i mirror/http/proxy string",
         f"d-i mirror/suite string {box_doc['release']}",
         # the archive's keys expired long ago; the harness's apt config allows the same (hop.apt_conf)
         "d-i debian-installer/allow_unauthenticated boolean true",
@@ -230,8 +242,8 @@ def preseed(box_doc, adapter, inst):
         "d-i partman/confirm_write_new_label boolean true", "d-i partman/confirm boolean true",
         "d-i passwd/root-login boolean true", "d-i passwd/make-user boolean false",
         "d-i passwd/root-password-crypted password $1$wendvm$NoPasswordOpensThisAcc", "d-i apt-setup/security_host string",
-        # iproute: the harness's own network check (NET) reads `ip`, which etch's minimal install doesn't have
-        "tasksel tasksel/first multiselect", f"d-i pkgsel/include string {' '.join(box_doc['packages'] + ['iproute'])}",
+        "tasksel tasksel/first multiselect",
+        f"d-i pkgsel/include string {' '.join(box_doc['packages'] + inst.get('packages', []))}",
         "popularity-contest popularity-contest/participate boolean false",
         "d-i grub-installer/only_debian boolean true", "d-i finish-install/reboot_in_progress note",
         "d-i debian-installer/exit/poweroff boolean true", *inst.get("preseed", []),
@@ -257,6 +269,44 @@ class Serve:
     def __init__(self, directory):
         h = lambda *a, **kw: http.server.SimpleHTTPRequestHandler(*a, directory=directory, **kw)
         self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), h)
+        self.port = self.httpd.server_address[1]
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+
+class PocketProxy:
+    """An http proxy on the host for debian-installer that offers a mirror's release pocket and nothing else: the
+    -updates, -security, -backports and -proposed suites answer 404. Ubuntu's installer always adds -updates (its
+    50mirror.ubuntu writes it whatever the preseed says) and installs from it, so without this a trusty box comes up
+    with the release's updates, while the route, and the chroot box, read the release pocket only (wend#47 is about
+    boxes that have them)."""
+
+    OTHER_POCKET = re.compile(r"/dists/[^/]+-(updates|security|backports|proposed)/")
+
+    def __init__(self, upstream):
+        up = upstream.rstrip("/")
+
+        class H(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"  # keep-alive: apt pipelines requests
+
+            def do_GET(self):
+                if PocketProxy.OTHER_POCKET.search(self.path) or ".." in self.path:
+                    return self.send_error(404)
+                try:
+                    with urllib.request.urlopen(up + self.path, timeout=300) as rsp:
+                        body = rsp.read()
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                except urllib.error.HTTPError as e:
+                    self.send_error(e.code)
+                except OSError:
+                    self.send_error(502)
+
+            def log_message(self, *a):
+                pass
+
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
         self.port = self.httpd.server_address[1]
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
@@ -305,14 +355,19 @@ def build(box_id):
         g.proc.wait(3600)
         srv.httpd.shutdown()
     else:  # debian-installer: netboot from the archive, the preseed and post_install() appended to its initrd
+        mirror = backends.of(a).hop_vars(a, box_doc["release"])["mirror"]
         for f in ("linux", "initrd.gz"):
-            fetch(f"{a['releases']['archive']}/{inst['netboot']}/{f}", os.path.join(d, f))
-        extra = gzip.compress(newc({"preseed.cfg": preseed(box_doc, a, inst).encode(),
+            fetch(f"{mirror}/{inst['netboot']}/{f}", os.path.join(d, f))
+        u = urllib.parse.urlsplit(mirror)
+        proxy = PocketProxy(f"{u.scheme}://{u.netloc}") if inst.get("release_pocket_only") else None
+        extra = gzip.compress(newc({"preseed.cfg": preseed(box_doc, a, inst, proxy).encode(),
                                     "wend-post.sh": post_install(box_doc, key_pub).encode()}))
         open(os.path.join(d, "initrd-wend.gz"), "wb").write(open(os.path.join(d, "initrd.gz"), "rb").read() + extra)
         g.start(["-kernel", os.path.join(d, "linux"), "-initrd", os.path.join(d, "initrd-wend.gz"), "-no-reboot",
                  "-append", "priority=critical console=ttyS0,115200n8"])
         g.proc.wait(3600)
+        if proxy:
+            proxy.httpd.shutdown()
     g = Guest(disk, key, g.ssh_port, hw)
     g.start()
     if not g.wait_ssh():
@@ -329,6 +384,10 @@ def build(box_id):
     rc, out = g.ssh(last, timeout=3600)
     if rc:
         raise RuntimeError(f"updating the installed box failed:\n{out[-2000:]}")
+    if not isinstance(backends.of(a), backends.Rpm):  # every installed version is one the box's sources offer
+        rc, out = g.ssh(OFF_POCKET, timeout=1800)
+        if rc or out.strip():
+            raise RuntimeError(f"the installed box has packages its release pocket doesn't offer:\n{out[-2000:]}")
     if not g.reboot()[0]:
         raise RuntimeError(f"the installed box didn't come back from its first reboot; console: {g.console}")
     log("installed and updated; checking the box")
