@@ -132,6 +132,8 @@ STOP_DB = ("pkill -TERM -x mariadbd; pkill -TERM -x mysqld; i=0; "
            "! pgrep -x 'mariadbd|mysqld' >/dev/null")
 SAVED = "/var/lib/wend/saved"  # what adopt-rpmnew replaced and set-aside-unowned moved, kept for the admin
 SYSV_RECORD = "/var/lib/wend/sysv-enabled"  # service.record: the SysV services the box started at boot, one per line
+# package file names (name-version-release.arch.rpm) to package names, one per line
+NAMES = "awk '{sub(/-[^-]*-[^-]*$/, \"\"); print}'"
 SOURCES = "/var/lib/wend/sources"  # <hop>/<repo id>.repomd.xml: metadata an op fetched through repos the hop then drops
 
 
@@ -140,12 +142,51 @@ def repo_file(adapter, release, shim):
                    for n, u in adapter["releases"][release]["repos"].items())
 
 
+def addon_repos(adapter, release, shim, file, prefix=None):
+    """SPEC "Add-on repositories": shell that appends each add-on's repo for `release` to `file`, as
+    [<prefix or release>-<addon>], when the add-on's marker package is installed. Empty when no add-on has one."""
+    out = []
+    for n, a in adapter.get("addons", {}).items():
+        if release in a["repos"]:
+            rid = f"{prefix or release}-{n}"
+            body = f"[{rid}]\\nname={rid}\\nbaseurl={shim}/{a['repos'][release]}/\\ngpgcheck=0\\nenabled=1\\n\\n"
+            out.append(f"if rpm -q {a['marker']} >/dev/null 2>&1; then printf '{body}' >> {file}; fi")
+    return "; ".join(out)
+
+
+def addon_vendors(adapter):
+    """Shell that sets A to |vendor|vendor|... for every add-on whose marker package is installed."""
+    return "A='|'; " + "".join(f"rpm -q {a['marker']} >/dev/null 2>&1 && A=\"${{A}}{a['vendor']}|\"; "
+                               for a in adapter.get("addons", {}).values())
+
+
+def addon_repo_ids(adapter):
+    """{repo id: repomd.xml URL} for every add-on repo a hop (<release>-<addon>) or rpm.transit (boot-<addon>) uses."""
+    ids = {}
+    for n, a in adapter.get("addons", {}).items():
+        for rel, u in a["repos"].items():
+            ids[f"{rel}-{n}"] = f"https://{u}/repodata/repomd.xml"
+        for r in adapter["releases"].values():
+            if "transit" in r and r["transit"]["from"] in a["repos"]:
+                ids[f"boot-{n}"] = f"https://{a['repos'][r['transit']['from']]}/repodata/repomd.xml"
+    return ids
+
+
 def primary_list(base, out):
     """The file names of every package in a repo, from its primary metadata (works with CentOS 5's own tools)."""
     return (f"R=$(curl -sf {base}/repodata/repomd.xml | grep -o 'href=\"[^\"]*primary.xml.gz\"' | head -n1 | "
             f"sed 's/href=\"//;s/\"//') && test -n \"$R\" && curl -sf -o {out}.gz {base}/$R && "
             f"zcat {out}.gz | grep -o '<location href=\"Packages/[^\"]*\"' | sed 's/.*Packages\\///;s/\"//' > {out} && "
             f"rm -f {out}.gz && test -s {out} || {{ echo 'no package list from {base}'; exit 1; }}")
+
+
+def package_names(base, out):
+    """Append the name of every package in a repo to out, from its primary metadata (gzip or xz, as EPEL 8 has it)."""
+    return (f"R=$(curl -sf {base}/repodata/repomd.xml | grep -o 'href=\"[^\"]*primary.xml[.a-z]*\"' | head -n1 | "
+            f"sed 's/href=\"//;s/\"//') && test -n \"$R\" && curl -sf -o {out}.z {base}/$R && "
+            f"case $R in *.xz) xz -dc;; *.gz) gzip -dc;; *) cat;; esac < {out}.z | grep -o '<name>[^<]*</name>' | "
+            f"sed 's/<[^>]*>//g' >> {out} && rm -f {out}.z && test -s {out} || "
+            f"{{ echo 'no package list from {base}'; exit 1; }}")
 
 
 def bootstrap_pins(adapter, release):
@@ -178,6 +219,7 @@ class Rpm:
                 t = r["transit"]
                 for n, u in {**adapter["releases"][t["from"]]["repos"], **t.get("extra_repos", {})}.items():
                     ids[f"boot-{n}"] = f"https://{u}/repodata/repomd.xml"
+        ids.update(addon_repo_ids(adapter))
         out = {}
         kept = f"{root}{SOURCES}/{release}"
         pins = {u: h for r in adapter["releases"] for u, h in bootstrap_pins(adapter, r).items()}
@@ -211,6 +253,7 @@ class Rpm:
         shim = adapter["mirror"]["shim"]
         return {"release": release, "major": r["major"], "shim": shim,
                 "repofile": repo_file(adapter, release, shim).replace("\n", "\\n"),
+                "addons": addon_repos(adapter, release, shim, "/etc/yum.repos.d/ladder.repo") or "true",
                 "pm": "$(command -v dnf || command -v yum)", "clean_repos": CLEAN_REPOS,
                 "dnf_opts": f"--releasever={r['major']} --allowerasing --setopt=install_weak_deps=False "
                             "--setopt=protected_packages="}
@@ -326,18 +369,33 @@ class Rpm:
         tag = f"el{t['major']}"
         base = f"{shim}/{next(iter(t['repos'].values()))}"
         reinstall = " ".join(s["reinstall"])
+        succ = [f"{shim}/{u}" for u in t["repos"].values()] + \
+            [f"{shim}/{a['repos'][target]}" for a in adapter.get("addons", {}).values() if target in a["repos"]]
         return "\n".join([
             # The last step drops every package EL8 doesn't ship from the rpm database (files kept). That is only
             # acceptable for the old release's own packages: refuse up front if anything else is installed (EPEL,
             # vendor or locally built RPMs), so such a box stops here instead of ending up with unowned software.
             # CentOS's own SIG and Software Collections packages carry its vendor too but EL8 doesn't ship them, so
             # those are refused by name.
-            f"V=$(rpm -q --qf '%{{VENDOR}}' {s['remove']}); T=$(rpm -qa --qf '%{{VENDOR}}|%{{NAME}}|%{{NAME}}-%{{VERSION}}-"
-            "%{RELEASE}.%{ARCH}\\n' | awk -F'|' -v v=\"$V\" '$2 != \"gpg-pubkey\" && ($1 != v || "
+            # Add-on repositories (SPEC "Add-on repositories") are the exception: their vendor's packages pass if the
+            # add-on's marker is installed, and the next step requires a successor for each of them.
+            f"{addon_vendors(adapter)}V=$(rpm -q --qf '%{{VENDOR}}' {s['remove']}); T=$(rpm -qa --qf "
+            "'%{VENDOR}|%{NAME}|%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\\n' | awk -F'|' -v v=\"$V\" -v a=\"$A\" "
+            "'$2 != \"gpg-pubkey\" && !index(a, \"|\" $1 \"|\") && ($1 != v || "
             "$2 ~ /^(rh-|devtoolset-|centos-release-.)/ && $2 != \"centos-release-notes\") {print $3}'); [ -z \"$T\" ] || "
             "{ printf 'refusing, not plain %s packages: ' \"$V\"; printf '%s ' $T; echo; exit 1; }",
             f"set -e; rm -rf {b}; mkdir -p {b}/old {b}/new {b}/pkgs {b}/stage",
-            f"printf '{old_repos}' > {b}/old/boot.repo; printf '{new_repos}' > {b}/new/ladder.repo",
+            # every add-on package needs a package of the same name in the release's repos or its add-on repos, or
+            # it would be dropped from the database at the end: refuse before changing anything, naming them
+            "P=$(rpm -qa --qf '%{VENDOR}|%{NAME}\\n' | awk -F'|' -v a=\"$A\" 'index(a, \"|\" $1 \"|\") {print $2}' | "
+            f"sort -u); if [ -n \"$P\" ]; then : > {b}/names; "
+            + "".join(f"{package_names(u, f'{b}/names')}; " for u in succ) +
+            f"M=$(for n in $P; do grep -qxF \"$n\" {b}/names || echo $n; done); [ -z \"$M\" ] || {{ echo "
+            f"\"refusing, no {target} package for these add-on packages (a fix must remove or replace them first):\" "
+            "$M; exit 1; }; fi",
+            f"printf '{old_repos}' > {b}/old/boot.repo; printf '{new_repos}' > {b}/new/ladder.repo"
+            + "".join(f"; {x}" for x in (addon_repos(adapter, boot["from"], shim, f"{b}/old/boot.repo", "boot"),
+                                         addon_repos(adapter, target, shim, f"{b}/new/ladder.repo")) if x),
             f"yum -y --setopt=reposdir={b}/old install dnf",
             # EL7's dnf 4.0 has no --nobest. rc ignored, as in the lab: what matters is that the new rpm, glibc and
             # dnf were fetched (checked next)
@@ -345,6 +403,8 @@ class Rpm:
             f"> {b}/dl.log 2>&1 || tail -n 20 {b}/dl.log",
             f"cd {b}/pkgs; for n in rpm rpm-libs glibc dnf python3-dnf; do ls | grep -qE \"^$n-[0-9]\" || "
             "{ echo \"not downloaded: $n\"; exit 1; }; done",
+            f"ls | {NAMES} > {b}/got; M=$(for n in $P; do grep -qxF \"$n\" {b}/got || echo $n; done); "
+            "[ -z \"$M\" ] || { echo \"not downloaded:\" $M; exit 1; }",
             "rpm -e dnf; rm -f /var/lib/rpm/__db.*; rpm --rebuilddb",
             f"ls | grep -qE '^{boot['release_package']}-' || {{ {primary_list(base, f'{b}/list')}; "
             f"f=$(grep -E '^{boot['release_package']}-{t['major']}[^/]*x86_64\\.rpm$' {b}/list | sort -V | tail -n1); "
@@ -499,9 +559,15 @@ class Rpm:
     def op_service_record(self, s, adapter, release, v, rel):
         """Write down which SysV services start at boot (S links in the default runlevel), before the hop that
         replaces SysV init with systemd: the old packages' scriptlets remove their links, and systemd's presets
-        leave most new units disabled. Only the first record is kept, so it is always the box's own state."""
+        leave most new units disabled. On a box that already runs systemd, its enabled service units, before a hop
+        that erases and reinstalls packages (EL8's module streams). Only the first record is kept, so it is always
+        the box's own state."""
         r = SYSV_RECORD
+        # a systemd box (EL7 on) records its enabled service units instead, by unit name
         return (f"if [ -e {r} ]; then echo \"kept the earlier record: $(tr '\\n' ' ' < {r})\"; exit 0; fi; "
+                "if command -v systemctl >/dev/null 2>&1; then mkdir -p /var/lib/wend && systemctl list-unit-files "
+                "--type=service --state=enabled --no-legend | awk '{sub(/\\.service$/, \"\", $1); print $1}' | sort -u "
+                f"> {r}.new && mv {r}.new {r} && echo \"systemd starts: $(tr '\\n' ' ' < {r})\"; exit $?; fi; "
                 "L=$(sed -n 's/^id:\\([0-9]\\):initdefault:.*/\\1/p' /etc/inittab 2>/dev/null | head -n 1); "
                 "[ -n \"$L\" ] || L=3; [ -d /etc/rc.d/rc$L.d ] || { echo \"no /etc/rc.d/rc$L.d: no SysV runlevels to record\"; exit 1; }; "
                 f"mkdir -p /var/lib/wend && ls /etc/rc.d/rc$L.d | sed -n 's/^S[0-9][0-9]//p' | sort -u > {r}.new && "

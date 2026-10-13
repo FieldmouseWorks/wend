@@ -34,9 +34,10 @@ UNSAFE = ["%", "'", '"', " ", "\t", "\n", "$", "`", ";", "&", "|", "<", ">", "("
 # Whatever an adapter's patterns say, a value a fix passes to an adapter op is held to this too: no shell
 # metacharacters, no printf %, and no leading - (it would read as an option).
 SAFE_VALUE = r"[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*"
+REPO_URL = r"[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)+"
 ADAPTER_KEYS = {"schema", "family", "backend", "release_file", "ladder", "may_skip", "harness_owned", "writable",
                 "managed", "force", "releases", "mirror", "hop", "predicates", "pm_options", "box", "ops", "checks",
-                "kv"}
+                "kv", "addons"}
 
 
 def family(pkg):
@@ -108,6 +109,18 @@ def check_adapter(a, where):
     for r, rel in a.get("releases", {}).items():  # SPEC "Kernels and the bootloader"
         if isinstance(rel, dict) and rel.get("reboot", "before-post") != "before-post":
             errs.append(f"{where}: releases.{r}.reboot can only be \"before-post\"")
+    if not isinstance(a.get("addons", {}), dict):
+        return errs + [f"{where}: addons must be a table"]
+    for n, ad in a.get("addons", {}).items():  # SPEC "Add-on repositories": their values land in root shell commands
+        rels = a.get("releases", {})
+        if a.get("backend") != "rpm" or not re.fullmatch(r"[a-z0-9]+", n) or not isinstance(ad, dict) or \
+                set(ad) != {"marker", "vendor", "repos"} or not isinstance(ad["marker"], str) or \
+                not re.fullmatch(PKG, ad["marker"]) or not isinstance(ad["vendor"], str) or \
+                not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 .,-]*", ad["vendor"]) or not isinstance(ad["repos"], dict) or \
+                not ad["repos"] or not all(r in rels and isinstance(u, str) and re.fullmatch(REPO_URL, u) and
+                                           n not in rels[r].get("repos", {}) for r, u in ad["repos"].items()):
+            errs.append(f"{where}: addons.{n} needs a plain name, a marker package, a plain vendor, and repos "
+                        "(host/path) for releases the adapter has, on the rpm backend")
     for k in ("kernel_before", "kernel_after"):
         if k in a.get("hop", {}) and not (isinstance(a["hop"][k], list) and all(isinstance(c, str) for c in a["hop"][k])):
             errs.append(f"{where}: hop.{k} must be a list of commands")

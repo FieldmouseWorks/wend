@@ -99,6 +99,9 @@ for name, mutate in {
     "an adapter declaring an op its backend doesn't implement": lambda a: a["ops"].update(
         {"shell.run": {"summary": "x", "args": {"cmd": {"pattern": "[a-z]+"}}}}),
     "an adapter without a backend": lambda a: a.pop("backend"),
+    "an add-on whose vendor would break out of the shell": lambda a: a["addons"]["epel"].update(vendor='x"; rm -rf /'),
+    "an add-on repo for a release the adapter doesn't have": lambda a: a["addons"]["epel"]["repos"].update(
+        centos4="vault.centos.org/4.9/os/x86_64"),
 }.items():
     a = copy.deepcopy(adapters["el"])
     mutate(a)

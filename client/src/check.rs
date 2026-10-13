@@ -53,6 +53,7 @@ const UNSAFE: &[&str] = &[
 /// Whatever an adapter's patterns say, a value a fix passes to an adapter op is held to this too: no shell
 /// metacharacters, no printf %, and no leading - (it would read as an option).
 const SAFE_VALUE: &str = r"[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*";
+const REPO_URL: &str = r"[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)+";
 const ADAPTER_KEYS: &[&str] = &[
     "schema",
     "family",
@@ -73,6 +74,7 @@ const ADAPTER_KEYS: &[&str] = &[
     "ops",
     "checks",
     "kv",
+    "addons",
 ];
 
 /// Python's re.fullmatch. A pattern Rust's regex can't compile matches nothing (and an adapter carrying one is
@@ -205,6 +207,7 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
         "ops",
         "checks",
         "kv",
+        "addons",
     ] {
         want_shape(a, k, "table", wh, &mut errs);
     }
@@ -291,6 +294,34 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
                         }
                     }
                 }
+            }
+        }
+    }
+    // SPEC "Add-on repositories": their values land in root shell commands
+    if let Some(Value::Object(addons)) = get(a, "addons") {
+        let rels = get(a, "releases");
+        for (n, ad) in addons {
+            let fields = ad.as_object().map(|o| o.keys().map(String::as_str).collect::<BTreeSet<_>>());
+            let repos_ok = get(ad, "repos").and_then(Value::as_object).is_some_and(|rs| {
+                !rs.is_empty()
+                    && rs.iter().all(|(r, u)| {
+                        let rel = rels.and_then(|x| get(x, r));
+                        rel.is_some()
+                            && full_v(REPO_URL, u)
+                            && !rel.and_then(|x| get(x, "repos")).is_some_and(|x| get(x, n).is_some())
+                    })
+            });
+            let ok = b.name == "rpm"
+                && full("[a-z0-9]+", n)
+                && fields == Some(BTreeSet::from(["marker", "repos", "vendor"]))
+                && get(ad, "marker").is_some_and(|m| full_v(PKG, m))
+                && get(ad, "vendor").is_some_and(|v| full_v("[A-Za-z0-9][A-Za-z0-9 .,-]*", v))
+                && repos_ok;
+            if !ok {
+                errs.push(format!(
+                    "{wh}: addons.{n} needs a plain name, a marker package, a plain vendor, and repos (host/path) \
+                     for releases the adapter has, on the rpm backend"
+                ));
             }
         }
     }

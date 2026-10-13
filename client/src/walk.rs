@@ -449,6 +449,7 @@ impl<'a> Walk<'a> {
                         }
                     }
                 }
+                ids.extend(crate::backend::addon_repo_ids(self.sources_adapter));
                 let kept = root.join(SOURCES.trim_start_matches('/')).join(hop);
                 // a fetched line counts only if it is one of the adapter's own pins
                 let mut pins = BTreeMap::new();
