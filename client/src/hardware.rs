@@ -1174,12 +1174,12 @@ mod tests {
         let one = [("3.13.0-170-generic", 35)];
         let v = verdict(
             "trusty-to-resolute",
-            &with_boot(machine(&full, false, vec![]), 200, &one),
+            &with_boot(machine(&full, false, vec![]), 195, &one),
         );
         assert_eq!(v["lands_on"], "jammy", "{v:#}");
         let p = v["hops"][4]["problems"][0].as_str().unwrap();
         assert!(
-            p.contains("jammy's kernel (105 MiB)") && !p.contains("focal's kernel") && p.contains("grow /boot"),
+            p.contains("jammy's kernel (88 MiB)") && !p.contains("focal's kernel") && p.contains("grow /boot"),
             "{p}"
         );
     }

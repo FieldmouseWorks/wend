@@ -141,8 +141,10 @@ services = "no explicitly installed, non-required package that ships an init scr
 # adapters/drivers/ubuntu/<release>.txt, the PCI disk controllers and network cards the release's kernel drives
 # (tools/hwdata.py builds it from the kernel package itself).
 # `boot_mib`, the space the release's kernel takes in /boot: linux-image's and linux-modules' /boot files (measured)
-# and the initramfs linux-generic builds, with lvm2 and mdadm (built from the release's packages in a container for
-# bionic to resolute; xenial's is an estimate; resolute's builds host-only, so its figure allows for real hardware).
+# and its initramfs, plus a tenth. xenial to jammy: the initrds the VM tier's trusty-to-resolute run made (37, 50, 48
+# and 62 MB for the route's pinned 4.4.0-21, 4.15.0-20, 5.4.0-26 and 5.15.0-25). noble and resolute: built from the
+# release's packages in a container, with lvm2 and mdadm; resolute's builds host-only, so its figure allows for real
+# hardware.
 # `old_kernels = "running"`: hop.kernel_before purges every kernel older than the running one before the
 # transaction, so the new kernel only ever sits beside the running one (apt's autoremove would keep two, and trusty's
 # guided-LVM /boot of 243 MB stops at focal).
@@ -152,25 +154,25 @@ old_kernels = "running"
 [hardware.xenial]
 cpu = "x86-64"
 disk_mib = 2048
-boot_mib = 56
+boot_mib = 54
 drivers = "sha256:f5d0794514fd9f2a5b26d6b837e5427eb79b3d2b81b44dfb9320030d6ce9f3f9"
 
 [hardware.bionic]
 cpu = "x86-64"
 disk_mib = 2048
-boot_mib = 64
+boot_mib = 70
 drivers = "sha256:e1bef70be98b23557dbef99f656a86563265545a0641053140f12cfffd5c04ad"
 
 [hardware.focal]
 cpu = "x86-64"
 disk_mib = 2048
-boot_mib = 88
+boot_mib = 71
 drivers = "sha256:821a2d9c1c3e65a38181bb8aa79e3d2c3290d6a32d7b608401545ef42f6ca0c9"
 
 [hardware.jammy]
 cpu = "x86-64"
 disk_mib = 2048
-boot_mib = 105
+boot_mib = 88
 drivers = "sha256:2a453ad5f9c4f188a3589d85b8c45e2000bf2eae3ee4484d553ca2dde747f47a"
 
 [hardware.noble]
