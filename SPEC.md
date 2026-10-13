@@ -1157,7 +1157,8 @@ on. On a route that starts there (an EL7 box; a bullseye or jammy start) that's 
 one (etch to trixie) it's the pre phase of the hop that drops Python 2, because only then do `/proc/<pid>/maps`,
 the imports, the package names and the changed files describe the userland the shelter replaces; an etch box's are
 Python 2.4's and etch's. Before the first hop the plan checks what it can already: that the vault serves that
-release's index, the free space, and the app-level choices (programs, mounts, connections, cron lines), which the
+release's index (reachable only: the box can't check its signature until it trusts that release's keys), the free
+space, and the app-level choices (programs, mounts, connections, cron lines), which the
 owner confirms then. If the drop hop's facts need anything the confirmed plan didn't list (a new mount, a new
 connection), `shelter.build` refuses, and the walk stops there: the box sits on `keeps_runtimes_on` with its app
 running natively, which is exactly the "stop" option.
@@ -1203,9 +1204,12 @@ Defaults, which the plan shows and the run records:
   to, since podman itself has no per-destination allow-list. It also allows `ct state established,related`
   (replies on published ports) and DNS to the network's gateway (aardvark-dns) when the network has DNS. It has to
   fail closed: netavark's own rules allow all egress, so a shelter started without the table is quietly public.
-  The table is loaded by a wend unit (`wend-shelter-net-<app>.service`, a oneshot that stays active), and the
-  shelter's unit has `Requires=` and `After=` on it, so after any reboot the shelter doesn't start unless the table
-  loaded. Runtime preflight records the TCP connections and
+  The table is loaded by a wend unit (`wend-shelter-net-<app>.service`, a oneshot that stays active, ordered
+  `After=nftables.service firewalld.service` with `PartOf=nftables.service`), and the shelter's unit has
+  `BindsTo=` and `After=` on it. After a reboot the shelter doesn't start unless the table loaded, and restarting
+  or reloading `nftables.service` (which runs `flush ruleset` on Debian and EL alike) restarts the table unit and,
+  through `BindsTo=`, the shelter with it. A hand-typed `nft flush ruleset` still drops the table under a running
+  shelter, which systemd can't see; the spec doesn't claim otherwise. Runtime preflight records the TCP connections and
   listening sockets each sheltered program actually has (`/proc/<pid>/net/tcp*` matched to its socket inodes,
   sampled while facts are gathered), and the plan prefills the opt-ins from them, so "private" rarely breaks a
   working app. A connection that only happens at 3 a.m. won't be seen, and the plan says so. Ports the program
@@ -1220,7 +1224,8 @@ Defaults, which the plan shows and the run records:
   `unix_socket` as its own user keeps working. On EL the proxy's directory is app-only, so it gets
   `container_file_t` (`:Z`) like the app's other directories; whether `container_t` may also `connectto` the
   proxy's domain is something only the VM tier shows, and if SELinux denies it, `shelter.start`'s check fails and
-  the hop rolls back. An app that reaches a host service over
+  the hop rolls back. The app inside runs as a mapped uid, and that directory has no `:idmap`, so the proxy's
+  socket is owned by that mapped uid (`SocketUser=`, mode 0600), not by the app's host user. An app that reaches a host service over
   TCP on `127.0.0.1` can't be served without changing its config, which wend doesn't do: the plan names it, and the
   owner's choices are `network = "host"` (opted in by name, recorded in the run as an exception) or editing the app.
 - **Mounts:** the code tree read-only. Data directories read-write (`:idmap`): the ones the program has open for
