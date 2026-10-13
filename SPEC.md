@@ -827,9 +827,11 @@ has a `[hardware.<release>]` table:
 
 **Driver tables.** A driver table lists every `alias=pci:` pattern of the storage and network modules (the kernel's
 `drivers/` `scsi`, `ata`, `nvme`, `block`, `md`, `message`, `ide`, `net` and `virtio`) in the kernel package the
-hop installs, one `<module> <pattern>` per line, plus `builtin <module>` for each driver built into the kernel, since a kernel doesn't record a built-in
-driver's device table (`modules.builtin.modinfo` has only its `MODULE_ALIAS` lines, which are listed too). A
-device bound now to a driver the release has built in counts as driven: the one place a match is by name, not ID. `tools/hwdata.py` makes it from the package itself: it finds the kernel in
+hop installs, one `<module> <pattern>` per line, plus `builtin <module>` for each driver built into the kernel, with whatever aliases `modules.builtin.modinfo`
+records for it (older kernels record no device tables there: EL9's built-in `virtio_pci` has none). A device bound
+now to a built-in driver whose table records no `pci:` pattern counts as driven: the one place a match is by name,
+not ID. Facts name the device's module (sysfs `driver/module`) as well as its driver, since the two can differ
+(lenny's `ide_pci_generic` registers as `PCI_IDE`). `tools/hwdata.py` makes it from the package itself: it finds the kernel in
 the release's index, checks the download against the index's sha256, and reads each module's `.modinfo` section.
 The table's header names the packages and their hashes. Built from the release's own kernel, not from a vendor's
 list of what it deprecated: AlmaLinux 9's kernel still drives the LSI SAS1078 (PERC 6) and SAS2008 HBAs that RHEL

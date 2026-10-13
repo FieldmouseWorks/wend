@@ -141,9 +141,13 @@ fn pci_devices(dir: &Path) -> Vec<Value> {
             hex("subsystem_vendor").unwrap_or(0),
             hex("subsystem_device").unwrap_or(0),
         );
-        let driver = fs::read_link(d.join("driver"))
-            .ok()
-            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+        let link = |p: &str| {
+            fs::read_link(d.join(p))
+                .ok()
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        };
+        // a driver's own name isn't always its module's (lenny's ide_pci_generic registers as PCI_IDE)
+        let (driver, module) = (link("driver"), link("driver/module"));
         out.push(json!({
             "slot": d.file_name().unwrap().to_string_lossy(),
             "class": format!("0x{class:06x}"),
@@ -154,6 +158,7 @@ fn pci_devices(dir: &Path) -> Vec<Value> {
                 class & 0xff
             ),
             "driver": driver,
+            "module": module,
         }));
     }
     out
@@ -272,6 +277,7 @@ pub fn check_facts(f: &Value) -> Result<(), String> {
             && d["class"].as_str().is_some_and(|c| c.len() == 8 && c.starts_with("0x"))
             && d["modalias"].as_str().is_some_and(|m| m.starts_with("pci:v"))
             && (d["driver"].is_string() || d["driver"].is_null())
+            && (d["module"].is_string() || d["module"].is_null())
     };
     if !f["pci"].as_array().is_some_and(|a| a.iter().all(dev_ok)) {
         return bad("pci");
@@ -405,17 +411,21 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
         }
         let table = parse_table(&String::from_utf8_lossy(bytes));
         for d in facts["pci"].as_array().into_iter().flatten() {
-            let Some(kind) = kind_of(d["class"].as_str().unwrap_or("")) else {
+            let Some(kind) = kind_of(&d["class"].as_str().unwrap_or("").to_ascii_lowercase()) else {
                 continue;
             };
             let alias = d["modalias"].as_str().unwrap_or("");
             let driver = d["driver"].as_str();
-            let norm = driver.map(|d| d.replace('-', "_"));
+            let norm = d["module"].as_str().or(driver).map(|d| d.replace('-', "_"));
             let hit = table.aliases.iter().find(|(m, p)| {
                 alias_match(p.as_bytes(), alias.as_bytes())
                     && (!CLASS_ONLY_MAYBE.contains(&m.as_str()) || norm.as_deref() == Some(m.as_str()))
             });
-            let built_in = norm.is_some_and(|dr| table.builtin.contains(&dr));
+            // by name only when the kernel recorded no IDs for that built-in driver (before Linux 6.12 it records
+            // none; EL9's built-in virtio_pci has none)
+            let built_in = norm
+                .as_ref()
+                .is_some_and(|dr| table.builtin.contains(dr) && !table.aliases.iter().any(|(m, _)| m == dr));
             if hit.is_some() || built_in {
                 continue;
             }
@@ -680,6 +690,21 @@ mod tests {
         assert_eq!(v["lands_on"], "etch", "{v:#}");
         let v = verdict("etch-to-trixie", &machine(&full, false, vec![ide("ata_generic")]));
         assert_eq!(v["ok"], true, "{v:#}");
+    }
+
+    /// resolute's kernel records its built-in ata_piix's IDs, so an ID it dropped isn't driven just because the
+    /// module's name is built in; a hand-written uppercase class is still judged.
+    #[test]
+    fn a_built_in_driver_with_recorded_ids_is_matched_by_id() {
+        let full: Vec<&str> = LEVEL_FEATURES.concat();
+        let piix = dev(
+            "0000:00:1f.1",
+            "0x0C0400",
+            "pci:v00008086d0000FFFEsv00000000sd00000000bc01sc01i8A",
+            Some("ata_piix"),
+        );
+        let v = verdict("trusty-to-resolute", &machine(&full, false, vec![piix]));
+        assert_eq!(v["lands_on"], "noble", "{v:#}");
     }
 
     #[test]

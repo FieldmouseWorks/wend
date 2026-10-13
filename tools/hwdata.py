@@ -199,10 +199,10 @@ def table(pkgs):
                 for kv in modinfo(unpack(fn, open(os.path.join(dirpath, fn), "rb").read())):
                     if kv.startswith("alias=pci:"):
                         lines.add(f"{name} {kv[6:]}")
-        # Built-in drivers have no .ko, and modules.builtin.modinfo (Linux 5.2 on) carries a built-in driver's
-        # MODULE_ALIAS lines but not its device table (EL9's built-in virtio_pci has none there). So a built-in driver
-        # is listed by name (`builtin <module>`), with whatever aliases the kernel recorded, and preflight takes a device
-        # bound to a built-in driver of that name as driven.
+        # Built-in drivers have no .ko. modules.builtin.modinfo (Linux 5.2 on) carries their aliases, device tables
+        # included only on newer kernels (EL9's built-in virtio_pci has none there). So a built-in driver is listed by
+        # name (`builtin <module>`) with whatever aliases the kernel recorded, and preflight matches it by name only
+        # when it has none.
         builtin = set()
         if os.path.exists(f"{top}/modules.builtin"):
             for p in open(f"{top}/modules.builtin").read().split():
