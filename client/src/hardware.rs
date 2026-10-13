@@ -596,7 +596,8 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
             )
         })
         .collect();
-    if box_running.is_empty() {
+    let running_found = !box_running.is_empty();
+    if !running_found {
         // the running kernel isn't in /boot: every kernel there may be the one GRUB boots
         box_running = box_all.clone();
     }
@@ -604,18 +605,26 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
     // EL's kernel_before drops only kernel, kernel-core and kernel-modules* records: a kernel another package owns
     // (EL5's kernel-xen, kernel-PAE, kernel-debug; ELRepo's kernel-lt and kernel-ml; Oracle's UEK) keeps its files
     // on every hop
-    let other_owned: Vec<(String, u64)> = bd["kernels"]
+    // (the running one too, once the machine has moved off it)
+    let owned: Vec<(String, u64, bool)> = bd["kernels"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|k| k["running"] != json!(true))
         .filter_map(|k| {
             let v = k["version"].as_str().unwrap_or("");
             let flavour = ["xen", "PAE", "debug"].iter().any(|f| v.ends_with(f))
                 || ["elrepo", "uek"].iter().any(|f| v.contains(f));
-            flavour.then(|| (format!("its kernel {v}"), k["mib"].as_u64().unwrap_or(0)))
+            flavour.then(|| {
+                (
+                    format!("its kernel {v}"),
+                    k["mib"].as_u64().unwrap_or(0),
+                    k["running"] == json!(true),
+                )
+            })
         })
         .collect();
+    let other_owned: Vec<(String, u64)> = owned.iter().map(|o| (o.0.clone(), o.1)).collect();
+    let idle_owned: Vec<(String, u64)> = owned.iter().filter(|o| !o.2).map(|o| (o.0.clone(), o.1)).collect();
     // apt before 1.0 (Debian to wheezy) never autoremoves a kernel (`APT::NeverAutoRemove "^linux-image.*"`): up to
     // and including the hop to `autoremove_from`, every kernel stays
     let ladder: Vec<String> = get(a, "ladder").and_then(crate::atlas::strings).unwrap_or_default();
@@ -683,7 +692,9 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
         let keeps_all = keep == "autoremove" && keep_all_to.is_some_and(|to| pos(h).is_some_and(|i| i <= to));
         let kept: Vec<(String, u64)> = match (keep, k) {
             _ if keeps_all => [box_all.clone(), route_kernels.clone()].concat(),
-            ("running", 0) => [box_running.clone(), other_owned.clone()].concat(),
+            // the running kernel is kept on the first hop anyway: count it once
+            ("running", 0) if running_found => [box_running.clone(), idle_owned.clone()].concat(),
+            ("running", 0) => box_running.clone(),
             ("running", _) => [other_owned.clone(), route_kernels[k - 1..].to_vec()].concat(),
             ("autoremove", 0) => box_all.clone(),
             ("autoremove", 1) => [box_running.clone(), route_kernels.clone()].concat(),
@@ -1266,6 +1277,14 @@ mod tests {
         assert_eq!(v["lands_on"], "centos6", "{v:#}");
         let p = v["hops"][1]["problems"][0].as_str().unwrap();
         assert!(p.contains("its kernel 2.6.18-398.el5xen (9 MiB)"), "{p}");
+        // a Xen guest running kernel-xen: it is counted once on the first hop, and stays after
+        let xen_guest = [("2.6.18-398.el5", 6), ("2.6.18-398.el5xen", 9)];
+        let v = verdict(
+            "centos5-to-alma10",
+            &with_boot(machine(&full, true, vec![]), 85, &xen_guest),
+        );
+        assert_eq!(v["lands_on"], "centos6", "{v:#}");
+        assert_eq!(v["hops"][0]["ok"], true, "{v:#}");
 
         let mut a = atlas();
         let (_, r) = a.route("centos5-to-alma10").unwrap();
