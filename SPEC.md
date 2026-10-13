@@ -935,8 +935,8 @@ the userland's word size (the ELF class of `/bin/sh`); the CPU's x86-64 level fe
 bit, not OSXSAVE, since the old kernel may not have turned it on and the new one will; CPUID's hypervisor bit;
 firmware (`/sys/firmware/efi` means UEFI; `uefi-secureboot` when the firmware's `SecureBoot` variable says on, when
 reading it fails, or when no variable store can be read: a Secure Boot chain is its own claim, so an unknown state
-fails closed; a readable store with no `SecureBoot` variable, as OVMF's non-secboot build and older UEFI firmware
-leave it, means off); `MemTotal`; free space on `/`; `/boot`: whether it is a filesystem of its
+fails closed; a store that lists variables but no `SecureBoot`, as OVMF's non-secboot build and older UEFI firmware
+leave it, means off, while an empty one is efivarfs not mounted, so unknown: every UEFI firmware keeps boot variables); `MemTotal`; free space on `/`; `/boot`: whether it is a filesystem of its
 own, its size and free space as a package install sees them (root's reserved blocks left out of both), and each
 kernel in it (one per `vmlinuz-<version>`, rescue images aside) with the MiB its files take (`vmlinuz`, initramfs,
 `System.map`, `config` and the rest named for that version; kdump images count as other files, since EL's
