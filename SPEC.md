@@ -863,7 +863,7 @@ harness, not to fixes, because the release's own tools can't carry them up the l
   running kernel and its boot entry stay as the fallback. This is the one place, besides `rpm.transit`'s last step,
   where wend drops records and keeps files. Fixes can't, because a fix doing it could fake `pkgdb`. It then removes
   the files of kernels that no package owns and that aren't running or GRUB's default, so the release's kernel fits
-  in `/boot` (CentOS 5's default is 200 MB). This is how the previous hop's kernel, once a reboot has moved off it,
+  in `/boot` (the VM tier's CentOS 5 /boot is 200 MiB). This is how the previous hop's kernel, once a reboot has moved off it,
   finally goes. None of the kernel steps acts unless the machine is booted from this root (`/` is PID 1's root): in
   a chroot of someone's disk the records, files and boot entries are left as they are, since `uname -r` there is the
   host's kernel, not the box's. The fallback the running kernel's entry gives is a manual one:
@@ -1331,13 +1331,15 @@ After every hop:
   `[vm].skip`, and `[vm].live` gives their live forms, which ask the running services instead.
 
 A hop ends the replay when its commands fail, when the guest doesn't come back, when its network differs from the
-start, when the newest installed kernel isn't the one running (or the query names none), or when a check that passed
-before it fails after the reboot. Its disk and serial console are kept.
+start, when the newest installed kernel isn't the one running (or the query names none), when the guest no longer
+runs on the firmware the replay boots, or when a check that passed before it fails after the reboot. Its disk and serial console are kept.
 
 The VM box differs from the chroot box in ways a replay can show: it has what the installer adds (`@core`, a kernel, a
-bootloader, a 200 MB `/boot`), SELinux is permissive and the firewall off (kickstart `selinux --permissive`,
-`firewall --disabled`), and `customize` runs before the release's last updates, not after. The kickstart is EL5's
-format for now. A Debian VM box has what debian-installer's minimal install adds (a kernel metapackage, GRUB legacy on
+bootloader, a `/boot` of `releases.<id>.install.boot_part_mib` MiB: 7.9's installer default of 1 GiB on CentOS 7, and
+200 MiB on CentOS 5, a chosen size where 5.11's installer makes 100 MiB), SELinux is permissive and the firewall off (kickstart `selinux --permissive`,
+`firewall --disabled`), and `customize` runs at the end of the install (after `set_release`, with the mirror shim
+where the guest sees the host), before the release's last updates, not after them. The adapter gives the kickstart
+lines that differ by release (EL7's `%end`, GRUB 2 and `net.ifnames=0`, so the NIC is `eth0` as the boxes expect). A Debian VM box has what debian-installer's minimal install adds (a kernel metapackage, GRUB legacy on
 etch, `iproute`, which the harness's own network check reads); an Ubuntu one what trusty's installer adds (GRUB 2,
 `linux-generic`). The adapter gives the preseed lines that differ by installer version (keymap, mirror country, disk
 path, partman names). Ubuntu's installer always adds the release's `-updates` pocket and installs from it, so for a
@@ -1355,23 +1357,40 @@ The rules:
   ssh and http are forwarded to fixed ports on `127.0.0.1`, so a host runs one VM replay at a time.
 - Box: an optional `[vm]` table with `ssh_port` (default 22), `skip` (roles that start their own daemons, which a
   running box already has) and `live` (role name to shell: the live forms of those checks; every skipped role needs
-  one, so skipping never drops a check) and `pockets` (`updates` and/or `security`, once each: the box starts from
-those pockets as well as the release pocket, as a fully updated server does; only on a release whose install is
-`release_pocket_only`; wend#47). The checker holds it to that. The route's hops still read the release pocket
-only, so `pockets` changes the start, never the walk.
+  one, so skipping never drops a check), `pockets` (`updates` and/or `security`, once each: the box starts from
+  those pockets as well as the release pocket, as a fully updated server does; only on a release whose install is
+  `release_pocket_only`; wend#47; the route's hops still read the release pocket only, so `pockets` changes the start,
+  never the walk) and `root_fs`, the filesystem the installer makes for `/` and `/boot`, one
+  its start release's installer offers (`releases.<id>.install.root_fs`; CentOS 7: `ext3`, `xfs`, v5 and EL 7.3's
+  default, or `xfs-v4`, `-m crc=0 -n ftype=0`, EL 7.0 to 7.2's on-disk format made by 7.9's installer). Without it the
+  kickstart makes ext3. The checker holds it to all that, and the build checks the installed box has its `root_fs`
+  (`xfs_info`'s `crc` and `ftype`).
 - A route that ends with `prune_obsolete` gets the chroot walk's prune after its last hop: the packages the target
   no longer ships are purged and autoremoved, the set split in halves whenever a step fails or a check is lost, and
   each attempt first drops what an earlier autoremove already took. Each attempt runs on its own overlay of the last
   good disk and reboots; a kept attempt is the next base. As in the chroot walk, a removal the prune drops never fails
   the run; a guest that doesn't come up from the last good disk, or a box it can't read, does. It records what was obsolete before and after.
 - Adapter: `releases.<id>.install` names a start release's installer. EL: its `tree` through the shim and the
-  `pxeboot` dir in it (the shim answers single byte ranges, which anaconda uses to read package headers). apt (Debian,
+  `pxeboot` dir in it (the shim answers single byte ranges, which anaconda uses to read package headers), `packages`
+  (what the install needs besides the box's: the bootloader), `ks_end` (sections end with `%end`), `append`
+  (kernel arguments for the installer and the installed system) and `ifname` (the installer's boot line names the NIC
+  by MAC, `ifname=eth0:<mac>`, so EL7's installer pins the ifcfg to it with `HWADDR`, as a box booted that way has)
+  and `boot_part_mib`, the size of the `/boot` partition in MiB (CentOS 7: 1024, 7.9's installer default; 200 when
+  unset). Not `[hardware.<release>].boot_mib`, which is the space one kernel takes in `/boot`. apt (Debian,
   Ubuntu): the `netboot` dir under the start release's mirror, `preseed` (the version's own preseed lines),
   `packages` (what the install needs besides the box's), `release_pocket_only` and `late` (shell the installer runs
   at the end, for the bootloader's serial console). `disk` (`virtio`, `lsi53c895a`) and `nic` (`virtio`, `e1000`) name
-  the emulated hardware, default virtio: the machine keeps them through every hop, so the start release's kernel has
+  the emulated hardware, default virtio, and `uefi` that the installer installs on UEFI firmware: the machine keeps them through every hop, so the start release's kernel has
   to know them (etch's has no virtio). `hop.kernel_newest` prints the newest installed kernel as `uname -r` names it;
   after every reboot it has to be the running one.
+- Firmware: BIOS (SeaBIOS) by default; `--uefi` boots every guest on OVMF (UEFI without Secure Boot) instead. The
+  box is built and cached apart from its BIOS build, the installer runs in UEFI mode (QEMU hands it the installer's
+  kernel as an EFI stub), the installer makes an EFI system partition (kickstart `part /boot/efi`; debian-installer's
+  atomic recipe makes one itself), and each disk carries its own copy of the NVRAM, made from the one before it, so a
+  hop boots from the boot entries the last one left. After the install and after every reboot the guest has to still
+  run on UEFI (`/sys/firmware/efi`). A start release whose installer can't install on UEFI isn't built:
+  `releases.<id>.install.uefi` says it can (trusty, CentOS 7; not etch or CentOS 5, whose installers predate UEFI on
+  x86-64, so no machine running them boots that way). A run records its `firmware`, and resumes only a run on the same.
 - `replay ROUTE BOX --from RUN HOP` starts from an earlier run's disk after the hop before HOP, to iterate on a late
   hop. It only resumes from a hop that passed on the same box, logs in with the ssh key of the box build that disk
   came from, and is recorded as `partial-pass` at best, never `pass`.

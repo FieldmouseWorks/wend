@@ -438,8 +438,8 @@ def check_box(doc, adapters, where):
     if not set(doc.get("isolate", [])) <= set(doc.get("roles", {})):
         errs.append(f"{where}: isolate names roles the box does not have")
     vm = doc.get("vm", {})  # tools/vm.py (SPEC "VM tier")
-    if not isinstance(vm, dict) or set(vm) - {"ssh_port", "skip", "live", "pockets"}:
-        errs.append(f"{where}: [vm] takes only ssh_port, skip, live and pockets")
+    if not isinstance(vm, dict) or set(vm) - {"ssh_port", "skip", "live", "pockets", "root_fs"}:
+        errs.append(f"{where}: [vm] takes only ssh_port, skip, live, pockets and root_fs")
     elif not isinstance(vm.get("pockets", []), list) or not all(isinstance(p, str) for p in vm.get("pockets", [])) or \
             not set(vm.get("pockets", [])) <= {"updates", "security"} or \
             len(set(vm.get("pockets", []))) != len(vm.get("pockets", [])) or \
@@ -447,6 +447,10 @@ def check_box(doc, adapters, where):
                 doc.get("release"), {}).get("install", {}).get("release_pocket_only")):
         errs.append(f"{where}: [vm] pockets lists updates and/or security, once each, and only on a release whose "
                     "VM install is release_pocket_only")
+    elif "root_fs" in vm and not (isinstance(fs := (adapters.get(doc.get("family"), {}).get("releases", {})
+                                                    .get(doc.get("release")) or {}).get("install", {}).get("root_fs", []),
+                                             list) and vm["root_fs"] in fs):
+        errs.append(f"{where}: [vm] root_fs must be one its release's installer makes (releases.<release>.install.root_fs)")
     elif type(vm.get("ssh_port", 22)) is not int or not 0 < vm.get("ssh_port", 22) < 65536 or \
             not isinstance(vm.get("skip", []), list) or not all(isinstance(r, str) for r in vm.get("skip", [])) or \
             not set(vm.get("skip", [])) <= set(doc.get("roles", {})) or not isinstance(vm.get("live", {}), dict) or \

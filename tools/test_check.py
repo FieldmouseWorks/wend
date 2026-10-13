@@ -291,7 +291,7 @@ ok = (body[0] == "let mask = RootUmask::set();" and "drop(mask);" in code
       and code.index("drop(mask);") < code.index("&o.steps") < code.index("&o.out"))
 print(("passed  " if ok else "WRONG   ") + "client cmd_walk walks under RootUmask, drops it before --steps and --out")
 bad += not ok
-# a box's [vm] table (tools/vm.py): only ssh_port, skip, live and pockets, each well formed
+# a box's [vm] table (tools/vm.py): only ssh_port, skip, live, pockets and root_fs, each well formed
 web = check.load_all()[3]["el/centos5-web"]
 for name, vm, want in (("the web box's own [vm]", web.get("vm", {}), False),
                        ("[vm] skip names a role the box doesn't have", {**web["vm"], "skip": ["dbb"]}, True),
@@ -300,9 +300,20 @@ for name, vm, want in (("the web box's own [vm]", web.get("vm", {}), False),
                        ("[vm] ssh_port out of range", {**web["vm"], "ssh_port": 70000}, True),
                        ("[vm] an empty live check", {**web["vm"], "live": {"x": ""}}, True),
                        ("[vm] an unknown key", {**web["vm"], "hostname": "x"}, True),
+                       ("[vm] root_fs on a release whose installer offers none (CentOS 5)", {**web["vm"], "root_fs": "ext3"},
+                        True),
                        ("[vm] a skipped role with no live check", {**web["vm"], "live": {"site": web["vm"]["live"]["site"]}},
                         True)):
     errs = check.check_box({**web, "vm": vm}, adapters, "boxes/el/centos5-web/box.toml")
+    print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
+    bad += bool(errs) != want
+# root_fs is one the box's start release's installer makes (releases.<release>.install.root_fs)
+lamp, trusty = check.load_all()[3]["el/centos7-lamp"], check.load_all()[3]["ubuntu/trusty-web"]
+for name, box, root_fs, want in (("[vm] root_fs xfs-v4 on CentOS 7", lamp, "xfs-v4", False),
+                                 ("[vm] root_fs xfs on CentOS 7", lamp, "xfs", False),
+                                 ("[vm] an unknown root_fs on CentOS 7", lamp, "btrfs", True),
+                                 ("[vm] root_fs on a debian-installer box", trusty, "xfs", True)):
+    errs = check.check_box({**box, "vm": {**box["vm"], "root_fs": root_fs}}, adapters, "boxes/x/box.toml")
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
 # [vm].pockets: the -updates/-security pockets a box built from them asks the VM installer for (wend#47)
