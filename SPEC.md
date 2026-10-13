@@ -869,25 +869,25 @@ harness, not to fixes, because the release's own tools can't carry them up the l
 
 - **The old release's kernel can't stay in the rpm database.** EL5's kernels require `mkinitrd`, which is gone in EL6
   (`pkgdb` fails). EL6's kernel requires `/sbin/new-kernel-pkg`, which nothing provides on EL7 after UsrMove, so the
-  transaction fails. And dnf won't remove the running kernel, so `rpm.transit` fails. So `hop.kernel_before` drops
-  the installed kernel packages' records with `rpm -e --justdb --nodeps --noscripts` and keeps their files: the
-  running kernel and its boot entry stay as the fallback. This is the one place, besides `rpm.transit`'s last step,
-  where wend drops records and keeps files. Fixes can't, because a fix doing it could fake `pkgdb`. It then removes
-  the files of kernels that no package owns and that aren't running or GRUB's default, so the release's kernel fits
-  in `/boot` (the VM tier's CentOS 5 /boot is 200 MiB), its kdump image with it. This is how the previous hop's kernel,
-  once a reboot has moved off it, finally goes. The rescue image (`vmlinuz-0-rescue-<machine id>`, its initramfs and BLS
-  entry) goes too, unless it is or may be GRUB's default (GRUB legacy's `default=saved`; GRUB 2's `saved_entry` or
-  `GRUB_DEFAULT` naming it or a menu number other than 0): it is the old release's kernel with a generic initramfs
-  (62 MiB on EL7), and EL9's `51-dracut-rescue.install`, finding no BLS entry for it, copies the new `vmlinuz` over
-  the old one and keeps EL7's initramfs. No hop builds another:
-  `hop.kernel_before` sets `dracut_rescue_image="no"` in a drop-in (`/etc/dracut.conf.d/99-wend-no-rescue.conf`) that
-  `hop.after` removes, since a generic image of 54 MiB (Alma 9) or 65 MiB (Alma 10) doesn't fit the VM tier's 200 MiB
-  CentOS 5 `/boot` beside two kernels. The machine lands without a rescue image, and its next kernel update builds one
-  for the release it runs, as EL does when none exists. None of the kernel steps acts unless the machine is booted from
-  this root (`/` is PID 1's root): in a chroot of someone's disk the records, files and boot entries are left as they
-  are, since `uname -r` there is the host's kernel, not the box's. The fallback the running kernel's entry gives is a
-  manual one: GRUB legacy has no `fallback=` set, so a hop that fails between the two halves leaves the default on the
-  running kernel's entry, which still boots.
+  transaction fails. And dnf won't remove the running kernel, so `rpm.transit` fails. So `hop.kernel_before` drops the
+  installed kernel packages' records with `rpm -e --justdb --nodeps --noscripts` and keeps their files: the running
+  kernel and its boot entry stay as the fallback. This is the one place, besides `rpm.transit`'s last step, where wend
+  drops records and keeps files. Fixes can't, because a fix doing it could fake `pkgdb`. It then removes the files of
+  kernels that no package owns and that aren't running or GRUB's default, so the release's kernel fits in `/boot` (the
+  VM tier's CentOS 5 /boot is 200 MiB), its kdump image with it. This is how the previous hop's kernel, once a reboot
+  has moved off it, finally goes. The rescue image (`vmlinuz-0-rescue-<machine id>`, its initramfs and BLS entry) goes
+  too, unless it is or may be GRUB's default (GRUB legacy's `default=saved`; GRUB 2's `saved_entry` naming anything but
+  an installed kernel's menu title or BLS id, or a `GRUB_DEFAULT` other than saved or 0): it is the old release's kernel
+  with a generic initramfs (62 MiB on EL7), and EL9's `51-dracut-rescue.install`, finding no BLS entry for it, copies
+  the new `vmlinuz` over the old one and keeps EL7's initramfs. No hop builds another: `hop.kernel_before` sets
+  `dracut_rescue_image="no"` in a drop-in (`/etc/dracut.conf.d/99-wend-no-rescue.conf`) that `hop.after` removes, since
+  a generic image of 54 MiB (Alma 9) or 65 MiB (Alma 10) doesn't fit the VM tier's 200 MiB CentOS 5 `/boot` beside two
+  kernels. The machine lands without a rescue image, and its next kernel update builds one for the release it runs, as
+  EL does when none exists. None of the kernel steps acts unless the machine is booted from this root (`/` is PID 1's
+  root): in a chroot of someone's disk the records, files and boot entries are left as they are, since `uname -r` there
+  is the host's kernel, not the box's. The fallback the running kernel's entry gives is a manual one: GRUB legacy has no
+  `fallback=` set, so a hop that fails between the two halves leaves the default on the running kernel's entry, which
+  still boots.
 - **The release's kernel is installed after the transaction** (`hop.kernel_after`), since the transaction itself only
   syncs what the database lists.
 - **GRUB legacy stays.** From EL8 on, kernels only get BLS entries, which GRUB legacy can't read, and GRUB2 can't be

@@ -238,6 +238,7 @@ fn boot_dir(dir: &Path, running: &str) -> Value {
         } || grub2_default_may_be_rescue(
             read_maybe(&dir.parent().unwrap_or(Path::new("/")).join("etc/default/grub")),
             read_maybe(&dir.join("grub2/grubenv")),
+            &files,
         ),
     })
 }
@@ -283,10 +284,10 @@ fn read_maybe(path: &Path) -> Option<String> {
 }
 
 /// Whether GRUB 2's default may boot the rescue image, read as EL's kernel_before reads it: `GRUB_DEFAULT` (quotes
-/// dropped) names it or a menu entry other than 0; or it is `saved` (or unset) and grubenv's `saved_entry` names the
-/// rescue image (EL7's menu title, a BLS id from EL8 on) or a menu number (`grub2-set-default 2`, `1>2`). A file that
-/// can't be read may say either.
-fn grub2_default_may_be_rescue(default_grub: Option<String>, grubenv: Option<String>) -> bool {
+/// dropped) is anything but `saved`, unset or 0; or grubenv's `saved_entry` names the rescue image, or anything that
+/// isn't an installed kernel's menu title (EL7: `... (<version>) ...`) or BLS id (`<machine id>-<version>`), such as a
+/// menu number. No saved entry boots entry 0, the newest kernel. A file that can't be read may say either.
+fn grub2_default_may_be_rescue(default_grub: Option<String>, grubenv: Option<String>, files: &[(String, u64)]) -> bool {
     let last = |text: &str, key: &str| {
         text.lines()
             .filter_map(|l| l.strip_prefix(key))
@@ -299,7 +300,13 @@ fn grub2_default_may_be_rescue(default_grub: Option<String>, grubenv: Option<Str
         "" | "saved" => {
             let Some(env) = grubenv else { return true };
             let s = last(&env, "saved_entry=");
-            s.contains("0-rescue") || (!s.is_empty() && s.chars().all(|c| c.is_ascii_digit() || c == '>'))
+            !s.is_empty()
+                && (s.contains("0-rescue")
+                    || !files
+                        .iter()
+                        .filter_map(|(n, _)| n.strip_prefix("vmlinuz-"))
+                        .filter(|v| !v.starts_with("0-rescue-"))
+                        .any(|v| s.contains(&format!("({v})")) || s.ends_with(&format!("-{v}"))))
         }
         "0" => false,
         _ => true,
@@ -1709,21 +1716,29 @@ mod tests {
         let first = "title rescue\n\tkernel /vmlinuz-0-rescue-ab ro\ntitle CentOS\n\tkernel /vmlinuz-2.6.32 ro\n";
         assert!(grub_default_is_rescue(first));
         // GRUB 2: grubenv's saved_entry, or GRUB_DEFAULT when it isn't `saved`
-        let g2 = |d: &str, e: &str| grub2_default_may_be_rescue(Some(d.into()), Some(e.into()));
+        let files = vec![
+            ("vmlinuz-3.10.0-1160.el7.x86_64".to_string(), 1),
+            ("vmlinuz-0-rescue-ab".to_string(), 1),
+        ];
+        let g2 = |d: &str, e: &str| grub2_default_may_be_rescue(Some(d.into()), Some(e.into()), &files);
         let saved = "GRUB_DEFAULT=saved\n";
         assert!(!g2(
             saved,
             "saved_entry=CentOS Linux (3.10.0-1160.el7.x86_64) 7 (Core)\n"
         ));
         assert!(g2(saved, "saved_entry=CentOS Linux (0-rescue-ab) 7 (Core)\n"));
+        // a renamed entry, or one whose kernel is gone, may be the rescue image
+        assert!(g2(saved, "saved_entry=Rescue\n"));
+        assert!(g2(saved, "saved_entry=CentOS Linux (3.10.0-957.el7.x86_64) 7 (Core)\n"));
         assert!(g2(saved, "saved_entry=2\n"));
         assert!(g2(saved, "saved_entry=1>2\n"));
-        assert!(!g2(saved, "saved_entry=3f2a9c-4.18.0-553.el8.x86_64\n"));
+        assert!(!g2(saved, "saved_entry=3f2a9c-3.10.0-1160.el7.x86_64\n"));
+        assert!(!g2(saved, "saved_entry=\n"));
         assert!(!g2("", ""));
         assert!(!g2("GRUB_DEFAULT=\"0\"\n", "saved_entry=2\n"));
         assert!(g2("GRUB_DEFAULT='2'\n", ""));
-        assert!(grub2_default_may_be_rescue(Some(saved.into()), None));
-        assert!(grub2_default_may_be_rescue(None, Some(String::new())));
+        assert!(grub2_default_may_be_rescue(Some(saved.into()), None, &files));
+        assert!(grub2_default_may_be_rescue(None, Some(String::new()), &files));
     }
 
     /// Debian's apt autoremoves no kernel before jessie's: on the hop to jessie every kernel is still there.
