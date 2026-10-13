@@ -1120,12 +1120,19 @@ was meant to run on. The plan says when that's newer than what the box runs now.
    facts are gathered, the plan runs the job's interpreter once in a sandbox copy with `-v` to list its imports. It
    never runs the job on the real machine.
 2. **Fetch, and what's trusted.** From the vendor's archive of that release (vault.centos.org, archive.debian.org,
-   old-releases.ubuntu.com). Today no run pins a release no hop installs, so `shelter.build` pins it itself: it
-   checks the index's signature against the release's own signing keys, which the box already trusts (rpm's
-   keyring, apt's trusted keys; an expired key counts, since these keys expired with their releases and the
-   signature is what's checked, not the date), checks every package against the sha256 the signed index lists, and
-   records the index digests in the lock. A rebuild is held to the lock. Bytes that don't match, or a signature
-   that doesn't verify, refuse the shelter before anything is touched.
+   old-releases.ubuntu.com). Today no run pins a release no hop installs, so `shelter.build` pins it itself. The
+   build runs while the box is on that release (see "When" below), so its signing keys are the ones the box already
+   trusts. An expired key counts: these keys expired with their releases, and the signature is what's checked, not
+   the date. The trust anchor differs by family:
+   - Debian and Ubuntu sign the index (`InRelease` or `Release.gpg`). wend checks that signature, then every package
+     against the sha256 the signed index lists.
+   - EL doesn't sign its index: CentOS 7's `repomd.xml` on the vault has no signature. There the anchor is each
+     package's own RPM header signature (`rpmkeys --checksig` against `RPM-GPG-KEY-CentOS-7`), and a package that
+     isn't signed is refused.
+
+   The lock records the index digests either way. On EL they're trust on first use: they hold later rebuilds to
+   what the first build saw, and nothing more. Bytes that don't match, or a signature that doesn't verify, refuse
+   the shelter, and the box stays on the release it's on.
 3. **Build.** Packages are unpacked and installed into `/var/lib/wend/shelter/<app>/root` by the release's own rpm or
    dpkg, in the sandbox wend already uses to build CI boxes (private tmpfs `/dev`, never the host's).
 4. **Carried files.** Files the app needs that no package owns (pip-installed site-packages, `/usr/local/lib/
@@ -1145,8 +1152,19 @@ The honest limit: package scriptlets aren't bit-reproducible (timestamps, genera
 inputs, records the output's ID, and runs the image by that ID. A rebuild re-verifies every input, not every
 output bit.
 
+**When.** The shelter is built from the box as it is on `keeps_runtimes_on`, never from the release the route starts
+on. On a route that starts there (an EL7 box; a bullseye or jammy start) that's before the first hop. On a longer
+one (etch to trixie) it's the pre phase of the hop that drops Python 2, because only then do `/proc/<pid>/maps`,
+the imports, the package names and the changed files describe the userland the shelter replaces; an etch box's are
+Python 2.4's and etch's. Before the first hop the plan checks what it can already: that the vault serves that
+release's index, the free space, and the app-level choices (programs, mounts, connections, cron lines), which the
+owner confirms then. If the drop hop's facts need anything the confirmed plan didn't list (a new mount, a new
+connection), `shelter.build` refuses, and the walk stops there: the box sits on `keeps_runtimes_on` with its app
+running natively, which is exactly the "stop" option.
+
 **No unbuilt infrastructure.** The vendor's archive is the only source until the archive (wend#19) exists. If it's
-gone, or serves other bytes, the shelter is refused before the box is touched, the same rule a route follows (open
+gone, or serves other bytes, the shelter is refused before the box is touched (on a longer route, before the drop
+hop touches it, with the box left on `keeps_runtimes_on`), the same rule a route follows (open
 question 12), and there's no `--live` escape, since there's nothing live to fall back to. Once a vault dies, a
 shelter can't be rebuilt from anywhere else, so #19 matters more with shelters: packages a proven shelter's lock
 names belong in the pinned archive, like a route's.
@@ -1155,9 +1173,11 @@ names belong in the pinned archive, like a route's.
 
 Podman, from the landing release's own repos. Read from the indexes on 2026-10-13: every release where Python 2
 drops has podman 4.3 or later: alma9 and alma10 (5.8.2), bookworm (4.3.1), trixie (5.4.2), noble (4.9.3) and
-resolute (5.7.0). Their kernels are all 5.14 or later, which idmapped mounts need. The image is built locally,
-loaded with `podman load`, and run by its image ID. There's no registry. Its size counts toward the hop's
-`disk_mib`, and a `/var/lib/containers` on XFS with `ftype=0` (overlay storage refuses it) fails preflight.
+resolute (5.7.0). Their kernels are all 5.14 or later. Idmapped mounts need 5.12 for ext4 and XFS and 5.15 for
+btrfs, and don't work on NFS at all, so preflight checks each data directory's filesystem and refuses one that
+can't be idmapped. The image is built locally, loaded with `podman load`, and run by its image ID. There's no
+registry. Its size counts toward the hop's `disk_mib`, and a `/var/lib/containers` on XFS with `ftype=0` (overlay
+storage refuses it) fails preflight.
 
 wend writes a plain systemd unit, not a quadlet (bookworm's podman has none):
 `/etc/systemd/system/wend-shelter-<app>.service` runs `podman run --rm --name wend-<app> ... <image ID>
@@ -1180,7 +1200,12 @@ Defaults, which the plan shows and the run records:
 - **Network** (private by default, and every connection is an explicit opt-in). The shelter gets a
   podman network of its own (`wend-<app>`, a fixed subnet), and wend adds an nftables table of its own
   (`inet wend_shelter`) that drops everything leaving that subnet except the destinations the owner opted in
-  to, since podman itself has no per-destination allow-list. Runtime preflight records the TCP connections and
+  to, since podman itself has no per-destination allow-list. It also allows `ct state established,related`
+  (replies on published ports) and DNS to the network's gateway (aardvark-dns) when the network has DNS. It has to
+  fail closed: netavark's own rules allow all egress, so a shelter started without the table is quietly public.
+  The table is loaded by a wend unit (`wend-shelter-net-<app>.service`, a oneshot that stays active), and the
+  shelter's unit has `Requires=` and `After=` on it, so after any reboot the shelter doesn't start unless the table
+  loaded. Runtime preflight records the TCP connections and
   listening sockets each sheltered program actually has (`/proc/<pid>/net/tcp*` matched to its socket inodes,
   sampled while facts are gathered), and the plan prefills the opt-ins from them, so "private" rarely breaks a
   working app. A connection that only happens at 3 a.m. won't be seen, and the plan says so. Ports the program
@@ -1189,7 +1214,13 @@ Defaults, which the plan shows and the run records:
   (MySQLdb's `host="localhost"` uses the socket at its compiled-in path) is served by a wend-written
   `systemd-socket-proxyd` unit on the host that listens on a socket in `/run/wend/shelter/<app>/` and connects to
   the real one per connection. That directory is mounted where the shelter's library looks, so a MariaDB restart
-  doesn't strand it and the database's own directory is never mounted. An app that reaches a host service over
+  doesn't strand it and the database's own directory is never mounted. The proxy runs as the app's host user
+  (`User=`, recorded in the run), never as root: MariaDB 10.4 and later give `root@localhost` `unix_socket` auth,
+  so a root proxy would hand anything in the shelter database root with no password, and an app that logs in by
+  `unix_socket` as its own user keeps working. On EL the proxy's directory is app-only, so it gets
+  `container_file_t` (`:Z`) like the app's other directories; whether `container_t` may also `connectto` the
+  proxy's domain is something only the VM tier shows, and if SELinux denies it, `shelter.start`'s check fails and
+  the hop rolls back. An app that reaches a host service over
   TCP on `127.0.0.1` can't be served without changing its config, which wend doesn't do: the plan names it, and the
   owner's choices are `network = "host"` (opted in by name, recorded in the run as an exception) or editing the app.
 - **Mounts:** the code tree read-only. Data directories read-write (`:idmap`): the ones the program has open for
@@ -1205,19 +1236,23 @@ step (no shell), each with preconditions and checks, and recorded in the run's `
 
 | op | when | does |
 |---|---|---|
-| `shelter.build` | before the first hop | builds the root and the lock (above); needs the free space the plan computed |
-| `shelter.prove` | before the first hop | runs the app's checks against the shelter root in the sandbox (a chroot), with the real data mounted read-only; refuses the route if the app doesn't run there |
+| `shelter.build` | on `keeps_runtimes_on`: before the first hop, or in the pre phase of the hop that drops Python 2 | builds the root and the lock (above); needs the free space the plan computed |
+| `shelter.prove` | right after `shelter.build` | runs the app's checks against the shelter root in the sandbox (a chroot), with the real data mounted read-only; refuses the route if the app doesn't run there |
 | `shelter.stop-native` | pre phase of the hop that drops Python 2 | stops and disables the app's own service unit, and comments out each cron line that runs a sheltered program with a `# wend-shelter:<app>` marker (the original goes under `/var/lib/wend/saved`; the precondition is the line's exact text). Nothing is deleted, so rolling the hop back restores both |
-| `shelter.start` | post phase of that hop | installs podman (an `install` op of the landing release), adds the subuid/subgid range, the network, the nftables table and the socket proxies, loads the image, writes and enables the unit, and writes one systemd timer per moved cron line |
+| `shelter.start` | post phase of that hop | installs podman (an `install` op of the landing release), adds the subuid/subgid range, the network, the nftables unit and the socket proxies, loads the image, writes and enables the unit, and writes one systemd timer per moved cron line |
 
-A cron line becomes a timer only when its schedule translates exactly to `OnCalendar=` (every standard five-field
-schedule and `@daily`-style names do; `@reboot` becomes a oneshot at boot); anything else is refused at plan time.
+A cron line becomes a timer only when its schedule translates exactly to `OnCalendar=`. Every standard five-field
+schedule and the `@daily`-style names do. When both day-of-month and day-of-week are restricted, cron runs on
+either, so that becomes two `OnCalendar=` lines. `@reboot` becomes a oneshot at boot. Anything else is refused at
+plan time.
 The timer runs the same command in the shelter (`podman run --rm ... <image ID> <command>`) with the crontab's
 `PATH` and environment. Cron's `MAILTO` doesn't carry over: output goes to the journal, and the plan says so.
 
 `shelter.start`'s checks are the app's own checks against the real container, on the box, under the real
 confinement (userns, MAC, read-only root, dropped capabilities, the network table). If they fail, the hop rolls
-back like any other, and the app comes back natively on the release before. That's the one place confinement is
+back like any other, and the app comes back natively on the release before. Rolling back undoes everything
+`shelter.start` added, not only the container: the units, timers, proxies and nftables table are removed, the
+subuid/subgid line goes, and the `:Z` labels are restored. That's the one place confinement is
 tested on the machine itself; `shelter.prove` only proves the userland.
 
 The app is down from `stop-native` until `start`: one hop, including that hop's reboot. That's the same window the
@@ -1258,7 +1293,7 @@ The verdict is `ok` only when every own Python 2 user is in a shelter that `shel
 - relabeling or mounting a directory the app shares with a host service
 - a cron schedule that doesn't translate exactly
 - a shelter on a release whose own repos have no podman
-- building from anything but the vendor's signed archive (or, once it exists, wend's pinned archive)
+- building from anything but the vendor's archive, verified as above (or, once it exists, wend's pinned archive)
 
 ## VM tier (maintainer-run)
 
