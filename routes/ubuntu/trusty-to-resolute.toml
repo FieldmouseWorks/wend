@@ -34,3 +34,7 @@ name = "php8.5-module"
 [meta]
 name = "trusty-to-resolute"
 summary = "Ubuntu 14.04 trusty (2014) to 26.04 resolute, LTS to LTS, proven on a web box and a database box"
+
+[[fixes]]
+id = "sha256:0fd0f96ea39f6ebd216caef47c8bba4a059fe1054b76f41697f8c1245608dc59"
+name = "jammy-ifupdown-dns-to-resolved"
