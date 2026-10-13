@@ -1154,7 +1154,7 @@ mod tests {
     }
 
     /// Ubuntu's kernel_before purges every kernel older than the running one, so a hop's kernel only sits beside the
-    /// running one: trusty's 243 MB LVM /boot takes the whole route even with five old kernels, a 200 MB one stops
+    /// running one: trusty's 243 MB LVM /boot takes the whole route even with five old kernels, a 195 MB one stops
     /// before noble.
     #[test]
     fn ubuntu_keeps_only_the_running_kernel_beside_the_new_one() {
