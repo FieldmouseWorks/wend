@@ -289,4 +289,32 @@ for fam, hop in (("el", "centos6"), ("debian", "squeeze")):
         ok = not kb and bool(ka) and first[-len(ka):] == ka and first[-len(ka) - len(up):-len(ka)] == up
     print(("passed  " if ok else "WRONG   ") + f"{fam} {hop}: kernel steps right after refresh and right after the upgrade")
     bad += not ok
+# Ubuntu: the adapter's own harness steps can't be reached or widened by a fix. A fix can't write the sources a hop
+# sets aside or the policy-rc.d the xenial MySQL stand-in swaps; xenial and jammy take their own upgrade, every other
+# Ubuntu hop the family's.
+ub_good = {**copy.deepcopy(good), "family": "ubuntu", "hop": "xenial", "when": {"installed": "mysql-server-5.5"},
+           "post": [{"op": "install", "packages": ["mysql-server-5.7"]}]}
+ub_rel = "fixes/ubuntu/xenial/reinstall-mysql-server-5.1-after-hop.toml"
+assert check.check_fix(ub_good, adapters, ub_rel) == [], check.check_fix(ub_good, adapters, ub_rel)
+for name, step in (("ubuntu: write a PPA into sources.list.d", {"op": "write-file",
+                    "path": "/etc/apt/sources.list.d/evil.list", "content": "deb http://evil/ x main\n"}),
+                   ("ubuntu: replace the policy-rc.d the xenial stand-in swaps", {"op": "write-file",
+                    "path": "/usr/sbin/policy-rc.d", "content": "exit 0\n"}),
+                   ("ubuntu: write the stand-in's saved policy-rc.d", {"op": "write-file",
+                    "path": "/tmp/wend-policy-rc.d", "content": "exit 0\n"})):
+    f = copy.deepcopy(ub_good)
+    f["post"].append(step)
+    errs = check.check_fix(f, adapters, ub_rel)
+    print(("refused " if errs else "MISSED  ") + name + (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
+    bad += not errs
+for hop in adapters["ubuntu"]["ladder"][1:]:
+    w_ = type("W", (), {})()
+    w_.adapter = adapters["ubuntu"]
+    first, _ = _walk.Walk.hop_parts(w_, hop, [])
+    rel = adapters["ubuntu"]["releases"].get(hop)
+    up = rel["upgrade"] if hop in ("xenial", "jammy") else adapters["ubuntu"]["hop"]["upgrade"]
+    ok = first[-len(up):] == up and (("policy-rc.d" in "".join(first)) == (hop == "xenial")) and \
+        (("usrmerge" in "".join(first)) == (hop == "jammy"))
+    print(("passed  " if ok else "WRONG   ") + f"ubuntu {hop}: the hop's own upgrade, and only xenial's and jammy's extras")
+    bad += not ok
 sys.exit(1 if bad else 0)

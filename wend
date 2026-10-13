@@ -44,7 +44,7 @@ class Repo:
         self.boxes = {p[len("boxes/"):-len("/box.toml")]: d for p, d in load("boxes/").items()}
 
 
-HOST_TOOLS = {"debian": ["debootstrap"], "el": ["rpm2cpio", "cpio", "curl", "ip"]}
+HOST_TOOLS = {"debian": ["debootstrap"], "ubuntu": ["debootstrap"], "el": ["rpm2cpio", "cpio", "curl", "ip"]}
 APT_NAMES = {"ip": "iproute2", "unshare": "util-linux"}
 
 
@@ -155,6 +155,7 @@ def cmd_discover(family, frm, to, box, max_calls=12):
             text = open(f"{ROOT}/{repo.fix_path[i]}").read()
             open(f"{ROOT}/{repo.fix_path[i]}", "w").write(_set_fires_on(text, f["meta"]["fires_on"]))
             print("now claims", box + ":", repo.fix_path[i])
+    os.makedirs(os.path.dirname(f"{ROOT}/{rpath}"), exist_ok=True)  # a family's first route
     open(f"{ROOT}/{rpath}", "w").write(toml(route, "# Every fix is pinned by content id. ./wend check --repin after editing fixes."))
     run["route"] = check.content_id(route)
     p = save_run(run)
