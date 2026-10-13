@@ -478,24 +478,25 @@ instead. A package that isn't installed is skipped, never installed (`--only-upg
 on). Reference: `apt-get install --reinstall --only-upgrade {packages}`.
 
 **`net.ifupdown-dns-to-resolved`** (no arguments; Ubuntu). Gives systemd-resolved the resolvers and search domains
-`/etc/network/interfaces` names, for a box that keeps ifupdown into a release where resolved answers its lookups. A
+ifupdown's configuration names, for a box that keeps ifupdown into a release where resolved answers its lookups. A
 box that came up from trusty keeps ifupdown and resolvconf; on jammy's release pocket ifupdown's own hook that hands
 the `dns-*` options to resolved fails ("mystatedir: not found"; jammy-updates fixes it), resolvconf lists only
 resolved's stub, and resolved has no upstream server, so nothing resolves after the reboot (found replaying trusty to
-resolute in a VM, wend#13). noble ships no resolvconf at all. The files are read the way ifupdown reads them: a line
-whose first non-blank is `#` is skipped before a trailing `\` joins the next line on, `source` globs and
-`source-directory` directories are followed (files named `[A-Za-z0-9_-]+`; a file already read is skipped). The
-options are named the way ifupdown hands them to its hooks (`-` or `_`, any case): `dns-nameservers` and
-`dns-nameserver` (global addresses only; scoped and link-local ones fail), `dns-search` and `dns-domain` (plain
-domain names). Any other `dns-*` option, or one on an interface that isn't brought up at boot by name (`auto`,
-`allow-*`) or in a file with a `mapping`, fails the step. The result is
-`/etc/systemd/resolved.conf.d/50-wend-ifupdown.conf` with `DNS=` and `Domains=`, written (mode 0644, never through a
-symlink) only when it is new; one that is already there must be a plain file saying the same, or the step fails.
-Nothing is written when no interface names a `dns-*` option, and every failure comes before anything is written.
-Addresses and routes stay with ifupdown, and resolved reads the drop-in at the reboot that ends the hop. Needs
-python3.6 or later on the box (bionic on; the route uses it on jammy). Reference: `python3 -` with the source in
-`tools/net_ifupdown_dns_to_resolved.py`, sent as a here-document; `tools/test_net_ifupdown.py` runs it on fixture
-roots.
+resolute in a VM, wend#13). noble ships no resolvconf at all. ifupdown reads its own configuration: `ifquery
+--list --allow=auto` and `--allow=hotplug` name the interfaces it brings up at boot, and `ifquery NAME` prints each
+one's options as ifupdown parsed them; a configuration it can't read fails the step. Each option name becomes the
+name ifupdown's hooks receive (`-` to `_`, ASCII upper case, anything else dropped). `DNS_NAMESERVERS` and
+`DNS_NAMESERVER` must be unicast addresses a resolver can be at (no scope, not link-local, multicast, loopback,
+unspecified, reserved, broadcast or IPv4-mapped); `DNS_SEARCH` and `DNS_DOMAIN` plain domain names; any other
+`DNS_*` option fails the step. The result is `/etc/systemd/resolved.conf.d/50-wend-ifupdown.conf` with `DNS=` and
+`Domains=`, written (mode 0644, never through a symlink) only when it is new; one that is already there must be a
+plain file saying the same, or the step fails. Nothing is written when no interface brought up at boot names a
+`dns-*` option, and every failure comes before anything is written. Addresses and routes stay with ifupdown, and
+resolved reads the drop-in at the reboot that ends the hop. Not seen: `no-scripts`, which `ifquery` doesn't show, so
+such an interface's options are carried although no hook ever read them. Needs python3.6 or later on the box (bionic
+on; the route uses it on jammy). Reference: `python3 -` with the source in `tools/net_ifupdown_dns_to_resolved.py`,
+sent as a here-document; `tools/test_net_ifupdown.py` runs it with a stand-in `ifquery`, and the VM replay proves the
+parse on a real box.
 
 ### EL ops
 
