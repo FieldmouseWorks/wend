@@ -9,13 +9,18 @@ resolves after the reboot. Noble no longer ships resolvconf at all.
 
 Typed, not a guess: ifupdown reads its own configuration. `ifquery --list --allow=auto` and `--allow=hotplug` name
 the interfaces it brings up at boot, and `ifquery NAME` prints each one's options as ifupdown parsed them (sourced
-files, comments, continuations, misplaced options); a configuration ifupdown can't read fails the step. Each option
-name is turned into the name ifupdown's hooks receive (setlocalenv: "-" to "_", ASCII upper case, anything else
-dropped). DNS_NAMESERVERS and DNS_NAMESERVER (what resolvconf's and ifupdown's hooks read) must be unicast addresses
-a resolver can be at; DNS_SEARCH and DNS_DOMAIN plain domain names; any other DNS_* option fails the step. The result
-is one resolved drop-in, /etc/systemd/resolved.conf.d/50-wend-ifupdown.conf, with DNS= and Domains=, written only
-when it is new or already the same. Addresses and routes stay with ifupdown. Not seen: `no-scripts`, which ifquery
-doesn't show; such an interface's options are carried although no hook ever read them.
+files, comments, continuations, misplaced options, inherits); a configuration ifupdown can't read fails the step.
+ifquery prints `name: value` per option, and an option given twice is one value joined by a newline (config.c), so a
+line without ": " continues the value before it; the hooks word-split the joined value. Each option name is turned
+into the name ifupdown's hooks receive (setlocalenv: up to the first "=", "-" to "_", ASCII upper case, anything else
+dropped), and two spellings of one DNS_* name on an interface fail the step, since a hook sees only the last.
+DNS_NAMESERVERS and DNS_NAMESERVER (what resolvconf's and ifupdown's hooks read) must be unicast addresses a resolver
+can be at; DNS_SEARCH and DNS_DOMAIN plain domain names; any other DNS_* option fails the step. The result is one
+resolved drop-in, /etc/systemd/resolved.conf.d/50-wend-ifupdown.conf, with DNS= and Domains=, written only when it
+is new or already the same. Addresses and routes stay with ifupdown. Not seen, from ifquery's text: `no-scripts`
+(kept apart from the options); an interface listed for boot whose device never appears (no hook runs for it); and a
+repeated option whose second value itself reads `name: value`, which prints like a separate option. In each, the
+options are carried although no hook read them. ifquery runs the admin's mapping scripts, as ifup does at boot.
 
 Run on the box by both engines as `python3 -` with this file as a here-document (tools/backends.py); this file is
 the source, and the client embeds the same text (client/parity.py compares them). tools/test_net_ifupdown.py runs it
@@ -29,7 +34,7 @@ import sys
 
 DROPIN = "/etc/systemd/resolved.conf.d/50-wend-ifupdown.conf"
 DOMAIN = r"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*\.?"
-NAME = r"[A-Za-z0-9_.:@-]+"
+NAME = r"[A-Za-z0-9_.:@][A-Za-z0-9_.:@-]*"
 
 
 def fail(msg):
@@ -44,14 +49,14 @@ def ifquery(*args):
     if p.returncode:
         fail(f"ifquery {' '.join(args)} failed: {p.stderr.decode('utf-8', 'replace').strip()}")
     try:
-        return [x for x in p.stdout.decode("utf-8").splitlines() if x.strip()]
+        return [x for x in p.stdout.decode("utf-8").split("\n") if x.strip()]
     except UnicodeDecodeError:
         fail(f"ifquery {' '.join(args)} printed something that isn't UTF-8")
 
 
 def option(key):
     """An option name as ifupdown hands it to its hooks (execute.c, setlocalenv)."""
-    return re.sub(r"[^A-Za-z0-9_]", "", key.replace("-", "_")).upper()
+    return re.sub(r"[^A-Za-z0-9_]", "", key.split("=", 1)[0].replace("-", "_")).upper()
 
 
 def server(iface, key, v):
@@ -61,7 +66,7 @@ def server(iface, key, v):
         fail(f"{iface}: {key} {v} isn't an address")
     mapped = a.version == 6 and a.ipv4_mapped is not None
     if "%" in v or mapped or a.is_link_local or a.is_multicast or a.is_loopback or a.is_unspecified or \
-            a.is_reserved or v == "255.255.255.255":
+            a.is_reserved:
         fail(f"{iface}: {key} {v} isn't a unicast address resolved can use as a server")
     return str(a)
 
@@ -76,13 +81,21 @@ def plan():
                 names.append(n)
     dns, search = [], []
     for iface in names:
-        for line in ifquery(iface):
+        options, spelled = [], {}
+        for line in ifquery("--", iface):
             key, sep, value = line.partition(": ")
-            if not sep:
-                fail(f"{iface}: ifquery printed {line!r}, which isn't 'option: value'")
+            if sep and key and " " not in key:
+                options.append([key, value])
+            elif options:
+                options[-1][1] += " " + line
+            else:
+                fail(f"{iface}: ifquery printed {line!r} before any option")
+        for key, value in options:
             opt = option(key)
             if not opt.startswith("DNS_"):
                 continue
+            if spelled.setdefault(opt, key) != key:
+                fail(f"{iface}: {spelled[opt]} and {key} are both {opt} to ifupdown's hooks, which see only the last")
             if opt in ("DNS_NAMESERVERS", "DNS_NAMESERVER"):
                 for v in value.split():
                     a = server(iface, key, v)
@@ -115,7 +128,9 @@ def main(root=""):
         return
     if os.path.lexists(path + ".wend"):
         fail(f"{DROPIN}.wend is in the way")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if not os.path.isdir(os.path.dirname(path)):
+        os.makedirs(os.path.dirname(path))
+        os.chmod(os.path.dirname(path), 0o755)
     fd = os.open(path + ".wend", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     with os.fdopen(fd, "w") as out:
         out.write(text)

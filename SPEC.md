@@ -483,17 +483,24 @@ box that came up from trusty keeps ifupdown and resolvconf; on jammy's release p
 the `dns-*` options to resolved fails ("mystatedir: not found"; jammy-updates fixes it), resolvconf lists only
 resolved's stub, and resolved has no upstream server, so nothing resolves after the reboot (found replaying trusty to
 resolute in a VM, wend#13). noble ships no resolvconf at all. ifupdown reads its own configuration: `ifquery
---list --allow=auto` and `--allow=hotplug` name the interfaces it brings up at boot, and `ifquery NAME` prints each
-one's options as ifupdown parsed them; a configuration it can't read fails the step. Each option name becomes the
-name ifupdown's hooks receive (`-` to `_`, ASCII upper case, anything else dropped). `DNS_NAMESERVERS` and
-`DNS_NAMESERVER` must be unicast addresses a resolver can be at (no scope, not link-local, multicast, loopback,
-unspecified, reserved, broadcast or IPv4-mapped); `DNS_SEARCH` and `DNS_DOMAIN` plain domain names; any other
-`DNS_*` option fails the step. The result is `/etc/systemd/resolved.conf.d/50-wend-ifupdown.conf` with `DNS=` and
-`Domains=`, written (mode 0644, never through a symlink) only when it is new; one that is already there must be a
-plain file saying the same, or the step fails. Nothing is written when no interface brought up at boot names a
-`dns-*` option, and every failure comes before anything is written. Addresses and routes stay with ifupdown, and
-resolved reads the drop-in at the reboot that ends the hop. Not seen: `no-scripts`, which `ifquery` doesn't show, so
-such an interface's options are carried although no hook ever read them. Needs python3.6 or later on the box (bionic
+--list --allow=auto` and `--allow=hotplug` name the interfaces it brings up at boot, and `ifquery -- NAME` prints
+each one's options as ifupdown parsed them (inet and inet6 stanzas, `inherits`, sourced files); a configuration it
+can't read fails the step, and so does an interface name that starts with `-` or holds anything but
+`[A-Za-z0-9_.:@-]`. ifquery prints `name: value` per option, and ifupdown keeps an option given twice as one value
+joined by a newline, so a line without `: ` continues the value before it (only a newline ends a line). Each option
+name becomes the name ifupdown's hooks receive (up to the first `=`, `-` to `_`, ASCII upper case, anything else
+dropped), and two spellings of one `DNS_*` name on an interface fail the step, because a hook sees only the last.
+`DNS_NAMESERVERS` and `DNS_NAMESERVER` must be unicast addresses a resolver can be at (no scope, not link-local,
+multicast, loopback, unspecified, reserved, broadcast or IPv4-mapped); `DNS_SEARCH` and `DNS_DOMAIN` plain domain
+names; any other `DNS_*` option fails the step. The result is `/etc/systemd/resolved.conf.d/50-wend-ifupdown.conf`
+with `DNS=` and `Domains=`, written (mode 0644 in a 0755 directory, never through a symlink) only when it is new;
+one that is already there must be a plain file saying the same, and a `.wend` file beside it fails the step. Nothing
+is written when no interface brought up at boot names a `dns-*` option, and every refusal comes before anything is
+written. Addresses and routes stay with ifupdown, and resolved reads the drop-in at the reboot that ends the hop.
+Not seen, because ifquery's text doesn't show it, so the options are carried although no hook read them:
+`no-scripts`; an interface listed for boot whose device never appears; and a repeated option whose second value
+itself reads `name: value`, which prints like a separate option. ifquery runs the admin's `mapping` scripts, as
+`ifup` does at boot. Needs python3.6 or later on the box (bionic
 on; the route uses it on jammy). Reference: `python3 -` with the source in `tools/net_ifupdown_dns_to_resolved.py`,
 sent as a here-document; `tools/test_net_ifupdown.py` runs it with a stand-in `ifquery`, and the VM replay proves the
 parse on a real box.
