@@ -5,11 +5,11 @@ schema = "wend.box/0"
 family = "el"
 release = "centos7"
 arch = "x86_64"
-summary = "CentOS 7.9 LAMP: httpd 2.4 + mod_php 5.4 (mysqli) + mod_ssl, MariaDB 5.5 with a real row, EPEL (fail2ban guarding ssh on 2222, htop, ncdu, jq), firewalld with custom ports, NetworkManager with a static ifcfg, Python 2 libraries, postfix, chrony, cron"
+summary = "CentOS 7.9 LAMP: httpd 2.4 + mod_php 5.4 (mysqli) + mod_ssl, MariaDB 5.5 with a real row, EPEL (fail2ban guarding ssh on 2222, htop, ncdu, jq), firewalld with custom ports, NetworkManager with a static ifcfg, tuned (from @core), Python 2 libraries, postfix, chrony, cron"
 packages = ["httpd", "mod_ssl", "php", "php-mysql", "php-gd", "php-mbstring", "php-xml", "mariadb-server", "mariadb",
             "openssh-server", "openssh-clients", "postfix", "cronie", "crontabs", "sudo", "perl", "curl", "rsync",
             "python", "MySQL-python", "python-requests", "logrotate", "chrony", "which", "firewalld", "NetworkManager",
-            "initscripts"]
+            "initscripts", "tuned"]
 customize = '''
 set -e
 grep -q localhost /etc/hosts 2>/dev/null || printf '127.0.0.1 localhost localhost.localdomain\n' >> /etc/hosts
@@ -74,8 +74,9 @@ postconf -e myhostname=oldbox.example.org
 useradd -m -s /bin/bash alice
 mkdir -p /home/alice/backup
 echo '0 3 * * * /usr/bin/rsync -a /var/www/ /home/alice/backup/ # nightly-backup' | crontab -u alice -
+# tuned: every @core install has it, and it requires polkit (which el9-drop-orphaned-polkit then has to keep)
 # what an EL7 admin enables (the presets leave httpd, mariadb and fail2ban off)
-systemctl enable httpd mariadb fail2ban firewalld sshd postfix crond chronyd NetworkManager
+systemctl enable httpd mariadb fail2ban firewalld sshd postfix crond chronyd NetworkManager tuned
 yum clean all >/dev/null
 mkdir -p /etc/wend/secrets && printf 'apppw' > /etc/wend/secrets/app-db && chmod 600 /etc/wend/secrets/app-db
 # a static address pinned to the NIC's MAC (QEMU's default), as EL7's installer writes it when the boot line names

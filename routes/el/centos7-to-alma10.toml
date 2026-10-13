@@ -68,7 +68,7 @@ id = "sha256:c5de001649525a86c2727b966232869401546ceb6cd0e982e39ec46ceb3fecf9"
 name = "el9-httpd-config"
 
 [[fixes]]
-id = "sha256:7aa2ee229b394192cc90f13098dea996af758664709e416eb8add860aabeeb9c"
+id = "sha256:7336db8eafd090f94ee758686fcf307d5aa26e454754f8213b3cf616bdac35d9"
 name = "el9-drop-orphaned-polkit"
 
 [[fixes]]
