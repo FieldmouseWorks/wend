@@ -60,7 +60,7 @@ SSH_FWD, HTTP_FWD = 10022, 10080
 FIRMWARE = "bios"
 OVMF_CODE, OVMF_VARS = "/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd"
 # what the guest says it booted with; a UEFI box that comes up on anything else fell back to a path wend didn't prove
-FW_NOW = "[ -d /sys/firmware/efi ] && echo uefi || echo bios"
+FW_NOW = "{ [ -d /sys/firmware/efi ] && echo uefi || echo bios; } 2>/dev/null"
 # the chroot harness's environment for box commands (tools/sandbox.py ENV), so a hop runs the same in both tiers
 ENV = ("export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C HOME=/root TERM=dumb "
        "DEBIAN_FRONTEND=noninteractive; umask 022; ")
@@ -250,6 +250,10 @@ def kickstart(box_doc, adapter, key_pub):
 # [vm].root_fs: the filesystem anaconda makes for / and /boot. xfs-v4 is EL 7.0 to 7.2's XFS (no metadata CRCs, no
 # d_type), which later releases still mount but can't make by default; xfs is v5, EL 7.3's default and on.
 ROOT_FS = {"ext3": "--fstype ext3", "xfs": "--fstype xfs", "xfs-v4": '--fstype xfs --mkfsoptions="-m crc=0 -n ftype=0"'}
+ROOT_FS_IS = {"ext3": "for m in / /boot; do [ \"$(findmnt -no FSTYPE $m)\" = ext3 ] || { findmnt $m; exit 1; }; done",
+              **{k: "for m in / /boot; do X=$(xfs_info $m) || exit 1; echo \"$X\" | grep -q 'crc=%s' && "
+                    "echo \"$X\" | grep -q 'ftype=%s' || { echo \"$X\"; exit 1; }; done" % c
+                 for k, c in (("xfs", ("1", "1")), ("xfs-v4", ("0", "0")))}}
 
 
 def post_install(box_doc, key_pub, before="", shim=None):
@@ -379,6 +383,13 @@ def build(box_id):
     base = os.path.join(d, "base.qcow2")
     if os.path.exists(base):
         return d, box_doc
+    inst = load(f"adapters/{fam}.toml")["releases"][box_doc["release"]]["install"]
+    root_fs = box_doc.get("vm", {}).get("root_fs")
+    if root_fs and root_fs not in inst.get("root_fs", []):
+        raise SystemExit(f"{box_doc['release']}'s installer doesn't make {root_fs} (releases.<release>.install.root_fs)")
+    if FIRMWARE == "uefi" and not inst.get("uefi"):
+        raise SystemExit(f"{box_doc['release']}'s installer doesn't install on UEFI (adapter: releases."
+                         f"{box_doc['release']}.install.uefi)")
     os.makedirs(d, exist_ok=True)
     a = guest_adapter(fam)
     sandbox.ensure_mirror(load(f"adapters/{fam}.toml"))
@@ -386,11 +397,6 @@ def build(box_id):
     if not os.path.exists(key):
         sandbox.host(f"ssh-keygen -q -t rsa -b 3072 -N '' -C wend-vm -f {key}")
     inst = a["releases"][box_doc["release"]]["install"]
-    if box_doc.get("vm", {}).get("root_fs") and not isinstance(backends.of(a), backends.Rpm):
-        raise SystemExit("[vm].root_fs is a kickstart choice; debian-installer's recipe makes ext4 (or ext3 on etch)")
-    if FIRMWARE == "uefi" and not inst.get("uefi"):
-        raise SystemExit(f"{box_doc['release']}'s installer doesn't install on UEFI (adapter: releases."
-                         f"{box_doc['release']}.install.uefi)")
     disk = os.path.join(d, "install.qcow2")
     sandbox.host(f"qemu-img create -q -f qcow2 {disk} 30G")
     if FIRMWARE == "uefi":
@@ -457,6 +463,10 @@ def build(box_id):
     fw = g.ssh(FW_NOW)[1].strip()
     if fw != FIRMWARE:
         raise RuntimeError(f"the installed box booted on {fw!r}, not {FIRMWARE}")
+    if root_fs:  # the box has the filesystem it says, or it isn't that box
+        rc, out = g.ssh(ROOT_FS_IS[root_fs])
+        if rc:
+            raise RuntimeError(f"the installed box's / and /boot aren't {root_fs}: {out[-600:]}")
     log("installed and updated; checking the box")
     failed = {n: o for n, (ok, o) in checks(g, box_doc, a).items() if not ok}
     g.stop()

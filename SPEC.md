@@ -1035,9 +1035,11 @@ The rules:
   ssh and http are forwarded to fixed ports on `127.0.0.1`, so a host runs one VM replay at a time.
 - Box: an optional `[vm]` table with `ssh_port` (default 22), `skip` (roles that start their own daemons, which a
   running box already has) and `live` (role name to shell: the live forms of those checks; every skipped role needs
-  one, so skipping never drops a check), and for a kickstart box `root_fs`, the filesystem anaconda makes for `/`
-  and `/boot`: `ext3` (the default), `xfs` (v5, EL 7.3's default) or `xfs-v4` (`-m crc=0 -n ftype=0`: EL 7.0 to
-  7.2's on-disk format, made by 7.9's installer). The checker holds it to that.
+  one, so skipping never drops a check), and `root_fs`, the filesystem the installer makes for `/` and `/boot`, one
+  its start release's installer offers (`releases.<id>.install.root_fs`; CentOS 7: `ext3`, `xfs`, v5 and EL 7.3's
+  default, or `xfs-v4`, `-m crc=0 -n ftype=0`, EL 7.0 to 7.2's on-disk format made by 7.9's installer). Without it the
+  kickstart makes ext3. The checker holds it to that, and the build checks the installed box has it (`xfs_info`'s
+  `crc` and `ftype`).
 - A route that ends with `prune_obsolete` gets the chroot walk's prune after its last hop: the packages the target
   no longer ships are purged and autoremoved, the set split in halves whenever a step fails or a check is lost, and
   each attempt first drops what an earlier autoremove already took. Each attempt runs on its own overlay of the last

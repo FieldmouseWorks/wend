@@ -416,8 +416,10 @@ def check_box(doc, adapters, where):
     vm = doc.get("vm", {})  # tools/vm.py (SPEC "VM tier")
     if not isinstance(vm, dict) or set(vm) - {"ssh_port", "skip", "live", "root_fs"}:
         errs.append(f"{where}: [vm] takes only ssh_port, skip, live and root_fs")
-    elif vm.get("root_fs", "ext3") not in ("ext3", "xfs", "xfs-v4"):
-        errs.append(f"{where}: [vm] root_fs is ext3, xfs or xfs-v4")
+    elif "root_fs" in vm and vm["root_fs"] not in (
+            (adapters.get(doc.get("family"), {}).get("releases", {}).get(doc.get("release")) or {})
+            .get("install", {}).get("root_fs", [])):
+        errs.append(f"{where}: [vm] root_fs must be one its release's installer makes (releases.<release>.install.root_fs)")
     elif type(vm.get("ssh_port", 22)) is not int or not 0 < vm.get("ssh_port", 22) < 65536 or \
             not isinstance(vm.get("skip", []), list) or not all(isinstance(r, str) for r in vm.get("skip", [])) or \
             not set(vm.get("skip", [])) <= set(doc.get("roles", {})) or not isinstance(vm.get("live", {}), dict) or \
