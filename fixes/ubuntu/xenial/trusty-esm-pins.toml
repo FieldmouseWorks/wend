@@ -18,5 +18,6 @@ release = "trusty"
 name = "trusty-esm-pins"
 author = "claude (wend#47, hand-written from the report)"
 source = "wend#47"
+found_on = "ubuntu/trusty-web-updated"
 note = "ubuntu-advantage-tools 19.7ubuntu0.2 (trusty-updates) writes /etc/apt/preferences.d/ubuntu-esm-infra-trusty, owned by no package, pinning its ESM source with Pin-Priority: never. trusty's apt reads it; xenial's apt 1.2 refuses every command over it (\"No priority (or zero) specified for pin\"), so after the xenial transaction autoremove and every later apt call fail. The ESM source itself is already set aside with the other third-party sources; the op drops the pin before the transaction, and only when it is u-a-t's own file."
-fires_on = []
+fires_on = ["ubuntu/trusty-web-updated"]

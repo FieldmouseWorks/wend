@@ -24,5 +24,5 @@ name = "php7.4"
 name = "php7.4-module"
 author = "agent (claude-code / opus 5.5)"
 found_on = "ubuntu/trusty-web"
-fires_on = ["ubuntu/trusty-web"]
+fires_on = ["ubuntu/trusty-web", "ubuntu/trusty-web-updated"]
 reason = "Focal ships PHP 7.4, not 7.2, so the site still runs on a PHP no release ships. Install 7.4's CLI and Apache module and swap the module (both define php7_module, so only one may load)."
