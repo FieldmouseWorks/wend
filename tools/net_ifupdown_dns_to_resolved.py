@@ -17,7 +17,8 @@ step. What the state says is what the op carries, in the order ifup started each
 before the interface's own `up` commands run): an interface whose ifup failed (even one family
 of it), that was never brought up, or that was taken down by hand isn't in it; one brought up by hand is; a box with
 no state (a chroot, or a live box whose /run/network/ifstate is gone) carries nothing, though its configuration is
-still read (`ifquery --list --all`) and one ifupdown can't read fails the step. Options given with `ifup -o`
+still parsed (`ifquery --list --all --exclude='*'`) and a main interfaces file ifupdown can't read fails the step; an
+error in a sourced file is a warning ifupdown skips, at ifup as here. Options given with `ifup -o`
 aren't in the configuration, so the configuration's value is carried, as it is for a stanza edited since boot (the
 value the hop's reboot gives the hooks). A stanza deleted since boot fails the step, unless a mapping still matches
 its name: then ifquery prints nothing for it and nothing is carried, as the reboot would give its hooks nothing.
@@ -87,7 +88,9 @@ def server(iface, key, v):
 
 
 def plan():
-    ifquery("--list", "--all")  # ifupdown reads its whole configuration: one it can't read fails, state or no state
+    # ifupdown parses its configuration, state or no state: a main file it can't read fails the step. --exclude='*'
+    # skips the per-interface check, so an auto name with no stanza (which ifup -a passes over) isn't a failure.
+    ifquery("--list", "--all", "--exclude=*")
     names = []
     for n in reversed(ifquery("--state")):  # ifupdown lists its state last first; this is the order ifup started them
         phys, eq, logical = n.partition("=")

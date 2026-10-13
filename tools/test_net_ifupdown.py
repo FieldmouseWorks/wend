@@ -22,7 +22,7 @@ q = json.load(open(%r))
 if q.get("fail"):
     sys.stderr.write("ifquery: /etc/network/interfaces:24: misplaced option\\n"); sys.exit(1)
 a = sys.argv[1:]
-if a == ["--list", "--all"]:
+if a == ["--list", "--all", "--exclude=*"]:
     if q.get("badconf"):
         sys.stderr.write("ifquery: /etc/network/interfaces:3: misplaced option\\n"); sys.exit(1)
 elif a == ["--state"]:

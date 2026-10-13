@@ -517,8 +517,10 @@ stanzas, `inherits`, sourced files); without `--no-mappings` ifquery would run t
 from the logical name and could land on another stanza. What the state says is what the op carries, in the order ifup
 started each interface (its state line, written before the interface's own `up` commands run): an interface whose ifup failed (even for one address family), that was never brought up, or that was taken
 down by hand isn't in it, and one brought up by hand is. A box with no state (a chroot replay, or a live box whose
-`/run/network/ifstate` is gone) carries nothing, though its configuration is still read (`ifquery --list --all`) and
-one ifupdown can't read fails the step. A value given with `ifup -o` isn't in the configuration, so the
+`/run/network/ifstate` is gone) carries nothing, though its configuration is still parsed (`ifquery --list --all
+--exclude='*'`, which skips the per-interface check, so an `auto` name with no stanza isn't a failure) and a main
+interfaces file ifupdown can't read fails the step; an error in a sourced file is a warning ifupdown skips, at `ifup`
+as here. A value given with `ifup -o` isn't in the configuration, so the
 configuration's value is carried, as it is for a stanza edited since boot (the value the hop's reboot gives the
 hooks). A stanza deleted since boot fails the step, unless a mapping still matches its name: then ifquery prints
 nothing for it and nothing is carried, as the reboot would give its hooks nothing. A configuration ifupdown can't read fails the step, and so does a state line whose interface or stanza name starts with `-` or holds anything
