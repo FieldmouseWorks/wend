@@ -43,7 +43,7 @@ DROP = "etc/systemd/resolved.conf.d/50-wend-ifupdown.conf"
 cases = []
 
 
-def run(query, existing=None, symlink=False, prepare=None, no_ifquery=False):
+def run(query, existing=None, symlink=False, prepare=None, no_ifquery=False, race=False):
     """Run the converter on a fresh root with ifquery answering query; return (exit message or None, drop-in text,
     files under the root, the drop-in's mode)."""
     loader = importlib.machinery.SourceFileLoader("net_ifupdown_dns_to_resolved", SRC)
@@ -64,6 +64,13 @@ def run(query, existing=None, symlink=False, prepare=None, no_ifquery=False):
                 os.symlink(target, t + m.DROPIN)
         path, mask, msg = os.environ["PATH"], os.umask(0o077), None  # 077: the mode must come from the op
         os.environ["PATH"] = b if no_ifquery else f"{b}:{path}"
+        chmod = os.chmod
+        if race:  # another process creates the drop-in just before the op publishes its own
+            def racing(p, mode):
+                chmod(p, mode)
+                if p.endswith(".wend"):
+                    open(p[:-len(".wend")], "w").write("admin\n")
+            os.chmod = racing
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 m.main(t)
@@ -72,7 +79,7 @@ def run(query, existing=None, symlink=False, prepare=None, no_ifquery=False):
         except Exception as e:  # a traceback is a defect too: it prints WRONG, not a crash of this test
             msg = f"EXCEPTION {e!r}"
         finally:
-            os.environ["PATH"], _ = path, os.umask(mask)
+            os.environ["PATH"], _, os.chmod = path, os.umask(mask), chmod
         p = t + m.DROPIN
         out = open(p).read() if os.path.isfile(p) else None
         mode = (os.stat(p).st_mode & 0o777, os.stat(os.path.dirname(p)).st_mode & 0o777) if os.path.isfile(p) else None
@@ -101,6 +108,9 @@ case("a drop-in that already says the same is left alone", msg is None and out =
 msg, out, left, mode = run(BOOT, existing="[Resolve]\nDNS=1.1.1.1\n")
 case("a drop-in that says something else is refused, not replaced",
      refused(msg, "exists already") and out == "[Resolve]\nDNS=1.1.1.1\n")
+msg, out, left, mode = run(BOOT, race=True)
+case("a drop-in created while the op writes is kept, not replaced",
+     refused(msg, "appeared while") and out == "admin\n" and left == [DROP])
 msg, out, left, mode = run(BOOT, existing=WANT, symlink=True)
 case("a drop-in that is a symlink is refused, even to the same text", refused(msg, "exists already"))
 msg, out, left, mode = run({"state": ["lo=lo", "eth0=work"], "ifaces": {"lo=lo": [], "eth0=work": ETH0,

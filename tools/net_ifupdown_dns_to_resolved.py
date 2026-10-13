@@ -160,7 +160,12 @@ def main(root=""):
     with os.fdopen(fd, "w") as out:
         out.write(text)
     os.chmod(path + ".wend", 0o644)
-    os.replace(path + ".wend", path)
+    try:  # link, not rename: a drop-in created since the check above is kept, never replaced
+        os.link(path + ".wend", path)
+    except FileExistsError:
+        fail(f"{DROPIN} appeared while it was being written")
+    finally:
+        os.unlink(path + ".wend")
     print(f"{DROPIN}: DNS={' '.join(dns) or '-'} Domains={' '.join(search) or '-'}")
 
 

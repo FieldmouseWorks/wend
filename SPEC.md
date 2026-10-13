@@ -534,7 +534,9 @@ multicast, loopback, unspecified, reserved, broadcast or IPv4-mapped); `DNS_SEAR
 names; any other `DNS_*` option fails the step. The result is `/etc/systemd/resolved.conf.d/50-wend-ifupdown.conf`
 with `DNS=` and `Domains=`, written (mode 0644 in a 0755 directory, never through a symlink, and `/etc`, `/etc/systemd` and the directory
 must not be symlinks either) only when it is new;
-one that is already there must be a plain file saying the same, and a `.wend` file beside it fails the step. Nothing
+one that is already there must be a plain file saying the same, and a `.wend` file beside it fails the step. The
+drop-in is published with a hard link, not a rename, so one created by something else while the op writes is kept
+and the step fails. Nothing
 is written when no interface ifupdown has up names a `dns-*` option, and every refusal comes before anything is
 written. Addresses and routes stay with ifupdown, and resolved reads the drop-in at the reboot that ends the hop.
 Not seen, because ifquery's text doesn't show it, so the options are carried although no hook read them:
