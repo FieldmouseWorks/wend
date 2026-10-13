@@ -113,6 +113,10 @@ for name, mutate in {
     "an adapter missing a booted release's runtimes": lambda a: a["runtimes"].pop("alma9"),
     "an adapter that doesn't say whether a release ships Python 2": lambda a: a["runtimes"]["alma9"].pop("python2"),
     "an adapter whose Python 2 version isn't a version": lambda a: a["runtimes"]["centos7"].update(python2=["2.7*"]),
+    "a relocate table missing a step (SPEC \"Relocate\")": lambda a: a["relocate"].pop("flip"),
+    "a relocate table with a step tools/vm.py doesn't run": lambda a: a["relocate"].update(extra=["true"]),
+    "a relocate step that's one command, not a list": lambda a: a["relocate"].update(place="true"),
+    "a relocate step with no commands": lambda a: a["relocate"].update(copy=[]),
 }.items():
     a = copy.deepcopy(adapters["el"])
     mutate(a)

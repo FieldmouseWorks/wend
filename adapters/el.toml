@@ -170,6 +170,189 @@ kernel_after = [
 ]
 
 
+# Relocate (SPEC "Relocate", docs/rebuild-and-carry.md): copy the running root onto a fresh XFS v5 filesystem on a disk
+# the owner names, point the boot at the copy for one trial boot, keep the old root untouched as the rollback. For
+# CentOS 7 boxes whose / and /boot are XFS v4, which EL10's kernel can't mount. Harness steps, not fix steps: fixes
+# can't reach any of this. tools/vm.py runs preflight, refresh, place, copy, fixup, flip and release in that order
+# inside the booted machine, one script per list item, stopping at the first that fails, then cleanup whatever
+# happened. {new_disk} is the disk the owner named, {route_mib} the room the route's hops need on top of the copy.
+# Facts the later steps and boots need go to /var/lib/wend/relocate.env, which the copy carries. BIOS and GRUB 2 only.
+[relocate]
+preflight = ['''
+set -e
+fail() { echo "relocate refused: $*"; exit 1; }
+D={new_disk}
+[ ! -d /sys/firmware/efi ] || fail "UEFI isn't built yet (BIOS only)"
+command -v grub2-install >/dev/null && [ -d /usr/lib/grub/i386-pc ] || fail "no GRUB 2 for BIOS (grub2-pc)"
+command -v rsync >/dev/null || fail "rsync isn't installed"
+mountpoint -q /boot || fail "/boot isn't a filesystem of its own"
+BOOT_DEV=$(findmnt -no SOURCE /boot)
+[ "$(lsblk -no TYPE "$BOOT_DEV" | head -n1)" = part ] || fail "/boot ($BOOT_DEV) isn't a plain partition"
+BOOT_DISK=/dev/$(lsblk -no PKNAME "$BOOT_DEV" | head -n1)
+case "$BOOT_DISK" in /dev/|/dev/md*) fail "/boot isn't on a plain disk ($BOOT_DISK)";; esac
+[ -f /boot/grub2/grub.cfg ] && [ -f /boot/grub2/grubenv ] && [ ! -L /boot/grub2/grubenv ] || fail "no GRUB 2 config and grubenv in /boot/grub2"
+[ ! -e /boot/grub2/grub.cfg.wend-old ] || fail "a relocate stub is already in /boot/grub2"
+ROOT_DEV=$(findmnt -no SOURCE /)
+set -- $(lvs --noheadings -o vg_name,lv_name "$ROOT_DEV" 2>/dev/null)
+[ $# = 2 ] || fail "/ ($ROOT_DEV) isn't on LVM"
+VG=$1 OLD_LV=$2
+! lvs "$VG/wend-root" >/dev/null 2>&1 || fail "$VG/wend-root exists already"
+! lsblk -rno TYPE | grep -qx crypt || fail "LUKS isn't handled"
+M=$(findmnt -rno TARGET,SOURCE | while read m s; do
+  case "$s" in (/dev/*) [ "$m" = / ] || [ "$m" = /boot ] || { echo "$m"; break; };; esac
+done)
+[ -z "$M" ] || fail "$M is mounted from a disk: carrying more than / and /boot isn't built yet, and both roots would share it"
+awk '$1 !~ /^#/ && $3 == "xfs" {print $2}' /etc/fstab | while read m; do mountpoint -q "$m" || { echo "$m"; break; }; done | grep -q . && fail "an XFS filesystem in fstab isn't mounted: wend doesn't know what's on it"
+[ "$(rpm -q --last kernel | head -n1 | awk '{print $1}')" = "kernel-$(uname -r)" ] || fail "the newest kernel isn't the running one: reboot first"
+! pgrep -x yum >/dev/null && [ ! -e /var/run/yum.pid ] || fail "yum is running"
+[ -b "$D" ] || fail "$D isn't a block device"
+[ "$(lsblk -dno TYPE "$D")" = disk ] && [ "$(lsblk -no NAME "$D" | wc -l)" = 1 ] || fail "$D isn't a whole disk without partitions"
+! blkid -p "$D" >/dev/null 2>&1 || fail "$D has a signature on it ($(blkid -p -o value -s TYPE "$D"))"
+! grep -q "^$D[ 0-9]" /proc/mounts || fail "$D is mounted"
+! pvs "$D" >/dev/null 2>&1 || fail "$D is an LVM PV already"
+[ "$(readlink -f "$D")" != "$(readlink -f "$BOOT_DISK")" ] || fail "$D is the boot disk"
+NEED=$(( ($(df -Pk / | awk 'NR == 2 {print $3}') + $(df -Pk /boot | awk 'NR == 2 {print $3}')) * 6 / 5 / 1024 + {route_mib} ))
+HAVE=$(( $(blockdev --getsize64 "$D") / 1048576 ))
+[ "$HAVE" -ge "$NEED" ] || fail "$D has $HAVE MiB; the copy needs $NEED"
+mkdir -p /var/lib/wend
+printf 'VG=%s\nOLD_LV=%s\nBOOT_DISK=%s\nBOOT_UUID=%s\nNEW_DISK=%s\n' "$VG" "$OLD_LV" "$BOOT_DISK" "$(blkid -s UUID -o value "$BOOT_DEV")" "$D" > /var/lib/wend/relocate.env
+echo "relocate: $VG/$OLD_LV -> $VG/wend-root on $D ($HAVE MiB, needs $NEED); boot disk $BOOT_DISK"
+''']
+# The running release's own grub2-install, with the old /boot/grub2 as its prefix: 7.0 and 7.1's core.img can't read
+# XFS v5, and every module under the prefix has to come from the same build as core.img. Before the copy, so the copy
+# carries the same modules. The only write to the boot disk's MBR.
+refresh = ['''
+set -e
+. /var/lib/wend/relocate.env
+grub2-install --target=i386-pc "$BOOT_DISK"
+''']
+place = ['''
+set -e
+. /var/lib/wend/relocate.env
+pvcreate -y "$NEW_DISK" && vgextend "$VG" "$NEW_DISK" && lvcreate -y -n wend-root -l 100%PVS "$VG" "$NEW_DISK"
+mkfs.xfs -q -m crc=1 -n ftype=1 "/dev/$VG/wend-root" && xfs_db -r -c version "/dev/$VG/wend-root" | grep -q CRC || { echo "the new root isn't XFS v5"; exit 1; }
+mkdir -p /run/wend/new && mount "/dev/$VG/wend-root" /run/wend/new
+echo "NEW_UUID=$(blkid -s UUID -o value "/dev/$VG/wend-root")" >> /var/lib/wend/relocate.env
+''']
+# Two passes from a bind mount of / (which shows what mounts hide, and nothing mounted under it): one live, then one
+# with every running service stopped except what keeps the machine reachable and safe (sshd, NetworkManager,
+# firewalld, auditd, dbus, systemd's own), which stays stopped until the trial boot. The old /boot goes into the
+# copy's /boot, which the root pass leaves alone.
+copy = ['''
+set -e
+mkdir -p /run/wend/src && { mountpoint -q /run/wend/src || mount --bind / /run/wend/src; }
+rsync -aHAXS --numeric-ids --exclude='/boot/*' /run/wend/src/ /run/wend/new/ && rsync -aHAXS --numeric-ids /boot/ /run/wend/new/boot/
+''', '''
+set -e
+K='^(sshd|NetworkManager|firewalld|auditd|dbus|polkit|systemd-.*|getty@.*|serial-getty@.*|lvm2-.*|dm-event)\.service$'
+systemctl list-units --type=service --state=running --no-legend --plain | awk '{print $1}' | grep -Ev "$K" > /var/lib/wend/relocate-stopped || true
+for s in $(cat /var/lib/wend/relocate-stopped); do systemctl stop "$s" || exit 1; done
+sync
+rsync -aHAXS --numeric-ids --delete --exclude='/boot/*' /run/wend/src/ /run/wend/new/ && rsync -aHAXS --numeric-ids --delete /boot/ /run/wend/new/boot/
+''']
+# In the copy only: fstab names the new root and drops /boot (a directory now); the kernel line activates the new LV
+# instead of the old one; every kernel gets an initramfs that isn't host-only (the old ones activate only the old LV),
+# a kernel that can't get one is dropped from the copy (unless it's the running one), and grub2-mkconfig writes the
+# copy's grub.cfg. The chroot sees this machine's own /dev, /proc and /sys, unmounted again before the step ends:
+# the one sandbox exception here, inside the machine being relocated, never a box on a harness host. SELinux labels
+# are fixed from outside, offline, last (never /.autorelabel: EL7's relabel reboots, which would end the trial).
+fixup = ['''
+set -e
+. /var/lib/wend/relocate.env
+N=/run/wend/new
+awk -v u="$NEW_UUID" '$1 !~ /^#/ && $2 == "/" {$1 = "UUID=" u; $3 = "xfs"} $1 !~ /^#/ && $2 == "/boot" {next} {print}' $N/etc/fstab > $N/etc/fstab.wend && cat $N/etc/fstab.wend > $N/etc/fstab && rm -f $N/etc/fstab.wend
+awk -v u="UUID=$NEW_UUID" '$1 !~ /^#/ && $2 == "/" && $1 == u {r++} $1 !~ /^#/ && $2 == "/boot" {b++} END {exit !(r == 1 && !b)}' $N/etc/fstab || { echo "the copy's fstab doesn't name the new root alone"; exit 1; }
+O=$(printf '%s/%s' "$VG" "$OLD_LV" | sed 's/[.[\*^$]/\\&/g')
+sed -i "s#rd\.lvm\.lv=$O\([\" ]\)#rd.lvm.lv=$VG/wend-root\1#" $N/etc/default/grub
+! grep -q "rd\.lvm\.lv=$O[\" ]" $N/etc/default/grub || { echo "the copy's kernel line still activates $VG/$OLD_LV"; exit 1; }
+''', '''
+set -e
+. /var/lib/wend/relocate.env
+N=/run/wend/new
+trap 'umount $N/sys $N/proc $N/dev 2>/dev/null' EXIT
+mount --bind /dev $N/dev && mount -t proc proc $N/proc && mount -t sysfs sysfs $N/sys || exit 1
+for v in $(ls $N/lib/modules); do
+  [ -f "$N/boot/vmlinuz-$v" ] || continue
+  chroot $N dracut -f --no-hostonly --add lvm "/boot/initramfs-$v.img" "$v" && continue
+  [ "$v" != "$(uname -r)" ] || { echo "the running kernel's initramfs can't be rebuilt in the copy"; exit 1; }
+  echo "dropping kernel $v from the copy: no initramfs for it"
+  mkdir -p $N/var/lib/wend/relocate-dropped && mv "$N/boot/vmlinuz-$v" $N/var/lib/wend/relocate-dropped/ || exit 1
+done
+GRUB_DISABLE_OS_PROBER=true chroot $N grub2-mkconfig -o /boot/grub2/grub.cfg || exit 1
+grep -q "root=/dev/mapper/$(echo "$VG" | sed 's/-/--/g')-wend--root " $N/boot/grub2/grub.cfg || { echo "the copy's grub.cfg doesn't boot the new root"; exit 1; }
+''', '''
+set -e
+N=/run/wend/new
+! awk -v n="$N/" 'index($5, n) == 1' /proc/self/mountinfo | grep -q . || { echo "still mounted inside the copy"; exit 1; }
+S=$(sed -n 's/^SELINUX=//p' $N/etc/selinux/config 2>/dev/null || true) T=$(sed -n 's/^SELINUXTYPE=//p' $N/etc/selinux/config 2>/dev/null || true)
+[ "$S" = disabled ] || [ -z "$T" ] || setfiles -r $N $N/etc/selinux/$T/contexts/files/file_contexts $N
+''']
+# The old /boot's grub.cfg becomes a stub (the old config moves beside it as grub.cfg.wend-old): entry 0 is the new
+# root, entry 1 the old one. Its own variables in the old /boot's grubenv, never saved_entry or next_entry: wend_next
+# is a one-shot boot, cleared before it's taken, else wend_default, and the old root unless that says 0. The old root
+# stays the default; arming the trial is the last write; then fsfreeze, because GRUB doesn't replay the XFS log.
+flip = ['''
+set -e
+. /var/lib/wend/relocate.env
+B=/boot/grub2
+grub2-editenv $B/grubenv set wend_default=1 && grub2-editenv $B/grubenv unset wend_next || exit 1
+cat > $B/grub.cfg.wend-stub <<'EOF'
+# wend relocate (docs/rebuild-and-carry.md): 0 boots the relocated root, 1 the old one (its config as it was)
+set timeout=3
+set fallback=1
+# the old /boot as GRUB found it: entry 1 goes back to it, even after a failed entry 0 has moved root and prefix
+set wend_boot=$root
+set wend_prefix=$prefix
+export wend_boot wend_prefix
+load_env wend_default wend_next
+if [ "${wend_next}" = 0 ]; then
+  set default=0
+  set wend_next=
+  save_env wend_next
+elif [ "${wend_next}" = 1 ]; then
+  set default=1
+  set wend_next=
+  save_env wend_next
+elif [ "${wend_default}" = 0 ]; then
+  set default=0
+else
+  set default=1
+fi
+menuentry 'wend: relocated root' {
+  insmod lvm
+  insmod xfs
+  search --no-floppy --fs-uuid --set=root NEW_UUID
+  set prefix=($root)/boot/grub2
+  configfile $prefix/grub.cfg
+}
+menuentry 'wend rollback: the old root' {
+  set root=$wend_boot
+  set prefix=$wend_prefix
+  configfile /grub2/grub.cfg.wend-old
+}
+EOF
+sed -i "s/NEW_UUID/$NEW_UUID/" $B/grub.cfg.wend-stub && cp -p $B/grub.cfg $B/grub.cfg.wend-old && mv $B/grub.cfg.wend-stub $B/grub.cfg || exit 1
+grub2-editenv $B/grubenv set wend_next=0 && touch /var/lib/wend/relocate-flipped && sync && fsfreeze -f /boot && fsfreeze -u /boot
+''']
+release = ['''
+set -e
+for m in /run/wend/new /run/wend/src; do ! mountpoint -q $m || umount $m || exit 1; done
+! grep -q ' /run/wend/' /proc/self/mounts || { echo "still mounted under /run/wend"; exit 1; }
+''']
+# whatever happened: nothing left mounted, and the services the copy stopped running again if the flip never happened
+cleanup = ['''
+for m in /run/wend/new/sys /run/wend/new/proc /run/wend/new/dev /run/wend/new /run/wend/src; do ! mountpoint -q $m || umount $m; done
+if [ ! -e /var/lib/wend/relocate-flipped ] && [ -s /var/lib/wend/relocate-stopped ]; then systemctl start $(cat /var/lib/wend/relocate-stopped); fi
+''']
+# which root is booted: "new" (the relocated one, XFS v5), "old", or what it is instead
+booted = '''. /var/lib/wend/relocate.env; L=$(lvs --noheadings -o lv_name "$(findmnt -no SOURCE /)" 2>/dev/null | tr -d ' '); if [ "$L" = wend-root ]; then xfs_info / | grep -q crc=1 && echo new || echo "new, but not XFS v5"; elif [ "$L" = "$OLD_LV" ]; then echo old; else echo "neither: ${L:-$(findmnt -no SOURCE /)}"; fi'''
+# while the stub is in charge: from the old root, try the new one once more (arm); from the new root, make it the
+# default (commit_trial: the old /boot is mounted, since the copy's fstab doesn't), or boot the old root once
+# (rollback_next)
+arm = '''grub2-editenv /boot/grub2/grubenv set wend_next=0 && sync && fsfreeze -f /boot && fsfreeze -u /boot'''
+commit_trial = '''. /var/lib/wend/relocate.env; O=/run/wend/oldboot; mkdir -p $O && mount "UUID=$BOOT_UUID" $O || exit 1; grub2-editenv $O/grub2/grubenv set wend_default=0 && grub2-editenv $O/grub2/grubenv unset wend_next && sync && fsfreeze -f $O && fsfreeze -u $O; r=$?; umount $O && exit $r'''
+rollback_next = '''. /var/lib/wend/relocate.env; O=/run/wend/oldboot; mkdir -p $O && mount "UUID=$BOOT_UUID" $O || exit 1; grub2-editenv $O/grub2/grubenv set wend_next=1 && sync && fsfreeze -f $O && fsfreeze -u $O; r=$?; umount $O && exit $r'''
+
 [predicates]
 # "installed" is rpm -q: EL has no removed-but-configured state. Multiple versions (kernels) still count as installed.
 installed = "rpm -q {pkg}"
