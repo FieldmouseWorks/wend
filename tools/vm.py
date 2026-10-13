@@ -41,6 +41,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tomllib
@@ -162,9 +163,12 @@ class Guest:
     def __init__(self, disk, key, ssh_port, hw=("virtio", "virtio")):
         self.disk, self.key, self.ssh_port, self.hw = disk, key, ssh_port, hw
         base = disk[:-len(".qcow2")]
-        self.console, self.monitor_path, self.proc = base + ".console.log", base + ".monitor", None
+        self.console, self.monitor_path, self.proc = base + ".console.log", None, None
 
     def start(self, extra=()):
+        # QEMU's monitor socket: a unix socket path has to fit in 108 bytes, which a run directory under a checkout
+        # doesn't, so it lives in a short directory of its own (removed on the way out, with the guest)
+        self.monitor_path = os.path.join(tempfile.mkdtemp(prefix="wend-vm-"), "monitor")
         fw = [] if FIRMWARE == "bios" else [
             "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF_CODE}",
             "-drive", f"if=pflash,format=raw,file={nvram(self.disk)}"]
@@ -967,3 +971,4 @@ if __name__ == "__main__":
     finally:
         for guest in GUESTS:  # an exception or Ctrl-C must not leave a guest holding 3 GB and the forwarded ports
             guest.kill()
+            shutil.rmtree(os.path.dirname(guest.monitor_path), ignore_errors=True)
