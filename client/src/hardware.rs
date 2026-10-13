@@ -80,9 +80,10 @@ const FILESYSTEMS: &[&str] = &["ext2", "ext3", "ext4", "xfs", "btrfs", "reiserfs
 
 /// The firmware the machine booted by: `bios`, `uefi`, or `uefi-secureboot` when Secure Boot is on or its state
 /// can't be read. A Secure Boot chain is a separate claim (shim, signed GRUB and kernels across every hop, the
-/// firmware's revocation list), so an unknown state fails closed. Read as the kernel's EFI stub does
-/// (efi_get_secureboot_mode): a firmware without Secure Boot has no `SecureBoot` variable (OVMF's non-secboot
-/// builds, older UEFI), which means off; only a variable store wend can't read is unknown. efivarfs holds 4 attribute
+/// firmware's revocation list), so an unknown state fails closed. A missing variable is read as the kernel's
+/// efi_get_secureboot_mode reads it: a firmware without Secure Boot has no `SecureBoot` variable (OVMF's non-secboot
+/// builds, older UEFI), which means off; a variable that can't be read, or no readable store, is unknown. (The kernel
+/// also counts SetupMode and MokSBState as off; wend doesn't, so it can only err toward refusing.) efivarfs holds 4 attribute
 /// bytes, then the value; the older sysfs interface (trusty's 3.13 without efivarfs mounted) the value alone in `data`.
 fn firmware(sys: &Path) -> &'static str {
     let efi = sys.join("firmware/efi");
@@ -1301,6 +1302,22 @@ mod tests {
         assert_eq!(firmware(&t), "uefi");
         std::fs::write(t.join("firmware/efi/vars").join(sb).join("data"), [1u8]).unwrap();
         assert_eq!(firmware(&t), "uefi-secureboot", "the sysfs interface saying on");
+        // a SecureBoot that is there but can't be read is unknown, never off
+        std::fs::create_dir_all(t.join("firmware/efi/efivars").join(sb)).unwrap();
+        assert_eq!(
+            firmware(&t),
+            "uefi-secureboot",
+            "an unreadable efivarfs SecureBoot fails closed"
+        );
+        std::fs::remove_dir_all(t.join("firmware/efi/efivars")).unwrap();
+        std::fs::remove_file(t.join("firmware/efi/vars").join(sb).join("data")).unwrap();
+        std::fs::create_dir_all(t.join("firmware/efi/vars").join(sb).join("data")).unwrap();
+        assert_eq!(
+            firmware(&t),
+            "uefi-secureboot",
+            "an unreadable sysfs SecureBoot fails closed"
+        );
+        std::fs::remove_dir_all(t.join("firmware/efi/vars").join(sb)).unwrap();
         std::fs::create_dir_all(t.join("firmware/efi/efivars")).unwrap();
         std::fs::write(t.join("firmware/efi/efivars").join(sb), [6u8, 0, 0, 0, 1]).unwrap();
         assert_eq!(firmware(&t), "uefi-secureboot", "efivarfs wins, and says on");
