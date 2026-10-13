@@ -919,7 +919,7 @@ refuses the CPU, or its kernel no longer drives the disk controller the root is 
 anything, a client walking a real machine checks that the machine can land on every release the route boots it into,
 and refuses, or names the furthest release it can land on, when it can't. `wend preflight ROUTE` does this.
 
-**Facts.** `wend facts` reads the machine (schema `wend.hardware/1`): the kernel's architecture (`uname -m`) and
+**Facts.** `wend facts` reads the machine (schema `wend.hardware/2`; its `runtimes` are SPEC "Runtime preflight"): the kernel's architecture (`uname -m`) and
 the userland's word size (the ELF class of `/bin/sh`); the CPU's x86-64 level features from CPUID itself, never
 `/proc/cpuinfo`, since an old kernel doesn't name features newer than itself (2.6.18 has no `avx2`), and the XSAVE
 bit, not OSXSAVE, since the old kernel may not have turned it on and the new one will; CPUID's hypervisor bit;
@@ -1021,6 +1021,65 @@ the hop removes the package (it is counted as staying, so such a machine may be 
 filesystems other than those seven (vfat, ZFS, OCFS2) and ones not mounted now (`noauto`); and LVM1 volume groups,
 which lvm2 2.03 (EL8, buster, focal on) no longer reads (every release a route starts from makes LVM2; md's 0.90
 metadata is still read by every kernel and mdadm here).
+
+## Runtime preflight
+
+A route that lands every hop can still kill the one program a machine exists for: its own code runs on a runtime the
+new release no longer ships. Python 2 is the first and the biggest. EL7 runs everything on it, and Debian, Ubuntu
+and EL all drop it partway up their ladders. wend moves machines and doesn't maintain runtimes: it never ships its own
+Python 2, and never carries a dead release's packages forward. What it does is tell the owner, before the first hop
+touches anything, which of the machine's own programs run on Python 2 and the last release that still ships it. Then
+the owner picks: **stop** there, or **shelter** those programs and go all the way ("Sheltering an app", once built).
+Porting them to Python 3 is the third way, and it's the owner's (or their agent's) to do. `wend preflight` does this
+as part of the same verdict.
+
+**Facts.** `wend facts` (schema `wend.hardware/2`) lists every Python 2 user under `runtimes`, each with the
+interpreter's `version` (`2.7`), `via`, `program`, `interpreter`, `where` and `owner`:
+
+| `via` | found by | `program` |
+|---|---|---|
+| `process` | a running process whose executable resolves to `python2.N` (or is a hard link to a `python2.N` beside it, as EL5's and EL6's `/usr/bin/python` is; or, failing both, a plain `python2`, or `python` with no `python3*` beside it, whose prefix holds one `lib/python2.N`), or that has `libpython2.N` or a `python2.N/` module directory mapped | the script it runs, made absolute from the process's working directory; `-m module`; `-c` |
+| `embedded` | any other running process with `libpython2.N` mapped: mod_wsgi or mod_python in httpd, a uwsgi plugin | the process's executable (`interpreter` is the library) |
+| `cron` | a job in `/etc/crontab`, `/etc/cron.d`, the per-user spools (`/var/spool/cron`, `/var/spool/cron/crontabs`) or the `run-parts` directories (`/etc/cron.{hourly,daily,weekly,monthly}`) that runs a Python 2 interpreter (by path, or a bare `python` through the `PATH` the crontab last set, else cron's `/usr/bin:/bin`) or a script whose `#!` names one (`env` resolved the same way; a `cd DIR &&` before it sets the directory a relative `./job` or script argument is under) | the script |
+
+`where` is the process's systemd service (from its cgroup) or the crontab, when there is one. `owner` is the package
+that owns `program`: dpkg's file lists, read from `/var/lib/dpkg/info`, or `rpm -qf` on an rpm machine (the one
+place facts asks a distro tool, since rpm's database is rpm's own format). Each program is listed once, so httpd's
+workers, or a script a service and a cron job both run, count once. A process whose root isn't the machine's (in a
+docker or LXC container) isn't listed: its userland isn't the one the route moves. Only root can read every
+process's executable and maps and every user's crontab, so `wend facts` and a live `wend preflight` refuse to run as
+anyone else rather than miss them.
+
+**Whose it is.** A user is the machine's own when its program belongs to no package, or it is `embedded` (whatever
+code mod_wsgi runs is the owner's: the distro never configures it). The distro's own Python 2 programs (yum,
+firewalld, fail2ban, a package's cron job) don't count, since the route carries their packages across like any
+other. A program run with `-m` or `-c` belongs to nobody, so it counts.
+
+**Requirements.** The adapter's `[runtimes.<release>]` tables hold, for every release a route can boot into,
+`python2`: the upstream version of each Python 2 interpreter the release ships, `[]` for none. `tools/runtimes.py`
+reads them from each release's own index, the components its hop uses (Debian: main; Ubuntu: main and universe,
+where Python 2 moved at focal; EL: the release's repos, modular packages included), and never from documentation.
+Add-on repositories aren't read. As read in October 2026: Debian ships Python 2 through bullseye (2.7.18), Ubuntu
+through jammy (2.7.18, universe), EL through EL8 (2.7.18, the `python27` module, out of upstream support since June
+2024). wend's EL routes never land on EL8 (`may_skip`), so an EL7 machine's last release with Python 2 is CentOS 7
+itself.
+
+**The verdict.** A hop has a runtime problem when the machine has its own Python 2 users and the release ships no
+Python 2. Each hop lists those in `runtime_problems`, apart from `problems`, which stay the hardware's: the machine
+would boot fine, and the owner's program wouldn't run. `keeps_runtimes_on` names the last release before the first
+such hop, or the route's last release when no hop drops it (`null` when the machine has no Python 2 of its own); a
+hop with runtime problems isn't `ok`, `runtimes` lists the machine's own users, and `ok`
+needs both the hardware and the runtime to reach the route's end. When a user's own 2.x isn't among a release's
+versions (2.4 on squeeze, which ships 2.5 and 2.6), the first such hop notes it. When Python 2 goes before the
+hardware stops, the report lists the programs and offers the choice: stop at `keeps_runtimes_on` (on EL7, stay where
+it is), or shelter them and land where the hardware allows. When the hardware stops first, its verdict stands
+alone. Nothing overrides a runtime problem: the owner shelters the programs, ports them, or retires them and checks
+again.
+
+Not checked yet: services that are enabled but not running, and timers; scripts a cron job reaches through a shell
+script of its own; a Python 2 an add-on repository ships (EPEL's `python26` on EL5); third-party packages of the
+owner's own code (an rpm or deb the owner built counts as the distro's); a Python 2 built from source, whose shared
+libraries the hop may take away even though its files stay; and runtimes other than Python 2 (PHP 5, Java 6).
 
 ## VM tier (maintainer-run)
 
