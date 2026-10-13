@@ -205,9 +205,8 @@ fn ext_inode_size(b: &[u8]) -> Option<u64> {
 }
 
 /// What `/boot` holds: whether it is a filesystem of its own, its size and free space as a package install sees them
-/// (reserved blocks left out), and each kernel in it with the space its files take (`vmlinuz`, its initramfs and
-/// `System.map`, `config` and the rest named for its version; rescue and kdump images count as other files, since
-/// they stay when the kernel's other files go).
+/// (reserved blocks left out), each kernel in it with the space its files take (`vmlinuz`, its initramfs, kdump
+/// image and `System.map`, `config` and the rest named for its version), and the space the rescue image takes.
 fn boot_dir(dir: &Path, running: &str) -> Value {
     use std::os::unix::fs::MetadataExt;
     let dev = |p: &Path| fs::metadata(p).ok().map(|m| m.dev());
@@ -228,6 +227,7 @@ fn boot_dir(dir: &Path, running: &str) -> Value {
         "total_mib": total,
         "free_mib": free,
         "kernels": boot_kernels(&files, running),
+        "rescue_mib": rescue_mib(&files),
     })
 }
 
@@ -244,6 +244,16 @@ const KERNEL_FILE_PREFIXES: &[&str] = &[
     "retpoline-",
 ];
 
+/// The MiB the rescue image (`vmlinuz-0-rescue-<machine id>`, its `.hmac` and initramfs) takes, rounded up.
+fn rescue_mib(files: &[(String, u64)]) -> u64 {
+    files
+        .iter()
+        .filter(|(n, _)| n.trim_start_matches('.').contains("-0-rescue-"))
+        .map(|f| f.1)
+        .sum::<u64>()
+        .div_ceil(1024 * 1024)
+}
+
 /// The kernels among `/boot`'s files (name, bytes): one per `vmlinuz-<version>`, rescue images aside, each with the
 /// MiB its files take, rounded up.
 fn boot_kernels(files: &[(String, u64)], running: &str) -> Vec<Value> {
@@ -255,20 +265,17 @@ fn boot_kernels(files: &[(String, u64)], running: &str) -> Vec<Value> {
     versions.sort();
     let mut bytes = vec![0u64; versions.len()];
     for (n, size) in files {
-        // kdump images stay when a kernel's other files go (EL's kernel_before leaves them): other files
-        if n.contains("kdump") {
-            continue;
-        }
         let Some(rest) = KERNEL_FILE_PREFIXES.iter().find_map(|p| n.strip_prefix(p)) else {
             continue;
         };
-        // the longest version the name is for: `initramfs-<v>.img`, `.vmlinuz-<v>.hmac`, `vmlinuz-<v>.efi.signed`
+        // the longest version the name is for: `initramfs-<v>.img`, `initramfs-<v>kdump.img`, `.vmlinuz-<v>.hmac`,
+        // `vmlinuz-<v>.efi.signed`
         let owner = versions
             .iter()
             .enumerate()
             .filter(|(_, v)| {
                 rest.strip_prefix(**v)
-                    .is_some_and(|t| t.is_empty() || t.starts_with('.'))
+                    .is_some_and(|t| t.is_empty() || t.starts_with('.') || t == "kdump.img")
             })
             .max_by_key(|(_, v)| v.len());
         if let Some((i, _)) = owner {
@@ -747,7 +754,15 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
         // the running kernel isn't in /boot: every kernel there may be the one GRUB boots
         box_running = box_all.clone();
     }
-    let other = (total.saturating_sub(free)).saturating_sub(box_all.iter().map(|k| k.1).sum());
+    // EL's kernel_before drops the rescue image before the first hop's transaction, and no hop builds another
+    let rescue = if keep == "running" {
+        bd["rescue_mib"].as_u64().unwrap_or(0)
+    } else {
+        0
+    };
+    let other = (total.saturating_sub(free))
+        .saturating_sub(box_all.iter().map(|k| k.1).sum())
+        .saturating_sub(rescue);
     // EL's kernel_before drops only kernel, kernel-core and kernel-modules* records: a kernel another package owns
     // (EL5's kernel-xen, kernel-PAE, kernel-debug; ELRepo's kernel-lt and kernel-ml; Oracle's UEK) keeps its files
     // on every hop
@@ -865,8 +880,8 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
                 "grow /boot"
             };
             problems.push(format!(
-                "the hop to {h} puts its kernel (about {need_boot} MiB) in /boot beside {beside}; /boot holds \
-                 {total} MiB with {other} MiB of other files, leaving {room}: {fix}"
+                "the hop to {h} puts its kernel (about {need_boot} MiB) in /boot beside {beside}; /boot \
+                 holds {total} MiB with {other} MiB of other files, leaving {room}: {fix}"
             ));
         }
         route_kernels.push((format!("{h}'s kernel"), need_boot));
@@ -1445,16 +1460,17 @@ mod tests {
             k,
             vec![
                 json!({"version": "2.6.32-754.el6.x86_64", "mib": 20, "running": false}),
-                json!({"version": "3.10.0-1160.el7.x86_64", "mib": 37, "running": true}),
+                json!({"version": "3.10.0-1160.el7.x86_64", "mib": 52, "running": true}),
             ]
         );
+        assert_eq!(rescue_mib(&files), 57);
         let b =
             blacklist_lines("# r8168\nblacklist r8169\ninstall pata-acpi /bin/false\ninstall foo /sbin/modprobe bar\n");
         assert_eq!(b, vec!["r8169", "pata_acpi"]);
     }
 
-    /// EL's kernel_before keeps a kernel another package owns (kernel-xen) and every kdump image; a release the route
-    /// only passes through installs no kernel, even with a table of its own.
+    /// EL's kernel_before keeps a kernel another package owns (kernel-xen); a release the route only passes through
+    /// installs no kernel, even with a table of its own.
     #[test]
     fn el_keeps_other_packages_kernels_and_skipped_releases_install_none() {
         let full: Vec<&str> = LEVEL_FEATURES.concat();
@@ -1494,6 +1510,27 @@ mod tests {
         assert_eq!(v["hops"][2]["notes"][0], "not booted on this route");
         let p = v["hops"][3]["problems"][0].as_str().unwrap();
         assert!(p.contains("centos7's kernel (45 MiB)"), "{p}");
+    }
+
+    /// EL's kernel_before drops the machine's rescue image and no hop builds another: a CentOS 7 machine's 63 MiB
+    /// rescue image doesn't count against alma10's kernel beside alma9's.
+    #[test]
+    fn el_drops_the_rescue_image() {
+        let full: Vec<&str> = LEVEL_FEATURES.concat();
+        let c7 = [("3.10.0-1160.el7.x86_64", 45)];
+        let rescued = |total: u64| {
+            let mut m = with_boot(machine(&full, true, vec![]), total, &c7);
+            m["boot_dir"]["free_mib"] = json!(total - 45 - 4 - 63);
+            m["boot_dir"]["rescue_mib"] = json!(63);
+            m
+        };
+        // alma10: 4 other + alma9's kernel 70 + its own 75
+        let v = verdict("centos7-to-alma10", &rescued(149));
+        assert_eq!(v["ok"], true, "{v:#}");
+        let v = verdict("centos7-to-alma10", &rescued(148));
+        assert_eq!(v["lands_on"], "alma9", "{v:#}");
+        let p = v["hops"][1]["problems"][0].as_str().unwrap();
+        assert!(p.contains("with 4 MiB of other files"), "{p}");
     }
 
     /// Debian's apt autoremoves no kernel before jessie's: on the hop to jessie every kernel is still there.
