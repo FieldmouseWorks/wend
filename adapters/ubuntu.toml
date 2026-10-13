@@ -81,14 +81,16 @@ set_release = "printf 'deb {mirror} {release} main restricted universe multivers
 refresh = "apt-get update"
 upgrade = ["apt-get dist-upgrade", "apt-get autoremove --purge"]
 verify = "grep -qx 'DISTRIB_CODENAME={release}' /etc/lsb-release"
-# SPEC "Kernels and the bootloader": a stock trusty install's /boot is 243 MB, and apt's autoremove keeps two old
-# kernels beside the new one, so past focal the next kernel and its initramfs don't fit and the hop dies half done.
+# SPEC "Kernels and the bootloader": a trusty install with guided LVM puts /boot on 243 MB, and apt's autoremove
+# keeps two old kernels beside the new one, so past focal the next kernel and its initramfs don't fit and the hop dies half done.
 # Before each hop's transaction, on a machine booted from this root, the harness purges every kernel older than the
 # running one with all its packages (image, extra modules, headers), so /boot holds the running kernel and the one the
-# hop brings. A kernel newer than the running one (installed, not booted yet) stays, and so do the metapackages,
-# which only ever depend on the newest. dpkg, not apt: it refuses rather than takes anything else with it.
+# hop brings. A kernel newer than the running one (installed, not booted yet) stays. So does an old kernel that
+# something still depends on (a metapackage pinned to it, say, while the machine runs an -updates or HWE kernel) or
+# that is on hold: each old kernel is tried with dpkg --no-act first, kept and named if dpkg would refuse, so such a
+# machine still takes the hop. dpkg, not apt: it never takes anything else with it.
 kernel_before = [
-  "[ / -ef /proc/1/root ] || { echo \"not booted from this root: kernels left as they are\"; exit 0; }; L=$(dpkg-query -W -f '${Status} ${Package}\\n' 2>/dev/null | awk -v r=\"$(uname -r)\" 'function key(v, n) {split(v, n, /[.-]/); return sprintf(\"%05d%05d%05d%05d\", n[1], n[2], n[3], n[4])} BEGIN {split(r, x, \"-\"); rk = key(x[1] \"-\" x[2])} $3 == \"installed\" && $4 ~ /^linux-/ {p[$4] = 1} END {for (q in p) if (match(q, /^linux-(image|image-unsigned|signed-image|image-extra)-[0-9]+[.][0-9]+[.][0-9]+-[0-9]+/)) {a = substr(q, RSTART, RLENGTH); sub(/^linux-[a-z-]*-/, \"\", a); if (key(a) < rk) old[a] = 1} for (q in p) for (a in old) if (index(q \"-\", \"-\" a \"-\")) print q}' | sort); [ -n \"$L\" ] || exit 0; echo \"purging kernels older than the running $(uname -r):\" $L; dpkg --purge $L || exit 1; df -h /boot | tail -n1",
+  "[ / -ef /proc/1/root ] || { echo \"not booted from this root: kernels left as they are\"; exit 0; }; O=$(dpkg-query -W -f '${Status} ${Package}\\n' 2>/dev/null | awk -v r=\"$(uname -r)\" 'function key(v, n) {split(v, n, /[.-]/); return sprintf(\"%05d%05d%05d%05d\", n[1], n[2], n[3], n[4])} BEGIN {split(r, x, \"-\"); rk = key(x[1] \"-\" x[2])} $3 == \"installed\" && $4 ~ /^linux-/ {p[$4] = 1; h[$4] = ($1 == \"hold\")} END {for (q in p) if (match(q, /^linux-(image|image-unsigned|signed-image|image-extra)-[0-9]+[.][0-9]+[.][0-9]+-[0-9]+/)) {a = substr(q, RSTART, RLENGTH); sub(/^linux-[a-z-]*-/, \"\", a); if (key(a) < rk) old[a] = 1} for (q in p) for (a in old) if (index(q \"-\", \"-\" a \"-\")) print a, q, h[q]}' | sort); [ -n \"$O\" ] || exit 0; L=; for a in $(echo \"$O\" | cut -d' ' -f1 | sort -u); do P=$(echo \"$O\" | awk -v a=\"$a\" '$1 == a {print $2}'); if echo \"$O\" | awk -v a=\"$a\" '$1 == a && $3 == 1 {f = 1} END {exit !f}'; then echo \"kept the kernel $a: a package of it is on hold\"; elif dpkg --no-act --purge $P >/dev/null 2>&1; then L=\"$L $P\"; else echo \"kept the kernel $a: something still depends on it:\" $(dpkg --no-act --purge $P 2>&1 | sed -n 's/^ *\\(.* depends on .*\\)[.]$/\\1/p' | sort -u | head -n 3); fi; done; [ -n \"$L\" ] || exit 0; echo \"purging kernels older than the running $(uname -r):\" $L; dpkg --purge $L || exit 1; df -h /boot | tail -n1",
 ]
 autoremove = "apt-get autoremove --purge"
 after = ["apt-get clean"]
@@ -139,11 +141,11 @@ services = "no explicitly installed, non-required package that ships an init scr
 # `boot_mib`, the space the release's kernel takes in /boot: linux-image's and linux-modules' /boot files (measured)
 # and the initramfs linux-generic builds, with lvm2 and mdadm (built from the release's packages in a container for
 # bionic to resolute; xenial's is an estimate; resolute's builds host-only, so its figure allows for real hardware).
-# `old_kernels = "autoremove"`: the transaction installs the new kernel beside every kernel already there, and
-# autoremove only afterwards takes the old ones, keeping the running kernel and the newest, so from the third hop on
-# the new kernel sits beside the two before it.
+# `old_kernels = "running"`: hop.kernel_before purges every kernel older than the running one before the
+# transaction, so the new kernel only ever sits beside the running one (apt's autoremove would keep two, and trusty's
+# guided-LVM /boot of 243 MB stops at focal).
 boot = ["bios"]
-old_kernels = "autoremove"
+old_kernels = "running"
 
 [hardware.xenial]
 cpu = "x86-64"

@@ -1153,22 +1153,12 @@ mod tests {
         assert_eq!(verdict("centos5-to-alma10", &flat)["ok"], true);
     }
 
-    /// apt keeps every kernel through the first transaction and two afterwards: trusty's 243 MB LVM /boot fills up
-    /// on the way to jammy, and one with five old kernels can't take the first hop until they go.
+    /// Ubuntu's kernel_before purges every kernel older than the running one, so a hop's kernel only sits beside the
+    /// running one: trusty's 243 MB LVM /boot takes the whole route even with five old kernels, a 200 MB one stops
+    /// before noble.
     #[test]
-    fn apt_keeps_two_kernels_beside_the_new_one() {
+    fn ubuntu_keeps_only_the_running_kernel_beside_the_new_one() {
         let full: Vec<&str> = LEVEL_FEATURES.concat();
-        let one = [("3.13.0-170-generic", 35)];
-        let v = verdict(
-            "trusty-to-resolute",
-            &with_boot(machine(&full, false, vec![]), 230, &one),
-        );
-        assert_eq!(v["lands_on"], "focal", "{v:#}");
-        let p = v["hops"][3]["problems"][0].as_str().unwrap();
-        assert!(
-            p.contains("bionic's kernel (64 MiB) and focal's kernel (88 MiB)"),
-            "{p}"
-        );
         let five = [
             ("3.13.0-160-generic", 35),
             ("3.13.0-162-generic", 35),
@@ -1180,11 +1170,18 @@ mod tests {
             "trusty-to-resolute",
             &with_boot(machine(&full, false, vec![]), 230, &five),
         );
-        assert_eq!(v["lands_on"], "trusty", "{v:#}");
-        assert!(v["hops"][0]["problems"][0]
-            .as_str()
-            .unwrap()
-            .contains("remove the kernels this machine doesn't run"));
+        assert_eq!(v["ok"], true, "{v:#}");
+        let one = [("3.13.0-170-generic", 35)];
+        let v = verdict(
+            "trusty-to-resolute",
+            &with_boot(machine(&full, false, vec![]), 200, &one),
+        );
+        assert_eq!(v["lands_on"], "jammy", "{v:#}");
+        let p = v["hops"][4]["problems"][0].as_str().unwrap();
+        assert!(
+            p.contains("jammy's kernel (105 MiB)") && !p.contains("focal's kernel") && p.contains("grow /boot"),
+            "{p}"
+        );
     }
 
     /// A Realtek NIC on ELRepo's kmod-r8168: every release's own r8169 takes it over, unless the machine blacklists
