@@ -77,6 +77,7 @@ const ADAPTER_KEYS: &[&str] = &[
     "hardware",
     "addons",
     "runtimes",
+    "relocate",
 ];
 /// SPEC "Hardware preflight"
 pub const CPU_LEVELS: &[&str] = &["x86-64", "x86-64-v2", "x86-64-v3"];
@@ -345,6 +346,39 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
                      for releases the adapter has, on the rpm backend"
                 ));
             }
+        }
+    }
+    // SPEC "Relocate": the harness's steps (lists of scripts) and the commands it runs between boots
+    if let Some(r) = get(a, "relocate") {
+        const STEPS: &[&str] = &[
+            "preflight",
+            "refresh",
+            "place",
+            "copy",
+            "fixup",
+            "flip",
+            "release",
+            "cleanup",
+        ];
+        const COMMANDS: &[&str] = &["booted", "arm", "commit_trial", "rollback_next"];
+        let want: BTreeSet<&str> = STEPS.iter().chain(COMMANDS).copied().collect();
+        match r.as_object() {
+            Some(o) if o.keys().map(String::as_str).collect::<BTreeSet<_>>() == want => {
+                for k in STEPS {
+                    if !o[*k]
+                        .as_array()
+                        .is_some_and(|l| !l.is_empty() && l.iter().all(Value::is_string))
+                    {
+                        errs.push(format!("{wh}: relocate.{k} must be a list of commands"));
+                    }
+                }
+                for k in COMMANDS {
+                    if !o[*k].is_string() {
+                        errs.push(format!("{wh}: relocate.{k} must be a command"));
+                    }
+                }
+            }
+            _ => errs.push(format!("{wh}: relocate needs exactly {want:?}")),
         }
     }
     if let Some(Value::Object(kv)) = get(a, "kv") {
