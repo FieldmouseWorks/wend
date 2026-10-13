@@ -1279,7 +1279,7 @@ output goes to the journal, and the plan says so.
 | `data` | list of absolute paths, under `/opt`, `/srv`, `/home` or `/var`, none inside `code` | data directories, mounted read-write (`:idmap`) |
 | `user` | user name, not `root` | the app's own user: its passwd and group lines are carried, and it runs as that uid inside |
 | `unit` | `<name>.service` | the app's own unit; its `ExecStart` (an absolute interpreter, then plain words) is the command the shelter runs |
-| `cron` | list of `{ user, line }` | each crontab line by its exact text: plain words only (no `%`, quotes, `$` or redirects), a schedule that translates exactly, an absolute interpreter |
+| `cron` | list of `{ user, line }` | each crontab line by its exact text: plain words only (no `%`, quotes, `$` or redirects), a schedule that translates exactly, an absolute interpreter; `user` is the app's own `user` (another user's jobs are an app of their own) |
 | `sockets` | list of absolute paths, one per directory | host unix sockets the app connects to, each served by its own proxy and mounted at its directory |
 | `ports` | list of `"address:port"` | published on the same host address |
 

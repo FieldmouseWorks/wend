@@ -501,6 +501,9 @@ def check_shelter(sh, where):
             for i, c in enumerate(cron):
                 if not isinstance(c["user"], str) or not re.fullmatch(USER, c["user"]):
                     errs.append(f"{w}.cron[{i}].user must be a user name ({USER})")
+                elif c["user"] != p.get("user"):  # one identity per shelter: discovery and the timer run as it
+                    errs.append(f"{w}.cron[{i}].user must be the app's user ({p.get('user')!r}); "
+                                "shelter another user's jobs as an app of their own")
                 if not isinstance(c["line"], str) or not re.fullmatch(CRON_LINE, c["line"]):
                     errs.append(f"{w}.cron[{i}].line must be the crontab line exactly, in plain words ({CRON_LINE})")
                     continue

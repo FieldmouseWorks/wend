@@ -336,6 +336,7 @@ for name, sh, want in (
             {**cron0, "line": "1-30/5 2 * * * /usr/bin/python /opt/billing/nightly.py"}]}}, True),
         ("shelter: a cron line with a bare command", {"billing": {**plan, "cron": [
             {**cron0, "line": "30 2 * * * python /opt/billing/nightly.py"}]}}, True),
+        ("shelter: a cron line of another user", {"billing": {**plan, "cron": [{**cron0, "user": "alice"}]}}, True),
         ("shelter: a cron line as a string", {"billing": {**plan, "cron": [cron0["line"]]}}, True),
         ("shelter: a relative socket", {"billing": {**plan, "sockets": ["mysql.sock"]}}, True),
         ("shelter: a port out of range", {"billing": {**plan, "ports": ["127.0.0.1:99999"]}}, True),
