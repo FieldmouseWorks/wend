@@ -272,13 +272,20 @@ pub fn check_facts(f: &Value) -> Result<(), String> {
     {
         return bad("cpu.features");
     }
-    let dev_ok = |d: &Value| {
-        d["slot"].is_string()
-            && d["class"].as_str().is_some_and(|c| c.len() == 8 && c.starts_with("0x"))
-            && d["modalias"].as_str().is_some_and(|m| m.starts_with("pci:v"))
-            && (d["driver"].is_string() || d["driver"].is_null())
-            && (d["module"].is_string() || d["module"].is_null())
-    };
+    let dev_ok =
+        |d: &Value| {
+            d["slot"].is_string()
+                && d["class"].as_str().is_some_and(|c| {
+                    c.len() == 8 && c.starts_with("0x") && c[2..].bytes().all(|b| b.is_ascii_hexdigit())
+                }) && d["modalias"].as_str().is_some_and(|m| {
+                regex::Regex::new(
+                    "^pci:v[0-9A-F]{8}d[0-9A-F]{8}sv[0-9A-F]{8}sd[0-9A-F]{8}bc[0-9A-F]{2}sc[0-9A-F]{2}i[0-9A-F]{2}$",
+                )
+                .unwrap()
+                .is_match(m)
+            }) && (d["driver"].is_string() || d["driver"].is_null())
+                && (d["module"].is_string() || d["module"].is_null())
+        };
     if !f["pci"].as_array().is_some_and(|a| a.iter().all(dev_ok)) {
         return bad("pci");
     }
@@ -421,7 +428,7 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
                 alias_match(p.as_bytes(), alias.as_bytes())
                     && (!CLASS_ONLY_MAYBE.contains(&m.as_str()) || norm.as_deref() == Some(m.as_str()))
             });
-            // by name only when the kernel recorded no IDs for that built-in driver (before Linux 6.12 it records
+            // by name only when the kernel recorded no IDs for that built-in driver (older kernels record
             // none; EL9's built-in virtio_pci has none)
             let built_in = norm
                 .as_ref()
@@ -667,6 +674,17 @@ mod tests {
         assert_eq!(verdict("centos5-to-alma10", &m)["ok"], true);
         let a = atlas();
         let (_, r) = a.route("centos5-to-alma10").unwrap();
+        let mut bad_class = machine(&full, false, vec![]);
+        bad_class["pci"] = json!([dev(
+            "0000:00:01.0",
+            "0xGGGGGG",
+            "pci:v00008086d00001234sv00000000sd00000000bc01sc00i00",
+            Some("x")
+        )]);
+        assert!(evaluate(&a, r, &bad_class).is_err());
+        let mut bad_alias = machine(&full, false, vec![]);
+        bad_alias["pci"] = json!([dev("0000:00:01.0", "0x010000", "pci:v8086", Some("x"))]);
+        assert!(evaluate(&a, r, &bad_alias).is_err());
         for k in ["pci", "ram_mib", "free_mib", "schema", "userland_bits"] {
             let mut bad = machine(&full, false, vec![]);
             bad.as_object_mut().unwrap().remove(k);
