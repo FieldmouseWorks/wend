@@ -340,7 +340,16 @@ start_hook = '''records the starting service families, outside /etc'''
 isolate = ["db"]              # roles whose checks start daemons: run them in a network namespace of their own
 [roles]                       # box-specific health checks, shell; adapter checks are added automatically
 web = "apache2ctl -t && ..."
+[shelter.billing]             # optional: an app to shelter on a route that drops its Python 2 ("Sheltering an app")
+code = "/opt/billing"
+data = ["/var/lib/billing"]
+user = "billing"
+unit = "billing.service"
 ```
+
+A box with Python 2 programs of its own may carry `[shelter.<app>]`: the plan its owner would have confirmed
+(`wend preflight --shelter`), given to the walk as box input. "Sheltering an app" defines the keys; the checker holds
+them to plain shapes, since every value lands in commands the harness runs as root.
 
 ### Decoys
 
@@ -1083,10 +1092,11 @@ script of its own; a Python 2 an add-on repository ships (EPEL's `python26` on E
 owner's own code (an rpm or deb the owner built counts as the distro's); a Python 2 built from source, whose shared
 libraries the hop may take away even though its files stay; and runtimes other than Python 2 (PHP 5, Java 6).
 
-## Sheltering an app (draft: not built yet)
+## Sheltering an app (draft: chroot tier built)
 
-This section designs the **shelter** choice that runtime preflight offers. Nothing here is built yet; it lands op by
-op, each with its own PR, after a box with a Python 2 app of its own (`el/centos7-pyapp`) is on main.
+This section designs the **shelter** choice that runtime preflight offers. The chroot (CI) tier is built in the
+reference harness (`tools/shelter.py`), together with the box that needs it (`el/centos7-pyapp`); the client's ops,
+the preflight plan and the VM tier come after it, each with its own PR.
 
 ### What it is, and what it isn't
 
@@ -1249,16 +1259,41 @@ step (no shell), each with preconditions and checks, and recorded in the run's `
 | op | when | does |
 |---|---|---|
 | `shelter.build` | on `keeps_runtimes_on`: before the first hop, or in the pre phase of the hop that drops Python 2 | builds the root and the lock (above); needs the free space the plan computed |
-| `shelter.prove` | right after `shelter.build` | runs the app's checks against the shelter root in the sandbox (a chroot), with the real data mounted read-only; refuses the route if the app doesn't run there |
-| `shelter.stop-native` | pre phase of the hop that drops Python 2 | stops and disables the app's own service unit, and comments out each cron line that runs a sheltered program with a `# wend-shelter:<app>` marker (the original goes under `/var/lib/wend/saved`; the precondition is the line's exact text). Nothing is deleted, so rolling the hop back restores both |
-| `shelter.start` | post phase of that hop | installs podman (an `install` op of the landing release), reserves the shelter's subuid/subgid range, the network, the nftables unit and the socket proxies, loads the image, writes and enables the unit, and writes one systemd timer per moved cron line |
+| `shelter.prove` | right after `shelter.build` | in a throwaway copy of the machine (so its real data is never written), does `stop-native` and `start`'s units, then runs the app's checks against the shelter root in the sandbox (a chroot); refuses the route if a check that passes natively fails there |
+| `shelter.stop-native` | pre phase of the hop that drops Python 2, before the fixes' pre steps | stops (where systemd runs that root) and disables the app's own service unit, and comments out each cron line that runs a sheltered program with a `# wend-shelter:<app>` marker (the original goes under `/var/lib/wend/saved`; the precondition is the line's exact text). Nothing is deleted, so rolling the hop back restores both |
+| `shelter.start` | post phase of that hop, after the fixes' post steps | installs podman (an `install` op of the landing release), reserves the shelter's subuid/subgid range, the network, the nftables unit and the socket proxies, loads the image, writes and enables the unit, and writes one systemd timer per moved cron line |
 
 A cron line becomes a timer only when its schedule translates exactly to `OnCalendar=`. Every standard five-field
 schedule and the `@daily`-style names do. When both day-of-month and day-of-week are restricted, cron runs on
-either, so that becomes two `OnCalendar=` lines. `@reboot` becomes a oneshot at boot. Anything else is refused at
-plan time.
+either, so that becomes two `OnCalendar=` lines. `@reboot` becomes a oneshot at boot (not built yet: the checker
+refuses it for now). Anything else is refused at plan time.
 The timer runs the same command in the shelter (`podman run --rm ... <image ID> <command>`) with the crontab's
-`PATH` and environment. Cron's `MAILTO` doesn't carry over: output goes to the journal, and the plan says so.
+`PATH` and environment (built so far: cron's default `PATH=/usr/bin:/bin`). Cron's `MAILTO` doesn't carry over:
+output goes to the journal, and the plan says so.
+
+**The plan** is a table per app, `[shelter.<app>]` (on a CI box, in its box file):
+
+| key | type | means |
+|---|---|---|
+| `code` | absolute path, under `/opt`, `/srv`, `/home`, `/var` or `/usr/local` | the code tree, mounted read-only |
+| `data` | list of absolute paths, under `/opt`, `/srv`, `/home` or `/var`, none inside `code` | data directories, mounted read-write (`:idmap`) |
+| `user` | user name, not `root` | the app's own user: its passwd and group lines are carried, and it runs as that uid inside |
+| `unit` | `<name>.service` | the app's own unit; its `ExecStart` (an absolute interpreter, then plain words) is the command the shelter runs |
+| `cron` | list of `{ user, line }` | each crontab line by its exact text: plain words only (no `%`, quotes, `$` or redirects), a schedule that translates exactly, an absolute interpreter |
+| `sockets` | list of absolute paths, one per directory | host unix sockets the app connects to, each served by its own proxy and mounted at its directory |
+| `ports` | list of `"address:port"` | published on the same host address |
+
+An app's name is lowercase letters and digits. Paths have no `.` or `..` segments. Unknown keys are refused, so a
+plan can't ask for host networking or privileges until the spec says how that's recorded.
+
+**What a run records.** Each built shelter goes into the run's `shelters`:
+`{app, release, lock_sha256, image, tier, confinement_proved, subuid}`. `tier` is `chroot` on CI and
+`confinement_proved` is `false` there (see Proof); `subuid` is the range `shelter.start` reserved (`start:count`),
+recorded in the run and not in the lock, since the lock describes the build and the range belongs to the machine.
+The lock is `/var/lib/wend/shelter/<app>/shelter.lock`, TOML (`wend.shelter-lock/0`): `release`, `key`, `image`,
+the carried `user` and `group` lines, `[indexes]` (each repo's `repomd.xml` by origin URL), and one
+`[[packages]]` (`nevra`, `sha256`, `url`) and `[[carried]]` (`path`, `sha256`, `why`: `unowned` or `changed`) per
+entry.
 
 `shelter.start`'s checks are the app's own checks against the real container, on the box, under the real
 confinement (userns, MAC, read-only root, dropped capabilities, the network table). If they fail, the hop rolls
@@ -1272,13 +1307,23 @@ route itself causes.
 
 ### Proof
 
-- **Box first** (its own PR): `el/centos7-pyapp` is a centos7-lamp sibling with a Python 2 service (a small
-  BaseHTTPServer JSON API reading MariaDB through MySQLdb over the socket, writing to `/var/lib/billing`), its
-  systemd unit, and a nightly cron job. Its `app` check fetches the row over HTTP. Its `cron` check runs the job
-  and reads what it wrote.
-- **CI (chroot tier):** chroots run no podman, so CI proves the userland only: it checks the shelter by chroot
-  into the shelter root with the same mounts. `site`, `app` and `cron` must stay green at every hop. It proves
-  nothing about confinement, and the run says so.
+- **The box lands with the chroot tier, not before it**: `el/centos7-pyapp` is a centos7-lamp sibling with a
+  Python 2 service (a small BaseHTTPServer JSON API reading MariaDB through MySQLdb over the socket, writing to
+  `/var/lib/billing`), its systemd unit, a nightly cron job, and the owner's plan (`[shelter.billing]`). Its `app`
+  check starts whatever the box has enabled for billing (its own unit, or the shelter's) from the unit's
+  `ExecStart` and fetches the row over HTTP; its `cron` check runs the crontab line, or the shelter's timer once
+  that has taken the line over, and reads what it wrote. Neither names Python. The box can't land alone: on the hop
+  to alma9 its app and cron checks go red, and a walk rolls back any hop that loses a passing check, so every
+  centos7 route would fail on it. Every box that starts at centos7 is a decoy for every centos7 route, so that would
+  turn all of them red in CI.
+- **CI (chroot tier):** chroots run no podman, so CI proves the userland only. While a box's checks run, the
+  harness puts a stand-in at `/usr/bin/podman` (`tools/podman_standin.sh`, never shipped to clients and never left
+  in the box) whose `run` chroots into the shelter root the image ID names, with the unit's declared mounts (code
+  read-only, data read-write, the socket proxies' directories), and runs the command as `--user`, ignoring every
+  confinement flag. There's no image store: the image ID is the digest of the built root, and the root stays at its
+  path. A check that starts a shelter's socket proxies starts them from their units, as the proxy's `User=`, since
+  a chroot has no systemd and no user namespace. `app`, `cron` and every other check must stay green at every hop.
+  It proves nothing about confinement, and the run says so (`tier = "chroot"`, `confinement_proved = false`).
 - **VM tier (remi):** the real thing, and the only proof of confinement. centos7-pyapp to alma10 under podman, with
   SELinux enforcing, real reboots, and checks green after each hop. The same goes for a Debian bullseye-to-trixie
   box (AppArmor) later.
