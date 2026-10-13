@@ -21,15 +21,16 @@ chroot harness, run as root, may own: point WEND_WORK somewhere the user can wri
 """
 import gzip
 import hashlib
+import http.client
 import http.server
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
 import threading
 import time
-import re
 import tomllib
 import urllib.error
 import urllib.parse
@@ -98,7 +99,9 @@ FORCED_RESET = ("sleep 2; kill -TERM -1; sleep 10; kill -KILL -1; sleep 3; sync;
                 "echo s > /proc/sysrq-trigger; sleep 2; echo u > /proc/sysrq-trigger; sleep 3; echo b > /proc/sysrq-trigger\n")
 # apt boxes: each installed package's version, unless `apt-cache madison` lists it from the box's sources (the release
 # pocket, set by set_release). A box with versions from elsewhere isn't the box the route starts from.
-OFF_POCKET = r"""dpkg-query -W -f '${Package} ${Version}\n' | while read p v; do apt-cache madison "$p" 2>/dev/null | awk -F'|' -v v="$v" '{gsub(/ /, "", $2); if ($2 == v) f = 1} END {exit !f}' || echo "$p $v"; done"""
+OFF_POCKET = (r"""l=$(dpkg-query -W -f '${Package} ${Version}\n') && [ -n "$l" ] || { echo "dpkg-query listed nothing"; """
+              r"""exit 1; }; printf '%s\n' "$l" | while read p v; do apt-cache madison "$p" 2>/dev/null | """
+              r"""awk -F'|' -v v="$v" '{gsub(/ /, "", $2); if ($2 == v) f = 1} END {exit !f}' || echo "$p $v"; done""")
 GUESTS = []  # every qemu this run started: killed on the way out, whatever happened
 
 
@@ -218,7 +221,8 @@ def post_install(box_doc, key_pub):
 
 def preseed(box_doc, adapter, inst, proxy=None):
     """debian-installer's answers, read from the initrd (no network is needed to fetch them): a static address, the
-    archive as the mirror, one root partition, the box's packages and debconf answers, and post_install() at the end.
+    start release's mirror (or the release-pocket proxy in front of it), one root partition, the box's packages and
+    debconf answers, and post_install() at the end.
     inst["preseed"] holds the lines that differ by installer version (keymap, mirror country, disk path, partman names),
     inst["packages"] what the install needs besides the box's own, inst["late"] what the release's bootloader needs for
     a serial console. The mirror is the start release's own (the archive, or the current mirror)."""
@@ -289,10 +293,13 @@ class PocketProxy:
             protocol_version = "HTTP/1.1"  # keep-alive: apt pipelines requests
 
             def do_GET(self):
-                if PocketProxy.OTHER_POCKET.search(self.path) or ".." in self.path:
+                # only a path on the mirror: "host:port/x" or ".evil/x" would otherwise reach another server
+                if not self.path.startswith("/") or PocketProxy.OTHER_POCKET.search(self.path) or ".." in self.path:
                     return self.send_error(404)
                 try:
                     with urllib.request.urlopen(up + self.path, timeout=300) as rsp:
+                        if rsp.geturl() != up + self.path:  # a redirect could lead to another pocket
+                            return self.send_error(502)
                         body = rsp.read()
                     self.send_response(200)
                     self.send_header("Content-Length", str(len(body)))
@@ -300,7 +307,7 @@ class PocketProxy:
                     self.wfile.write(body)
                 except urllib.error.HTTPError as e:
                     self.send_error(e.code)
-                except OSError:
+                except (OSError, http.client.HTTPException):
                     self.send_error(502)
 
             def log_message(self, *a):
@@ -318,7 +325,7 @@ def fetch(url, out):
 
 
 def build(box_id):
-    """Install BOX in a VM from its release's own installer (anaconda for EL, debian-installer for Debian), then bring
+    """Install BOX in a VM from its release's own installer (anaconda for EL, debian-installer for Debian and Ubuntu), then bring
     it to the release's last packages, as the chroot build does. Cached by box file and adapter, like
     sandbox.build_box."""
     box_doc = load(f"boxes/{box_id}/box.toml")
@@ -350,11 +357,14 @@ def build(box_id):
         os.makedirs(ks, exist_ok=True)
         open(os.path.join(ks, "ks.cfg"), "w").write(kickstart(box_doc, a, key_pub))
         srv = Serve(ks)
-        g.start(["-kernel", os.path.join(d, "vmlinuz"), "-initrd", os.path.join(d, "initrd.img"), "-no-reboot",
-                 "-append", f"ks=http://{GUEST_HOST}:{srv.port}/ks.cfg ksdevice=eth0 console=ttyS0,115200 text"])
-        g.proc.wait(3600)
-        srv.httpd.shutdown()
-    else:  # debian-installer: netboot from the archive, the preseed and post_install() appended to its initrd
+        try:
+            g.start(["-kernel", os.path.join(d, "vmlinuz"), "-initrd", os.path.join(d, "initrd.img"), "-no-reboot",
+                     "-append", f"ks=http://{GUEST_HOST}:{srv.port}/ks.cfg ksdevice=eth0 console=ttyS0,115200 text"])
+            g.proc.wait(3600)
+        finally:
+            srv.httpd.shutdown()
+            srv.httpd.server_close()
+    else:  # debian-installer: netboot from the start release's mirror, the preseed and post_install() in its initrd
         mirror = backends.of(a).hop_vars(a, box_doc["release"])["mirror"]
         for f in ("linux", "initrd.gz"):
             fetch(f"{mirror}/{inst['netboot']}/{f}", os.path.join(d, f))
@@ -363,11 +373,14 @@ def build(box_id):
         extra = gzip.compress(newc({"preseed.cfg": preseed(box_doc, a, inst, proxy).encode(),
                                     "wend-post.sh": post_install(box_doc, key_pub).encode()}))
         open(os.path.join(d, "initrd-wend.gz"), "wb").write(open(os.path.join(d, "initrd.gz"), "rb").read() + extra)
-        g.start(["-kernel", os.path.join(d, "linux"), "-initrd", os.path.join(d, "initrd-wend.gz"), "-no-reboot",
-                 "-append", "priority=critical console=ttyS0,115200n8"])
-        g.proc.wait(3600)
-        if proxy:
-            proxy.httpd.shutdown()
+        try:
+            g.start(["-kernel", os.path.join(d, "linux"), "-initrd", os.path.join(d, "initrd-wend.gz"), "-no-reboot",
+                     "-append", "priority=critical console=ttyS0,115200n8"])
+            g.proc.wait(3600)
+        finally:
+            if proxy:
+                proxy.httpd.shutdown()
+                proxy.httpd.server_close()
     g = Guest(disk, key, g.ssh_port, hw)
     g.start()
     if not g.wait_ssh():
