@@ -31,7 +31,8 @@ DNS= for two would send every lookup to both, so a second one fails the step.
 DNS_NAMESERVERS and DNS_NAMESERVER (what resolvconf's and ifupdown's hooks read) must be unicast addresses a resolver
 can be at; DNS_SEARCH and DNS_DOMAIN plain domain names; any other DNS_* option fails the step. The result is one
 resolved drop-in, /etc/systemd/resolved.conf.d/50-wend-ifupdown.conf, with DNS= and Domains=, written only when it
-is new or already the same. Addresses and routes stay with ifupdown. Not seen, from ifquery's text: `no-scripts`
+is new or already the same, written through its directory opened one name at a time from / without following a
+symlink, so a symlinked or swapped-in path component can't redirect it. Addresses and routes stay with ifupdown. Not seen, from ifquery's text: `no-scripts`
 (kept apart from the options), and a repeated option whose second value itself reads `name: value`, which prints
 like a separate option; in each, the options are carried although no hook read them. ifquery prints an interface's
 inet and inet6 stanzas together, so two spellings across them fail the step although each hook saw one. A file where
@@ -41,9 +42,11 @@ Run on the box by both engines as `python3 -` with this file as a here-document 
 the source, and the client embeds the same text (client/parity.py compares them). tools/test_net_ifupdown.py runs it
 with a stand-in ifquery; the parse itself is ifupdown's, proven by the VM replay on #13.
 """
+import errno
 import ipaddress
 import os
 import re
+import stat
 import subprocess
 import sys
 
@@ -137,6 +140,32 @@ def plan():
     return dns, search
 
 
+def dropin_dir(root):
+    """The drop-in's directory as an open descriptor, reached one name at a time from root without following a symlink,
+    so nothing swapped in after a check can redirect the write; a missing directory is made, mode 0755."""
+    d = os.open(root or "/", os.O_RDONLY | os.O_DIRECTORY)
+    path = ""
+    for part in os.path.dirname(DROPIN).strip("/").split("/"):
+        path += "/" + part
+        try:
+            try:
+                n = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=d)
+            except FileNotFoundError:
+                os.mkdir(part, 0o755, dir_fd=d)
+                n = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=d)
+                os.fchmod(n, 0o755)
+        except OSError as e:  # O_NOFOLLOW with O_DIRECTORY refuses a symlink as ENOTDIR (or ELOOP)
+            try:
+                link = stat.S_ISLNK(os.stat(part, dir_fd=d, follow_symlinks=False).st_mode)
+            except OSError:
+                link = False
+            os.close(d)
+            fail(f"{path} is a symlink" if link or e.errno == errno.ELOOP else f"{path} isn't a directory ({e.strerror})")
+        os.close(d)
+        d = n
+    return d
+
+
 def main(root=""):
     dns, search = plan()
     if not dns and not search:
@@ -145,32 +174,41 @@ def main(root=""):
     text = "".join(["# Written by wend (net.ifupdown-dns-to-resolved) from ifupdown's dns-* options.\n",
                     "[Resolve]\n", f"DNS={' '.join(dns)}\n" if dns else "",
                     f"Domains={' '.join(search)}\n" if search else ""])
-    path = root + DROPIN
-    if os.path.lexists(path):
-        if os.path.islink(path) or not os.path.isfile(path) or open(path, "rb").read() != text.encode():
+    d = dropin_dir(root)
+    name = os.path.basename(DROPIN)
+    try:
+        try:
+            old = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=d)
+        except FileNotFoundError:
+            old = None
+        except OSError:  # a symlink (ELOOP) or something open() refuses
             fail(f"{DROPIN} exists already as something else")
-        print(f"{DROPIN} already says so")
-        return
-    if os.path.lexists(path + ".wend"):
-        fail(f"{DROPIN}.wend is in the way")
-    for d in ("/etc", "/etc/systemd", os.path.dirname(DROPIN)):  # O_NOFOLLOW guards only the last name
-        if os.path.islink(root + d):
-            fail(f"{d} is a symlink")
-    if os.path.lexists(os.path.dirname(path)) and not os.path.isdir(os.path.dirname(path)):
-        fail(f"{os.path.dirname(DROPIN)} isn't a directory")
-    if not os.path.isdir(os.path.dirname(path)):
-        os.makedirs(os.path.dirname(path))
-        os.chmod(os.path.dirname(path), 0o755)
-    fd = os.open(path + ".wend", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-    with os.fdopen(fd, "w") as out:
-        out.write(text)
-    os.chmod(path + ".wend", 0o644)
-    try:  # link, not rename: a drop-in created since the check above is kept, never replaced
-        os.link(path + ".wend", path)
-    except FileExistsError:
-        fail(f"{DROPIN} appeared while it was being written")
+        if old is not None:
+            if not stat.S_ISREG(os.fstat(old).st_mode):
+                os.close(old)
+                fail(f"{DROPIN} exists already as something else")
+            with os.fdopen(old, "rb") as f:
+                same = f.read() == text.encode()
+            if not same:
+                fail(f"{DROPIN} exists already as something else")
+            print(f"{DROPIN} already says so")
+            return
+        try:
+            fd = os.open(name + ".wend", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=d)
+        except FileExistsError:
+            fail(f"{DROPIN}.wend is in the way")
+        try:
+            with os.fdopen(fd, "w") as out:
+                out.write(text)
+                os.fchmod(out.fileno(), 0o644)
+            # link, not rename: a drop-in created since the check above is kept, never replaced
+            os.link(name + ".wend", name, src_dir_fd=d, dst_dir_fd=d, follow_symlinks=False)
+        except FileExistsError:
+            fail(f"{DROPIN} appeared while it was being written")
+        finally:
+            os.unlink(name + ".wend", dir_fd=d)
     finally:
-        os.unlink(path + ".wend")
+        os.close(d)
     print(f"{DROPIN}: DNS={' '.join(dns) or '-'} Domains={' '.join(search) or '-'}")
 
 

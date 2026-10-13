@@ -533,8 +533,9 @@ one global `DNS=` for two would send every lookup to both, so a second one fails
 one interface are one interface). `DNS_NAMESERVERS` and `DNS_NAMESERVER` must be unicast addresses a resolver can be at (no scope, not link-local,
 multicast, loopback, unspecified, reserved, broadcast or IPv4-mapped); `DNS_SEARCH` and `DNS_DOMAIN` plain domain
 names; any other `DNS_*` option fails the step. The result is `/etc/systemd/resolved.conf.d/50-wend-ifupdown.conf`
-with `DNS=` and `Domains=`, written (mode 0644 in a 0755 directory, never through a symlink, and `/etc`, `/etc/systemd` and the directory
-must not be symlinks either) only when it is new;
+with `DNS=` and `Domains=`, written (mode 0644 in a 0755 directory) only when it is new, through the directory reached one name at a time
+from `/` without following a symlink: a symlinked `/etc`, `/etc/systemd`, `resolved.conf.d` or drop-in fails the
+step, and a directory swapped for a symlink while the op writes doesn't redirect the write;
 one that is already there must be a plain file saying the same, and a `.wend` file beside it fails the step. The
 drop-in is published with a hard link, not a rename, so one created by something else while the op writes is kept
 and the step fails. Nothing

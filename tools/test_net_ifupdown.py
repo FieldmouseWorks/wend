@@ -64,13 +64,18 @@ def run(query, existing=None, symlink=False, prepare=None, no_ifquery=False, rac
                 os.symlink(target, t + m.DROPIN)
         path, mask, msg = os.environ["PATH"], os.umask(0o077), None  # 077: the mode must come from the op
         os.environ["PATH"] = b if no_ifquery else f"{b}:{path}"
-        chmod = os.chmod
-        if race:  # another process creates the drop-in just before the op publishes its own
-            def racing(p, mode):
-                chmod(p, mode)
-                if p.endswith(".wend"):
-                    open(p[:-len(".wend")], "w").write("admin\n")
-            os.chmod = racing
+        link = os.link
+        if race:  # another process acts just before the op publishes its drop-in
+            def racing(*a, **kw):
+                if race == "swap":  # resolved.conf.d moved away and a symlink to elsewhere put in its place
+                    d = os.path.dirname(t + m.DROPIN)
+                    os.rename(d, t + "/moved")
+                    os.makedirs(t + "/elsewhere")
+                    os.symlink(t + "/elsewhere", d)
+                else:
+                    open(t + m.DROPIN, "w").write("admin\n")
+                return link(*a, **kw)
+            os.link = racing
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 m.main(t)
@@ -79,7 +84,7 @@ def run(query, existing=None, symlink=False, prepare=None, no_ifquery=False, rac
         except Exception as e:  # a traceback is a defect too: it prints WRONG, not a crash of this test
             msg = f"EXCEPTION {e!r}"
         finally:
-            os.environ["PATH"], _, os.chmod = path, os.umask(mask), chmod
+            os.environ["PATH"], _, os.link = path, os.umask(mask), link
         p = t + m.DROPIN
         out = open(p).read() if os.path.isfile(p) else None
         mode = (os.stat(p).st_mode & 0o777, os.stat(os.path.dirname(p)).st_mode & 0o777) if os.path.isfile(p) else None
@@ -111,6 +116,9 @@ case("a drop-in that says something else is refused, not replaced",
 msg, out, left, mode = run(BOOT, race=True)
 case("a drop-in created while the op writes is kept, not replaced",
      refused(msg, "appeared while") and out == "admin\n" and left == [DROP])
+msg, out, left, mode = run(BOOT, race="swap")
+case("a directory swapped for a symlink while the op writes doesn't redirect the write",
+     msg is None and not [n for n in left if n.startswith("elsewhere/")] and "moved/50-wend-ifupdown.conf" in left)
 msg, out, left, mode = run(BOOT, existing=WANT, symlink=True)
 case("a drop-in that is a symlink is refused, even to the same text", refused(msg, "exists already"))
 msg, out, left, mode = run({"state": ["lo=lo", "eth0=work"], "ifaces": {"lo=lo": [], "eth0=work": ETH0,
@@ -173,6 +181,9 @@ for name, q, why, kw in (
         ("a symlinked resolved.conf.d", BOOT, "is a symlink",
          {"prepare": lambda p: (os.makedirs(os.path.dirname(p) + ".real"),
                                 os.symlink(os.path.dirname(p) + ".real", os.path.dirname(p)))}),
+        ("a symlinked /etc", BOOT, "is a symlink",
+         {"prepare": lambda p: (os.makedirs(p.split("/etc/")[0] + "/etc.real"),
+                                os.symlink(p.split("/etc/")[0] + "/etc.real", p.split("/etc/")[0] + "/etc"))}),
         ("a symlinked /etc/systemd", BOOT, "is a symlink",
          {"prepare": lambda p: (os.makedirs(os.path.dirname(os.path.dirname(p)) + ".real"),
                                 os.symlink(os.path.dirname(os.path.dirname(p)) + ".real",
