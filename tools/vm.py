@@ -221,8 +221,9 @@ def kickstart(box_doc, adapter, key_pub):
     """anaconda's answers. inst["packages"] is what the install needs besides the box's own (the release's bootloader
     package), inst["append"] kernel arguments for the installer and the installed system (EL7's net.ifnames=0, so the
     NIC is eth0 as the box's network role expects), inst["ifname"] that the installer's boot line names the NIC by MAC
-    (ifname=eth0:<mac>: EL7's installer then pins the ifcfg to it with HWADDR), inst["boot_mib"] the size of /boot as
-    the release's installer makes it by default (200 MiB unless set), inst["ks_end"] whether sections end with %end (EL7 on; EL5's
+    (ifname=eth0:<mac>: EL7's installer then pins the ifcfg to it with HWADDR), inst["boot_part_mib"] the size of
+    /boot as the release's installer makes it by default (7.9's: 1 GiB); unset, 200 MiB, a size chosen for CentOS 5,
+    whose 5.11 installer makes 100 MB, inst["ks_end"] whether sections end with %end (EL7 on; EL5's
     anaconda doesn't know it). On UEFI, an EFI system partition. The box's customize runs in %post after the release's
     repos are set (set_release), as the chroot build runs it, with the mirror shim where the guest sees the host."""
     rel = adapter["releases"][box_doc["release"]]
@@ -239,7 +240,7 @@ def kickstart(box_doc, adapter, key_pub):
         "rootpw --iscrypted !", "firewall --disabled", "selinux --permissive", "authconfig --enableshadow --enablemd5",
         "timezone --utc UTC",
         f'bootloader --location=mbr --append="console=tty0 console=ttyS0,115200 {inst.get("append", "")}"'.replace(" \"", "\""),
-        "zerombr", "clearpart --all --initlabel", f"part /boot {fs} --size={inst.get('boot_mib', 200)}",
+        "zerombr", "clearpart --all --initlabel", f"part /boot {fs} --size={inst.get('boot_part_mib', 200)}",
         *(["part /boot/efi --fstype efi --size=200"] if FIRMWARE == "uefi" else []), "part swap --size=1024",
         f"part / {fs} --size=1 --grow", "poweroff", "",
         "%packages --nobase", "kernel", *inst.get("packages", []), *box_doc["packages"], *end, "",
