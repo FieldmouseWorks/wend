@@ -50,7 +50,7 @@ def run(script, t):
 # A default CentOS 7.0-7.2 install as preflight sees it: / on LVM centos/root and /boot on vda1, both XFS v4, BIOS,
 # GRUB 2, the newest kernel running, and an empty 30 GB vdb.
 GOOD = {"efi": False, "boot_type": "part", "root_lv": "centos root", "wend_root": False, "crypt": False,
-        "v4_home": False, "fstab_unmounted": False, "newest": "kernel-3.10.0-1160.el7.x86_64", "yum": False,
+        "home": False, "fstab_unmounted": False, "newest": "kernel-3.10.0-1160.el7.x86_64", "yum": False,
         "disk_type": "disk", "disk_parts": 0, "disk_sig": "", "disk_mounted": False, "disk_pv": False,
         "disk_gb": 30, "used_k": 2_000_000, "stub": False}
 
@@ -70,12 +70,13 @@ def machine(t, m):
                                   ("/dev/sdc1 /data xfs defaults 0 0\n" if m["fstab_unmounted"] else ""))
     open(f"{t}/mounts", "w").write("/dev/mapper/centos-root / xfs rw 0 0\n" +
                                    (f"{disk} /mnt ext4 rw 0 0\n" if m["disk_mounted"] else ""))
-    xfs = "/\n/boot\n" + ("/home\n" if m["v4_home"] else "")
+    mounts = "/ /dev/mapper/centos-root\n/boot /dev/vda1\n/dev devtmpfs\n/run tmpfs\n" + \
+        ("/home /dev/mapper/centos-home\n" if m["home"] else "")
     shims(t, {
         "grub2-install": "exit 0", "rsync": "exit 0",
         "mountpoint": 'case "$2" in /boot) exit 0;; /data) exit 1;; esac; exit 0',
         "findmnt": f'case "$*" in "-no SOURCE /boot") echo /dev/vda1;; "-no SOURCE /") echo /dev/mapper/centos-root;;'
-                   f' "-rno TARGET -t xfs") printf "{xfs}";; esac',
+                   f' "-rno TARGET,SOURCE") printf "{mounts}";; esac',
         "lsblk": f'case "$*" in "-no TYPE /dev/vda1") echo {m["boot_type"]};; "-no PKNAME /dev/vda1") echo vda;;'
                  f' "-rno TYPE") printf "disk\\npart\\nlvm\\n{"crypt" if m["crypt"] else ""}\\n";;'
                  f' "-dno TYPE {disk}") echo {m["disk_type"]};;'
@@ -104,7 +105,8 @@ for name, change, want in (
         ("a stub from an earlier relocate", {"stub": True}, "a relocate stub is already"),
         ("an earlier relocate's LV", {"wend_root": True}, "centos/wend-root exists already"),
         ("LUKS", {"crypt": True}, "LUKS isn't handled"),
-        ("another XFS v4 filesystem mounted (/home)", {"v4_home": True}, "/home is XFS v4 too"),
+        ("another filesystem from a disk mounted (/home): not carried, and both roots would share it", {"home": True},
+         "/home is mounted from a disk"),
         ("an XFS filesystem in fstab that isn't mounted", {"fstab_unmounted": True}, "isn't mounted"),
         ("a newer kernel waiting for a reboot", {"newest": "kernel-3.10.0-1160.119.1.el7.x86_64"}, "reboot first"),
         ("yum running", {"yum": True}, "yum is running"),

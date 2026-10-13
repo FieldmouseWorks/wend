@@ -1430,8 +1430,9 @@ The steps, in order, each a list of scripts that run inside the booted machine a
 
 - `preflight` refuses, naming why, before anything is written: UEFI; no GRUB 2 for BIOS or no `rsync`; `/boot` not a
   plain partition of its own; `/` not on LVM; a stub or a `wend-root` LV from an earlier relocate; LUKS anywhere;
-  another mounted XFS v4 filesystem (carrying more than `/` and `/boot` isn't built); an XFS filesystem in fstab
-  that isn't mounted; a newer kernel than the running one, or yum running; and a new disk that isn't a whole disk
+  any other filesystem mounted from a disk (carrying more than `/` and `/boot` isn't built, and one left in place
+  would be shared by both roots, so the trial would write the rollback's data); an XFS filesystem in fstab that isn't
+  mounted; a newer kernel than the running one, or yum running; and a new disk that isn't a whole disk
   with no partitions, no signature, not mounted, not a PV, not the boot disk, and at least 1.2 times what `/` and
   `/boot` use plus `{route_mib}` (what the route's hops need). It writes the facts the later steps and boots read
   to `/var/lib/wend/relocate.env` (the volume group and the old LV, the boot disk, the old `/boot`'s UUID, the new
@@ -1454,7 +1455,8 @@ The steps, in order, each a list of scripts that run inside the booted machine a
   finds the new root by UUID and sets `prefix` there before loading its config (so every module and the `grubenv`
   after that are the new root's); entry 1 loads the old config as it was. The stub keeps its own variables in the old
   `/boot`'s `grubenv`, never the configs' `saved_entry` or `next_entry`: `wend_next`, if 0 or 1, is a one-shot boot
-  GRUB clears before taking it; otherwise `wend_default`, and the old root unless it says 0. The flip leaves the old
+  GRUB clears before taking it; otherwise `wend_default`, and the old root unless it says 0. If entry 0 fails inside
+  GRUB, it falls back to entry 1 (`fallback=1`), so a remote machine doesn't sit at a menu. The flip leaves the old
   root the default, arms the trial (`wend_next=0`) as its last write, then freezes and thaws `/boot` so the XFS log
   is written home (GRUB doesn't replay it). Nothing on the old root changes.
 - `release` unmounts everything under `/run/wend` and checks nothing is left. `cleanup` does the same after a failure,
@@ -1476,6 +1478,10 @@ was one-shot), the trial again (new), commit to the trial and reboot (new), a on
 reboot (new). Its run goes to `.wend/vm/` (schema `wend.vmrelocate/0`), with each stage, how long the steps and the
 trial boot took, and what the new root uses. `tools/test_relocate.py` checks preflight's refusals, the copy's fstab and
 kernel line, and the flip (with the real `grub-editenv`, and `grub-script-check` on the stub) without a machine.
+
+Between the flip and commit, the old root must not install a kernel: its grubby and `grub2-mkconfig` write through
+`/etc/grub2.cfg` to the stub. The harness never does (the services are stopped and the trial boot follows the flip
+at once); a client will have to hold kernel updates while the stub is in charge.
 
 Not built yet: free extents in the volume group instead of a disk, a root on a plain partition, other v4 filesystems,
 UEFI (the same stub on the ESP), the route's GRUB reinstall at EL8 (see the doc), the client's preflight verdict,

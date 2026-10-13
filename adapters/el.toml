@@ -198,9 +198,10 @@ set -- $(lvs --noheadings -o vg_name,lv_name "$ROOT_DEV" 2>/dev/null)
 VG=$1 OLD_LV=$2
 ! lvs "$VG/wend-root" >/dev/null 2>&1 || fail "$VG/wend-root exists already"
 ! lsblk -rno TYPE | grep -qx crypt || fail "LUKS isn't handled"
-for m in $(findmnt -rno TARGET -t xfs); do
-  [ "$m" = / ] || [ "$m" = /boot ] || ! xfs_info "$m" | grep -q crc=0 || fail "$m is XFS v4 too; carrying more than / and /boot isn't built yet"
-done
+M=$(findmnt -rno TARGET,SOURCE | while read m s; do
+  case "$s" in /dev/*) [ "$m" = / ] || [ "$m" = /boot ] || { echo "$m"; break; };; esac
+done)
+[ -z "$M" ] || fail "$M is mounted from a disk: carrying more than / and /boot isn't built yet, and both roots would share it"
 awk '$1 !~ /^#/ && $3 == "xfs" {print $2}' /etc/fstab | while read m; do mountpoint -q "$m" || { echo "$m"; break; }; done | grep -q . && fail "an XFS filesystem in fstab isn't mounted: wend doesn't know what's on it"
 [ "$(rpm -q --last kernel | head -n1 | awk '{print $1}')" = "kernel-$(uname -r)" ] || fail "the newest kernel isn't the running one: reboot first"
 ! pgrep -x yum >/dev/null && [ ! -e /var/run/yum.pid ] || fail "yum is running"
@@ -261,8 +262,9 @@ set -e
 N=/run/wend/new
 awk -v u="$NEW_UUID" '$1 !~ /^#/ && $2 == "/" {$1 = "UUID=" u; $3 = "xfs"} $1 !~ /^#/ && $2 == "/boot" {next} {print}' $N/etc/fstab > $N/etc/fstab.wend && cat $N/etc/fstab.wend > $N/etc/fstab && rm -f $N/etc/fstab.wend
 awk -v u="UUID=$NEW_UUID" '$1 !~ /^#/ && $2 == "/" && $1 == u {r++} $1 !~ /^#/ && $2 == "/boot" {b++} END {exit !(r == 1 && !b)}' $N/etc/fstab || { echo "the copy's fstab doesn't name the new root alone"; exit 1; }
-sed -i "s#rd\.lvm\.lv=$VG/$OLD_LV\([\" ]\)#rd.lvm.lv=$VG/wend-root\1#" $N/etc/default/grub
-! grep -q "rd\.lvm\.lv=$VG/$OLD_LV[\" ]" $N/etc/default/grub || { echo "the copy's kernel line still activates $VG/$OLD_LV"; exit 1; }
+O=$(printf '%s/%s' "$VG" "$OLD_LV" | sed 's/[.[\*^$]/\\&/g')
+sed -i "s#rd\.lvm\.lv=$O\([\" ]\)#rd.lvm.lv=$VG/wend-root\1#" $N/etc/default/grub
+! grep -q "rd\.lvm\.lv=$O[\" ]" $N/etc/default/grub || { echo "the copy's kernel line still activates $VG/$OLD_LV"; exit 1; }
 ''', '''
 set -e
 . /var/lib/wend/relocate.env
@@ -297,6 +299,7 @@ grub2-editenv $B/grubenv set wend_default=1 && grub2-editenv $B/grubenv unset we
 cat > $B/grub.cfg.wend-stub <<'EOF'
 # wend relocate (docs/rebuild-and-carry.md): 0 boots the relocated root, 1 the old one (its config as it was)
 set timeout=3
+set fallback=1
 load_env wend_default wend_next
 if [ "${wend_next}" = 0 ]; then
   set default=0
