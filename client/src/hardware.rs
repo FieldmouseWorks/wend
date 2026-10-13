@@ -1154,7 +1154,7 @@ mod tests {
     }
 
     /// Ubuntu's kernel_before purges every kernel older than the running one, so a hop's kernel only sits beside the
-    /// running one: trusty's 243 MB LVM /boot takes the whole route even with five old kernels, a 200 MB one stops
+    /// running one: trusty's 243 MB LVM /boot takes the whole route even with five old kernels, a 195 MB one stops
     /// before noble.
     #[test]
     fn ubuntu_keeps_only_the_running_kernel_beside_the_new_one() {
@@ -1174,12 +1174,12 @@ mod tests {
         let one = [("3.13.0-170-generic", 35)];
         let v = verdict(
             "trusty-to-resolute",
-            &with_boot(machine(&full, false, vec![]), 200, &one),
+            &with_boot(machine(&full, false, vec![]), 195, &one),
         );
         assert_eq!(v["lands_on"], "jammy", "{v:#}");
         let p = v["hops"][4]["problems"][0].as_str().unwrap();
         assert!(
-            p.contains("jammy's kernel (105 MiB)") && !p.contains("focal's kernel") && p.contains("grow /boot"),
+            p.contains("jammy's kernel (88 MiB)") && !p.contains("focal's kernel") && p.contains("grow /boot"),
             "{p}"
         );
     }
