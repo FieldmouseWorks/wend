@@ -1,0 +1,128 @@
+{
+ "schema": "wend.run/0",
+ "route": "sha256:a4dbda4e919a520cff362f51cb5b264cfa67ca6df830cd9648eb14bb5cd703b7",
+ "box": "ubuntu/trusty-db",
+ "from": "trusty",
+ "to": "resolute",
+ "result": "pass",
+ "started": "20261013-000547",
+ "wall_seconds": 1081,
+ "start_fingerprint": "sha256:d635da3090064ed318745b8fa4438002f32ecd1574e236321d65a0edf37d4cb5",
+ "runner": {
+  "kind": "local",
+  "host": "vm",
+  "kernel": "6.18.44-fc-v114"
+ },
+ "hops": [
+  {
+   "to": "xenial",
+   "fired": [],
+   "fired_names": [],
+   "ok": true,
+   "seconds": 128.5,
+   "sources": {
+    "http://archive.ubuntu.com/ubuntu/dists/xenial/InRelease": "sha256:30e9ff343d9ec0b64d28d27010bf472090bb3399b4b6bc5aee077085e920e89b"
+   }
+  },
+  {
+   "to": "bionic",
+   "fired": [],
+   "fired_names": [],
+   "ok": true,
+   "seconds": 115.0,
+   "sources": {
+    "http://archive.ubuntu.com/ubuntu/dists/bionic/InRelease": "sha256:690bd875ab5799394af7406f32f2e698c48e772ac367d520f74ec1095662da4d"
+   }
+  },
+  {
+   "to": "focal",
+   "fired": [],
+   "fired_names": [],
+   "ok": true,
+   "seconds": 161.8,
+   "sources": {
+    "http://archive.ubuntu.com/ubuntu/dists/focal/InRelease": "sha256:cc9be89a0984aeca9e3ca40ae0e6decff75aa32653a5925b04956a7c12487e99"
+   }
+  },
+  {
+   "to": "jammy",
+   "fired": [],
+   "fired_names": [],
+   "ok": true,
+   "seconds": 163.9,
+   "sources": {
+    "http://archive.ubuntu.com/ubuntu/dists/jammy/InRelease": "sha256:c14060cd8c6d625874dfcb9523a35a395bf4865c28b6b6a82569ef326fe92dc6"
+   }
+  },
+  {
+   "to": "noble",
+   "fired": [],
+   "fired_names": [],
+   "ok": true,
+   "seconds": 151.4,
+   "sources": {
+    "http://archive.ubuntu.com/ubuntu/dists/noble/InRelease": "sha256:cdb2f31d809f589719a53c6ad15f255b27569c4059542ada282aaa21b8e164b0"
+   }
+  },
+  {
+   "to": "resolute",
+   "fired": [],
+   "fired_names": [],
+   "ok": true,
+   "seconds": 162.1,
+   "sources": {
+    "http://archive.ubuntu.com/ubuntu/dists/resolute/InRelease": "sha256:45f95ce276cdba3e41870516a130e03c58b8b7a79e9546b0efe9e526d255740c"
+   }
+  }
+ ],
+ "start_services": [
+  "README",
+  "bind9",
+  "cron",
+  "exim4",
+  "halt",
+  "killprocs",
+  "kmod",
+  "mysql",
+  "networking",
+  "ondemand",
+  "procps",
+  "rc",
+  "rc.local",
+  "rcS",
+  "reboot",
+  "rsync",
+  "sendsigs",
+  "single",
+  "skeleton",
+  "ssh",
+  "sudo",
+  "udev",
+  "umountfs",
+  "umountnfs.sh",
+  "umountroot",
+  "urandom"
+ ],
+ "failed_stage": "",
+ "final": {
+  "release": "DISTRIB_ID=Ubuntu\nDISTRIB_RELEASE=26.04\nDISTRIB_CODENAME=resolute\nDISTRIB_DESCRIPTION=\"Ubuntu 26.04 LTS\"",
+  "passed": [
+   "cron",
+   "current",
+   "db",
+   "dns",
+   "mail",
+   "pkgdb",
+   "python",
+   "services",
+   "ssh",
+   "tools"
+  ],
+  "failed": [],
+  "failed_logs": {}
+ },
+ "obsolete_before": 18,
+ "obsolete_after": 0,
+ "model_calls": 0,
+ "log_sha256": "sha256:8d805472894313ee126ca52aa186f54369a5fb8e1bd96a09b0490430a5281e14"
+}

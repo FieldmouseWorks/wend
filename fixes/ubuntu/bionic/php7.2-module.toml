@@ -1,0 +1,28 @@
+# Discovered by agent (claude-code / opus 5.5) on ubuntu/trusty-web.
+schema = "wend.fix/0"
+family = "ubuntu"
+hop = "bionic"
+when = { installed = "libapache2-mod-php7.0" }
+restores = ["box:web", "box:php", "current"]
+adds = []
+
+[[post]]
+op = "install"
+packages = ["php7.2-cli", "libapache2-mod-php7.2"]
+
+[[post]]
+op = "apache.disable"
+kind = "mod"
+name = "php7.0"
+
+[[post]]
+op = "apache.enable"
+kind = "mod"
+name = "php7.2"
+
+[meta]
+name = "php7.2-module"
+author = "agent (claude-code / opus 5.5)"
+found_on = "ubuntu/trusty-web"
+fires_on = ["ubuntu/trusty-web"]
+reason = "Bionic ships PHP 7.2, not 7.0, so the vhost is still served by a PHP no release ships any more. Install 7.2's CLI and Apache module, and swap the module (7.0 and 7.2 both define php7_module, so only one may load)."

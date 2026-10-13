@@ -1,0 +1,23 @@
+# Discovered by agent (claude-code / opus 5.5) on ubuntu/trusty-web.
+schema = "wend.fix/0"
+family = "ubuntu"
+hop = "resolute"
+when = { installed = "libapache2-mod-php8.3" }
+restores = ["box:web", "box:php", "current"]
+adds = []
+
+[[post]]
+op = "install"
+packages = ["php8.5-cli", "libapache2-mod-php8.5"]
+
+[[post]]
+op = "apache.enable"
+kind = "mod"
+name = "php8.5"
+
+[meta]
+name = "php8.5-module"
+author = "agent (claude-code / opus 5.5)"
+found_on = "ubuntu/trusty-web"
+fires_on = ["ubuntu/trusty-web"]
+reason = "Resolute drops PHP 8.3, and the dist-upgrade removes it with its Apache module, leaving no PHP. Install PHP 8.5's CLI and Apache module, which resolute ships, and enable the module."

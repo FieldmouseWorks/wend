@@ -1,0 +1,28 @@
+# Discovered by agent (claude-code / opus 5.5) on ubuntu/trusty-web.
+schema = "wend.fix/0"
+family = "ubuntu"
+hop = "focal"
+when = { installed = "libapache2-mod-php7.2" }
+restores = ["box:web", "box:php", "current"]
+adds = []
+
+[[post]]
+op = "install"
+packages = ["php7.4-cli", "libapache2-mod-php7.4"]
+
+[[post]]
+op = "apache.disable"
+kind = "mod"
+name = "php7.2"
+
+[[post]]
+op = "apache.enable"
+kind = "mod"
+name = "php7.4"
+
+[meta]
+name = "php7.4-module"
+author = "agent (claude-code / opus 5.5)"
+found_on = "ubuntu/trusty-web"
+fires_on = ["ubuntu/trusty-web"]
+reason = "Focal ships PHP 7.4, not 7.2, so the site still runs on a PHP no release ships. Install 7.4's CLI and Apache module and swap the module (both define php7_module, so only one may load)."
