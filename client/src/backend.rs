@@ -333,8 +333,16 @@ fn addon_repos(adapter: &Doc, release: &str, shim: &str, file: &str, prefix: Opt
 /// Shell that sets A to |vendor|vendor|... for every add-on whose marker package is installed.
 fn addon_vendors(adapter: &Doc) -> String {
     let mut out = String::from("A='|'; ");
-    for a in get(adapter, "addons").and_then(Value::as_object).into_iter().flatten().map(|(_, a)| a) {
-        let (m, v) = (get(a, "marker").map(scalar).unwrap_or_default(), get(a, "vendor").map(scalar).unwrap_or_default());
+    for a in get(adapter, "addons")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .map(|(_, a)| a)
+    {
+        let (m, v) = (
+            get(a, "marker").map(scalar).unwrap_or_default(),
+            get(a, "vendor").map(scalar).unwrap_or_default(),
+        );
         out.push_str(&format!("rpm -q {m} >/dev/null 2>&1 && A=\"${{A}}{v}|\"; "));
     }
     out
@@ -347,12 +355,18 @@ pub fn addon_repo_ids(adapter: &Doc) -> Vec<(String, String)> {
     for (n, a) in get(adapter, "addons").and_then(Value::as_object).into_iter().flatten() {
         let repos = get(a, "repos").and_then(Value::as_object);
         for (rel, u) in repos.into_iter().flatten() {
-            ids.push((format!("{rel}-{n}"), format!("https://{}/repodata/repomd.xml", scalar(u))));
+            ids.push((
+                format!("{rel}-{n}"),
+                format!("https://{}/repodata/repomd.xml", scalar(u)),
+            ));
         }
         for r in rels.into_iter().flatten().map(|(_, r)| r) {
             let from = get(r, "transit").and_then(|t| get(t, "from")).and_then(Value::as_str);
             if let Some(u) = from.and_then(|f| repos.and_then(|rs| rs.get(f))) {
-                ids.push((format!("boot-{n}"), format!("https://{}/repodata/repomd.xml", scalar(u))));
+                ids.push((
+                    format!("boot-{n}"),
+                    format!("https://{}/repodata/repomd.xml", scalar(u)),
+                ));
             }
         }
     }
@@ -669,14 +683,23 @@ fn transit(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
         .join(" ");
     let remove = str_of(s, "remove")?;
     let relpkg = str_of(boot, "release_package")?;
-    let mut succ: Vec<String> = table(t, "repos")?.values().map(|u| format!("{shim}/{}", scalar(u))).collect();
-    for a in get(adapter, "addons").and_then(Value::as_object).into_iter().flatten().map(|(_, a)| a) {
+    let mut succ: Vec<String> = table(t, "repos")?
+        .values()
+        .map(|u| format!("{shim}/{}", scalar(u)))
+        .collect();
+    for a in get(adapter, "addons")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .map(|(_, a)| a)
+    {
         if let Some(u) = get(a, "repos").and_then(|r| get(r, target)) {
             succ.push(format!("{shim}/{}", scalar(u)));
         }
     }
     let from = str_of(boot, "from")?;
-    let mut repo_lines = format!("printf '{old_repos}' > {b}/old/boot.repo; printf '{new_repos}' > {b}/new/ladder.repo");
+    let mut repo_lines =
+        format!("printf '{old_repos}' > {b}/old/boot.repo; printf '{new_repos}' > {b}/new/ladder.repo");
     for x in [
         addon_repos(adapter, from, shim, &format!("{b}/old/boot.repo"), Some("boot")),
         addon_repos(adapter, target, shim, &format!("{b}/new/ladder.repo"), None),

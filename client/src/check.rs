@@ -301,7 +301,9 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
     if let Some(Value::Object(addons)) = get(a, "addons") {
         let rels = get(a, "releases");
         for (n, ad) in addons {
-            let fields = ad.as_object().map(|o| o.keys().map(String::as_str).collect::<BTreeSet<_>>());
+            let fields = ad
+                .as_object()
+                .map(|o| o.keys().map(String::as_str).collect::<BTreeSet<_>>());
             let repos_ok = get(ad, "repos").and_then(Value::as_object).is_some_and(|rs| {
                 !rs.is_empty()
                     && rs.iter().all(|(r, u)| {
