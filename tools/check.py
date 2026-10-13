@@ -37,7 +37,7 @@ SAFE_VALUE = r"[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*"
 REPO_URL = r"[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)+"
 ADAPTER_KEYS = {"schema", "family", "backend", "release_file", "ladder", "may_skip", "harness_owned", "writable",
                 "managed", "force", "releases", "mirror", "hop", "predicates", "pm_options", "box", "ops", "checks",
-                "kv", "hardware", "addons", "runtimes"}
+                "kv", "hardware", "addons", "runtimes", "relocate"}
 CPU_LEVELS = ("x86-64", "x86-64-v2", "x86-64-v3")  # SPEC "Hardware preflight"
 HARDWARE_KEYS = {"cpu", "ram_mib", "disk_mib", "boot_mib", "drivers", "note"}
 OLD_KERNELS = ("running", "autoremove")
@@ -132,7 +132,24 @@ def check_adapter(a, where):
     for k in ("kernel_before", "kernel_after"):
         if k in a.get("hop", {}) and not (isinstance(a["hop"][k], list) and all(isinstance(c, str) for c in a["hop"][k])):
             errs.append(f"{where}: hop.{k} must be a list of commands")
+    errs += check_relocate(a, where)
     return errs
+
+
+# SPEC "Relocate": the harness's steps, in the order tools/vm.py runs them, then the commands it runs between boots
+RELOCATE_STEPS = ("preflight", "refresh", "place", "copy", "fixup", "flip", "release", "cleanup")
+RELOCATE_COMMANDS = ("booted", "arm", "commit_trial", "rollback_next")
+
+
+def check_relocate(a, where):
+    r = a.get("relocate")
+    if r is None:
+        return []
+    if not isinstance(r, dict) or set(r) != set(RELOCATE_STEPS + RELOCATE_COMMANDS):
+        return [f"{where}: relocate needs exactly {sorted(RELOCATE_STEPS + RELOCATE_COMMANDS)}"]
+    errs = [f"{where}: relocate.{k} must be a list of commands" for k in RELOCATE_STEPS
+            if not (isinstance(r[k], list) and r[k] and all(isinstance(c, str) for c in r[k]))]
+    return errs + [f"{where}: relocate.{k} must be a command" for k in RELOCATE_COMMANDS if not isinstance(r[k], str)]
 
 
 def booted_releases(a):

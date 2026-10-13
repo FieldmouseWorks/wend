@@ -817,6 +817,7 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear. Whatever a `pattern`, `list` or `table` says, every value a fix passes through one must also match `[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*`: no quote, whitespace, backslash, glob character, `%`, any of `` $`;&|<>(){}~ ``, or leading `-` |
 | `[checks]` | universal health checks: `pkgdb` is a command; `current` and `services` are described in words and built by the harness from the box |
 | `[hardware]` | required: what a machine needs before a route boots it into each release (see "Hardware preflight"): `boot`, `old_kernels`, and a table per release a route can boot into |
+| `[relocate]` | optional: relocate's steps (lists of scripts: `preflight`, `refresh`, `place`, `copy`, `fixup`, `flip`, `release`, `cleanup`) and the commands between boots (`booted`, `arm`, `commit_trial`, `rollback_next`); see "Relocate" |
 | `[box]` | how to build a fresh box of this family (rpm: `seeds`, the packages to bootstrap a root from; apt: optional `debootstrap_script`, a script name under the host's `/usr/share/debootstrap/scripts`) |
 
 These checks narrow what an adapter lets fixes do (ops, force flags, argument values). They don't judge an adapter's
@@ -1411,6 +1412,73 @@ The rules:
   extended-attribute reference counts too high. A userspace fsck cleans the same orphans correctly, but EL7 mounts
   the root before any fsck, and EL9's forced fsck then stops the boot. Only PID 1's own files stay orphaned, and
   those come through clean. A client on a real machine must stop the processes the same way.
+
+## Relocate (VM tier for now)
+
+Relocate is the first half of rebuild and carry (`docs/rebuild-and-carry.md`): copy the running root onto a fresh
+filesystem beside it, boot the copy once on trial, keep the old root untouched as the rollback. It's for machines a
+route's kernels can't read: CentOS 7 installed from 7.0 to 7.2 media has XFS v4 on `/` and `/boot`, which EL10's
+kernel can't mount, and XFS has no in-place conversion. The copy is the same machine on XFS v5 (made by the running
+release's own `mkfs.xfs`, so every kernel from the running one on mounts it); routes then walk it as they walk any box.
+Harness work, like the kernel steps: the adapter's `[relocate]` table holds the commands, fixes can't reach them, and
+it's reviewed as a spec change. Built for EL7 on BIOS with GRUB 2, `/` on LVM, `/boot` a plain partition, and the
+new root on a whole empty disk the owner names. Everything else is refused.
+
+The steps, in order, each a list of scripts that run inside the booted machine and stop at the first failure (`set
+-e`), then `cleanup` whatever happened:
+
+- `preflight` refuses, naming why, before anything is written: UEFI; no GRUB 2 for BIOS or no `rsync`; `/boot` not a
+  plain partition of its own; `/` not on LVM; a stub or a `wend-root` LV from an earlier relocate; LUKS anywhere;
+  another mounted XFS v4 filesystem (carrying more than `/` and `/boot` isn't built); an XFS filesystem in fstab
+  that isn't mounted; a newer kernel than the running one, or yum running; and a new disk that isn't a whole disk
+  with no partitions, no signature, not mounted, not a PV, not the boot disk, and at least 1.2 times what `/` and
+  `/boot` use plus `{route_mib}` (what the route's hops need). It writes the facts the later steps and boots read
+  to `/var/lib/wend/relocate.env` (the volume group and the old LV, the boot disk, the old `/boot`'s UUID, the new
+  disk), which the copy carries.
+- `refresh`: the running release's own `grub2-install` onto the boot disk, with the old `/boot/grub2` as its prefix.
+  EL 7.0 and 7.1's `core.img` can't read XFS v5, and every module under a prefix has to come from `core.img`'s build.
+  It's the only write to the boot disk's MBR, and it runs before the copy so the copy carries the same modules.
+- `place`: the new disk becomes a PV in the root's volume group, with one LV `wend-root` filling it, made XFS v5
+  (`-m crc=1 -n ftype=1`, checked) and mounted at `/run/wend/new`.
+- `copy`: rsync (`-aHAXS --numeric-ids`) from a bind mount of `/` (which shows what mounts hide and nothing mounted
+  under it), and the old `/boot` into the copy's `/boot`. Once live, then again with `--delete` after every running
+  service is stopped except what keeps the machine reachable and safe (sshd, NetworkManager, firewalld, auditd, dbus,
+  polkit, systemd's own). They stay stopped until the trial boot, so downtime is the second pass and one boot.
+- `fixup`, in the copy only: fstab names the new root by UUID and drops `/boot` (a directory in the copy now); the
+  kernel line's `rd.lvm.lv=` names the new LV instead of the old; every kernel gets an initramfs that isn't host-only
+  (an old one activates only the old LV), and one that can't is dropped from the copy unless it's the running kernel;
+  `grub2-mkconfig` writes the copy's config, which has to boot the new root; SELinux labels are fixed offline from
+  outside (`setfiles -r`), never with `/.autorelabel` (EL7's relabel reboots, ending the trial).
+- `flip`: the old `/boot/grub2/grub.cfg` moves to `grub.cfg.wend-old` and a stub takes its place. The stub's entry 0
+  finds the new root by UUID and sets `prefix` there before loading its config (so every module and the `grubenv`
+  after that are the new root's); entry 1 loads the old config as it was. The stub keeps its own variables in the old
+  `/boot`'s `grubenv`, never the configs' `saved_entry` or `next_entry`: `wend_next`, if 0 or 1, is a one-shot boot
+  GRUB clears before taking it; otherwise `wend_default`, and the old root unless it says 0. The flip leaves the old
+  root the default, arms the trial (`wend_next=0`) as its last write, then freezes and thaws `/boot` so the XFS log
+  is written home (GRUB doesn't replay it). Nothing on the old root changes.
+- `release` unmounts everything under `/run/wend` and checks nothing is left. `cleanup` does the same after a failure,
+  and starts the stopped services again if the flip never happened.
+
+Between boots: `booted` says which root is up (`new`, which must be XFS v5, or `old`); `arm` tries the new root once
+more from the old one; `commit_trial` makes the new root the default (it mounts the old `/boot`, which the copy's
+fstab doesn't); `rollback_next` boots the old root once.
+
+The copy's `fixup` chroot sees the machine's own `/dev` (bound), `/proc` and `/sys`, all unmounted before the step
+ends and checked against `/proc/self/mountinfo` before the labels are fixed. That's an exception to the sandbox rules
+above, and it's reachable only from the adapter's `[relocate]` table, inside the machine being relocated, never a box
+on a harness host. Nothing under `/run/wend/new` is ever deleted: a failed relocate leaves the LV for a look.
+
+`tools/vm.py --extra-disk GB relocate BOX` proves it on a fresh copy of a box (with `--root-fs xfs-v4 --lvm`, a 7.0
+to 7.2 install), the new root on the first extra disk. After the steps, each followed by which root came up, the box's
+checks, its network and its firmware: the trial boot (new), a hard reset from outside, as a power cut (old: the trial
+was one-shot), the trial again (new), commit to the trial and reboot (new), a one-shot rollback (old), and one more
+reboot (new). Its run goes to `.wend/vm/` (schema `wend.vmrelocate/0`), with each stage, how long the steps and the
+trial boot took, and what the new root uses. `tools/test_relocate.py` checks preflight's refusals, the copy's fstab and
+kernel line, and the flip (with the real `grub-editenv`, and `grub-script-check` on the stub) without a machine.
+
+Not built yet: free extents in the volume group instead of a disk, a root on a plain partition, other v4 filesystems,
+UEFI (the same stub on the ESP), the route's GRUB reinstall at EL8 (see the doc), the client's preflight verdict,
+`wend commit` and `wend rollback`.
 
 ## Open questions
 

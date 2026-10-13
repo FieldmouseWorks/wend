@@ -13,6 +13,10 @@ not runs/ (runs/ holds what CI proved).
   python3 tools/vm.py replay ROUTE BOX     walk ROUTE on a fresh copy of it, rebooting after every hop
   python3 tools/vm.py replay ROUTE BOX --from RUN HOP
                                            the same from RUN's disk after the hop before HOP (partial-pass at best)
+  python3 tools/vm.py --extra-disk GB relocate BOX
+                                           relocate a fresh copy of BOX onto the first extra disk and prove the trial
+                                           boot, a reset back to the old root, commit and a rollback boot (SPEC
+                                           "Relocate"; with --root-fs xfs-v4 --lvm, an EL 7.0-7.2 install)
   --uefi (before the command)              the same on UEFI firmware (OVMF) instead of BIOS: its own box, install
                                            and NVRAM, and after every boot the guest must still be running on UEFI
   --root-fs FS, --lvm, --extra-disk GB     (before the command, EL7 kickstart on) the box installed another way:
@@ -34,6 +38,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -231,6 +236,17 @@ class Guest:
             self.ssh("setsid nohup sh /root/.wend-reset >/dev/null 2>&1 </dev/null &", timeout=30)
             time.sleep(40)
         return self.wait_ssh() and self.boot_id() not in (None, before), forced
+
+    def reset(self):
+        """A hard reset from outside, as a power cut would be (QEMU's monitor): no sync, no shutdown. Returns whether
+        the guest came back on a new boot."""
+        before = self.boot_id()
+        with socket.socket(socket.AF_UNIX) as s:
+            s.connect(self.monitor_path)
+            s.sendall(b"system_reset\n")
+            time.sleep(1)
+        time.sleep(20)
+        return before is not None and self.wait_ssh() and self.boot_id() not in (None, before)
 
     def stop(self):
         if not self.running():
@@ -731,6 +747,101 @@ def replay(route_path, box_id, resume=None):
     return 0 if run["result"] == "pass" else 1
 
 
+def relocate(box_id):
+    """Relocate (SPEC "Relocate"): on a fresh copy of the box, the adapter's [relocate] steps copy the running root onto
+    the first extra disk and flip the boot to it for one trial. Then, each followed by a check of which root came up
+    (and the box's checks, its network and its firmware): the trial boot (the new root), a hard reset (the trial was
+    one-shot: the old root), the trial again (the new root), commit to the trial and reboot (the new root, now the
+    default), a one-shot rollback (the old root) and one more reboot (the new root). No route: the relocated root
+    walks a route on its own later."""
+    d, box_doc = build(box_id)
+    a = guest_adapter(box_doc["family"])
+    r = a.get("relocate")
+    if not r:
+        raise SystemExit(f"adapters/{box_doc['family']}.toml has no [relocate] table")
+    if FIRMWARE != "bios":
+        raise SystemExit("relocate is BIOS-only for now (docs/rebuild-and-carry.md: UEFI comes after its own proof)")
+    if not LAYOUT["extra_disks"]:
+        raise SystemExit("relocate needs a disk for the new root: --extra-disk GB")
+    hw = hardware(a, box_doc["release"])
+    first = FIRST_DISK[hw[0]]
+    fills = {"new_disk": f"/dev/{first[:-1]}{chr(ord(first[-1]) + 1)}", "route_mib": 0}
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    tag = "-".join(filter(None, [FIRMWARE, layout_tag()]))
+    out_dir = os.path.join(ROOT, ".wend", "vm", f"{stamp}-{box_id.replace('/', '_')}-{tag}-relocate-{os.getpid()}")
+    os.makedirs(out_dir)
+    disk = os.path.join(out_dir, "relocate.qcow2")
+    overlay(os.path.join(d, "base.qcow2"), disk)
+    g = Guest(disk, os.path.join(d, "key"), box_doc.get("vm", {}).get("ssh_port", 22), hw)
+    g.start()
+    stages = []
+    run = {"schema": "wend.vmrelocate/0", "box": box_id, "started": stamp, "firmware": FIRMWARE,
+           "layout": {k: v for k, v in LAYOUT.items() if v}, "new_disk": fills["new_disk"], "stages": stages,
+           "runner": {"kind": "vm", "host": os.uname().nodename, "kernel": os.uname().release}}
+
+    def finish(result):
+        run["result"] = result
+        json.dump(run, open(os.path.join(out_dir, "run.json"), "w"), indent=1)
+        log(f"{result.upper()}: relocate {box_id}; run and disk in {os.path.relpath(out_dir, ROOT)}")
+        g.stop()  # a failed stage's disk and console stay for a look
+        return 0 if result == "pass" else 1
+
+    if not g.wait_ssh():
+        stages.append({"stage": "start", "ok": False, "console_tail": open(g.console, errors="replace").read()[-4000:]})
+        return finish("fail")
+    start_net = g.ssh(NET)[1]
+    if f"default via {GUEST_HOST}" not in start_net or ADDR not in start_net:  # never compare two empty reads
+        raise RuntimeError(f"the box's network can't be read at the start (no `ip`?): {start_net!r}")
+    before = checks(g, box_doc, a)
+
+    def came_up(name, want, back, forced=False, **extra):
+        """Which root the guest came up on after a stage, and whether it's the box it was."""
+        h = {"stage": name, "want": want, "came_back": back, "forced": forced, **extra}
+        if back:
+            after = checks(g, box_doc, a)
+            h["booted"] = g.ssh(r["booted"])[1].strip()
+            h["lost"] = sorted(n for n, (good, _) in before.items() if good and not after.get(n, (False,))[0])
+            h["failed_logs"] = {n: after[n][1][-1500:] for n in h["lost"]}
+            h["net_kept"] = g.ssh(NET)[1] == start_net
+            h["firmware"] = g.ssh(FW_NOW)[1].strip()
+            h["ok"] = h["booted"] == want and not h["lost"] and h["net_kept"] and h["firmware"] == FIRMWARE
+        else:
+            h["ok"] = False
+            h["console_tail"] = open(g.console, errors="replace").read()[-4000:]
+        log(f"{name}: {'OK' if h['ok'] else 'FAILED'} (came back {back}{' (forced)' if forced else ''}, root "
+            f"{h.get('booted')!r}, wanted {want!r}, lost {h.get('lost')}, network kept {h.get('net_kept')})")
+        stages.append(h)
+        return h["ok"]
+
+    def between(name, cmd):
+        rc, out = g.ssh(cmd)
+        if rc:
+            stages.append({"stage": name, "ok": False, "output": out[-3000:]})
+            log(f"{name}: FAILED ({out[-300:]})")
+        return rc == 0
+
+    t0 = time.time()
+    ok, steps = run_hop(g, [backends.fill(c, fills) for k in check.RELOCATE_STEPS if k != "cleanup" for c in r[k]],
+                        [backends.fill(c, fills) for c in r["cleanup"]])
+    open(os.path.join(out_dir, "relocate.steps.log"), "w").write(steps)
+    stages.append({"stage": "relocate", "ok": ok, "seconds": round(time.time() - t0)})
+    log(f"relocate: {'OK' if ok else 'FAILED'} in {round(time.time() - t0)} s")
+    if not ok:
+        return finish("fail")
+    t0 = time.time()
+    back, forced = g.reboot()
+    if not came_up("trial", "new", back, forced, seconds=round(time.time() - t0)):
+        return finish("fail")
+    if not came_up("reset during the trial", "old", g.reset()):
+        return finish("fail")
+    for name, cmd, want in (("trial again", r["arm"], "new"), ("commit to the trial", r["commit_trial"], "new"),
+                            ("rollback once", r["rollback_next"], "old"), ("after the rollback", "true", "new")):
+        if not between(name, cmd) or not came_up(name, want, *g.reboot()):
+            return finish("fail")
+    run["new_root_used_mib"] = g.ssh("df -Pm / | awk 'NR == 2 {print $3}'")[1].strip()
+    return finish("pass")
+
+
 def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net):
     """The route's finish step, as the chroot walk's prune (tools/walk.py): purge the packages the target release no
     longer ships, then autoremove, splitting the set in halves whenever a step fails or a passing check is lost.
@@ -843,6 +954,8 @@ def main(args):
         return replay(args[1], args[2])
     if args[:1] == ["replay"] and len(args) == 6 and args[3] == "--from":
         return replay(args[1], args[2], (args[4], args[5]))
+    if args[:1] == ["relocate"] and len(args) == 2:
+        return relocate(args[1])
     return __doc__
 
 
