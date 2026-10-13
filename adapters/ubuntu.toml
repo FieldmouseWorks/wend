@@ -182,8 +182,9 @@ services = "no explicitly installed, non-required package that ships an init scr
 # host-only and far smaller), its 28.6 MiB of package files, the 5 MiB, and a little.
 # `old_kernels = "running"`: hop.kernel_before purges every kernel older than the running one before the
 # transaction, so the new kernel only ever sits beside the running one (apt's autoremove would keep two, and trusty's
-# guided-LVM /boot of 243 MB stops at focal). `boot`: trusty-web and trusty-db passed trusty -> resolute on UEFI
-# (tools/vm.py --uefi, OVMF without Secure Boot) as on BIOS, rebooting onto UEFI at every hop (wend#13).
+# guided-LVM /boot of 243 MB stops at focal). `boot`: every box on the route (trusty-web, trusty-db,
+# trusty-web-updated) passed trusty -> resolute on UEFI (tools/vm.py --uefi, OVMF without Secure Boot) as on BIOS,
+# rebooting onto UEFI at every hop (wend#13); Secure Boot isn't proven.
 boot = ["bios", "uefi"]
 old_kernels = "running"
 

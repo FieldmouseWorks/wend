@@ -78,33 +78,45 @@ pub fn gather() -> Result<Value, String> {
 /// The filesystems driver tables say whether a kernel mounts (`fs` lines); a mount of any other type isn't checked.
 const FILESYSTEMS: &[&str] = &["ext2", "ext3", "ext4", "xfs", "btrfs", "reiserfs", "jfs"];
 
-/// Every mounted disk filesystem preflight checks (one entry per filesystem; bind mounts of it are left out): where it
-/// is mounted, its device, its type, and from its superblock whether an XFS is the old v4 format and an ext2/3/4's
-/// inode size (null when the device can't be read).
 /// The firmware the machine booted by: `bios`, `uefi`, or `uefi-secureboot` when Secure Boot is on or its state
 /// can't be read. A Secure Boot chain is a separate claim (shim, signed GRUB and kernels across every hop, the
-/// firmware's revocation list), so an unknown state fails closed. efivarfs holds 4 attribute bytes, then the value;
-/// the older sysfs interface (trusty's 3.13 without efivarfs mounted) holds the value alone in `data`.
+/// firmware's revocation list), so an unknown state fails closed. Read as the kernel's EFI stub does
+/// (efi_get_secureboot_mode): a firmware without Secure Boot has no `SecureBoot` variable (OVMF's non-secboot
+/// builds, older UEFI), which means off; only a variable store wend can't read is unknown. efivarfs holds 4 attribute
+/// bytes, then the value; the older sysfs interface (trusty's 3.13 without efivarfs mounted) the value alone in `data`.
 fn firmware(sys: &Path) -> &'static str {
-    if !sys.join("firmware/efi").exists() {
+    let efi = sys.join("firmware/efi");
+    if !efi.exists() {
         return "bios";
     }
     const SB: &str = "SecureBoot-8be4df61-93ca-11d0-aa0d-00e098032b8c";
-    let on = std::fs::read(sys.join("firmware/efi/efivars").join(SB))
-        .ok()
-        .and_then(|b| b.get(4).copied())
-        .or_else(|| {
-            std::fs::read(sys.join("firmware/efi/vars").join(SB).join("data"))
-                .ok()
-                .and_then(|b| b.first().copied())
-        });
-    if on == Some(0) {
+    // the first variable interface the kernel offers that lists any variable
+    let listed = |d: &Path| std::fs::read_dir(d).is_ok_and(|mut r| r.next().is_some());
+    let value = if listed(&efi.join("efivars")) {
+        match std::fs::read(efi.join("efivars").join(SB)) {
+            Ok(b) => b.get(4).copied(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(0),
+            Err(_) => None,
+        }
+    } else if listed(&efi.join("vars")) {
+        match std::fs::read(efi.join("vars").join(SB).join("data")) {
+            Ok(b) => b.first().copied(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(0),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    if value == Some(0) {
         "uefi"
     } else {
         "uefi-secureboot"
     }
 }
 
+/// Every mounted disk filesystem preflight checks (one entry per filesystem; bind mounts of it are left out): where it
+/// is mounted, its device, its type, and from its superblock whether an XFS is the old v4 format and an ext2/3/4's
+/// inode size (null when the device can't be read).
 fn mounts() -> Vec<Value> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
     let mut seen = std::collections::HashSet::new();
@@ -686,8 +698,7 @@ fn vm_hint(level: usize) -> String {
     )
 }
 
-/// The verdict for one route on one machine's facts: every hop's problems (things that would leave the machine
-/// unbootable or unreachable), its notes, and the furthest release it can land on.
+/// How a refusal names a firmware mode.
 fn firmware_name(boot: &str) -> String {
     match boot {
         "uefi-secureboot" => "UEFI with Secure Boot on (or its state unreadable)".into(),
@@ -695,6 +706,8 @@ fn firmware_name(boot: &str) -> String {
     }
 }
 
+/// The verdict for one route on one machine's facts: every hop's problems (things that would leave the machine
+/// unbootable or unreachable), its notes, and the furthest release it can land on.
 pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, String> {
     check_facts(facts)?;
     let fam = str_of(route, "family")?;
@@ -1264,11 +1277,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(&t);
         std::fs::create_dir_all(&t).unwrap();
         assert_eq!(firmware(&t), "bios");
-        std::fs::create_dir_all(t.join("firmware/efi")).unwrap();
-        assert_eq!(firmware(&t), "uefi-secureboot", "no readable state fails closed");
+        std::fs::create_dir_all(t.join("firmware/efi/efivars")).unwrap();
+        assert_eq!(
+            firmware(&t),
+            "uefi-secureboot",
+            "no variable store to read fails closed"
+        );
+        // the store as OVMF without Secure Boot leaves it (a real trusty-web-updated guest): variables, none of them
+        // SecureBoot, which the kernel's EFI stub reads as off ("secureboot: Secure boot disabled")
+        std::fs::write(
+            t.join("firmware/efi/efivars/BootOrder-8be4df61-93ca-11d0-aa0d-00e098032b8c"),
+            [7u8, 0, 0, 0, 2, 0],
+        )
+        .unwrap();
+        assert_eq!(
+            firmware(&t),
+            "uefi",
+            "no SecureBoot variable is a firmware without Secure Boot"
+        );
+        std::fs::remove_dir_all(t.join("firmware/efi/efivars")).unwrap();
         std::fs::create_dir_all(t.join("firmware/efi/vars").join(sb)).unwrap();
         std::fs::write(t.join("firmware/efi/vars").join(sb).join("data"), [0u8]).unwrap();
         assert_eq!(firmware(&t), "uefi");
+        std::fs::write(t.join("firmware/efi/vars").join(sb).join("data"), [1u8]).unwrap();
+        assert_eq!(firmware(&t), "uefi-secureboot", "the sysfs interface saying on");
         std::fs::create_dir_all(t.join("firmware/efi/efivars")).unwrap();
         std::fs::write(t.join("firmware/efi/efivars").join(sb), [6u8, 0, 0, 0, 1]).unwrap();
         assert_eq!(firmware(&t), "uefi-secureboot", "efivarfs wins, and says on");
