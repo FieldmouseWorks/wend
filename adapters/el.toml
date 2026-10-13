@@ -280,8 +280,13 @@ set = false
 # adapters/drivers/el/<release>.txt, the PCI disk controllers and network cards the release's kernel drives
 # and the filesystems it mounts (tools/hwdata.py builds it from the kernel package itself).
 # `boot_mib`, the space the release's kernel takes in /boot: its package's /boot files (vmlinuz, System.map, config,
-# symvers; measured) and a host-only initramfs (an estimate: a container can't build one for real hardware; CentOS 6's
-# dracut builds a generic one). `old_kernels = "running"`: hop.kernel_before removes every kernel but the running one
+# symvers; measured) and a host-only initramfs. centos7: measured on the VM tier's centos7-lamp (3.10.0-1160.119.1:
+# 28.3 MiB without its kdump image, 17.7 of it the initramfs) plus 3 MiB for an LVM or md root. centos6, alma9 and
+# alma10: estimates (a container can't build a host-only initramfs for real hardware; CentOS 6's dracut builds a
+# generic one); alma9's package files are 24.1 MiB, alma10's 24.9. alma9's also holds 8 MiB for the rescue image: the
+# first kernel a BLS release installs finds no rescue loader entry, so dracut-config-rescue's 51-dracut-rescue.install
+# copies its own vmlinuz (14.5 MiB) over an EL7 box's vmlinuz-0-rescue (6.5 MiB) and keeps the EL7 rescue initramfs
+# it finds; from then on the entry exists and alma10 adds nothing. `old_kernels = "running"`: hop.kernel_before removes every kernel but the running one
 # (and GRUB's default) before the hop installs its own, so the new kernel sits beside one other.
 boot = ["bios"]
 old_kernels = "running"
@@ -297,14 +302,14 @@ drivers = "sha256:5d8c4017ddb11282325cd8f6443f39da37cd0c23598ce12c63375cd058431a
 cpu = "x86-64"
 ram_mib = 1024
 disk_mib = 2048
-boot_mib = 45
+boot_mib = 32
 drivers = "sha256:965df193dc31f5ed07b8bf88088d8f88371058bdf99fef77c3dfe74965403335"
 
 [hardware.alma9]
 cpu = "x86-64-v2"
 ram_mib = 1536
 disk_mib = 4096
-boot_mib = 70
+boot_mib = 78
 drivers = "sha256:7f5cd70e88962874ef8a0bb5143f617b54bdd77d874ce0a09e68911a0957eb28"
 
 [hardware.alma10]
