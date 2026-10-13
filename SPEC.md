@@ -1015,7 +1015,7 @@ start, when the newest installed kernel isn't the one running (or the query name
 runs on the firmware the replay boots, or when a check that passed before it fails after the reboot. Its disk and serial console are kept.
 
 The VM box differs from the chroot box in ways a replay can show: it has what the installer adds (`@core`, a kernel, a
-bootloader, a 200 MB `/boot`), SELinux is permissive and the firewall off (kickstart `selinux --permissive`,
+bootloader, the `/boot` its installer makes by default: 200 MB on CentOS 5, 500 MB on CentOS 7), SELinux is permissive and the firewall off (kickstart `selinux --permissive`,
 `firewall --disabled`), and `customize` runs at the end of the install (after `set_release`, with the mirror shim
 where the guest sees the host), before the release's last updates, not after them. The adapter gives the kickstart
 lines that differ by release (EL7's `%end`, GRUB 2 and `net.ifnames=0`, so the NIC is `eth0` as the boxes expect). A Debian VM box has what debian-installer's minimal install adds (a kernel metapackage, GRUB legacy on
@@ -1049,7 +1049,8 @@ The rules:
   `pxeboot` dir in it (the shim answers single byte ranges, which anaconda uses to read package headers), `packages`
   (what the install needs besides the box's: the bootloader), `ks_end` (sections end with `%end`), `append`
   (kernel arguments for the installer and the installed system) and `ifname` (the installer's boot line names the NIC
-  by MAC, `ifname=eth0:<mac>`, so EL7's installer pins the ifcfg to it with `HWADDR`, as a box booted that way has). apt (Debian,
+  by MAC, `ifname=eth0:<mac>`, so EL7's installer pins the ifcfg to it with `HWADDR`, as a box booted that way has)
+  and `boot_mib`, the `/boot` the release's installer makes by default (EL7: 500; 200 when unset). apt (Debian,
   Ubuntu): the `netboot` dir under the start release's mirror, `preseed` (the version's own preseed lines),
   `packages` (what the install needs besides the box's), `release_pocket_only` and `late` (shell the installer runs
   at the end, for the bootloader's serial console). `disk` (`virtio`, `lsi53c895a`) and `nic` (`virtio`, `e1000`) name

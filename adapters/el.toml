@@ -80,10 +80,11 @@ major = 7
 pm = "yum"
 repos = { base = "vault.centos.org/7.9.2009/os/x86_64", updates = "vault.centos.org/7.9.2009/updates/x86_64" }
 # anaconda's EL7 kickstart: sections end with %end, GRUB 2, and eth0 (net.ifnames=0) as the box's network role expects,
-# named by MAC on the installer's boot line (ifname), so the installer writes the HWADDR pin the box has;
+# named by MAC on the installer's boot line (ifname), so the installer writes the HWADDR pin the box has; /boot the
+# 500 MiB EL7's installer makes by default (boot_mib);
 # EL7's installer installs on UEFI (an EFI system partition, grub2-efi and shim) and makes ext3, XFS v5 or, with
 # mkfs options, XFS v4 (box [vm].root_fs)
-install = { tree = "vault.centos.org/7.9.2009/os/x86_64", pxeboot = "images/pxeboot", packages = ["grub2"], ks_end = true, append = "net.ifnames=0 biosdevname=0", ifname = true, uefi = true, root_fs = ["ext3", "xfs", "xfs-v4"] }
+install = { tree = "vault.centos.org/7.9.2009/os/x86_64", pxeboot = "images/pxeboot", packages = ["grub2"], ks_end = true, append = "net.ifnames=0 biosdevname=0", ifname = true, boot_mib = 500, uefi = true, root_fs = ["ext3", "xfs", "xfs-v4"] }
 # el6's grep is newer than el7's, so `upgrade` leaves it behind; distro-sync takes everything to el7's version
 upgrade = ["yum -y distro-sync"]
 
