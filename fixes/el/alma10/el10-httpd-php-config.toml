@@ -23,4 +23,4 @@ author = "claude-opus-5-5 medium (dep-lab guided run A)"
 curated_by = "claude (wend port to typed ops)"
 source = "dep-lab centos/fixes-v3.json: a10-httpd-php-config"
 note = "Takes every packaged httpd and PHP config rpm left as .rpmnew (httpd.conf, conf.d, conf.modules.d, php.ini, php-fpm.conf and pools) and sets aside unowned module configs and php.d/*.ini files (an admin's zz-local.ini included). The owner's changes are NOT carried over: the old files are under /var/lib/wend/saved, re-apply them."
-fires_on = ["el/centos5-web"]
+fires_on = ["el/centos5-web", "el/centos7-lamp"]

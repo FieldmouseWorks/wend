@@ -16,4 +16,4 @@ name = "el9-enable-php-fpm"
 author = "claude (wend#6)"
 source = "wend#6"
 note = "EL9 has no mod_php, so el9-php-fpm-stack installs php-fpm (preset disabled). Enables it at boot wherever httpd starts. Gated like el9-php-fpm-stack: a box with httpd and no PHP has no php-fpm unit."
-fires_on = ["el/centos5-web"]
+fires_on = ["el/centos5-web", "el/centos7-lamp"]

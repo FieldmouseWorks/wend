@@ -16,4 +16,4 @@ author = "claude-opus-5-5 medium (dep-lab guided run A)"
 curated_by = "claude (wend port to typed ops)"
 source = "dep-lab centos/fixes-v3.json: a9-install-web-php (php-mysql part)"
 note = "php-mysqlnd replaces php-mysql (mysqli for the site)."
-fires_on = ["el/centos5-web"]
+fires_on = ["el/centos5-web", "el/centos7-lamp"]

@@ -30,4 +30,4 @@ author = "claude-opus-5-5 medium (dep-lab guided run A)"
 curated_by = "claude (wend port to typed ops)"
 source = "dep-lab centos/fixes-v3.json: a9-mariadb-upgrade"
 note = "EL9 leaves its packaged /etc/my.cnf (just !includedir /etc/my.cnf.d) as .rpmnew; this takes it, keeps the old file under /var/lib/wend/saved, and upgrades the data files. Fires only when, as the server reads it, the old file sets the default datadir and no bind-address, skip-networking, log-bin or server-id. Other server settings in the old file (buffer sizes, max_connections) are not carried over: re-apply them in /etc/my.cnf.d."
-fires_on = ["el/centos5-web"]
+fires_on = ["el/centos5-web", "el/centos7-lamp"]
