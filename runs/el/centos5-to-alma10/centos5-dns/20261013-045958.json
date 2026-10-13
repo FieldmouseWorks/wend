@@ -1,0 +1,157 @@
+{
+ "schema": "wend.run/0",
+ "route": "sha256:46619a3a86c2f94ea5a99e2bd751dd2ca0b488cdf44c168969bad42090921aa0",
+ "box": "el/centos5-dns",
+ "from": "centos5",
+ "to": "alma10",
+ "result": "pass",
+ "started": "20261013-045958",
+ "wall_seconds": 754,
+ "start_fingerprint": "sha256:64506855792f03c180c74cb7187f786e6b8137caf3303517b7ad1ed93608369a",
+ "runner": {
+  "kind": "local",
+  "host": "vm",
+  "kernel": "6.18.44-fc-v114"
+ },
+ "hops": [
+  {
+   "to": "centos6",
+   "fired": [
+    "sha256:e0fb1a56cc91ead37da70377e4cd252fa583a5997f57b1f33304070a32060061",
+    "sha256:ea3b6c527ca4f1d0de9f96071994cb09b9913315b40275cc918f71978b4dacec",
+    "sha256:c61cf3abbfe01b7f7f5590c5aa5e147d472135cac6c349920bc8d1f48ebb2882"
+   ],
+   "fired_names": [
+    "el6-bootstrap-rpm-yum",
+    "el6-drop-i386-multilib",
+    "el6-swap-release-package"
+   ],
+   "ok": true,
+   "seconds": 95.7,
+   "sources": {
+    "https://archives.fedoraproject.org/pub/archive/epel/5/x86_64/p7zip-9.20.1-2.el5.x86_64.rpm": "sha256:8f5feea09ccbd75e7972c00aa04269ec2ef3db3f7c08875aef8806bae4b173da",
+    "https://archives.fedoraproject.org/pub/archive/epel/5/x86_64/p7zip-plugins-9.20.1-2.el5.x86_64.rpm": "sha256:49ed9ca05f0da717b3d18b80f8d1b1e132c439d1b25c902629a8f7abee9a2476",
+    "https://vault.centos.org/6.10/os/x86_64/repodata/repomd.xml": "sha256:b1341f97c86af576a55c9893cc92d8c79e5c1de46fa81c495f8e241ebb05fb01",
+    "https://vault.centos.org/6.10/updates/x86_64/repodata/repomd.xml": "sha256:86193bfa7b11b4e30568804082de23225b2889323ac91705268585e73da9a931"
+   }
+  },
+  {
+   "to": "centos7",
+   "fired": [
+    "sha256:397a077d5ce43514ebee2d4c21a0237c9cf4278ca621c4c7bc7bcdd05ea980a6",
+    "sha256:cfcc9948ba7c45b32e6b5deaae2d48b742000cd06db1f17a33c0f7b4f4ea3401",
+    "sha256:628cb40ebdd9f0e5bf637aefc5537ce547e968f652eeea96428f0f728bded5d4",
+    "sha256:b56636fc8e156b0ef458eb128c435b2d70d46048869e4de4fb53fae8db29ee77",
+    "sha256:85f7db6108e947a7c2e1c3fd5fa0efa62e5477a44f7ae4d6d4a76b8139a75c1a",
+    "sha256:506d9872830c08ee699fa031fa7638dc0cc1dd00309be811af2b84b2159457b7",
+    "sha256:60d1c0bac8fa3943cc9deffb6566143acc02937f3d711125221fa42755c453aa"
+   ],
+   "fired_names": [
+    "el7-carry-boot-services",
+    "el7-usrmove",
+    "el7-var-run",
+    "el7-swap-release-package",
+    "el7-drop-portreserve",
+    "el7-drop-unused-iptables-service",
+    "vsftpd3-standalone-ipv4"
+   ],
+   "ok": true,
+   "seconds": 111.9,
+   "sources": {
+    "https://vault.centos.org/7.9.2009/os/x86_64/repodata/repomd.xml": "sha256:8b45b07b03813d3248c4fe4f407c4d9e4ebe91ca63591cc9e13243ec719c69e8",
+    "https://vault.centos.org/7.9.2009/updates/x86_64/repodata/repomd.xml": "sha256:d165598c04def2f2e8771309282c7a586b6cc981847676f811ee931f41d46392"
+   }
+  },
+  {
+   "to": "alma9",
+   "fired": [
+    "sha256:035f0b28d9ddc9a18be4a58e77994d5f8e54079cd77528173150bfe14e29f000",
+    "sha256:d99088da93a73b9606892e9b835938c7598c86e33c3918d7df079664690c310a",
+    "sha256:e8702cb424e0a946035342b9f09dd72dd3bebec98a8fe865b01818086ef02e6f",
+    "sha256:8d110d6e4770534ad468560ae02bd468542eed315f1b3a87a9e211b761ca2710",
+    "sha256:645af92e570ed65e10a8d48297fcc9012a6a2e7723cceb4eac2084a73a27522d"
+   ],
+   "fired_names": [
+    "el8-transit",
+    "el9-ssh-host-keys",
+    "vsftpd-drop-tcp-wrappers",
+    "el9-networkmanager",
+    "el9-carry-boot-services"
+   ],
+   "ok": true,
+   "seconds": 359.6,
+   "sources": {
+    "https://repo.almalinux.org/almalinux/8/AppStream/x86_64/os/repodata/repomd.xml": "sha256:2ba920ad8c7c4c03c213d94b6adb67fb73a557adfe60fc01b26dcc56be9fd1b0",
+    "https://repo.almalinux.org/almalinux/8/BaseOS/x86_64/os/repodata/repomd.xml": "sha256:7c255f165d6ea7afdebf33d5b47ea9ab8c524e5e2758368af448ebce13aa095f",
+    "https://repo.almalinux.org/almalinux/9/AppStream/x86_64/os/repodata/repomd.xml": "sha256:57a7aaca3497fb836a86b65ff88f02b242e2704ed0306655530e15bcb55c2c2c",
+    "https://repo.almalinux.org/almalinux/9/BaseOS/x86_64/os/repodata/repomd.xml": "sha256:ce4be0e43d1fc1489e2a2182a52bc65d68eaf6ff00794ce427998c4b00d31338",
+    "https://vault.centos.org/7.9.2009/extras/x86_64/repodata/repomd.xml": "sha256:ded127650d783f91b8a207e9c8829f8bab6100ab252fb4bf167920f6745c6563",
+    "https://vault.centos.org/7.9.2009/os/x86_64/repodata/repomd.xml": "sha256:8b45b07b03813d3248c4fe4f407c4d9e4ebe91ca63591cc9e13243ec719c69e8",
+    "https://vault.centos.org/7.9.2009/updates/x86_64/repodata/repomd.xml": "sha256:d165598c04def2f2e8771309282c7a586b6cc981847676f811ee931f41d46392"
+   }
+  },
+  {
+   "to": "alma10",
+   "fired": [
+    "sha256:c1fb16715be095a9c4da5f4d1d32632118e80929ab1ef9d5e6bf9b1ccc85b768"
+   ],
+   "fired_names": [
+    "el10-network-keyfiles"
+   ],
+   "ok": true,
+   "seconds": 112.1,
+   "sources": {
+    "https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/repodata/repomd.xml": "sha256:ef02af0cc7c49c0f2f10c88fe7b9daaa21636bdfeea48a3d02f60fa1a366021c",
+    "https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/repodata/repomd.xml": "sha256:746dd3eaab8b7742bf47555332c7117406ea6ba9d5fec81384bebfd12ca784bd"
+   }
+  }
+ ],
+ "start_services": [
+  "crond",
+  "functions",
+  "halt",
+  "iscsi",
+  "iscsid",
+  "killall",
+  "lvm2-monitor",
+  "mcstrans",
+  "messagebus",
+  "multipathd",
+  "named",
+  "netconsole",
+  "netfs",
+  "netplugd",
+  "network",
+  "ntpd",
+  "postfix",
+  "rawdevices",
+  "rdisc",
+  "restorecond",
+  "rsyslog",
+  "single",
+  "sshd",
+  "vsftpd"
+ ],
+ "failed_stage": "",
+ "final": {
+  "release": "AlmaLinux release 10.2 (Lavender Lion)",
+  "passed": [
+   "boot",
+   "cron",
+   "current",
+   "dns",
+   "ftp",
+   "mail",
+   "network",
+   "pkgdb",
+   "python",
+   "services",
+   "ssh",
+   "tools"
+  ],
+  "failed": [],
+  "failed_logs": {}
+ },
+ "model_calls": 0,
+ "log_sha256": "sha256:0aed54e1e56080c273e8e351fcf931049bed8b0cb31492e56cd38fe474ca7a95"
+}
