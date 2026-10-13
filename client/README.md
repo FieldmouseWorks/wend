@@ -58,6 +58,11 @@ release's own kernel package). It prints each hop, what would break there (a CPU
 controller or network card in use that the release's kernel doesn't drive, a kernel that won't fit in `/boot` beside
 the ones the hop keeps), and the furthest release the machine can land on, and exits 1 unless the whole route fits. On a VM whose CPU model is too low it says how to raise it. It touches nothing.
 
+It also finds the machine's own Python 2 programs (SPEC "Runtime preflight"): running processes, cron jobs, and
+anything with `libpython2` loaded (mod_wsgi), less what the distro's own packages own. When the route leaves Python 2
+behind before the hardware stops, it names the last release that ships it (adapters' `[runtimes]`, from
+`tools/runtimes.py`) and offers the choice: stop there, or shelter those programs and go on.
+
 ### Verified fetching (`--run`)
 
 ```

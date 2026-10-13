@@ -10,6 +10,7 @@ mod check;
 mod fetch;
 mod hardware;
 mod hop;
+mod runtime;
 mod sandbox;
 mod walk;
 
@@ -35,11 +36,12 @@ wend: walk a proven upgrade route on a machine. No model, no network beyond your
                                     --run: the repos only serve what that run's pinned sources vouch for,
                                     from the cache, each --source (laid out host/path), then the origin
   wend facts                        what preflight reads about this machine: CPU level features, firmware, memory,
-                                    free disk, PCI devices and their drivers (JSON)
+                                    free disk, PCI devices and their drivers, its own Python 2 programs (JSON)
   wend preflight ROUTE [--facts FILE] [--json]
                                     can this machine land on every release the route boots it into? CPU level,
                                     firmware, memory, disk, and the disk and network drivers each release's
-                                    kernel has. Says the furthest release it can land on; exits 1 short of the end
+                                    kernel has, and whether each still ships the Python 2 the machine's own
+                                    programs run. Says the furthest release it can land on; exits 1 short of the end
   wend parity INPUT.json            machine output for client/parity.py (the Python engine must agree)
 
 Options: --atlas DIR (default: the current directory, laid out like the wend repo).

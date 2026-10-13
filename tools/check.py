@@ -37,10 +37,11 @@ SAFE_VALUE = r"[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*"
 REPO_URL = r"[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)+"
 ADAPTER_KEYS = {"schema", "family", "backend", "release_file", "ladder", "may_skip", "harness_owned", "writable",
                 "managed", "force", "releases", "mirror", "hop", "predicates", "pm_options", "box", "ops", "checks",
-                "kv", "hardware", "addons"}
+                "kv", "hardware", "addons", "runtimes"}
 CPU_LEVELS = ("x86-64", "x86-64-v2", "x86-64-v3")  # SPEC "Hardware preflight"
 HARDWARE_KEYS = {"cpu", "ram_mib", "disk_mib", "boot_mib", "drivers", "note"}
 OLD_KERNELS = ("running", "autoremove")
+RUNTIMES = ("python2",)  # SPEC "Runtime preflight"
 
 
 def family(pkg):
@@ -113,6 +114,7 @@ def check_adapter(a, where):
         if isinstance(rel, dict) and rel.get("reboot", "before-post") != "before-post":
             errs.append(f"{where}: releases.{r}.reboot can only be \"before-post\"")
     errs += check_hardware(a, where)
+    errs += check_runtimes(a, where)
     if not isinstance(a.get("addons", {}), dict):
         return errs + [f"{where}: addons must be a table"]
     for n, ad in a.get("addons", {}).items():  # SPEC "Add-on repositories": their values land in root shell commands
@@ -176,6 +178,28 @@ def check_hardware(a, where):
     missing = [r for r in booted_releases(a) if r not in h]
     if missing:
         errs.append(f"{where}: hardware has no table for {missing}, which a route can boot into")
+    return errs
+
+
+def check_runtimes(a, where):
+    """SPEC "Runtime preflight": the versions of each legacy runtime every booted release ships ([] for none)."""
+    rt = a.get("runtimes")
+    if not isinstance(rt, dict):
+        return [f"{where}: missing the runtimes table"]
+    errs = []
+    for r, t in rt.items():
+        if not isinstance(a.get("ladder"), list) or r not in a["ladder"] or not isinstance(t, dict):
+            errs.append(f"{where}: runtimes.{r} must be a table named for a release on the ladder")
+            continue
+        for k in RUNTIMES:
+            v = t.get(k)
+            if not (isinstance(v, list) and all(isinstance(x, str) and re.fullmatch(r"\d+\.\d+(\.\d+)?", x) for x in v)):
+                errs.append(f"{where}: runtimes.{r}.{k} must list the versions the release ships ([] for none)")
+        if set(t) - set(RUNTIMES):
+            errs.append(f"{where}: runtimes.{r} has unknown keys {sorted(set(t) - set(RUNTIMES))}")
+    missing = [r for r in booted_releases(a) if r not in rt]
+    if missing:
+        errs.append(f"{where}: runtimes has no table for {missing}, which a route can boot into")
     return errs
 
 

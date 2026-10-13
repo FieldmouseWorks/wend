@@ -314,3 +314,18 @@ disk_mib = 4096
 boot_mib = 75
 drivers = "sha256:005a32d661cc840df36d29089b8b0ca4010f4e388c50976d68366e2e03734c82"
 note = "AlmaLinux 10 has a separate x86_64_v2 build for older CPUs, but no wend route lands on it yet, so an x86-64-v2 machine stops at alma9"
+
+# SPEC "Runtime preflight": the Python 2 interpreters each release a route boots into ships, by upstream version
+# ([] for none). tools/runtimes.py reads them from the release's own index (the components the hop uses); a machine
+# whose own programs run on Python 2 is told where it stops shipping before anything is touched.
+[runtimes.centos6]
+python2 = ["2.6.6"]
+
+[runtimes.centos7]
+python2 = ["2.7.5"]
+
+[runtimes.alma9]
+python2 = []
+
+[runtimes.alma10]
+python2 = []

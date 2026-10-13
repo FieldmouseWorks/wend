@@ -17,8 +17,9 @@ const LEVEL_FEATURES: [&[&str]; 2] = [
 
 // ---------- gathering facts ----------
 
-/// What preflight knows about this machine (schema `wend.hardware/1`). Read from the hardware and /proc and /sys,
-/// never from the distro's tools, so it reads the same on CentOS 5 as on trixie.
+/// What preflight knows about this machine (schema `wend.hardware/2`). Read from the hardware and /proc and /sys,
+/// never from the distro's tools, so it reads the same on CentOS 5 as on trixie. The one exception is who owns a
+/// Python 2 program (SPEC "Runtime preflight"): on rpm machines only `rpm` can read its database.
 pub fn gather() -> Value {
     let mut uts: libc::utsname = unsafe { std::mem::zeroed() };
     // SAFETY: uname fills the struct it is given.
@@ -58,7 +59,7 @@ pub fn gather() -> Value {
         })
         .map_or(Value::Null, |kb| json!(kb / 1024));
     json!({
-        "schema": "wend.hardware/1",
+        "schema": "wend.hardware/2",
         "arch": arch,
         "userland_bits": userland,
         "cpu": {"model": model, "features": features, "hypervisor": hypervisor},
@@ -68,6 +69,7 @@ pub fn gather() -> Value {
         "boot_dir": boot_dir(Path::new("/boot"), &release),
         "blacklisted": blacklisted(),
         "pci": pci_devices(Path::new("/sys/bus/pci/devices"), &module_files(&release)),
+        "runtimes": crate::runtime::gather(Path::new("/proc"), Path::new("/"), &crate::runtime::Owners::new(Path::new("/"))),
     })
 }
 
@@ -420,9 +422,12 @@ const CLASS_ONLY_MAYBE: &[&str] = &["ata_generic", "ide_pci_generic", "pata_acpi
 
 /// Facts from a file are held to the shape `gather` writes: a check whose input is missing never passes by default.
 pub fn check_facts(f: &Value) -> Result<(), String> {
-    let bad = |what: &str| Err(format!("not a wend.hardware/1 facts file: {what}"));
-    if f["schema"] != "wend.hardware/1" {
-        return bad("schema");
+    let bad = |what: &str| Err(format!("not a wend.hardware/2 facts file: {what}"));
+    if f["schema"] != "wend.hardware/2" {
+        return bad("schema (gather the facts again with this client: wend facts)");
+    }
+    if !crate::runtime::check(&f["runtimes"]) {
+        return bad("runtimes");
     }
     let b = &f["boot_dir"];
     if !(b["separate"].is_boolean() && b["total_mib"].is_u64() && b["free_mib"].is_u64())
@@ -637,6 +642,17 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
     };
     let mut route_kernels: Vec<(String, u64)> = vec![];
     let blacklist: Vec<String> = crate::atlas::strings(&facts["blacklisted"]).unwrap_or_default();
+    // SPEC "Runtime preflight": the machine's own Python 2 programs, and the last release that still ships Python 2
+    let own: Vec<Value> = facts["runtimes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|u| crate::runtime::is_own(u))
+        .cloned()
+        .collect();
+    let mut keeps = Some(from.to_string());
+    let mut runtime_broken = false;
+    let mut noted: Vec<String> = vec![];
 
     for h in &hops {
         let mut problems: Vec<String> = vec![];
@@ -644,7 +660,8 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
         // a release the route only passes through (may_skip) installs no kernel and is never booted, even
         // when its adapter has a table for it
         if !booted.contains(h) {
-            out_hops.push(json!({"to": h, "ok": true, "problems": [], "notes": ["not booted on this route"]}));
+            out_hops.push(json!({"to": h, "ok": true, "problems": [], "runtime_problems": [],
+                                 "notes": ["not booted on this route"]}));
             continue;
         }
         let Some(t) = get(hw, h) else {
@@ -807,13 +824,48 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
                 )),
             }
         }
+        let mut app: Vec<String> = vec![];
+        if !own.is_empty() {
+            let ships: Vec<String> = get(a, "runtimes")
+                .and_then(|r| get(r, h))
+                .and_then(|t| get(t, "python2"))
+                .and_then(crate::atlas::strings)
+                .ok_or(format!("adapters/{fam}.toml has no runtimes.{h}.python2"))?;
+            if ships.is_empty() {
+                app.push(format!(
+                    "{h} ships no Python 2, and this machine's own programs run on it: {}",
+                    own.iter().map(crate::runtime::describe).collect::<Vec<_>>().join("; ")
+                ));
+            } else {
+                for u in &own {
+                    let v = u["version"].as_str().unwrap_or("");
+                    let prog = u["program"].as_str().unwrap_or("?").to_string();
+                    if !ships.iter().any(|s| s == v || s.starts_with(&format!("{v}."))) && !noted.contains(&prog) {
+                        notes.push(format!(
+                            "{prog} runs on Python {v}; {h} ships Python {} instead. Python 2 code mostly runs on a \
+                             later 2.x, but check it does",
+                            ships.join(" and ")
+                        ));
+                        noted.push(prog);
+                    }
+                }
+            }
+        }
+        if app.is_empty() && !runtime_broken {
+            keeps = Some(h.clone());
+        } else {
+            runtime_broken = true;
+        }
         let ok = problems.is_empty() && !blocked;
         if ok {
             lands = Some(h.clone());
         } else {
             blocked = true;
         }
-        out_hops.push(json!({"to": h, "ok": problems.is_empty(), "problems": problems, "notes": notes}));
+        out_hops.push(
+            json!({"to": h, "ok": problems.is_empty(), "problems": problems, "runtime_problems": app,
+                             "notes": notes}),
+        );
     }
     let to = str_of(route, "to")?;
     Ok(json!({
@@ -825,7 +877,9 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
         "machine": machine,
         "hops": out_hops,
         "lands_on": lands,
-        "ok": lands.as_deref() == Some(to),
+        "runtimes": own,
+        "keeps_runtimes_on": if own.is_empty() { Value::Null } else { json!(keeps) },
+        "ok": lands.as_deref() == Some(to) && !runtime_broken,
     }))
 }
 
@@ -838,22 +892,71 @@ pub fn report(v: &Value) -> String {
     for h in v["hops"].as_array().into_iter().flatten() {
         let to = h["to"].as_str().unwrap_or("?");
         let probs = h["problems"].as_array().cloned().unwrap_or_default();
-        s += &format!("{} {to}\n", if probs.is_empty() { "ok     " } else { "NO     " });
-        for p in &probs {
+        let app = h["runtime_problems"].as_array().cloned().unwrap_or_default();
+        s += &format!(
+            "{} {to}\n",
+            if probs.is_empty() && app.is_empty() {
+                "ok     "
+            } else {
+                "NO     "
+            }
+        );
+        for p in probs.iter().chain(&app) {
             s += &format!("        {}\n", p.as_str().unwrap_or(""));
         }
         for n in h["notes"].as_array().into_iter().flatten() {
             s += &format!("        note: {}\n", n.as_str().unwrap_or(""));
         }
     }
-    s += &match (v["ok"].as_bool(), v["lands_on"].as_str()) {
-        (Some(true), _) => format!("This machine can land on {}.\n", v["to"].as_str().unwrap_or("?")),
-        (_, Some(l)) if l == v["from"].as_str().unwrap_or("") => {
+    let (from, to) = (v["from"].as_str().unwrap_or(""), v["to"].as_str().unwrap_or("?"));
+    let lands = v["lands_on"].as_str();
+    let keeps = v["keeps_runtimes_on"].as_str();
+    let order: Vec<&str> = std::iter::once(from)
+        .chain(
+            v["hops"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|h| h["to"].as_str()),
+        )
+        .collect();
+    let at = |r: &str| order.iter().position(|x| *x == r);
+    if let (Some(l), Some(k)) = (lands, keeps) {
+        // only when Python 2 goes before the hardware stops does the owner have a choice to make
+        if at(k) < at(l) {
+            // the runtime goes before the hardware stops: the owner picks
+            let stop = if k == from {
+                format!("stay on {from}: the route's first hop already leaves Python 2 behind")
+            } else {
+                format!("walk the route only to {k}, the last release that still ships Python 2")
+            };
+            let landing = if l == to {
+                to.to_string()
+            } else {
+                format!("{l}, the furthest this hardware goes")
+            };
+            s += &format!(
+                "This machine's own programs run on Python 2, and the route leaves it behind after {k}:\n{}\
+                 Pick one:\n  stop:    {stop}\n  shelter: upgrade to {landing}, and run those programs in a sealed \
+                 Python 2 userland of their own (SPEC \"Sheltering an app\"; not built yet)\n\
+                 Or port them to Python 3 and check again. Nothing was touched.\n",
+                v["runtimes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|u| format!("  {}\n", crate::runtime::describe(u)))
+                    .collect::<String>()
+            );
+            return s;
+        }
+    }
+    s += &match (v["ok"].as_bool(), lands) {
+        (Some(true), _) => format!("This machine can land on {to}.\n"),
+        (_, Some(l)) if l == from => {
             format!("This machine can't take the first hop. Nothing was touched; it stays on {l}.\n")
         }
         (_, Some(l)) => format!(
-            "This machine can't reach {}. The furthest it can land on is {l}: walk the route only that far.\n",
-            v["to"].as_str().unwrap_or("?")
+            "This machine can't reach {to}. The furthest it can land on is {l}: walk the route only that far.\n"
         ),
         _ => "This machine can't take this route. Nothing was touched.\n".into(),
     };
@@ -902,11 +1005,11 @@ mod tests {
     }
 
     fn machine(features: &[&str], vm: bool, pci: Vec<Value>) -> Value {
-        json!({"schema": "wend.hardware/1", "arch": "x86_64", "userland_bits": 64,
+        json!({"schema": "wend.hardware/2", "arch": "x86_64", "userland_bits": 64,
                "cpu": {"model": "test", "features": features, "hypervisor": vm}, "boot": "bios",
                "ram_mib": 4096, "free_mib": 20000,
                "boot_dir": {"separate": false, "total_mib": 20000, "free_mib": 20000, "kernels": []},
-               "blacklisted": [], "pci": pci})
+               "blacklisted": [], "pci": pci, "runtimes": []})
     }
 
     /// A separate /boot of `total` MiB holding `kernels` (version, MiB; the last one running) and 4 MiB of other files.
@@ -1309,5 +1412,124 @@ mod tests {
         let v = verdict("etch-to-trixie", &with_boot(machine(&full, false, vec![]), 86, &etch));
         assert_eq!(v["hops"][3]["ok"], true, "{v:#}");
         assert_eq!(v["hops"][4]["ok"], true, "{v:#}");
+    }
+
+    fn app(program: &str, version: &str, via: &str, owner: Option<&str>) -> Value {
+        json!({"runtime": "python2", "version": version, "via": via, "program": program,
+               "interpreter": "/usr/bin/python2.7", "where": "billing.service", "owner": owner})
+    }
+
+    fn modern(runtimes: Vec<Value>) -> Value {
+        let mut f: Vec<&str> = LEVEL_FEATURES[0].to_vec();
+        f.extend(LEVEL_FEATURES[1]);
+        let mut m = machine(&f, false, vec![]);
+        m["runtimes"] = json!(runtimes);
+        m
+    }
+
+    /// SPEC "Runtime preflight": a CentOS 7 box whose own billing app runs on Python 2. Its hardware reaches alma10,
+    /// but Alma 9 ships no Python 2 and wend never lands on Alma 8, so the choice is stay or shelter.
+    #[test]
+    fn an_el7_python2_app_is_told_to_stay_or_shelter() {
+        let v = verdict(
+            "centos7-to-alma10",
+            &modern(vec![
+                app("/opt/billing/app.py", "2.7", "process", None),
+                app("/usr/bin/fail2ban-server", "2.7", "process", Some("fail2ban-server")),
+            ]),
+        );
+        assert_eq!(v["lands_on"], "alma10", "{v:#}");
+        assert_eq!(v["keeps_runtimes_on"], "centos7");
+        assert_eq!(v["ok"], false);
+        assert_eq!(
+            v["runtimes"].as_array().unwrap().len(),
+            1,
+            "fail2ban is the distro's: {v:#}"
+        );
+        let p = v["hops"][0]["runtime_problems"][0].as_str().unwrap();
+        assert!(
+            p.starts_with("alma9 ships no Python 2") && p.contains("/opt/billing/app.py"),
+            "{p}"
+        );
+        let r = report(&v);
+        assert!(
+            r.contains("stay on centos7") && r.contains("shelter: upgrade to alma10,"),
+            "{r}"
+        );
+        // the distro's own Python 2 alone changes nothing
+        let v = verdict(
+            "centos7-to-alma10",
+            &modern(vec![app(
+                "/usr/bin/fail2ban-server",
+                "2.7",
+                "process",
+                Some("fail2ban-server"),
+            )]),
+        );
+        assert_eq!(v["ok"], true, "{v:#}");
+        assert_eq!(v["keeps_runtimes_on"], Value::Null);
+        // mod_wsgi counts whoever owns httpd
+        let v = verdict(
+            "centos7-to-alma10",
+            &modern(vec![app("/usr/sbin/httpd", "2.7", "embedded", Some("httpd"))]),
+        );
+        assert_eq!(v["keeps_runtimes_on"], "centos7");
+    }
+
+    /// Ubuntu keeps Python 2 in universe through jammy; Debian through bullseye, with a note where an app's own
+    /// 2.x goes.
+    #[test]
+    fn apt_routes_stop_where_python2_ends() {
+        let v = verdict(
+            "trusty-to-resolute",
+            &modern(vec![app("/srv/app/run.py", "2.7", "cron", None)]),
+        );
+        assert_eq!(v["keeps_runtimes_on"], "jammy", "{v:#}");
+        assert_eq!(v["lands_on"], "resolute");
+        let r = report(&v);
+        assert!(
+            r.contains("walk the route only to jammy") && r.contains("shelter: upgrade to resolute, and run"),
+            "{r}"
+        );
+        let v = verdict(
+            "etch-to-trixie",
+            &modern(vec![app("/opt/old/job.py", "2.4", "cron", None)]),
+        );
+        assert_eq!(v["keeps_runtimes_on"], "bullseye", "{v:#}");
+        let notes = v["hops"].to_string();
+        assert_eq!(
+            notes.matches("runs on Python 2.4;").count(),
+            1,
+            "noted once, at squeeze: {notes}"
+        );
+        assert!(
+            v["hops"][1]["notes"]
+                .to_string()
+                .contains("squeeze ships Python 2.5.5 and 2.6.6"),
+            "{v:#}"
+        );
+    }
+
+    /// When the hardware stops first, the runtime isn't the owner's choice to make: the hardware verdict stands.
+    #[test]
+    fn hardware_that_stops_first_decides() {
+        let mut m = machine(V1_PENRYN, false, vec![]);
+        m["runtimes"] = json!([app("/opt/billing/app.py", "2.4", "process", None)]);
+        let v = verdict("centos5-to-alma10", &m);
+        assert_eq!(
+            (v["lands_on"].as_str(), v["keeps_runtimes_on"].as_str()),
+            (Some("centos7"), Some("centos7"))
+        );
+        let r = report(&v);
+        assert!(
+            r.contains("The furthest it can land on is centos7") && !r.contains("shelter"),
+            "{r}"
+        );
+        // facts without the runtimes this client gathers are refused, not read as "none"
+        let mut old = m.clone();
+        old.as_object_mut().unwrap().remove("runtimes");
+        let a = atlas();
+        let (_, r) = a.route("centos5-to-alma10").unwrap();
+        assert!(evaluate(&a, r, &old).unwrap_err().contains("runtimes"));
     }
 }

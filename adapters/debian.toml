@@ -196,3 +196,33 @@ ram_mib = 512
 disk_mib = 2048
 boot_mib = 58
 drivers = "sha256:80bab778035805af4f567958fc1635e6b4a6315ba652072816ca71ed13df3464"
+
+# SPEC "Runtime preflight": the Python 2 interpreters each release a route boots into ships, by upstream version
+# ([] for none). tools/runtimes.py reads them from the release's own index (the components the hop uses); a machine
+# whose own programs run on Python 2 is told where it stops shipping before anything is touched.
+[runtimes.lenny]
+python2 = ["2.4.6", "2.5.2"]
+
+[runtimes.squeeze]
+python2 = ["2.5.5", "2.6.6"]
+
+[runtimes.wheezy]
+python2 = ["2.6.8", "2.7.3"]
+
+[runtimes.jessie]
+python2 = ["2.7.9"]
+
+[runtimes.stretch]
+python2 = ["2.7.13"]
+
+[runtimes.buster]
+python2 = ["2.7.16"]
+
+[runtimes.bullseye]
+python2 = ["2.7.18"]
+
+[runtimes.bookworm]
+python2 = []
+
+[runtimes.trixie]
+python2 = []
