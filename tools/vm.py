@@ -332,7 +332,8 @@ class PocketProxy:
     -updates, -security, -backports and -proposed suites answer 404. Ubuntu's installer always adds -updates (its
     50mirror.ubuntu writes it whatever the preseed says) and installs from it, so without this a trusty box comes up
     with the release's updates, while the route, and the chroot box, read the release pocket only. A box that is meant
-    to start from them (wend#47) names the pockets it wants in [vm].pockets, and those suites pass."""
+    to start from them (wend#47) names the pockets it wants in [vm].pockets, and those suites pass: backports too, which
+    trusty's installer also writes into sources.list, so a box that runs apt-get update in customize needs it."""
 
     OTHER_POCKET = re.compile(r"/dists/[^/]+-(updates|security|backports|proposed)/")
 
