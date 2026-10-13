@@ -1,0 +1,23 @@
+# Discovered by agent (claude-code / opus 5.5) on ubuntu/trusty-web.
+schema = "wend.fix/0"
+family = "ubuntu"
+hop = "xenial"
+when = { installed = "libapache2-mod-php5" }
+restores = ["box:web", "box:php", "current"]
+adds = []
+
+[[post]]
+op = "install"
+packages = ["php7.0-cli", "libapache2-mod-php7.0"]
+
+[[post]]
+op = "apache.enable"
+kind = "mod"
+name = "php7.0"
+
+[meta]
+name = "php7.0-module"
+author = "agent (claude-code / opus 5.5)"
+found_on = "ubuntu/trusty-web"
+fires_on = ["ubuntu/trusty-web"]
+reason = "Xenial drops PHP 5: the dist-upgrade removes the php5 Apache module and leaves php5-cli orphaned. Install PHP 7.0's CLI and Apache module, which xenial ships, and enable the module."
