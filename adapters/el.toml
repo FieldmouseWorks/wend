@@ -112,21 +112,27 @@ repos = { baseos = "repo.almalinux.org/almalinux/9/BaseOS/x86_64/os", appstream 
 # it trusts yet). EL9's rpm only reads EL8's Berkeley DB read-only, so the database is rebuilt (as sqlite) before any
 # fix installs anything.
 #
-# On a live box (wend#75) the transaction runs offline, as it does in a chroot: SYSTEMD_OFFLINE=1 makes EL8's and EL9's
-# systemctl skip every start, restart and daemon-reexec the scriptlets ask for ("Running in chroot, ignoring"; `enable
-# --now` and `disable --now` still reach PID 1, which stops an erased EL8 package's service fine). Without
-# it systemd's %post re-executes PID 1 as EL9's systemd on the old release's kernel (EL7's 3.10), which never sees a
-# stopped unit's cgroup empty, so a scriptlet that waits on a stop or start (audit's %post) hangs the transaction. The
-# old daemons keep running until the reboot that ends the hop. sshd is the exception: the running listener re-executes
-# /usr/sbin/sshd for every new connection, and an older listener can't hand its state to a newer binary, so once
-# rpm.transit or the transaction replaces it nobody can log in. It is restarted after each (its config checked with
-# sshd -t first), and the step fails unless a new connection gets the ssh greeting. Only `systemctl
+# On a live box (wend#75) the transaction runs offline, as it does in a chroot, and can't reach PID 1 at all. Without
+# that, systemd's %post re-executes PID 1 as EL9's systemd on the old release's kernel (EL7's 3.10), which never sees a
+# stopped unit's cgroup empty, and a scriptlet that starts or restarts a service (audit's) hangs the transaction.
+# SYSTEMD_OFFLINE=1 (systemctl has read it since systemd 237) turns the scriptlets' own systemctl calls into no-ops
+# ("Running in chroot, ignoring"), but `service` runs legacy actions under `env -i`, which drops it: EL8 audit's
+# %postun `service auditd condrestart` still ran `systemctl start auditd` and hung (remi, wend#79). So dnf runs in a
+# private mount namespace with tmpfs over /run/systemd and /run/dbus: no systemctl, busctl or D-Bus client in any
+# scriptlet can find PID 1, whatever environment it was given (systemctl says "System has not been booted with
+# systemd", and the scriptlets ignore it; audit's condrestart sees no active state and leaves auditd running). The old
+# daemons, and EL7's PID 1, keep running until the reboot that ends the hop. sshd is the exception: the running
+# listener re-executes /usr/sbin/sshd for every new connection, and an older listener can't hand its state to a newer
+# binary, so once rpm.transit or the transaction replaces it nobody can log in. A watcher outside the namespace
+# restarts it as soon as the transaction swaps the binary (once sshd -t accepts it), so ssh stays usable even if the
+# transaction then stalls; and it is restarted after rpm.transit and after the transaction (its config checked with
+# sshd -t first), and that step fails unless a new connection gets the ssh greeting. Only `systemctl
 # is-active` saying inactive, failed or unknown skips it (a socket-activated sshd execs per connection already); a
 # bus error counts as running, so it fails the step rather than skipping it. A chroot box runs no sshd and skips
 # both.
 upgrade = ["[ / -ef /proc/1/root ] && [ -d /run/systemd/system ] && case $(systemctl is-active sshd 2>/dev/null) in inactive|failed|unknown) false;; esac || { echo \"sshd: not a running systemd service on this root, left alone\"; exit 0; }; /usr/sbin/sshd -t || { echo \"the installed sshd rejects its configuration: restarting it would lock ssh out\"; exit 1; }; timeout 120 systemctl restart sshd || { echo \"systemctl restart sshd failed or hung\"; exit 1; }; L=$(/usr/sbin/sshd -T 2>/dev/null | awk '$1 == \"listenaddress\" {print $2}'); A=$(echo \"$L\" | grep -v '^\\[' | head -n1); [ -n \"$A\" ] || A=$(echo \"$L\" | head -n1); H=${A%:*}; P=${A##*:}; H=${H#[}; H=${H%]}; case \"$H\" in 0.0.0.0|\"\") H=127.0.0.1;; ::) H=::1;; esac; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do timeout 5 bash -c \"exec 3<>/dev/tcp/$H/${P:-22} && head -c 4 <&3\" 2>/dev/null | grep -q '^SSH-' && { echo \"sshd restarted: a new connection to $H port ${P:-22} gets its greeting\"; exit 0; }; sleep 1; done; echo \"sshd restarted, but a new connection to $H port ${P:-22} gets no greeting\"; exit 1",
            "rm -f /etc/dnf/modules.d/*.module",
-           "{clean_repos}; SYSTEMD_OFFLINE=1 dnf -y {dnf_opts} --nobest --setopt=module_platform_id=platform:el9 distro-sync",
+           "{clean_repos}; set -- dnf -y {dnf_opts} --nobest --setopt=module_platform_id=platform:el9 distro-sync; [ / -ef /proc/1/root ] && [ -d /run/systemd/system ] || { SYSTEMD_OFFLINE=1 \"$@\"; exit; }; W=; case $(systemctl is-active sshd 2>/dev/null) in inactive|failed|unknown) ;; *) ( I=$(stat -c %i /usr/sbin/sshd); while sleep 10; do J=$(stat -c %i /usr/sbin/sshd 2>/dev/null) || continue; [ \"$J\" = \"$I\" ] && continue; /usr/sbin/sshd -t >/dev/null 2>&1 || continue; timeout 60 systemctl restart sshd && I=$J && echo \"sshd was replaced mid-transaction: restarted it\"; done ) & W=$!;; esac; unshare -m sh -c 'mount --make-rprivate / && mount -t tmpfs -o mode=755 wend-offline /run/systemd && { [ ! -d /run/dbus ] || mount -t tmpfs -o mode=755 wend-offline /run/dbus; } && exec \"$@\"' sh env SYSTEMD_OFFLINE=1 \"$@\"; rc=$?; [ -z \"$W\" ] || kill $W; exit $rc",
            "/usr/sbin/ldconfig; rm -f /var/lib/rpm/__db.*; rpmdb --rebuilddb && rpm -q rpm",
            "[ / -ef /proc/1/root ] && [ -d /run/systemd/system ] && case $(systemctl is-active sshd 2>/dev/null) in inactive|failed|unknown) false;; esac || { echo \"sshd: not a running systemd service on this root, left alone\"; exit 0; }; /usr/sbin/sshd -t || { echo \"the installed sshd rejects its configuration: restarting it would lock ssh out\"; exit 1; }; timeout 120 systemctl restart sshd || { echo \"systemctl restart sshd failed or hung\"; exit 1; }; L=$(/usr/sbin/sshd -T 2>/dev/null | awk '$1 == \"listenaddress\" {print $2}'); A=$(echo \"$L\" | grep -v '^\\[' | head -n1); [ -n \"$A\" ] || A=$(echo \"$L\" | head -n1); H=${A%:*}; P=${A##*:}; H=${H#[}; H=${H%]}; case \"$H\" in 0.0.0.0|\"\") H=127.0.0.1;; ::) H=::1;; esac; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do timeout 5 bash -c \"exec 3<>/dev/tcp/$H/${P:-22} && head -c 4 <&3\" 2>/dev/null | grep -q '^SSH-' && { echo \"sshd restarted: a new connection to $H port ${P:-22} gets its greeting\"; exit 0; }; sleep 1; done; echo \"sshd restarted, but a new connection to $H port ${P:-22} gets no greeting\"; exit 1"]
 
