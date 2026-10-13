@@ -12,7 +12,7 @@ packages = ["openssh-server", "apache2", "libapache2-mod-php5", "php5-cli", "pos
 customize = '''
 set -e
 sed -n 's/^deb \([^ ]*\) trusty \(.*\)$/deb \1 trusty-updates \2\ndeb \1 trusty-security \2/p' /etc/apt/sources.list > /tmp/pockets
-cat /tmp/pockets >> /etc/apt/sources.list
+while read -r l; do grep -qxF "$l" /etc/apt/sources.list || echo "$l" >> /etc/apt/sources.list; done < /tmp/pockets
 rm /tmp/pockets
 apt-get update
 apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade
@@ -56,6 +56,7 @@ current = "for f in $(command -v php) $(sed -n 's/^LoadModule [^ ]* //p' /etc/ap
 # box; the live checks ask the running services after every reboot.
 [vm]
 ssh_port = 2222
-# the VM installer starts it from -updates and -security too (tools/vm.py, SPEC "VM tier"), as the chroot box does
-pockets = ["updates", "security"]
+# the VM installer starts it from -updates and -security too (tools/vm.py, SPEC "VM tier"), as the chroot box does,
+# and from -backports, which trusty's installer turns on and customize's apt-get update reads
+pockets = ["updates", "security", "backports"]
 live = { daemons = "for i in $(seq 1 30); do ok=1; for p in apache2 master cron sshd; do pgrep -x $p >/dev/null || ok=0; done; [ $ok = 1 ] && exit 0; sleep 2; done; for p in apache2 master cron sshd; do pgrep -x $p >/dev/null || echo \"$p is not running\"; done; exit 1", site = "for i in $(seq 1 30); do curl -s -H 'Host: mysite.local' http://127.0.0.1/ | grep -q 'hello from oldbox OK' && exit 0; sleep 2; done; curl -s -H 'Host: mysite.local' http://127.0.0.1/ | head -c 300; exit 1" }

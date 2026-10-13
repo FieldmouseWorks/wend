@@ -113,6 +113,10 @@ for name, mutate in {
     "an adapter missing a booted release's runtimes": lambda a: a["runtimes"].pop("alma9"),
     "an adapter that doesn't say whether a release ships Python 2": lambda a: a["runtimes"]["alma9"].pop("python2"),
     "an adapter whose Python 2 version isn't a version": lambda a: a["runtimes"]["centos7"].update(python2=["2.7*"]),
+    "a relocate table missing a step (SPEC \"Relocate\")": lambda a: a["relocate"].pop("flip"),
+    "a relocate table with a step tools/vm.py doesn't run": lambda a: a["relocate"].update(extra=["true"]),
+    "a relocate step that's one command, not a list": lambda a: a["relocate"].update(place="true"),
+    "a relocate step with no commands": lambda a: a["relocate"].update(copy=[]),
 }.items():
     a = copy.deepcopy(adapters["el"])
     mutate(a)
@@ -291,7 +295,7 @@ ok = (body[0] == "let mask = RootUmask::set();" and "drop(mask);" in code
       and code.index("drop(mask);") < code.index("&o.steps") < code.index("&o.out"))
 print(("passed  " if ok else "WRONG   ") + "client cmd_walk walks under RootUmask, drops it before --steps and --out")
 bad += not ok
-# a box's [vm] table (tools/vm.py): only ssh_port, skip, live and pockets, each well formed
+# a box's [vm] table (tools/vm.py): only ssh_port, skip, live, pockets and root_fs, each well formed
 web = check.load_all()[3]["el/centos5-web"]
 for name, vm, want in (("the web box's own [vm]", web.get("vm", {}), False),
                        ("[vm] skip names a role the box doesn't have", {**web["vm"], "skip": ["dbb"]}, True),
@@ -300,6 +304,8 @@ for name, vm, want in (("the web box's own [vm]", web.get("vm", {}), False),
                        ("[vm] ssh_port out of range", {**web["vm"], "ssh_port": 70000}, True),
                        ("[vm] an empty live check", {**web["vm"], "live": {"x": ""}}, True),
                        ("[vm] an unknown key", {**web["vm"], "hostname": "x"}, True),
+                       ("[vm] root_fs on a release whose installer offers none (CentOS 5)", {**web["vm"], "root_fs": "ext3"},
+                        True),
                        ("[vm] a skipped role with no live check", {**web["vm"], "live": {"site": web["vm"]["live"]["site"]}},
                         True)):
     errs = check.check_box({**web, "vm": vm}, adapters, "boxes/el/centos5-web/box.toml")
@@ -355,10 +361,23 @@ for line, want in (("30 2 1,15 * 1 /x", ["*-*-01,15 02:30:00", "Mon *-*-* 02:30:
     got = shelter.cron_calendar(line)[0]
     print(("passed  " if got == want else f"WRONG   {got} ") + f"cron {line!r}")
     bad += got != want
-# [vm].pockets: the -updates/-security pockets a box built from them asks the VM installer for (wend#47)
+# root_fs is one the box's start release's installer makes (releases.<release>.install.root_fs)
+lamp, trusty = check.load_all()[3]["el/centos7-lamp"], check.load_all()[3]["ubuntu/trusty-web"]
+for name, box, root_fs, want in (("[vm] root_fs xfs-v4 on CentOS 7", lamp, "xfs-v4", False),
+                                 ("[vm] root_fs xfs on CentOS 7", lamp, "xfs", False),
+                                 ("[vm] an unknown root_fs on CentOS 7", lamp, "btrfs", True),
+                                 ("[vm] root_fs on a debian-installer box", trusty, "xfs", True)):
+    errs = check.check_box({**box, "vm": {**box["vm"], "root_fs": root_fs}}, adapters, "boxes/x/box.toml")
+    print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
+    bad += bool(errs) != want
+# [vm].pockets: the -updates/-security/-backports pockets a box built from them asks the VM installer for (wend#47)
 tweb = check.load_all()[3]["ubuntu/trusty-web"]
 for name, box, want in (("[vm] pockets on a release_pocket_only release", {**tweb, "vm": {**tweb["vm"], "pockets": ["updates", "security"]}}, False),
-                        ("[vm] pockets naming backports", {**tweb, "vm": {**tweb["vm"], "pockets": ["backports"]}}, True),
+                        ("[vm] pockets naming backports", {**tweb, "vm": {**tweb["vm"], "pockets": ["updates", "security", "backports"]}}, False),
+                        ("[vm] pockets with updates alone", {**tweb, "vm": {**tweb["vm"], "pockets": ["updates"]}}, False),
+                        ("[vm] pockets without updates, which the installer's sources.list always has",
+                         {**tweb, "vm": {**tweb["vm"], "pockets": ["security", "backports"]}}, True),
+                        ("[vm] pockets naming proposed", {**tweb, "vm": {**tweb["vm"], "pockets": ["proposed"]}}, True),
                         ("[vm] pockets naming one twice", {**tweb, "vm": {**tweb["vm"], "pockets": ["updates", "updates"]}}, True),
                         ("[vm] pockets as a string", {**tweb, "vm": {**tweb["vm"], "pockets": "updates"}}, True),
                         ("[vm] pockets on a release whose install isn't release_pocket_only",
@@ -366,7 +385,7 @@ for name, box, want in (("[vm] pockets on a release_pocket_only release", {**twe
     errs = check.check_box(box, adapters, "boxes/ubuntu/trusty-web/box.toml")
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
-# the VM installer's pocket proxy: the release pocket always, -updates/-security only when the box asks ([vm].pockets)
+# the VM installer's pocket proxy: the release pocket always, -updates/-security/-backports only when the box asks ([vm].pockets)
 import http.server as _hs  # noqa: E402
 import threading as _th  # noqa: E402
 import urllib.request as _ur  # noqa: E402
@@ -391,6 +410,8 @@ for allow, path, want in (((), "/ubuntu/dists/trusty/Release", 200), ((), "/ubun
                           (("updates", "security"), "/ubuntu/dists/trusty-updates/Release", 200),
                           (("updates", "security"), "/ubuntu/dists/trusty-security/Release", 200),
                           (("updates", "security"), "/ubuntu/dists/trusty-backports/Release", 404),
+                          (("updates", "security", "backports"), "/ubuntu/dists/trusty-backports/Release", 200),
+                          (("updates", "security", "backports"), "/ubuntu/dists/trusty-proposed/Release", 404),
                           (("updates",), "/ubuntu/dists/trusty-security/Release", 404)):
     px = _vm.PocketProxy(f"http://127.0.0.1:{_up.server_address[1]}", allow)
     try:

@@ -826,6 +826,7 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear. Whatever a `pattern`, `list` or `table` says, every value a fix passes through one must also match `[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*`: no quote, whitespace, backslash, glob character, `%`, any of `` $`;&|<>(){}~ ``, or leading `-` |
 | `[checks]` | universal health checks: `pkgdb` is a command; `current` and `services` are described in words and built by the harness from the box |
 | `[hardware]` | required: what a machine needs before a route boots it into each release (see "Hardware preflight"): `boot`, `old_kernels`, and a table per release a route can boot into |
+| `[relocate]` | optional: relocate's steps (lists of scripts: `preflight`, `refresh`, `place`, `copy`, `fixup`, `flip`, `release`, `cleanup`) and the commands between boots (`booted`, `arm`, `commit_trial`, `rollback_next`); see "Relocate" |
 | `[box]` | how to build a fresh box of this family (rpm: `seeds`, the packages to bootstrap a root from; apt: optional `debootstrap_script`, a script name under the host's `/usr/share/debootstrap/scripts`) |
 
 These checks narrow what an adapter lets fixes do (ops, force flags, argument values). They don't judge an adapter's
@@ -872,7 +873,7 @@ harness, not to fixes, because the release's own tools can't carry them up the l
   running kernel and its boot entry stay as the fallback. This is the one place, besides `rpm.transit`'s last step,
   where wend drops records and keeps files. Fixes can't, because a fix doing it could fake `pkgdb`. It then removes
   the files of kernels that no package owns and that aren't running or GRUB's default, so the release's kernel fits
-  in `/boot` (CentOS 5's default is 200 MB). This is how the previous hop's kernel, once a reboot has moved off it,
+  in `/boot` (the VM tier's CentOS 5 /boot is 200 MiB). This is how the previous hop's kernel, once a reboot has moved off it,
   finally goes. None of the kernel steps acts unless the machine is booted from this root (`/` is PID 1's root): in
   a chroot of someone's disk the records, files and boot entries are left as they are, since `uname -r` there is the
   host's kernel, not the box's. The fallback the running kernel's entry gives is a manual one:
@@ -1378,13 +1379,15 @@ After every hop:
   `[vm].skip`, and `[vm].live` gives their live forms, which ask the running services instead.
 
 A hop ends the replay when its commands fail, when the guest doesn't come back, when its network differs from the
-start, when the newest installed kernel isn't the one running (or the query names none), or when a check that passed
-before it fails after the reboot. Its disk and serial console are kept.
+start, when the newest installed kernel isn't the one running (or the query names none), when the guest no longer
+runs on the firmware the replay boots, or when a check that passed before it fails after the reboot. Its disk and serial console are kept.
 
 The VM box differs from the chroot box in ways a replay can show: it has what the installer adds (`@core`, a kernel, a
-bootloader, a 200 MB `/boot`), SELinux is permissive and the firewall off (kickstart `selinux --permissive`,
-`firewall --disabled`), and `customize` runs before the release's last updates, not after. The kickstart is EL5's
-format for now. A Debian VM box has what debian-installer's minimal install adds (a kernel metapackage, GRUB legacy on
+bootloader, a `/boot` of `releases.<id>.install.boot_part_mib` MiB: 7.9's installer default of 1 GiB on CentOS 7, and
+200 MiB on CentOS 5, a chosen size where 5.11's installer makes 100 MiB), SELinux is permissive and the firewall off (kickstart `selinux --permissive`,
+`firewall --disabled`), and `customize` runs at the end of the install (after `set_release`, with the mirror shim
+where the guest sees the host), before the release's last updates, not after them. The adapter gives the kickstart
+lines that differ by release (EL7's `%end`, GRUB 2 and `net.ifnames=0`, so the NIC is `eth0` as the boxes expect). A Debian VM box has what debian-installer's minimal install adds (a kernel metapackage, GRUB legacy on
 etch, `iproute`, which the harness's own network check reads); an Ubuntu one what trusty's installer adds (GRUB 2,
 `linux-generic`). The adapter gives the preseed lines that differ by installer version (keymap, mirror country, disk
 path, partman names). Ubuntu's installer always adds the release's `-updates` pocket and installs from it, so for a
@@ -1402,23 +1405,52 @@ The rules:
   ssh and http are forwarded to fixed ports on `127.0.0.1`, so a host runs one VM replay at a time.
 - Box: an optional `[vm]` table with `ssh_port` (default 22), `skip` (roles that start their own daemons, which a
   running box already has) and `live` (role name to shell: the live forms of those checks; every skipped role needs
-  one, so skipping never drops a check) and `pockets` (`updates` and/or `security`, once each: the box starts from
-those pockets as well as the release pocket, as a fully updated server does; only on a release whose install is
-`release_pocket_only`; wend#47). The checker holds it to that. The route's hops still read the release pocket
-only, so `pockets` changes the start, never the walk.
+  one, so skipping never drops a check), `pockets` (`updates`, and `security` and/or `backports` beside it, once each: the box
+  starts from those pockets as well as the release pocket, as a fully updated server does; `backports` because
+  trusty's installer also writes an active `-backports` line, which a `customize` that runs `apt-get update` fetches,
+  and apt pins it `NotAutomatic`, so it adds an index, not packages; only on a release whose install is
+  `release_pocket_only`; wend#47; the route's hops still read the release pocket only, so `pockets` changes the start,
+  never the walk) and `root_fs`, the filesystem the installer makes for `/` and `/boot`, one
+  its start release's installer offers (`releases.<id>.install.root_fs`; CentOS 7: `ext3`, `xfs`, v5 and EL 7.3's
+  default, or `xfs-v4`, `-m crc=0 -n ftype=0`, EL 7.0 to 7.2's on-disk format made by 7.9's installer). Without it the
+  kickstart makes ext3. The checker holds it to all that, and the build checks the installed box has its `root_fs`
+  (`xfs_info`'s `crc` and `ftype`).
 - A route that ends with `prune_obsolete` gets the chroot walk's prune after its last hop: the packages the target
   no longer ships are purged and autoremoved, the set split in halves whenever a step fails or a check is lost, and
   each attempt first drops what an earlier autoremove already took. Each attempt runs on its own overlay of the last
   good disk and reboots; a kept attempt is the next base. As in the chroot walk, a removal the prune drops never fails
   the run; a guest that doesn't come up from the last good disk, or a box it can't read, does. It records what was obsolete before and after.
 - Adapter: `releases.<id>.install` names a start release's installer. EL: its `tree` through the shim and the
-  `pxeboot` dir in it (the shim answers single byte ranges, which anaconda uses to read package headers). apt (Debian,
+  `pxeboot` dir in it (the shim answers single byte ranges, which anaconda uses to read package headers), `packages`
+  (what the install needs besides the box's: the bootloader), `ks_end` (sections end with `%end`), `append`
+  (kernel arguments for the installer and the installed system) and `ifname` (the installer's boot line names the NIC
+  by MAC, `ifname=eth0:<mac>`, so EL7's installer pins the ifcfg to it with `HWADDR`, as a box booted that way has)
+  and `boot_part_mib`, the size of the `/boot` partition in MiB (CentOS 7: 1024, 7.9's installer default; 200 when
+  unset). Not `[hardware.<release>].boot_mib`, which is the space one kernel takes in `/boot`. apt (Debian,
   Ubuntu): the `netboot` dir under the start release's mirror, `preseed` (the version's own preseed lines),
   `packages` (what the install needs besides the box's), `release_pocket_only` and `late` (shell the installer runs
   at the end, for the bootloader's serial console). `disk` (`virtio`, `lsi53c895a`) and `nic` (`virtio`, `e1000`) name
-  the emulated hardware, default virtio: the machine keeps them through every hop, so the start release's kernel has
+  the emulated hardware, default virtio, and `uefi` that the installer installs on UEFI firmware: the machine keeps them through every hop, so the start release's kernel has
   to know them (etch's has no virtio). `hop.kernel_newest` prints the newest installed kernel as `uname -r` names it;
   after every reboot it has to be the running one.
+- Firmware: BIOS (SeaBIOS) by default; `--uefi` boots every guest on OVMF (UEFI without Secure Boot) instead. The
+  box is built and cached apart from its BIOS build, the installer runs in UEFI mode (QEMU hands it the installer's
+  kernel as an EFI stub), the installer makes an EFI system partition (kickstart `part /boot/efi`; debian-installer's
+  atomic recipe makes one itself), and each disk carries its own copy of the NVRAM, made from the one before it, so a
+  hop boots from the boot entries the last one left. After the install and after every reboot the guest has to still
+  run on UEFI (`/sys/firmware/efi`). A start release whose installer can't install on UEFI isn't built:
+  `releases.<id>.install.uefi` says it can (trusty, CentOS 7; not etch or CentOS 5, whose installers predate UEFI on
+  x86-64, so no machine running them boots that way). A run records its `firmware`, and resumes only a run on the same.
+- Disk layout: by default anaconda makes `/boot` (the release's default size), swap and `/` as plain partitions on one
+  disk. Three install choices, given before the command, change that for an EL7-and-later kickstart: `--root-fs`
+  overrides the box's `root_fs` (one the installer makes); `--lvm` lays the disk out as EL7's own autopart does
+  (`/boot`, then one PV in a volume group
+  `centos` holding `swap` and a `root` that fills it, so no extents are free); `--extra-disk GB` (repeatable) adds an
+  empty disk on the same controller, which anaconda never touches (`ignoredisk --only-use`) and which carries its own
+  overlay through every hop like the first. They are install choices, not boxes: a chroot box has no disks, so the box
+  and its checks are the same either way. A layout is built and cached apart, a run records its `layout`, and resumes
+  only a run with the same. This is how the VM tier makes a CentOS 7 machine installed from 7.0 to 7.2 media (`--root-fs
+  xfs-v4 --lvm`) and gives rebuild and carry its room (`--extra-disk`, see `docs/rebuild-and-carry.md`).
 - `replay ROUTE BOX --from RUN HOP` starts from an earlier run's disk after the hop before HOP, to iterate on a late
   hop. It only resumes from a hop that passed on the same box, logs in with the ssh key of the box build that disk
   came from, and is recorded as `partial-pass` at best, never `pass`.
@@ -1430,6 +1462,80 @@ only, so `pockets` changes the start, never the walk.
   extended-attribute reference counts too high. A userspace fsck cleans the same orphans correctly, but EL7 mounts
   the root before any fsck, and EL9's forced fsck then stops the boot. Only PID 1's own files stay orphaned, and
   those come through clean. A client on a real machine must stop the processes the same way.
+
+## Relocate (VM tier for now)
+
+Relocate is the first half of rebuild and carry (`docs/rebuild-and-carry.md`): copy the running root onto a fresh
+filesystem beside it, boot the copy once on trial, keep the old root untouched as the rollback. It's for machines a
+route's kernels can't read: CentOS 7 installed from 7.0 to 7.2 media has XFS v4 on `/` and `/boot`, which EL10's
+kernel can't mount, and XFS has no in-place conversion. The copy is the same machine on XFS v5 (made by the running
+release's own `mkfs.xfs`, so every kernel from the running one on mounts it); routes then walk it as they walk any box.
+Harness work, like the kernel steps: the adapter's `[relocate]` table holds the commands, fixes can't reach them, and
+it's reviewed as a spec change. Built for EL7 on BIOS with GRUB 2, `/` on LVM, `/boot` a plain partition, and the
+new root on a whole empty disk the owner names. Everything else is refused.
+
+The steps, in order, each a list of scripts that run inside the booted machine and stop at the first failure (`set
+-e`), then `cleanup` whatever happened:
+
+- `preflight` refuses, naming why, before anything is written: UEFI; no GRUB 2 for BIOS or no `rsync`; `/boot` not a
+  plain partition of its own; `/` not on LVM; a stub or a `wend-root` LV from an earlier relocate; LUKS anywhere;
+  any other filesystem mounted from a disk (carrying more than `/` and `/boot` isn't built, and one left in place
+  would be shared by both roots, so the trial would write the rollback's data); an XFS filesystem in fstab that isn't
+  mounted; a newer kernel than the running one, or yum running; and a new disk that isn't a whole disk
+  with no partitions, no signature, not mounted, not a PV, not the boot disk, and at least 1.2 times what `/` and
+  `/boot` use plus `{route_mib}` (what the route's hops need). It writes the facts the later steps and boots read
+  to `/var/lib/wend/relocate.env` (the volume group and the old LV, the boot disk, the old `/boot`'s UUID, the new
+  disk), which the copy carries.
+- `refresh`: the running release's own `grub2-install` onto the boot disk, with the old `/boot/grub2` as its prefix.
+  EL 7.0 and 7.1's `core.img` can't read XFS v5, and every module under a prefix has to come from `core.img`'s build.
+  It's the only write to the boot disk's MBR, and it runs before the copy so the copy carries the same modules.
+- `place`: the new disk becomes a PV in the root's volume group, with one LV `wend-root` filling it, made XFS v5
+  (`-m crc=1 -n ftype=1`, checked) and mounted at `/run/wend/new`.
+- `copy`: rsync (`-aHAXS --numeric-ids`) from a bind mount of `/` (which shows what mounts hide and nothing mounted
+  under it), and the old `/boot` into the copy's `/boot`. Once live, then again with `--delete` after every running
+  service is stopped except what keeps the machine reachable and safe (sshd, NetworkManager, firewalld, auditd, dbus,
+  polkit, systemd's own). They stay stopped until the trial boot, so downtime is the second pass and one boot.
+- `fixup`, in the copy only: fstab names the new root by UUID and drops `/boot` (a directory in the copy now); the
+  kernel line's `rd.lvm.lv=` names the new LV instead of the old; every kernel gets an initramfs that isn't host-only
+  (an old one activates only the old LV), and one that can't is dropped from the copy unless it's the running kernel;
+  `grub2-mkconfig` writes the copy's config, which has to boot the new root; SELinux labels are fixed offline from
+  outside (`setfiles -r`), never with `/.autorelabel` (EL7's relabel reboots, ending the trial).
+- `flip`: the old `/boot/grub2/grub.cfg` moves to `grub.cfg.wend-old` and a stub takes its place. The stub's entry 0
+  finds the new root by UUID and sets `prefix` there before loading its config (so every module and the `grubenv`
+  after that are the new root's); entry 1 loads the old config as it was. The stub keeps its own variables in the old
+  `/boot`'s `grubenv`, never the configs' `saved_entry` or `next_entry`: `wend_next`, if 0 or 1, is a one-shot boot
+  GRUB clears before taking it; otherwise `wend_default`, and the old root unless it says 0. If entry 0 fails inside
+  GRUB, it falls back to entry 1 (`fallback=1`), which first puts `root` and `prefix` back to the old `/boot` as GRUB
+  found it (a failed entry 0 may have moved them), so a remote machine doesn't sit at a menu. The flip leaves the old
+  root the default, arms the trial (`wend_next=0`) as its last write, then freezes and thaws `/boot` so the XFS log
+  is written home (GRUB doesn't replay it). Nothing on the old root changes.
+- `release` unmounts everything under `/run/wend` and checks nothing is left. `cleanup` does the same after a failure,
+  and starts the stopped services again if the flip never happened.
+
+Between boots: `booted` says which root is up (`new`, which must be XFS v5, or `old`); `arm` tries the new root once
+more from the old one; `commit_trial` makes the new root the default (it mounts the old `/boot`, which the copy's
+fstab doesn't); `rollback_next` boots the old root once.
+
+The copy's `fixup` chroot sees the machine's own `/dev` (bound), `/proc` and `/sys`, all unmounted before the step
+ends and checked against `/proc/self/mountinfo` before the labels are fixed. That's an exception to the sandbox rules
+above, and it's reachable only from the adapter's `[relocate]` table, inside the machine being relocated, never a box
+on a harness host. Nothing under `/run/wend/new` is ever deleted: a failed relocate leaves the LV for a look.
+
+`tools/vm.py --extra-disk GB relocate BOX` proves it on a fresh copy of a box (with `--root-fs xfs-v4 --lvm`, a 7.0
+to 7.2 install), the new root on the first extra disk. After the steps, each followed by which root came up, the box's
+checks, its network and its firmware: the trial boot (new), a hard reset from outside, as a power cut (old: the trial
+was one-shot), the trial again (new), commit to the trial and reboot (new), a one-shot rollback (old), and one more
+reboot (new). Its run goes to `.wend/vm/` (schema `wend.vmrelocate/0`), with each stage, how long the steps and the
+trial boot took, and what the new root uses. `tools/test_relocate.py` checks preflight's refusals, the copy's fstab and
+kernel line, and the flip (with the real `grub-editenv`, and `grub-script-check` on the stub) without a machine.
+
+Between the flip and commit, the old root must not install a kernel: its grubby and `grub2-mkconfig` write through
+`/etc/grub2.cfg` to the stub. The harness never does (the services are stopped and the trial boot follows the flip
+at once); a client will have to hold kernel updates while the stub is in charge.
+
+Not built yet: free extents in the volume group instead of a disk, a root on a plain partition, other v4 filesystems,
+UEFI (the same stub on the ESP), the route's GRUB reinstall at EL8 (see the doc), the client's preflight verdict,
+`wend commit` and `wend rollback`.
 
 ## Open questions
 
