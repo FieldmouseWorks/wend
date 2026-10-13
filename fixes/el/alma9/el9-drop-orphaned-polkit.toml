@@ -16,4 +16,4 @@ name = "el9-drop-orphaned-polkit"
 author = "claude (wend#13, hand-written from the VM replay)"
 source = "wend#13"
 note = "On EL6, hal pulls in ConsoleKit, which requires polkit, and EL7's polkit brings polkit-pkla-compat. From EL9 nothing hard-requires polkit any more: polkit-pkla-compat only has Requires(pre): polkit, which rpm -e and rpm -q --whatrequires ignore. So the services check flags polkit as a new service family the box never ran. Removing polkit alone isn't enough: EL10's transaction upgrades polkit-pkla-compat and installs polkit again for that Requires(pre) (seen in the replay), so both go. Not a narrow gate: on a box where something does require polkit (pcsc-lite, tuned, accountsservice, ...), rpm -e refuses and the alma9 hop rolls back, so such a box needs a different fix (wend#27). Local .pkla or polkit rules that grant non-root users actions stop applying."
-fires_on = ["el/centos5-web", "el/centos7-lamp"]
+fires_on = ["el/centos5-web", "el/centos7-lamp", "el/centos8-lamp"]

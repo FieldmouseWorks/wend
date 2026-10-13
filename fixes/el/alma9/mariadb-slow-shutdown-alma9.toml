@@ -15,4 +15,4 @@ author = "claude-opus-5-5 medium (dep-lab guided run A)"
 curated_by = "claude (wend port to typed ops)"
 source = "dep-lab centos/fixes-v3.json: a9-mariadb-rehash-and-clean-stop"
 note = "Stops MariaDB 5.5 with innodb_fast_shutdown=0 before the hop, so the next major version opens clean data files."
-fires_on = ["el/centos5-web", "el/centos7-lamp"]
+fires_on = ["el/centos5-web", "el/centos7-lamp", "el/centos8-lamp"]

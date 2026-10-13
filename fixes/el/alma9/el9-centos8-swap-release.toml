@@ -1,0 +1,17 @@
+# Hand-written for the CentOS 8 route (CentOS 8 -> AlmaLinux 9 with EL8's own dnf).
+schema = "wend.fix/0"
+family = "el"
+hop = "alma9"
+when = { installed = "centos-linux-release" }
+restores = ["pkgdb"]
+adds = []
+
+[[pre]]
+op = "rpm.swap-release"
+remove = "centos-linux-release"
+install = "almalinux-release"
+
+[meta]
+name = "el9-centos8-swap-release"
+note = "CentOS 8's release package names a vendor and an epoch dnf won't trade for AlmaLinux's, so it is swapped by hand for AlmaLinux 9's before the distro-sync."
+fires_on = ["el/centos8-lamp"]
