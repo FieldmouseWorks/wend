@@ -1,7 +1,8 @@
 """The Ubuntu old-kernel purge (adapters/ubuntu.toml, hop.kernel_before, SPEC "Kernels and the bootloader") by
 behaviour: every package of a kernel older than the running one goes, in one dpkg call, and nothing else does (the
 running kernel, a newer one not booted yet, the metapackages, linux-firmware, removed-but-configured leftovers, an
-old kernel on hold or one dpkg would refuse to purge because something still depends on it). It runs
+old kernel on hold or one dpkg would refuse to purge because something still depends on it, and every kernel while
+the running one isn't Ubuntu's). It runs
 the PR's own adapter text, so the gate's schema job (which judges a PR with the base branch's tools and never runs the
 PR's code) doesn't run it: `wend check` and the client job do.
 python3 tools/test_kernels_apt.py"""
@@ -42,6 +43,7 @@ for name, running, refuse, held, dpkg_rc, want_rc, want in (
         ("an old kernel on hold stays, the others go", "4.4.0-21-generic", [], ["linux-headers-3.13.0-24"], 0, 0,
          sorted(set(OLD) - set(T13))),
         ("every old kernel refused: dpkg purges nothing", "4.4.0-21-generic", OLD, [], 0, 0, None),
+        ("a provider's kernel is running: every Ubuntu kernel stays", "6.1.10-x86_64-linode158", [], [], 0, 0, None),
         ("the purge itself fails: the hop fails", "4.4.0-21-generic", [], [], 2, 1, sorted(OLD))):
     with tempfile.TemporaryDirectory() as t:
         os.makedirs(f"{t}/bin")
