@@ -291,7 +291,7 @@ ok = (body[0] == "let mask = RootUmask::set();" and "drop(mask);" in code
       and code.index("drop(mask);") < code.index("&o.steps") < code.index("&o.out"))
 print(("passed  " if ok else "WRONG   ") + "client cmd_walk walks under RootUmask, drops it before --steps and --out")
 bad += not ok
-# a box's [vm] table (tools/vm.py): only ssh_port, skip and live, each well formed
+# a box's [vm] table (tools/vm.py): only ssh_port, skip, live and pockets, each well formed
 web = check.load_all()[3]["el/centos5-web"]
 for name, vm, want in (("the web box's own [vm]", web.get("vm", {}), False),
                        ("[vm] skip names a role the box doesn't have", {**web["vm"], "skip": ["dbb"]}, True),
@@ -352,6 +352,55 @@ for line, want in (("30 2 1,15 * 1 /x", ["*-*-01,15 02:30:00", "Mon *-*-* 02:30:
     got = shelter.cron_calendar(line)[0]
     print(("passed  " if got == want else f"WRONG   {got} ") + f"cron {line!r}")
     bad += got != want
+# [vm].pockets: the -updates/-security pockets a box built from them asks the VM installer for (wend#47)
+tweb = check.load_all()[3]["ubuntu/trusty-web"]
+for name, box, want in (("[vm] pockets on a release_pocket_only release", {**tweb, "vm": {**tweb["vm"], "pockets": ["updates", "security"]}}, False),
+                        ("[vm] pockets naming backports", {**tweb, "vm": {**tweb["vm"], "pockets": ["backports"]}}, True),
+                        ("[vm] pockets naming one twice", {**tweb, "vm": {**tweb["vm"], "pockets": ["updates", "updates"]}}, True),
+                        ("[vm] pockets as a string", {**tweb, "vm": {**tweb["vm"], "pockets": "updates"}}, True),
+                        ("[vm] pockets on a release whose install isn't release_pocket_only",
+                         {**web, "vm": {**web["vm"], "pockets": ["updates"]}}, True)):
+    errs = check.check_box(box, adapters, "boxes/ubuntu/trusty-web/box.toml")
+    print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
+    bad += bool(errs) != want
+# the VM installer's pocket proxy: the release pocket always, -updates/-security only when the box asks ([vm].pockets)
+import http.server as _hs  # noqa: E402
+import threading as _th  # noqa: E402
+import urllib.request as _ur  # noqa: E402
+import vm as _vm  # noqa: E402
+
+
+class _Up(_hs.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+    def log_message(self, *a):
+        pass
+
+
+_up = _hs.ThreadingHTTPServer(("127.0.0.1", 0), _Up)
+_th.Thread(target=_up.serve_forever, daemon=True).start()
+for allow, path, want in (((), "/ubuntu/dists/trusty/Release", 200), ((), "/ubuntu/dists/trusty-updates/Release", 404),
+                          ((), "/ubuntu/dists/trusty-security/Release", 404),
+                          (("updates", "security"), "/ubuntu/dists/trusty-updates/Release", 200),
+                          (("updates", "security"), "/ubuntu/dists/trusty-security/Release", 200),
+                          (("updates", "security"), "/ubuntu/dists/trusty-backports/Release", 404),
+                          (("updates",), "/ubuntu/dists/trusty-security/Release", 404)):
+    px = _vm.PocketProxy(f"http://127.0.0.1:{_up.server_address[1]}", allow)
+    try:
+        got = _ur.urlopen(f"http://127.0.0.1:{px.port}{path}", timeout=10).status
+    except _ur.HTTPError as e:
+        got = e.code
+    finally:
+        px.httpd.shutdown()
+        px.httpd.server_close()
+    name = f"the VM pocket proxy allowing {list(allow)} answers {want} for {path}"
+    print(("passed  " if got == want else f"WRONG   got {got}: ") + name)
+    bad += got != want
+_up.shutdown()
 # the kernel handover's place in a hop (SPEC "Kernels and the bootloader"): right after refresh, and right after the
 # upgrade; Debian has only the second. Parity holds the client to the same order.
 import walk as _walk  # noqa: E402

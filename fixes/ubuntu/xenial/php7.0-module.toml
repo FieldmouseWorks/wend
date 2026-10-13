@@ -19,5 +19,5 @@ name = "php7.0"
 name = "php7.0-module"
 author = "agent (claude-code / opus 5.5)"
 found_on = "ubuntu/trusty-web"
-fires_on = ["ubuntu/trusty-web"]
+fires_on = ["ubuntu/trusty-web", "ubuntu/trusty-web-updated"]
 reason = "Xenial drops PHP 5: the dist-upgrade removes the php5 Apache module and leaves php5-cli orphaned. Install PHP 7.0's CLI and Apache module, which xenial ships, and enable the module."

@@ -1360,7 +1360,9 @@ preseed for Debian and Ubuntu (appended to the installer's initrd, so it needs n
 `box.toml`: its packages, `customize` and `start_hook` (and the apt boxes' `debconf_selections`), a static address and the
 release's kernel and bootloader. The box is then brought to the release's last packages, as the chroot build does
 (apt: the harness's `hop.apt_conf` first, then `set_release`, `refresh` and `apt-get dist-upgrade`, which on a
-frozen release pocket changes nothing the installer didn't already fetch). An apt box must then hold only versions
+frozen release pocket changes nothing the installer didn't already fetch). A box that asks for `[vm].pockets` gets
+those pockets added to `sources.list` right after `set_release` (each of the release's `deb` lines again for
+`{release}-{pocket}`), so its dist-upgrade brings it to their last packages. An apt box must then hold only versions
 its `sources.list` offers (`apt-cache madison`), or the build fails naming them: a box with packages from another
 pocket isn't the box the route starts from. Each hop compiles exactly the commands the chroot harness
 runs (the same `hop_cmds`), runs them inside the running guest, and reboots it for real (checked by `boot_id`).
@@ -1385,7 +1387,8 @@ etch, `iproute`, which the harness's own network check reads); an Ubuntu one wha
 `linux-generic`). The adapter gives the preseed lines that differ by installer version (keymap, mirror country, disk
 path, partman names). Ubuntu's installer always adds the release's `-updates` pocket and installs from it, so for a
 release with `release_pocket_only` the harness gives the installer a mirror (a proxy on the host) that answers 404
-for every `-updates`, `-security`, `-backports` and `-proposed` suite. Its static address is not the one QEMU's DHCP
+for every `-updates`, `-security`, `-backports` and `-proposed` suite, except the ones the box lists in
+`[vm].pockets`. Its static address is not the one QEMU's DHCP
 hands out and the forwards point at it, so a box that falls back to DHCP is unreachable and fails the hop.
 
 The rules:
@@ -1397,7 +1400,10 @@ The rules:
   ssh and http are forwarded to fixed ports on `127.0.0.1`, so a host runs one VM replay at a time.
 - Box: an optional `[vm]` table with `ssh_port` (default 22), `skip` (roles that start their own daemons, which a
   running box already has) and `live` (role name to shell: the live forms of those checks; every skipped role needs
-  one, so skipping never drops a check). The checker holds it to that.
+  one, so skipping never drops a check) and `pockets` (`updates` and/or `security`, once each: the box starts from
+those pockets as well as the release pocket, as a fully updated server does; only on a release whose install is
+`release_pocket_only`; wend#47). The checker holds it to that. The route's hops still read the release pocket
+only, so `pockets` changes the start, never the walk.
 - A route that ends with `prune_obsolete` gets the chroot walk's prune after its last hop: the packages the target
   no longer ships are purged and autoremoved, the set split in halves whenever a step fails or a check is lost, and
   each attempt first drops what an earlier autoremove already took. Each attempt runs on its own overlay of the last

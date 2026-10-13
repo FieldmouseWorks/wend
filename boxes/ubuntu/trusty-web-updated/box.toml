@@ -1,0 +1,61 @@
+# CI fixture: ubuntu/trusty-web as most trusty servers are, with every update trusty-updates and trusty-security
+# (standard support ended in 2019) and ubuntu-advantage-tools 19.7ubuntu0.2, whose postinst
+# writes an ESM pin xenial's apt refuses (wend#47). The route's hops read release pockets only, so this box is the one
+# that starts from newer packages than the hop's own.
+# Box files are trusted test code: humans review them, clients never run them.
+schema = "wend.box/0"
+family = "ubuntu"
+release = "trusty"
+arch = "amd64"
+summary = "trusty web server, fully updated: Apache 2.4 + mod_php5 vhost, postfix, ssh on 2222, cron, ubuntu-advantage-tools"
+packages = ["openssh-server", "apache2", "libapache2-mod-php5", "php5-cli", "postfix", "cron", "rsync", "sudo", "python", "python3", "perl", "curl", "ntp", "logrotate", "less"]
+customize = '''
+set -e
+sed -n 's/^deb \([^ ]*\) trusty \(.*\)$/deb \1 trusty-updates \2\ndeb \1 trusty-security \2/p' /etc/apt/sources.list > /tmp/pockets
+cat /tmp/pockets >> /etc/apt/sources.list
+rm /tmp/pockets
+apt-get update
+apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade
+apt-get -y install ubuntu-advantage-tools
+grep -qx 'Pin-Priority: never' /etc/apt/preferences.d/ubuntu-esm-infra-trusty
+mkdir -p /var/www/mysite
+printf '<?php echo "hello from oldbox " . strtoupper("ok") . "\\n"; ?>\n' > /var/www/mysite/index.php
+cat > /etc/apache2/sites-available/mysite.conf <<'EOF'
+<VirtualHost *:80>
+    ServerName mysite.local
+    DocumentRoot /var/www/mysite
+    <Directory /var/www/mysite>
+        Require all granted
+    </Directory>
+</VirtualHost>
+EOF
+a2ensite mysite
+postconf -e myhostname=oldbox.example.org
+
+useradd -m -s /bin/bash alice
+mkdir -p /home/alice/backup
+sed -i 's/^Port 22$/Port 2222/' /etc/ssh/sshd_config
+echo '0 3 * * * /usr/bin/rsync -a /var/www/ /home/alice/backup/ # nightly-backup' | crontab -u alice -
+apt-get clean
+'''
+start_hook = "dpkg-query -W -f '${Package}\\n' | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 's/^mariadb$/mysql/' -e 's/^ntpsec$/ntp/' | sort -u > /var/lib/ol-expected-families; printf 'dbus\\nsystemd\\nutil\\n' >> /var/lib/ol-expected-families"
+debconf_selections = ["postfix postfix/main_mailer_type select Internet Site", "postfix postfix/mailname string oldbox.example.org"]
+
+[roles]
+ssh = "mkdir -p /var/run/sshd /run/sshd; /usr/sbin/sshd -t && grep -q '^Port 2222' /etc/ssh/sshd_config"
+cron = "test -x /usr/sbin/cron && crontab -l -u alice | grep nightly-backup"
+python = "python3 -c 'print(6*7)' | grep 42 || python -c 'print 6*7' | grep 42"
+tools = "perl -e 1 && curl -s file:///etc/lsb-release && rsync --version && sudo -V && id alice"
+services = "for p in $(ls /etc/init.d/* /lib/systemd/system/*.service /usr/lib/systemd/system/*.service 2>/dev/null | while read f; do dpkg -S \"$f\" 2>/dev/null | grep -v ^diversion | cut -d: -f1 | tr ', ' '\\n\\n'; done | sort -u | while read p; do s=$(dpkg-query -W -f '${Status}|${Priority}' \"$p\" 2>/dev/null); echo \"$s\" | grep -q 'ok installed|' && ! echo \"$s\" | grep -qE '[|](required|important)$' && ! awk -v p=\"$p\" '$1==\"Package:\"{x=($2==p)} x&&$1==\"Auto-Installed:\"&&$2==1{f=1} END{exit !f}' /var/lib/apt/extended_states 2>/dev/null && echo $p; done); do f=$(echo $p | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 's/^mariadb$/mysql/' -e 's/^ntpsec$/ntp/'); grep -qxs \"$f\" /var/lib/ol-expected-families /var/lib/wend/added-families || { echo \"unexpected new service package: $p\"; exit 1; }; done"
+web = "apache2ctl -t && apache2ctl -S 2>&1 | grep mysite.local && apache2ctl -M 2>&1 | grep -i php"
+php = "php /var/www/mysite/index.php | grep 'hello from oldbox OK'"
+mail = "postfix check && test \"$(postconf -h myhostname)\" = oldbox.example.org"
+current = "for f in $(command -v php) $(sed -n 's/^LoadModule [^ ]* //p' /etc/apache2/mods-enabled/php*.load); do f=$(readlink -f \"$f\"); p=$(dpkg -S \"$f\" 2>/dev/null | grep -v ^diversion | head -n1 | cut -d: -f1); test -n \"$p\" && test -n \"$(apt-cache madison \"$p\")\" || { echo \"$f comes from package '$p', which the current release does not ship\"; exit 1; }; done"
+
+# tools/vm.py: the same box installed in a VM by trusty's debian-installer. Its roles all work offline on a running
+# box; the live checks ask the running services after every reboot.
+[vm]
+ssh_port = 2222
+# the VM installer starts it from -updates and -security too (tools/vm.py, SPEC "VM tier"), as the chroot box does
+pockets = ["updates", "security"]
+live = { daemons = "for i in $(seq 1 30); do ok=1; for p in apache2 master cron sshd; do pgrep -x $p >/dev/null || ok=0; done; [ $ok = 1 ] && exit 0; sleep 2; done; for p in apache2 master cron sshd; do pgrep -x $p >/dev/null || echo \"$p is not running\"; done; exit 1", site = "for i in $(seq 1 30); do curl -s -H 'Host: mysite.local' http://127.0.0.1/ | grep -q 'hello from oldbox OK' && exit 0; sleep 2; done; curl -s -H 'Host: mysite.local' http://127.0.0.1/ | head -c 300; exit 1" }
