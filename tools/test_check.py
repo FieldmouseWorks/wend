@@ -109,6 +109,10 @@ for name, mutate in {
     "an adapter missing a booted release's hardware": lambda a: a["hardware"].pop("alma10"),
     "an adapter that doesn't say which old kernels a hop keeps in /boot": lambda a: a["hardware"].pop("old_kernels"),
     "an adapter whose release has no /boot footprint": lambda a: a["hardware"]["alma9"].pop("boot_mib"),
+    "an adapter without runtime tables (SPEC \"Runtime preflight\")": lambda a: a.pop("runtimes"),
+    "an adapter missing a booted release's runtimes": lambda a: a["runtimes"].pop("alma9"),
+    "an adapter that doesn't say whether a release ships Python 2": lambda a: a["runtimes"]["alma9"].pop("python2"),
+    "an adapter whose Python 2 version isn't a version": lambda a: a["runtimes"]["centos7"].update(python2=["2.7*"]),
 }.items():
     a = copy.deepcopy(adapters["el"])
     mutate(a)

@@ -10,6 +10,7 @@ mod check;
 mod fetch;
 mod hardware;
 mod hop;
+mod runtime;
 mod sandbox;
 mod walk;
 
@@ -35,11 +36,12 @@ wend: walk a proven upgrade route on a machine. No model, no network beyond your
                                     --run: the repos only serve what that run's pinned sources vouch for,
                                     from the cache, each --source (laid out host/path), then the origin
   wend facts                        what preflight reads about this machine: CPU level features, firmware, memory,
-                                    free disk, PCI devices and their drivers (JSON)
+                                    free disk, PCI devices and their drivers, its own Python 2 programs (JSON)
   wend preflight ROUTE [--facts FILE] [--json]
                                     can this machine land on every release the route boots it into? CPU level,
                                     firmware, memory, disk, and the disk and network drivers each release's
-                                    kernel has. Says the furthest release it can land on; exits 1 short of the end
+                                    kernel has, and whether each still ships the Python 2 the machine's own
+                                    programs run. Says the furthest release it can land on; exits 1 short of the end
   wend parity INPUT.json            machine output for client/parity.py (the Python engine must agree)
 
 Options: --atlas DIR (default: the current directory, laid out like the wend repo).
@@ -95,7 +97,14 @@ fn main() -> ExitCode {
     }
     if cmd == "facts" && args.len() == 1 {
         // no atlas needed: run it on the machine, judge the file anywhere (`preflight --facts`)
-        println!("{}", serde_json::to_string_pretty(&hardware::gather()).unwrap());
+        let f = match hardware::gather() {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("wend: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        println!("{}", serde_json::to_string_pretty(&f).unwrap());
         return ExitCode::SUCCESS;
     }
     let atlas = match Atlas::load(&root) {
@@ -168,7 +177,7 @@ fn cmd_preflight(atlas: &Atlas, route: &str, facts: Option<&str>, as_json: bool)
     let f = match facts {
         Some(p) => serde_json::from_str(&std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?)
             .map_err(|e| format!("{p}: {e}"))?,
-        None => hardware::gather(),
+        None => hardware::gather()?,
     };
     let v = hardware::evaluate(atlas, r, &f)?;
     if as_json {
