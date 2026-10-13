@@ -22,7 +22,10 @@ q = json.load(open(%r))
 if q.get("fail"):
     sys.stderr.write("ifquery: /etc/network/interfaces:24: misplaced option\\n"); sys.exit(1)
 a = sys.argv[1:]
-if a == ["--state"]:
+if a == ["--list", "--all"]:
+    if q.get("badconf"):
+        sys.stderr.write("ifquery: /etc/network/interfaces:3: misplaced option\\n"); sys.exit(1)
+elif a == ["--state"]:
     print("\\n".join(q["state"]))
 elif a[:2] == ["--no-mappings", "--"] and "raw" in q:
     sys.stdout.buffer.write(bytes.fromhex(q["raw"]))
@@ -162,6 +165,8 @@ for name, q, why, kw in (
          {"prepare": lambda p: (os.makedirs(os.path.dirname(os.path.dirname(p)) + ".real"),
                                 os.symlink(os.path.dirname(os.path.dirname(p)) + ".real",
                                            os.path.dirname(os.path.dirname(p))))}),
+        ("an unreadable configuration on a box with no state", {"state": [], "ifaces": {}, "badconf": True},
+         "misplaced option", {}),
         ("a continuation before any option", with_eth0(["10.0.2.3"] + ETH0), "before any option", {}),
         ("a state interface that reads as an option", with_eth0(ETH0, ["lo=lo", "--help=eth0"]), "isn't 'interface=",
          {}),
