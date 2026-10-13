@@ -876,9 +876,10 @@ harness, not to fixes, because the release's own tools can't carry them up the l
   the files of kernels that no package owns and that aren't running or GRUB's default, so the release's kernel fits
   in `/boot` (the VM tier's CentOS 5 /boot is 200 MiB), its kdump image with it. This is how the previous hop's kernel,
   once a reboot has moved off it, finally goes. The rescue image (`vmlinuz-0-rescue-<machine id>`, its initramfs and BLS
-  entry) goes too, unless it is or may be GRUB's default (GRUB legacy's `default=saved`, GRUB 2's `saved_entry`): it is
-  the old release's kernel with a generic initramfs (62 MiB on EL7), and EL9's `51-dracut-rescue.install`, finding no
-  BLS entry for it, copies the new `vmlinuz` over the old one and keeps EL7's initramfs. No hop builds another:
+  entry) goes too, unless it is or may be GRUB's default (GRUB legacy's `default=saved`; GRUB 2's `saved_entry` or
+  `GRUB_DEFAULT` naming it or a menu number other than 0): it is the old release's kernel with a generic initramfs
+  (62 MiB on EL7), and EL9's `51-dracut-rescue.install`, finding no BLS entry for it, copies the new `vmlinuz` over
+  the old one and keeps EL7's initramfs. No hop builds another:
   `hop.kernel_before` sets `dracut_rescue_image="no"` in a drop-in (`/etc/dracut.conf.d/99-wend-no-rescue.conf`) that
   `hop.after` removes, since a generic image of 54 MiB (Alma 9) or 65 MiB (Alma 10) doesn't fit the VM tier's 200 MiB
   CentOS 5 `/boot` beside two kernels. The machine lands without a rescue image, and its next kernel update builds one

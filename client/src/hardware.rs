@@ -235,11 +235,10 @@ fn boot_dir(dir: &Path, running: &str) -> Value {
         "rescue_default": match fs::read_to_string(dir.join("grub/grub.conf")) {
             Ok(g) => grub_default_is_rescue(&g),
             Err(e) => e.kind() != std::io::ErrorKind::NotFound,
-        } || match fs::read_to_string(dir.join("grub2/grubenv")) {
-            // GRUB 2's saved default (EL7's menu title, EL8 on a BLS id), as kernel_before greps it
-            Ok(g) => g.lines().any(|l| l.starts_with("saved_entry=") && l.contains("0-rescue")),
-            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
-        },
+        } || grub2_default_may_be_rescue(
+            read_maybe(&dir.parent().unwrap_or(Path::new("/")).join("etc/default/grub")),
+            read_maybe(&dir.join("grub2/grubenv")),
+        ),
     })
 }
 
@@ -272,6 +271,39 @@ fn grub_default_is_rescue(conf: &str) -> bool {
         }
     }
     true
+}
+
+/// A file's text, `Some("")` when it isn't there, `None` when it is but can't be read.
+fn read_maybe(path: &Path) -> Option<String> {
+    match fs::read_to_string(path) {
+        Ok(t) => Some(t),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(String::new()),
+        Err(_) => None,
+    }
+}
+
+/// Whether GRUB 2's default may boot the rescue image, read as EL's kernel_before reads it: `GRUB_DEFAULT` (quotes
+/// dropped) names it or a menu entry other than 0; or it is `saved` (or unset) and grubenv's `saved_entry` names the
+/// rescue image (EL7's menu title, a BLS id from EL8 on) or a menu number (`grub2-set-default 2`, `1>2`). A file that
+/// can't be read may say either.
+fn grub2_default_may_be_rescue(default_grub: Option<String>, grubenv: Option<String>) -> bool {
+    let last = |text: &str, key: &str| {
+        text.lines()
+            .filter_map(|l| l.strip_prefix(key))
+            .next_back()
+            .map(str::to_string)
+            .unwrap_or_default()
+    };
+    let Some(dg) = default_grub else { return true };
+    match last(&dg, "GRUB_DEFAULT=").replace(['"', '\''], "").as_str() {
+        "" | "saved" => {
+            let Some(env) = grubenv else { return true };
+            let s = last(&env, "saved_entry=");
+            s.contains("0-rescue") || (!s.is_empty() && s.chars().all(|c| c.is_ascii_digit() || c == '>'))
+        }
+        "0" => false,
+        _ => true,
+    }
 }
 
 /// The MiB the rescue image (`vmlinuz-0-rescue-<machine id>`, its `.hmac` and initramfs) takes, rounded up.
@@ -1676,6 +1708,22 @@ mod tests {
         // no default= line: GRUB boots entry 0
         let first = "title rescue\n\tkernel /vmlinuz-0-rescue-ab ro\ntitle CentOS\n\tkernel /vmlinuz-2.6.32 ro\n";
         assert!(grub_default_is_rescue(first));
+        // GRUB 2: grubenv's saved_entry, or GRUB_DEFAULT when it isn't `saved`
+        let g2 = |d: &str, e: &str| grub2_default_may_be_rescue(Some(d.into()), Some(e.into()));
+        let saved = "GRUB_DEFAULT=saved\n";
+        assert!(!g2(
+            saved,
+            "saved_entry=CentOS Linux (3.10.0-1160.el7.x86_64) 7 (Core)\n"
+        ));
+        assert!(g2(saved, "saved_entry=CentOS Linux (0-rescue-ab) 7 (Core)\n"));
+        assert!(g2(saved, "saved_entry=2\n"));
+        assert!(g2(saved, "saved_entry=1>2\n"));
+        assert!(!g2(saved, "saved_entry=3f2a9c-4.18.0-553.el8.x86_64\n"));
+        assert!(!g2("", ""));
+        assert!(!g2("GRUB_DEFAULT=\"0\"\n", "saved_entry=2\n"));
+        assert!(g2("GRUB_DEFAULT='2'\n", ""));
+        assert!(grub2_default_may_be_rescue(Some(saved.into()), None));
+        assert!(grub2_default_may_be_rescue(None, Some(String::new())));
     }
 
     /// Debian's apt autoremoves no kernel before jessie's: on the hop to jessie every kernel is still there.
