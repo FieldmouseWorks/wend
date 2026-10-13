@@ -272,20 +272,21 @@ pub fn check_facts(f: &Value) -> Result<(), String> {
     {
         return bad("cpu.features");
     }
-    let dev_ok =
-        |d: &Value| {
-            d["slot"].is_string()
-                && d["class"].as_str().is_some_and(|c| {
-                    c.len() == 8 && c.starts_with("0x") && c[2..].bytes().all(|b| b.is_ascii_hexdigit())
-                }) && d["modalias"].as_str().is_some_and(|m| {
+    let dev_ok = |d: &Value| {
+        d["slot"].is_string()
+            && d["class"]
+                .as_str()
+                .is_some_and(|c| c.len() == 8 && c.starts_with("0x") && c[2..].bytes().all(|b| b.is_ascii_hexdigit()))
+            && d["modalias"].as_str().is_some_and(|m| {
                 regex::Regex::new(
                     "^pci:v[0-9A-F]{8}d[0-9A-F]{8}sv[0-9A-F]{8}sd[0-9A-F]{8}bc[0-9A-F]{2}sc[0-9A-F]{2}i[0-9A-F]{2}$",
                 )
                 .unwrap()
                 .is_match(m)
-            }) && (d["driver"].is_string() || d["driver"].is_null())
-                && (d["module"].is_string() || d["module"].is_null())
-        };
+            })
+            && (d["driver"].is_string() || d["driver"].is_null())
+            && (d["module"].is_string() || d["module"].is_null())
+    };
     if !f["pci"].as_array().is_some_and(|a| a.iter().all(dev_ok)) {
         return bad("pci");
     }
