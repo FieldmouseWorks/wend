@@ -7,9 +7,13 @@ ifupdown's own hook that hands an interface's dns-* options to resolved (/etc/ne
 ("mystatedir: not found"), resolvconf lists only resolved's stub, and resolved has no upstream server: nothing
 resolves after the reboot. Noble no longer ships resolvconf at all.
 
-Typed, not a guess: ifupdown reads its own configuration. `ifquery --list --allow=auto` and `--allow=hotplug` name
-the interfaces it brings up at boot, and `ifquery NAME` prints each one's options as ifupdown parsed them (sourced
-files, comments, continuations, misplaced options, inherits); a configuration ifupdown can't read fails the step.
+Typed, not a guess: ifupdown says which interfaces it has up and reads its own configuration. The op runs on the
+live box before the hop's reboot, so `ifquery --state` lists each interface ifup brought up, as `PHYSICAL=LOGICAL`
+(the stanza it used: `auto eth0=work` and mapping patterns name the logical stanza there, not the physical one), and
+`ifquery -- PHYSICAL=LOGICAL` prints that stanza's options as ifupdown parsed them (sourced files, comments,
+continuations, misplaced options, inherits) without running mapping scripts; a configuration ifupdown can't read
+fails the step. An interface whose ifup failed, or that was never brought up, isn't in the state; a box with no
+state (a chroot) carries nothing.
 ifquery prints `name: value` per option, and an option given twice is one value joined by a newline (config.c), so a
 line without ": " (or with whitespace in its name) continues the value before it, and a value is split into words
 as a hook's shell splits it (space, tab, newline; nothing else). Each option name is turned into the name ifupdown's
@@ -19,10 +23,10 @@ DNS_NAMESERVERS and DNS_NAMESERVER (what resolvconf's and ifupdown's hooks read)
 can be at; DNS_SEARCH and DNS_DOMAIN plain domain names; any other DNS_* option fails the step. The result is one
 resolved drop-in, /etc/systemd/resolved.conf.d/50-wend-ifupdown.conf, with DNS= and Domains=, written only when it
 is new or already the same. Addresses and routes stay with ifupdown. Not seen, from ifquery's text: `no-scripts`
-(kept apart from the options); an interface listed for boot whose device never appears (no hook runs for it); and a
-repeated option whose second value itself reads `name: value`, which prints like a separate option. In each, the
-options are carried although no hook read them. A file where the drop-in's directory goes fails the step too.
-ifquery runs the admin's mapping scripts, as ifup does at boot.
+(kept apart from the options), and a repeated option whose second value itself reads `name: value`, which prints
+like a separate option; in each, the options are carried although no hook read them. ifquery prints an interface's
+inet and inet6 stanzas together, so two spellings across them fail the step although each hook saw one. A file where
+the drop-in's directory goes fails the step too.
 
 Run on the box by both engines as `python3 -` with this file as a here-document (tools/backends.py); this file is
 the source, and the client embeds the same text (client/parity.py compares them). tools/test_net_ifupdown.py runs it
@@ -77,12 +81,12 @@ def server(iface, key, v):
 
 def plan():
     names = []
-    for allow in ("auto", "hotplug"):
-        for n in ifquery("--list", f"--allow={allow}"):
-            if not re.fullmatch(NAME, n):
-                fail(f"ifquery listed {n!r}, which isn't an interface name")
-            if n not in names:
-                names.append(n)
+    for n in ifquery("--state"):
+        phys, eq, logical = n.partition("=")
+        if not eq or not re.fullmatch(NAME, phys) or not re.fullmatch(NAME, logical):
+            fail(f"ifquery's state has {n!r}, which isn't 'interface=stanza'")
+        if n not in names:
+            names.append(n)
     dns, search = [], []
     for iface in names:
         options, spelled = [], {}
@@ -120,7 +124,7 @@ def plan():
 def main(root=""):
     dns, search = plan()
     if not dns and not search:
-        print("ifupdown brings up no interface with a dns-* option at boot: nothing to carry to resolved")
+        print("ifupdown has no interface up with a dns-* option: nothing to carry to resolved")
         return
     text = "".join(["# Written by wend (net.ifupdown-dns-to-resolved) from ifupdown's dns-* options.\n",
                     "[Resolve]\n", f"DNS={' '.join(dns)}\n" if dns else "",

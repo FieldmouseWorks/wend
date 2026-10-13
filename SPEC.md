@@ -482,11 +482,13 @@ ifupdown's configuration names, for a box that keeps ifupdown into a release whe
 box that came up from trusty keeps ifupdown and resolvconf; on jammy's release pocket ifupdown's own hook that hands
 the `dns-*` options to resolved fails ("mystatedir: not found"; jammy-updates fixes it), resolvconf lists only
 resolved's stub, and resolved has no upstream server, so nothing resolves after the reboot (found replaying trusty to
-resolute in a VM, wend#13). noble ships no resolvconf at all. ifupdown reads its own configuration: `ifquery
---list --allow=auto` and `--allow=hotplug` name the interfaces it brings up at boot, and `ifquery -- NAME` prints
-each one's options as ifupdown parsed them (inet and inet6 stanzas, `inherits`, sourced files); a configuration it
-can't read fails the step, and so does an interface name that starts with `-` or holds anything but
-`[A-Za-z0-9_.:@-]`. ifquery prints `name: value` per option, and ifupdown keeps an option given twice as one value
+resolute in a VM, wend#13). noble ships no resolvconf at all. ifupdown says which interfaces it has up and reads its
+own configuration. The op runs on the live box before the hop's reboot: `ifquery --state` lists each interface ifup
+brought up as `PHYSICAL=LOGICAL`, the stanza it used (`auto eth0=work` and mapping patterns name the logical stanza),
+and `ifquery -- PHYSICAL=LOGICAL` prints that stanza's options as ifupdown parsed them (inet and inet6 stanzas,
+`inherits`, sourced files) without running mapping scripts. An interface whose ifup failed, or that was never brought
+up, isn't in the state, and a box with no state (a chroot replay) carries nothing. A configuration ifupdown can't read fails the step, and so does a state line whose interface or stanza name starts with `-` or holds anything
+but `[A-Za-z0-9_.:@-]`. ifquery prints `name: value` per option, and ifupdown keeps an option given twice as one value
 joined by a newline, so a line without `: ` (or with whitespace in its name) continues the value before it (only a
 newline ends a line), and a value is split into words as a hook's shell splits it (space, tab, newline). Each option
 name becomes the name ifupdown's hooks receive (up to the first `=`, whose rest leads the value; `-` to `_`, ASCII
@@ -496,12 +498,12 @@ multicast, loopback, unspecified, reserved, broadcast or IPv4-mapped); `DNS_SEAR
 names; any other `DNS_*` option fails the step. The result is `/etc/systemd/resolved.conf.d/50-wend-ifupdown.conf`
 with `DNS=` and `Domains=`, written (mode 0644 in a 0755 directory, never through a symlink) only when it is new;
 one that is already there must be a plain file saying the same, and a `.wend` file beside it fails the step. Nothing
-is written when no interface brought up at boot names a `dns-*` option, and every refusal comes before anything is
+is written when no interface ifupdown has up names a `dns-*` option, and every refusal comes before anything is
 written. Addresses and routes stay with ifupdown, and resolved reads the drop-in at the reboot that ends the hop.
 Not seen, because ifquery's text doesn't show it, so the options are carried although no hook read them:
-`no-scripts`; an interface listed for boot whose device never appears; and a repeated option whose second value
-itself reads `name: value`, which prints like a separate option. ifquery runs the admin's `mapping` scripts, as
-`ifup` does at boot. Needs python3.6 or later on the box (bionic
+`no-scripts`, and a repeated option whose second value itself reads `name: value`, which prints like a separate
+option. ifquery prints an interface's inet and inet6 stanzas together, so two spellings across them fail the step
+although each hook saw one. Needs python3.6 or later on the box (bionic
 on; the route uses it on jammy). Reference: `python3 -` with the source in `tools/net_ifupdown_dns_to_resolved.py`,
 sent as a here-document; `tools/test_net_ifupdown.py` runs it with a stand-in `ifquery`, and the VM replay proves the
 parse on a real box.

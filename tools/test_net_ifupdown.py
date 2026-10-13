@@ -1,5 +1,5 @@
 """The Ubuntu op net.ifupdown-dns-to-resolved (SPEC.md, "Debian ops"; tools/net_ifupdown_dns_to_resolved.py) by
-behaviour, with a stand-in ifquery on PATH: which interfaces it reads (those ifupdown brings up at boot), how it names
+behaviour, with a stand-in ifquery on PATH: which interfaces it reads (those ifupdown has up, from its state), how it names
 their options (as ifupdown's hooks receive them), the values it refuses, that every refusal changes nothing, and the
 drop-in it writes. The parse of /etc/network/interfaces itself is ifupdown's, proven by the VM replay on wend#13. It
 runs the PR's own converter, so the gate's schema job (which judges a PR with the base branch's tools and never runs
@@ -22,8 +22,8 @@ q = json.load(open(%r))
 if q.get("fail"):
     sys.stderr.write("ifquery: /etc/network/interfaces:24: misplaced option\\n"); sys.exit(1)
 a = sys.argv[1:]
-if a[:1] == ["--list"]:
-    print("\\n".join(q["lists"].get(a[1].split("=", 1)[1], [])))
+if a == ["--state"]:
+    print("\\n".join(q["state"]))
 elif a[:1] == ["--"] and "raw" in q:
     sys.stdout.buffer.write(bytes.fromhex(q["raw"]))
 elif a[:1] == ["--"]:
@@ -33,7 +33,7 @@ else:
 """
 ETH0 = ["address: 10.0.2.20", "netmask: 255.255.255.0", "gateway: 10.0.2.2", "dns-nameservers: 10.0.2.3",
         "dns-search: example.org"]
-BOOT = {"lists": {"auto": ["lo", "eth0"], "hotplug": []}, "ifaces": {"lo": [], "eth0": ETH0}}
+BOOT = {"state": ["lo=lo", "eth0=eth0"], "ifaces": {"lo=lo": [], "eth0=eth0": ETH0}}
 WANT = ("# Written by wend (net.ifupdown-dns-to-resolved) from ifupdown's dns-* options.\n"
         "[Resolve]\nDNS=10.0.2.3\nDomains=example.org\n")
 DROP = "etc/systemd/resolved.conf.d/50-wend-ifupdown.conf"
@@ -86,8 +86,8 @@ def refused(msg, why):
     return msg is not None and msg.endswith(", nothing changed") and why in msg
 
 
-def with_eth0(lines, lists=None):
-    return {"lists": lists or BOOT["lists"], "ifaces": {"lo": [], "eth0": lines}}
+def with_eth0(lines, state=None):
+    return {"state": state or BOOT["state"], "ifaces": {"lo=lo": [], "eth0=eth0": lines}}
 
 
 msg, out, left, mode = run(BOOT)
@@ -100,10 +100,11 @@ case("a drop-in that says something else is refused, not replaced",
      refused(msg, "exists already") and out == "[Resolve]\nDNS=1.1.1.1\n")
 msg, out, left, mode = run(BOOT, existing=WANT, symlink=True)
 case("a drop-in that is a symlink is refused, even to the same text", refused(msg, "exists already"))
-msg, out, left, mode = run({"lists": {"auto": ["lo"], "hotplug": ["eth0"]}, "ifaces": {"lo": [], "eth0": ETH0}})
-case("an allow-hotplug interface counts: ifupdown brings it up at boot", msg is None and out == WANT)
-msg, out, left, mode = run({"lists": {"auto": ["lo"], "hotplug": []}, "ifaces": {"lo": [], "eth0": ETH0}})
-case("an interface ifupdown doesn't bring up at boot is left out", msg is None and out is None and left == [])
+msg, out, left, mode = run({"state": ["lo=lo", "eth0=work"], "ifaces": {"lo=lo": [], "eth0=work": ETH0,
+                                                                        "eth0=eth0": ["dns-nameservers: 6.6.6.6"]}})
+case("an interface up from a mapped stanza (auto eth0=work) is read from that stanza", msg is None and out == WANT)
+msg, out, left, mode = run({"state": ["lo=lo"], "ifaces": {"lo=lo": [], "eth0=eth0": ETH0}})
+case("an interface ifupdown doesn't have up is left out", msg is None and out is None and left == [])
 msg, out, left, mode = run(with_eth0([x.replace("dns-nameservers", "dns-nameserver") for x in ETH0]))
 case("dns-nameserver (singular), which resolvconf's and ifupdown's hooks read too", msg is None and out == WANT)
 msg, out, left, mode = run(with_eth0([x.replace("dns-nameservers", "d.ns_Nameservers") for x in ETH0]))
@@ -112,7 +113,7 @@ case("option names as ifupdown hands them to its hooks (- to _, upper case, othe
 msg, out, left, mode = run(with_eth0(ETH0 + ["dns-nameservers: 10.0.2.3 2001:db8::53", "dns-domain: example.org."]))
 case("several servers, IPv6, dns-domain, duplicates once",
      msg is None and out is not None and "DNS=10.0.2.3 2001:db8::53\n" in out and "Domains=example.org\n" in out)
-msg, out, left, mode = run({"lists": {"auto": ["lo"], "hotplug": []}, "ifaces": {"lo": []}})
+msg, out, left, mode = run({"state": [], "ifaces": {}})
 case("no interface with dns options: nothing written", msg is None and out is None and left == [])
 msg, out, left, mode = run(with_eth0(ETH0 + ["dns-nameservers: 10.0.2.4", "10.0.2.5 2001:db8::53"]))
 case("an option given twice is one value over two lines (config.c), as ifupdown hands it to the hooks",
@@ -150,10 +151,11 @@ for name, q, why, kw in (
          {"prepare": lambda p: (os.makedirs(os.path.dirname(os.path.dirname(p))),
                                 open(os.path.dirname(p), "w").write("x"))}),
         ("a continuation before any option", with_eth0(["10.0.2.3"] + ETH0), "before any option", {}),
-        ("an interface name that reads as an option", with_eth0(ETH0, {"auto": ["lo", "--help"], "hotplug": []}),
-         "isn't an interface name", {}),
-        ("an interface name with a space", with_eth0(ETH0, {"auto": ["lo", "eth 0"], "hotplug": []}),
-         "isn't an interface name", {}),
+        ("a state interface that reads as an option", with_eth0(ETH0, ["lo=lo", "--help=eth0"]), "isn't 'interface=",
+         {}),
+        ("a state stanza that reads as an option", with_eth0(ETH0, ["lo=lo", "eth0=--help"]), "isn't 'interface=", {}),
+        ("a state name with a space", with_eth0(ETH0, ["lo=lo", "eth 0=eth0"]), "isn't 'interface=", {}),
+        ("a state line without a stanza", with_eth0(ETH0, ["lo=lo", "eth0"]), "isn't 'interface=", {}),
         ("ifquery printing something that isn't UTF-8", dict(BOOT, raw=b"dns-search: \xff\n".hex()), "isn't UTF-8",
          {}),
         ("no ifquery on the box", BOOT, "ifquery:", {"no_ifquery": True}),
