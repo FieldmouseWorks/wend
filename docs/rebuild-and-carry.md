@@ -145,17 +145,22 @@ back": the refreshed GRUB reads the old config as it is.
 
 **UEFI (shim, EL7's grubx64.efi).** The ESP (vfat) is mounted at `/boot/efi` on the old root and every kernel mounts
 it, so it stays where it is and both roots mount it. No refresh is needed: `grubx64.efi` is a file of the `grub2-efi`
-package with every module built in, so 7.9's updates already put a GRUB that reads v5 on the ESP, and there are no
-loose modules to mismatch. A second loader directory with copied shim and GRUB plus `BootNext` looks like the natural
-trial, but EL7's `grubx64.efi` has its prefix built in (`/EFI/centos`), so a copy started from `EFI/wend/` would still
-read the old root's config. So UEFI uses the same stub as BIOS, in the place GRUB actually reads:
-`EFI/centos/grub.cfg` becomes the stub (the old config moves to `grub.cfg.wend-old` beside it), with the same
-`wend_default`/`wend_next` in `EFI/centos/grubenv` (GRUB writes `grubenv` on vfat), the same entry 0 into the new root
-and entry 1 into the old config. No NVRAM change at all, and the VFAT needs no log flush, just `sync`. In the copy,
-`/etc/grub2-efi.cfg` (which grubby and `grub2-mkconfig` write through, and which points at `EFI/centos/grub.cfg`) is
-repointed at the copy's own `/boot/grub2/grub.cfg`, or every kernel install in the new root would overwrite the stub.
-EL8+'s shim and GRUB install to `EFI/almalinux/` with that prefix, and nothing creates an NVRAM entry for them, so the
-in-place route needs a UEFI step there too (the counterpart of the BIOS GRUB reinstall below), and on a relocated box
+package with every module its config uses built in (`lvm`, `xfs`, `loadenv`, `search_fs_uuid`, `linuxefi`...), so
+7.9's updates already put a GRUB that reads v5 on the ESP, and there are no loose modules to mismatch (under Secure
+Boot GRUB loads none from disk at all). A second loader directory with copied shim and GRUB plus `BootNext` would work
+too, since EL7's GRUB reads the `grub.cfg` beside its own image first, but it means NVRAM writes, which some firmware
+handles badly, and a second trial mechanism. So UEFI uses the same stub as BIOS: `EFI/centos/grub.cfg` becomes the
+stub (the old config moves to `grub.cfg.wend-old` beside it), with the same `wend_default`/`wend_next` in
+`EFI/centos/grubenv` (GRUB writes `grubenv` in place on vfat), the same entry 0 into the new root and entry 1 into the
+old config. No NVRAM change at all, and vfat needs no log flush, just `sync`. In the copy, `/etc/grub2-efi.cfg` (which
+grubby and `grub2-mkconfig` write through, and which points at `EFI/centos/grub.cfg`) is repointed at the copy's own
+`/boot/grub2/grub.cfg`, or every kernel install in the new root would overwrite the stub. The copy's
+`/boot/grub2/grubenv` may be a symlink to `../efi/EFI/centos/grubenv` (EL8+ makes it one; check on a 7.9 UEFI
+install): it becomes a real file in the copy, so the new root's config and its tools read and write the env file entry
+0's `prefix` points at, which matters once EL8 keeps `kernelopts` there. EL8+'s shim and GRUB install to
+`EFI/almalinux/` with that prefix, and nothing creates an NVRAM entry for them on an in-place walk (the fallback
+loader, `EFI/BOOT/fbx64.efi` with `BOOTX64.CSV`, does it only when the machine boots from the removable path), so the
+in-place route needs a UEFI step there too, the counterpart of the BIOS GRUB reinstall below, and on a relocated box
 that step carries the rollback entry over. Preflight keeps refusing UEFI until a UEFI VM proof (that's already the
 rule for every route).
 
@@ -188,6 +193,9 @@ So:
   as the default once the EL8 GRUB reinstall has moved the prefix onto LVM, see above). Data written on the new root
   since the flip stays there, readable from the old root only through the new LV (the old kernel mounts the new root
   fine, it made it). The run says this in words: rollback loses what happened after the flip, unless you copy it back.
+  A rollback that stays for good (`wend rollback --permanent`) also renames `grub.cfg.wend-old` back over the stub:
+  the old root's `/etc/grub2.cfg` and `/etc/grub2-efi.cfg` still point at that path, so its next kernel update would
+  otherwise have grubby edit the stub.
 - **Commit** (`wend commit`, never automatic): drops the rollback entry and removes the old LVs that moved (`root`,
   and `home` or `var` if they were v4), or tells the owner which partitions are now free (wend never repartitions).
   On BIOS, if the route's GRUB reinstall hasn't already moved the prefix to the new root (a relocate committed before
