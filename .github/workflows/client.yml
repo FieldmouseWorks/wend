@@ -40,9 +40,15 @@ jobs:
       - name: the Ubuntu old-kernel purge, by behaviour (runs the PR's own adapter text, so not in the gate)
         working-directory: .
         run: python3 -B tools/test_kernels_apt.py
-      - name: relocate's preflight, copy fixups and flip, by behaviour (runs the PR's own adapter text, so not in the gate)
+      - name: relocate's preflight, copy fixups and flip, by behaviour, in EL7's bash 4.2 (runs the PR's own adapter text, so not in the gate)
         working-directory: .
-        run: python3 -B tools/test_relocate.py
+        run: |
+          sudo apt-get install -y -q grub-common >/dev/null
+          curl -sSfL -o "$RUNNER_TEMP/bash-4.2.tar.gz" https://ftp.gnu.org/gnu/bash/bash-4.2.tar.gz
+          echo "a27a1179ec9c0830c65c6aa5d7dab60f7ce1a2a608618570f96bfa72e95ab3d8  $RUNNER_TEMP/bash-4.2.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/bash-4.2.tar.gz" -C "$RUNNER_TEMP"
+          (cd "$RUNNER_TEMP/bash-4.2" && ./configure -q --without-bash-malloc >/dev/null && make -s -j4 >/dev/null 2>&1)
+          WEND_EL7_BASH="$RUNNER_TEMP/bash-4.2/bash" python3 -B tools/test_relocate.py
       - name: the EL op net.ifcfg-to-keyfile, by behaviour (runs the PR's own converter, so not in the gate)
         working-directory: .
         run: python3 -B tools/test_net_ifcfg.py

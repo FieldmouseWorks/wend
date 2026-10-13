@@ -4,7 +4,10 @@ its reason, every machine it can't relocate yet; the copy's fstab and kernel lin
 writes the stub GRUB parses, keeps the old config beside it, leaves the old root the default and arms the trial last.
 The VM tier (tools/vm.py relocate) proves the rest on a real install. It runs the PR's own adapter text, so the gate's
 schema job doesn't run it: `wend check` and the client job do. The flip and the stub need grub-editenv and
-grub-script-check (grub-common), and are skipped without them. python3 tools/test_relocate.py"""
+grub-script-check (grub-common), and are skipped without them. The scripts run in EL7's own shell, bash 4.2, which
+parses some things newer shells accept differently (a case pattern's bare `)` inside `$( )`): with WEND_EL7_BASH set
+to a bash 4.2 binary, every relocate script is parsed with it and the tests run under it; the client job builds one.
+python3 tools/test_relocate.py"""
 import os
 import shutil
 import subprocess
@@ -20,6 +23,17 @@ from backends import fill  # noqa: E402
 a = tomllib.load(open(os.path.join(ROOT, "adapters", "el.toml"), "rb"))
 r = a["relocate"]
 bad = 0
+SH = os.environ.get("WEND_EL7_BASH") or "sh"
+if SH == "sh":
+    print("note    running under sh: set WEND_EL7_BASH to a bash 4.2 to parse and run the scripts as EL7 does")
+else:
+    for k, v in r.items():
+        for i, c in enumerate(v if isinstance(v, list) else [v]):
+            p = subprocess.run([SH, "-n", "-c", fill(c, {"new_disk": "/dev/vdb", "route_mib": 0})],
+                               capture_output=True, text=True)
+            print(("passed  " if p.returncode == 0 else "WRONG   ") + f"EL7's bash parses relocate.{k}[{i}]" +
+                  ("" if p.returncode == 0 else f"\n        {p.stderr.strip()[-300:]}"))
+            bad += p.returncode != 0
 UUID = "0b7e1a52-36f4-4d55-9f0e-3c1d2e5a6b70"
 
 
@@ -43,7 +57,7 @@ def shims(t, cmds):
 
 def run(script, t):
     env = {**os.environ, "PATH": f"{t}/bin:{os.environ['PATH']}"}
-    p = subprocess.run(["sh", "-c", script], capture_output=True, text=True, env=env)
+    p = subprocess.run([SH, "-c", script], capture_output=True, text=True, env=env)
     return p.returncode, p.stdout + p.stderr
 
 

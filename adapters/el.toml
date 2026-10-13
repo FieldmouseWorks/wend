@@ -199,7 +199,7 @@ VG=$1 OLD_LV=$2
 ! lvs "$VG/wend-root" >/dev/null 2>&1 || fail "$VG/wend-root exists already"
 ! lsblk -rno TYPE | grep -qx crypt || fail "LUKS isn't handled"
 M=$(findmnt -rno TARGET,SOURCE | while read m s; do
-  case "$s" in /dev/*) [ "$m" = / ] || [ "$m" = /boot ] || { echo "$m"; break; };; esac
+  case "$s" in (/dev/*) [ "$m" = / ] || [ "$m" = /boot ] || { echo "$m"; break; };; esac
 done)
 [ -z "$M" ] || fail "$M is mounted from a disk: carrying more than / and /boot isn't built yet, and both roots would share it"
 awk '$1 !~ /^#/ && $3 == "xfs" {print $2}' /etc/fstab | while read m; do mountpoint -q "$m" || { echo "$m"; break; }; done | grep -q . && fail "an XFS filesystem in fstab isn't mounted: wend doesn't know what's on it"
