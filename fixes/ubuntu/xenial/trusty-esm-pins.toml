@@ -1,0 +1,22 @@
+# Found on a fully updated trusty box (wend#47). ubuntu/trusty-web-updated, added in its own PR, is the box that needs it.
+schema = "wend.fix/0"
+family = "ubuntu"
+hop = "xenial"
+# u-a-t 19.7's name, and the one earlier u-a-t releases used (19.7's postinst renames it); the op takes both
+when = { any = [
+  { file-contains = { path = "/etc/apt/preferences.d/ubuntu-esm-infra-trusty", text = "Pin-Priority: never" } },
+  { file-contains = { path = "/etc/apt/preferences.d/ubuntu-esm-trusty", text = "Pin-Priority: never" } },
+] }
+restores = ["pkgdb"]
+adds = []
+
+[[pre]]
+op = "apt.drop-esm-pins"
+release = "trusty"
+
+[meta]
+name = "trusty-esm-pins"
+author = "claude (wend#47, hand-written from the report)"
+source = "wend#47"
+note = "ubuntu-advantage-tools 19.7ubuntu0.2 (trusty-updates) writes /etc/apt/preferences.d/ubuntu-esm-infra-trusty, owned by no package, pinning its ESM source with Pin-Priority: never. trusty's apt reads it; xenial's apt 1.2 refuses every command over it (\"No priority (or zero) specified for pin\"), so after the xenial transaction autoremove and every later apt call fail. The ESM source itself is already set aside with the other third-party sources; the op drops the pin before the transaction, and only when it is u-a-t's own file."
+fires_on = []
