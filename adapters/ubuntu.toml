@@ -34,7 +34,7 @@ current_from = "trusty"
 # spellings, with no security or updates service. The installer still adds -updates, so tools/vm.py gives it a mirror
 # that offers the release pocket only (release_pocket_only): the box is the release pocket's, as the chroot box is and
 # as the route's hops read. GRUB 2 gets the serial console on the kernel command line.
-install = { netboot = "dists/trusty/main/installer-amd64/current/images/netboot/ubuntu-installer/amd64", release_pocket_only = true, preseed = [
+install = { netboot = "dists/trusty/main/installer-amd64/current/images/netboot/ubuntu-installer/amd64", release_pocket_only = true, uefi = true, preseed = [
   "d-i keyboard-configuration/xkb-keymap select us",
   "d-i console-setup/ask_detect boolean false",
   "d-i mirror/country string manual",
@@ -223,3 +223,25 @@ ram_mib = 1024
 disk_mib = 2048
 boot_mib = 116
 drivers = "sha256:2a1d342c740b940e03149a80efeeb7e49bb8409a739536bc6a915c7c932181eb"
+
+# SPEC "Runtime preflight": the Python 2 interpreters each release a route boots into ships, by upstream version
+# ([] for none). tools/runtimes.py reads them from the release's own index (the components the hop uses); a machine
+# whose own programs run on Python 2 is told where it stops shipping before anything is touched.
+[runtimes.xenial]
+python2 = ["2.7.11"]
+
+[runtimes.bionic]
+python2 = ["2.7.15"]
+
+[runtimes.focal]
+python2 = ["2.7.18"]
+
+[runtimes.jammy]
+python2 = ["2.7.18"]
+
+[runtimes.noble]
+python2 = []
+
+[runtimes.resolute]
+python2 = []
+
