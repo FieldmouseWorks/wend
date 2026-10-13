@@ -41,6 +41,22 @@ sudo wend walk etch-to-trixie --root /srv/etch --checks boxes/debian/etch-web/bo
 `/proc` and `/sys` inside the root, never the host's. EL routes fetch through `tools/mirror.py` on port 8085 (old yum
 can't speak the vault's TLS), as the Python harness does; `walk` checks it is up before it starts.
 
+### Hardware preflight
+
+```
+wend preflight centos5-to-alma10                 # on the machine: can it land on every release the route boots?
+wend facts > box.json                            # or read the machine here...
+wend preflight centos5-to-alma10 --facts box.json --json    # ...and judge it anywhere
+```
+
+SPEC "Hardware preflight". It reads the CPU's x86-64 level features from CPUID (not `/proc/cpuinfo`, which an old
+kernel under-reports), the firmware, memory, free space on `/`, and every PCI device's IDs and bound driver, and holds
+them to the adapter's `[hardware]` table: each release's CPU level, memory and disk, and its driver table
+(`adapters/drivers/<family>/<release>.txt`, made by `tools/hwdata.py` from the release's own kernel package). It
+prints each hop, what would break there (a CPU the release's glibc refuses, a disk controller or network card in use
+that the release's kernel no longer drives), and the furthest release the machine can land on, and exits 1 unless
+the whole route fits. On a VM whose CPU model is too low it says how to raise it. It touches nothing.
+
 ### Verified fetching (`--run`)
 
 ```

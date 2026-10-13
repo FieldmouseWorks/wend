@@ -110,3 +110,68 @@ args = { packages = { list = "[a-z0-9][a-z0-9.+-]*" } }
 pkgdb = 'test -z "$(dpkg --audit 2>&1)" && apt-get check >/dev/null'
 current = "every binary a service runs comes from a package the release in sources.list still ships (apt-cache madison); the box lists the binaries"
 services = "no explicitly installed, non-required package that ships an init script or unit belongs to a name family the box did not have at the start"
+
+[hardware]
+# SPEC "Hardware preflight": what a machine needs before a route boots it into each release, checked before the first
+# hop touches anything. `boot` is the firmware wend's kernel steps are proven to carry a real machine through (the VM
+# tier boots its guests by BIOS); a UEFI machine is refused until a UEFI replay proves it. Per release: `cpu`, the
+# release's x86-64 level (its glibc refuses anything lower: "Fatal glibc error: CPU does not support x86-64-v2");
+# `ram_mib`, the installation guide's minimum without a desktop ("Meeting Minimum Hardware Requirements"); `disk_mib`, an estimate of the free space on / the hop needs (its downloads and the release's
+# growth; walking a copy of the machine first measures the real need); `drivers`, the sha256 of
+# adapters/drivers/debian/<release>.txt, the PCI disk controllers and network cards the release's kernel drives
+# (tools/hwdata.py builds it from the kernel package itself).
+boot = ["bios"]
+
+[hardware.lenny]
+cpu = "x86-64"
+ram_mib = 64
+disk_mib = 2048
+drivers = "sha256:a42e474a8d6c8602e4a03c5e720f386f52832304cfa67e595ead0dc256f432b3"
+
+[hardware.squeeze]
+cpu = "x86-64"
+ram_mib = 64
+disk_mib = 2048
+drivers = "sha256:6f5da0b610919df2e51d4d24194117f3d856e805c244b2f076a51334fde32cd1"
+
+[hardware.wheezy]
+cpu = "x86-64"
+ram_mib = 64
+disk_mib = 2048
+drivers = "sha256:bbe7a92a413866a520ece112952da8bd9875a705aac4cfcf4508e1db3459d7f9"
+
+[hardware.jessie]
+cpu = "x86-64"
+ram_mib = 128
+disk_mib = 2048
+drivers = "sha256:1ed1613f2ac9e3f9b772ddf2b8f262c9eb332d0f9017d75f25242207a15ef47d"
+
+[hardware.stretch]
+cpu = "x86-64"
+ram_mib = 128
+disk_mib = 2048
+drivers = "sha256:0211139a49a4c0fa12de537a3a1d781cd5c34a2f3e2ea0f3973d831ecc3ee50c"
+
+[hardware.buster]
+cpu = "x86-64"
+ram_mib = 256
+disk_mib = 2048
+drivers = "sha256:dbeee94e62a1becd9f135bb94b9d124b13529f42fa99f710dbe4475990082f72"
+
+[hardware.bullseye]
+cpu = "x86-64"
+ram_mib = 256
+disk_mib = 2048
+drivers = "sha256:7226f8ebb60daf4f0d5fe8c6e4e6f953dd37df9cf9b3334de14d25807971b49f"
+
+[hardware.bookworm]
+cpu = "x86-64"
+ram_mib = 256
+disk_mib = 2048
+drivers = "sha256:71d4ad42b9ea85d8bfd5b778c515456bd88b6d65241e851c8dfbeb877b02dfb4"
+
+[hardware.trixie]
+cpu = "x86-64"
+ram_mib = 512
+disk_mib = 2048
+drivers = "sha256:80bab778035805af4f567958fc1635e6b4a6315ba652072816ca71ed13df3464"

@@ -115,3 +115,48 @@ args = { kind = { enum = ["site", "mod", "conf"] }, name = { pattern = "[A-Za-z0
 pkgdb = 'test -z "$(dpkg --audit 2>&1)" && apt-get check >/dev/null'
 current = "every binary a service runs comes from a package the release in sources.list still ships (apt-cache madison); the box lists the binaries"
 services = "no explicitly installed, non-required package that ships an init script or unit belongs to a name family the box did not have at the start"
+
+[hardware]
+# SPEC "Hardware preflight": what a machine needs before a route boots it into each release, checked before the first
+# hop touches anything. `boot` is the firmware wend's kernel steps are proven to carry a real machine through (the VM
+# tier boots its guests by BIOS); a UEFI machine is refused until a UEFI replay proves it. Per release: `cpu`, the
+# release's x86-64 level (its glibc refuses anything lower: "Fatal glibc error: CPU does not support x86-64-v2");
+# `ram_mib`, Ubuntu Server's documented minimum for a cloud image (24.04's figure, which 26.04's docs still give;
+# 16.04 to 22.04 publish none we could find, so those releases have no ram_mib); `disk_mib`, an estimate of the free
+# space on / the hop needs (its downloads and the release's growth; walking a copy of the machine first measures the
+# real need); `drivers`, the sha256 of
+# adapters/drivers/ubuntu/<release>.txt, the PCI disk controllers and network cards the release's kernel drives
+# (tools/hwdata.py builds it from the kernel package itself).
+boot = ["bios"]
+
+[hardware.xenial]
+cpu = "x86-64"
+disk_mib = 2048
+drivers = "sha256:f5d0794514fd9f2a5b26d6b837e5427eb79b3d2b81b44dfb9320030d6ce9f3f9"
+
+[hardware.bionic]
+cpu = "x86-64"
+disk_mib = 2048
+drivers = "sha256:e1bef70be98b23557dbef99f656a86563265545a0641053140f12cfffd5c04ad"
+
+[hardware.focal]
+cpu = "x86-64"
+disk_mib = 2048
+drivers = "sha256:821a2d9c1c3e65a38181bb8aa79e3d2c3290d6a32d7b608401545ef42f6ca0c9"
+
+[hardware.jammy]
+cpu = "x86-64"
+disk_mib = 2048
+drivers = "sha256:2a453ad5f9c4f188a3589d85b8c45e2000bf2eae3ee4484d553ca2dde747f47a"
+
+[hardware.noble]
+cpu = "x86-64"
+ram_mib = 1024
+disk_mib = 2048
+drivers = "sha256:f1c5c6babe929becf674f7ccea07e9ddc130bacc493304012d1dcd2dfcef5a12"
+
+[hardware.resolute]
+cpu = "x86-64"
+ram_mib = 1024
+disk_mib = 2048
+drivers = "sha256:a7b3497a96495da38204c4691cd2f218da4346f642f96e1cc0f90affde0bfac4"

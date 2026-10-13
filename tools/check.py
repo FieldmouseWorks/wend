@@ -36,7 +36,9 @@ UNSAFE = ["%", "'", '"', " ", "\t", "\n", "$", "`", ";", "&", "|", "<", ">", "("
 SAFE_VALUE = r"[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*"
 ADAPTER_KEYS = {"schema", "family", "backend", "release_file", "ladder", "may_skip", "harness_owned", "writable",
                 "managed", "force", "releases", "mirror", "hop", "predicates", "pm_options", "box", "ops", "checks",
-                "kv"}
+                "kv", "hardware"}
+CPU_LEVELS = ("x86-64", "x86-64-v2", "x86-64-v3")  # SPEC "Hardware preflight"
+HARDWARE_KEYS = {"cpu", "ram_mib", "disk_mib", "drivers", "note"}
 
 
 def family(pkg):
@@ -108,9 +110,64 @@ def check_adapter(a, where):
     for r, rel in a.get("releases", {}).items():  # SPEC "Kernels and the bootloader"
         if isinstance(rel, dict) and rel.get("reboot", "before-post") != "before-post":
             errs.append(f"{where}: releases.{r}.reboot can only be \"before-post\"")
+    errs += check_hardware(a, where)
     for k in ("kernel_before", "kernel_after"):
         if k in a.get("hop", {}) and not (isinstance(a["hop"][k], list) and all(isinstance(c, str) for c in a["hop"][k])):
             errs.append(f"{where}: hop.{k} must be a list of commands")
+    return errs
+
+
+def booted_releases(a):
+    """Every release a route can boot a machine into: the ladder after its first release, less may_skip."""
+    ladder = a.get("ladder") if isinstance(a.get("ladder"), list) else []
+    skip = a.get("may_skip") if isinstance(a.get("may_skip"), list) else []
+    return [r for r in ladder[1:] if r not in skip]
+
+
+def check_hardware(a, where):
+    """SPEC "Hardware preflight": what a machine needs before a route boots it into each release."""
+    h = a.get("hardware")
+    if not isinstance(h, dict):
+        return [f"{where}: missing the hardware table"]
+    errs = []
+    boot = h.get("boot")
+    if not (isinstance(boot, list) and boot and all(b in ("bios", "uefi") for b in boot)):
+        errs.append(f"{where}: hardware.boot must list the firmware modes proven, from bios and uefi")
+    for r, t in h.items():
+        if r == "boot":
+            continue
+        if not isinstance(a.get("ladder"), list) or r not in a["ladder"] or not isinstance(t, dict):
+            errs.append(f"{where}: hardware.{r} must be a table named for a release on the ladder")
+            continue
+        if set(t) - HARDWARE_KEYS:
+            errs.append(f"{where}: hardware.{r} has unknown keys {sorted(set(t) - HARDWARE_KEYS)}")
+        if t.get("cpu") not in CPU_LEVELS:
+            errs.append(f"{where}: hardware.{r}.cpu must be one of {list(CPU_LEVELS)}")
+        for k in ("ram_mib", "disk_mib"):  # ram_mib is optional: some releases publish no minimum
+            if (k == "disk_mib" or k in t) and (type(t.get(k)) is not int or t[k] < 1):
+                errs.append(f"{where}: hardware.{r}.{k} must be a whole number of MiB")
+        if not isinstance(t.get("drivers"), str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", t["drivers"]):
+            errs.append(f"{where}: hardware.{r}.drivers must be the sha256 of its driver table")
+        if "note" in t and not isinstance(t["note"], str):
+            errs.append(f"{where}: hardware.{r}.note must be a string")
+    missing = [r for r in booted_releases(a) if r not in h]
+    if missing:
+        errs.append(f"{where}: hardware has no table for {missing}, which a route can boot into")
+    return errs
+
+
+def driver_table_errors(fam, a, where):
+    """Each release's driver table is in the atlas (adapters/drivers/<family>/<release>.txt) at the pinned hash."""
+    errs = []
+    h = a.get("hardware")
+    for r, t in (h if isinstance(h, dict) else {}).items():
+        if r == "boot" or not isinstance(t, dict) or not isinstance(t.get("drivers"), str):
+            continue
+        p = f"{ROOT}/adapters/drivers/{fam}/{r}.txt"
+        got = "sha256:" + hashlib.sha256(open(p, "rb").read()).hexdigest() if os.path.isfile(p) else None
+        if got != t["drivers"]:
+            errs.append(f"{where}: hardware.{r}.drivers: adapters/drivers/{fam}/{r}.txt "
+                        f"{'is missing' if got is None else 'has sha256 ' + got[7:19] + '...'}, not the pinned one")
     return errs
 
 
@@ -441,6 +498,7 @@ def main(argv):
     errs = []
     for fam, a in adapters.items():
         errs += check_adapter(a, f"adapters/{fam}.toml")
+        errs += driver_table_errors(fam, a, f"adapters/{fam}.toml")
     by_id = {}
     for p, d in fixes.items():
         rel = os.path.relpath(p, ROOT)
