@@ -511,8 +511,8 @@ on). Reference: `apt-get install --reinstall --only-upgrade {packages}`.
 zero) specified for pin"), so after the xenial transaction autoremove and every later apt call fail (wend#47). The
 op looks at `ubuntu-esm-{release}` and `ubuntu-esm-*-{release}` in `/etc/apt/preferences.d` and removes one only
 when it is a plain file (not a symlink), `dpkg -S` names no package for it, every line is u-a-t's own (`Package: *`,
-`Pin: release o=UbuntuESM..., n={release}`, `Pin-Priority: never`, a comment or a blank line) and it pins to
-`never`. Anything else is left, with a line saying why, and the step passes: a pin apt can read does no harm, and one
+`Pin: release o=UbuntuESM..., n={release}`, `Pin-Priority: never`, a comment or a blank line) and each of those
+three pin lines is there. Anything else is left, with a line saying why, and the step passes: a pin apt can read does no harm, and one
 it can't fails the transaction that follows. The ESM source list beside it is already set aside with the other
 third-party sources (`set_release`). Reference: a `for` loop over the two names, in `tools/backends.py`
 (`ESM_PINS`); `tools/test_esm_pins.py` runs it against a stand-in directory and `dpkg`.

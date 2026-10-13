@@ -28,6 +28,12 @@ for name, files, owned, want_gone in (
         ("a pin a package owns stays", {"ubuntu-esm-infra-trusty": UAT}, ["ubuntu-esm-infra-trusty"], []),
         ("a pin with a line u-a-t never writes stays",
          {"ubuntu-esm-infra-trusty": UAT + "Package: openssl\n"}, [], []),
+        ("a file with only the priority line stays",
+         {"ubuntu-esm-infra-trusty": "# local\nPin-Priority: never\n"}, [], []),
+        ("a pin without its Pin: line stays",
+         {"ubuntu-esm-infra-trusty": "Package: *\nPin-Priority: never\n"}, [], []),
+        ("a pin without its Package: line stays",
+         {"ubuntu-esm-infra-trusty": "Pin: release o=UbuntuESM, n=trusty\nPin-Priority: never\n"}, [], []),
         ("a pin with a numeric priority stays", {"ubuntu-esm-infra-trusty": UAT.replace("never", "-32768")}, [], []),
         ("comments and blank lines are u-a-t's shape", {"ubuntu-esm-apps-trusty": "\n" +
                                                          UAT.replace("UbuntuESM", "UbuntuESMApps")}, [],

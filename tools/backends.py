@@ -598,7 +598,9 @@ ESM_PINS = ("for f in /etc/apt/preferences.d/ubuntu-esm-{release} /etc/apt/prefe
             "if [ -L \"$f\" ] || [ ! -f \"$f\" ]; then echo \"$f: not a plain file, left\"; continue; fi; "
             "if dpkg -S \"$f\" >/dev/null 2>&1; then echo \"$f: a package owns it, left\"; continue; fi; "
             "if grep -qvxE '(Package: [*]|Pin: release o=UbuntuESM[A-Za-z]*, n={release}|Pin-Priority: never|#.*|"
-            "[[:space:]]*)' \"$f\" || ! grep -qx 'Pin-Priority: never' \"$f\"; then "
+            "[[:space:]]*)' \"$f\" || ! grep -qx 'Package: [*]' \"$f\" || "
+            "! grep -qxE 'Pin: release o=UbuntuESM[A-Za-z]*, n={release}' \"$f\" || ! grep -qx 'Pin-Priority: never' \"$f\"; "
+            "then "
             "echo \"$f: not an ubuntu-advantage-tools ESM pin, left\"; continue; fi; "
             "rm -f \"$f\" || exit 1; echo \"$f: ubuntu-advantage-tools' ESM pin for {release}, removed\"; done")
 NET_IFUPDOWN_DNS_TO_RESOLVED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "net_ifupdown_dns_to_resolved.py")
