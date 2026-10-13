@@ -261,10 +261,13 @@ pub fn check_facts(f: &Value) -> Result<(), String> {
             return bad(k);
         }
     }
-    for k in ["ram_mib", "free_mib", "userland_bits"] {
+    for k in ["ram_mib", "free_mib"] {
         if !f[k].is_u64() {
             return bad(k);
         }
+    }
+    if f["userland_bits"] != json!(32) && f["userland_bits"] != json!(64) {
+        return bad("userland_bits");
     }
     if !f["cpu"]["features"]
         .as_array()
@@ -334,7 +337,7 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
             "this machine runs a {arch} kernel and the route is for {want_arch}. wend has no route that changes \
              a machine's architecture."
         ));
-    } else if facts["userland_bits"] == json!(32) {
+    } else if facts["userland_bits"] != json!(64) {
         machine.push("this machine runs a 32-bit userland on a 64-bit kernel; the route is for a 64-bit one".into());
     }
     let boot = facts["boot"].as_str().unwrap_or("");
@@ -686,6 +689,9 @@ mod tests {
         let mut bad_alias = machine(&full, false, vec![]);
         bad_alias["pci"] = json!([dev("0000:00:01.0", "0x010000", "pci:v8086", Some("x"))]);
         assert!(evaluate(&a, r, &bad_alias).is_err());
+        let mut odd = machine(&full, false, vec![]);
+        odd["userland_bits"] = json!(33);
+        assert!(evaluate(&a, r, &odd).is_err());
         for k in ["pci", "ram_mib", "free_mib", "schema", "userland_bits"] {
             let mut bad = machine(&full, false, vec![]);
             bad.as_object_mut().unwrap().remove(k);
