@@ -19,5 +19,5 @@ name = "php8.1"
 name = "php8.1-module"
 author = "agent (claude-code / opus 5.5)"
 found_on = "ubuntu/trusty-web"
-fires_on = ["ubuntu/trusty-web"]
+fires_on = ["ubuntu/trusty-web", "ubuntu/trusty-web-updated"]
 reason = "Jammy drops PHP 7.4, and the dist-upgrade removes it along with its Apache module, leaving no PHP at all. Install PHP 8.1's CLI and Apache module, which jammy ships, and enable the module."
