@@ -2,7 +2,7 @@
 schema = "wend.fix/0"
 family = "el"
 hop = "alma9"
-when = { all = [{ installed = "epel-release" }, { installed = "fail2ban-server" }] }
+when = { all = [{ installed = "epel-release" }, { installed = "fail2ban-server" }, { installed = "fail2ban-firewalld" }] }
 restores = ["pkgdb", "box:fail2ban", "box:boot"]
 adds = []
 

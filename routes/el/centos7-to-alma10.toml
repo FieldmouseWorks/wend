@@ -20,7 +20,7 @@ id = "sha256:ff383fd999c7033ab0d6ac8be0eaef10ad2e6edd1cd9553bc22ed104bb4deb82"
 name = "el9-record-boot-services"
 
 [[fixes]]
-id = "sha256:d291a8783a4d419ee49348c5e03e3fa1d64c2c9245137d129ad7e835e31d6601"
+id = "sha256:dc8ab830df9ba3d27b0b18113e5769c26c323621769c4422b81fdf160c8ac3c2"
 name = "el9-fail2ban-through-el8"
 
 [[fixes]]
