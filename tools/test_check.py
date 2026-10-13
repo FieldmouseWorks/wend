@@ -320,6 +320,9 @@ for name, box, root_fs, want in (("[vm] root_fs xfs-v4 on CentOS 7", lamp, "xfs-
 tweb = check.load_all()[3]["ubuntu/trusty-web"]
 for name, box, want in (("[vm] pockets on a release_pocket_only release", {**tweb, "vm": {**tweb["vm"], "pockets": ["updates", "security"]}}, False),
                         ("[vm] pockets naming backports", {**tweb, "vm": {**tweb["vm"], "pockets": ["updates", "security", "backports"]}}, False),
+                        ("[vm] pockets with updates alone", {**tweb, "vm": {**tweb["vm"], "pockets": ["updates"]}}, False),
+                        ("[vm] pockets without updates, which the installer's sources.list always has",
+                         {**tweb, "vm": {**tweb["vm"], "pockets": ["security", "backports"]}}, True),
                         ("[vm] pockets naming proposed", {**tweb, "vm": {**tweb["vm"], "pockets": ["proposed"]}}, True),
                         ("[vm] pockets naming one twice", {**tweb, "vm": {**tweb["vm"], "pockets": ["updates", "updates"]}}, True),
                         ("[vm] pockets as a string", {**tweb, "vm": {**tweb["vm"], "pockets": "updates"}}, True),

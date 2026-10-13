@@ -443,10 +443,11 @@ def check_box(doc, adapters, where):
     elif not isinstance(vm.get("pockets", []), list) or not all(isinstance(p, str) for p in vm.get("pockets", [])) or \
             not set(vm.get("pockets", [])) <= {"updates", "security", "backports"} or \
             len(set(vm.get("pockets", []))) != len(vm.get("pockets", [])) or \
+            (vm.get("pockets") and "updates" not in vm["pockets"]) or \
             (vm.get("pockets") and not adapters.get(doc.get("family"), {}).get("releases", {}).get(
                 doc.get("release"), {}).get("install", {}).get("release_pocket_only")):
-        errs.append(f"{where}: [vm] pockets lists updates, security and/or backports, once each, and only on a release whose "
-                    "VM install is release_pocket_only")
+        errs.append(f"{where}: [vm] pockets lists updates, and security and/or backports beside it, once each, and only on a "
+                    "release whose VM install is release_pocket_only")
     elif "root_fs" in vm and not (isinstance(fs := (adapters.get(doc.get("family"), {}).get("releases", {})
                                                     .get(doc.get("release")) or {}).get("install", {}).get("root_fs", []),
                                              list) and vm["root_fs"] in fs):
