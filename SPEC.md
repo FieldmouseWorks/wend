@@ -1047,8 +1047,9 @@ The rules:
   the run; a guest that doesn't come up from the last good disk, or a box it can't read, does. It records what was obsolete before and after.
 - Adapter: `releases.<id>.install` names a start release's installer. EL: its `tree` through the shim and the
   `pxeboot` dir in it (the shim answers single byte ranges, which anaconda uses to read package headers), `packages`
-  (what the install needs besides the box's: the bootloader), `ks_end` (sections end with `%end`) and `append`
-  (kernel arguments for the installer and the installed system). apt (Debian,
+  (what the install needs besides the box's: the bootloader), `ks_end` (sections end with `%end`), `append`
+  (kernel arguments for the installer and the installed system) and `ifname` (the installer's boot line names the NIC
+  by MAC, `ifname=eth0:<mac>`, so EL7's installer pins the ifcfg to it with `HWADDR`, as a box booted that way has). apt (Debian,
   Ubuntu): the `netboot` dir under the start release's mirror, `preseed` (the version's own preseed lines),
   `packages` (what the install needs besides the box's), `release_pocket_only` and `late` (shell the installer runs
   at the end, for the bootloader's serial console). `disk` (`virtio`, `lsi53c895a`) and `nic` (`virtio`, `e1000`) name

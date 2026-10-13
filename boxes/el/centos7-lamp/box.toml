@@ -78,11 +78,11 @@ echo '0 3 * * * /usr/bin/rsync -a /var/www/ /home/alice/backup/ # nightly-backup
 systemctl enable httpd mariadb fail2ban firewalld sshd postfix crond chronyd NetworkManager
 yum clean all >/dev/null
 mkdir -p /etc/wend/secrets && printf 'apppw' > /etc/wend/secrets/app-db && chmod 600 /etc/wend/secrets/app-db
-# the static address and MAC pin anaconda writes for a static install (QEMU's default MAC)
+# a static address pinned to the NIC's MAC (QEMU's default), as EL7's installer writes it when the boot line names
+# the NIC by MAC (ifname=eth0:<mac>, as the VM tier boots it); a plain kickstart or interactive install writes no
+# HWADDR, which the alma10 hop's keyfile conversion refuses (wend#74)
 mkdir -p /etc/sysconfig/network-scripts
 [ -f /etc/sysconfig/network-scripts/ifcfg-eth0 ] || printf 'TYPE=Ethernet\nDEVICE=eth0\nNAME=eth0\nHWADDR=52:54:00:12:34:56\nBOOTPROTO=none\nIPADDR=10.0.2.20\nPREFIX=24\nGATEWAY=10.0.2.2\nDNS1=10.0.2.3\nONBOOT=yes\n' > /etc/sysconfig/network-scripts/ifcfg-eth0
-# a kickstart's network line writes the file without the MAC pin; an install that found the NIC itself has it
-grep -q '^HWADDR=' /etc/sysconfig/network-scripts/ifcfg-eth0 || echo 'HWADDR=52:54:00:12:34:56' >> /etc/sysconfig/network-scripts/ifcfg-eth0
 '''
 # The services role flags service packages whose family wasn't on the box at the start (see el/centos5-web).
 start_hook = "rpm -qa --qf '%{NAME}\\n' | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 's/^mariadb$/mysql/' -e 's/^chrony$/ntp/' -e 's/^cronie$/vixie/' -e 's/^openssh$/openssh/' | sort -u > /var/lib/wend-expected-families"

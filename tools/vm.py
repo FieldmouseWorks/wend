@@ -220,7 +220,8 @@ class Guest:
 def kickstart(box_doc, adapter, key_pub):
     """anaconda's answers. inst["packages"] is what the install needs besides the box's own (the release's bootloader
     package), inst["append"] kernel arguments for the installer and the installed system (EL7's net.ifnames=0, so the
-    NIC is eth0 as the box's network role expects), inst["ks_end"] whether sections end with %end (EL7 on; EL5's
+    NIC is eth0 as the box's network role expects), inst["ifname"] that the installer's boot line names the NIC by MAC
+    (ifname=eth0:<mac>: EL7's installer then pins the ifcfg to it with HWADDR), inst["ks_end"] whether sections end with %end (EL7 on; EL5's
     anaconda doesn't know it). On UEFI, an EFI system partition. The box's customize runs in %post after the release's
     repos are set (set_release), as the chroot build runs it, with the mirror shim where the guest sees the host."""
     rel = adapter["releases"][box_doc["release"]]
@@ -416,7 +417,7 @@ def build(box_id):
         try:
             g.start(["-kernel", os.path.join(d, "vmlinuz"), "-initrd", os.path.join(d, "initrd.img"), "-no-reboot",
                      "-append", f"ks=http://{GUEST_HOST}:{srv.port}/ks.cfg ksdevice=eth0 console=ttyS0,115200 text "
-                     f"{inst.get('append', '')}".strip()])
+                     f"{inst.get('append', '')}{f' ifname=eth0:{MAC}' if inst.get('ifname') else ''}".strip()])
             g.proc.wait(3600)
         finally:
             srv.httpd.shutdown()
