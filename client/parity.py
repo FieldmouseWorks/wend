@@ -60,6 +60,7 @@ STEPS = [
     ("debian", "jessie", {"op": "apache.enable", "kind": "mod", "name": "php5"}),
     ("debian", "jessie", {"op": "apache.disable", "kind": "site", "name": "000-default"}),
     ("debian", "wheezy", {"op": "dpkg.reinstall", "packages": ["module-init-tools", "a"]}),
+    ("ubuntu", "jammy", {"op": "net.ifupdown-dns-to-resolved"}),
 ] + [("el", rel_, s) for rel_ in ("centos6", "centos7", "alma9", "alma10") for s in [
     {"op": "install", "packages": ["php", "php-mysqlnd"]},
     {"op": "remove", "packages": ["a", "b"], "purge": True},

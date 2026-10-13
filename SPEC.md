@@ -144,7 +144,8 @@ Adapter ops are named `<tool>.<verb>`. The adapter declares which ones its famil
 (`[ops."<name>"].args`, see [Argument specs](#argument-specs)); the Op reference defines what they do.
 
 - Debian: `apache.enable` and `apache.disable` (`kind` = site/mod/conf, `name`) compile to `a2en*`/`a2dis*`;
-  `dpkg.reinstall` (`packages`) to `apt-get install --reinstall --only-upgrade`.
+  `dpkg.reinstall` (`packages`) to `apt-get install --reinstall --only-upgrade`; Ubuntu also
+  `net.ifupdown-dns-to-resolved`.
 - EL: `rpm.bootstrap` (unpack EL6's rpm/yum stack over / with 7-Zip, because rpm 4.4 can't read xz payloads),
   `rpm.transit` (pass through EL8: EL8's rpm run from a staging dir, then a real distro-sync), `rpm.swap-release`
   (release packages by hand: epochs and vendor switches), `rpm.drop-arch` (multilib leftovers), `rpm.adopt-rpmnew`,
@@ -475,6 +476,21 @@ writes them. A package apt doesn't know fails the step. One the release no longe
 says so and carries on, so the step passes and the hop's `pkgdb` check is what fails; a fix purges such a package
 instead. A package that isn't installed is skipped, never installed (`--only-upgrade`, apt 0.8 and later: squeeze
 on). Reference: `apt-get install --reinstall --only-upgrade {packages}`.
+
+**`net.ifupdown-dns-to-resolved`** (no arguments; Ubuntu). Gives systemd-resolved the resolvers and search domains
+`/etc/network/interfaces` names, for a box that keeps ifupdown into a release where resolved answers its lookups. A
+box that came up from trusty keeps ifupdown and resolvconf; on jammy's release pocket ifupdown's own hook that hands
+the `dns-*` options to resolved fails ("mystatedir: not found"), resolvconf lists only resolved's stub, and resolved
+has no upstream server, so nothing resolves after the reboot (found replaying trusty to resolute in a VM, wend#13).
+noble ships no resolvconf at all. The files are read as interfaces(5) says: a `#` starts a comment only at the start
+of a line, `\` continues a line, `source` globs and `source-directory` directories are followed (files named
+`[A-Za-z0-9_-]+` only). Only `dns-nameservers`, `dns-search` and `dns-domain` are read; every nameserver must be an
+address and every domain a plain name. The result is `/etc/systemd/resolved.conf.d/50-wend-ifupdown.conf` with `DNS=`
+and `Domains=`, written (mode 0644, never through a symlink) only when it is new; one that is already there must say
+the same, or the step fails. Nothing is written when the file names no `dns-*` option. Addresses and routes stay with
+ifupdown, and resolved reads the drop-in at the reboot that ends the hop. Needs python3.6 or later on the box (jammy
+on). Reference: `python3 -` with the source in `tools/net_ifupdown_dns_to_resolved.py`, sent as a here-document;
+`tools/test_net_ifupdown.py` runs it on fixture roots.
 
 ### EL ops
 

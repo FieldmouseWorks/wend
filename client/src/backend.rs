@@ -101,7 +101,12 @@ pub struct Caps {
 
 pub const APT: Caps = Caps {
     name: "apt",
-    ops: &["apache.enable", "apache.disable", "dpkg.reinstall"],
+    ops: &[
+        "apache.enable",
+        "apache.disable",
+        "dpkg.reinstall",
+        "net.ifupdown-dns-to-resolved",
+    ],
     force: &["depends", "remove-essential"],
     pm_options: &["overwrite-conflicting-files"],
 };
@@ -241,6 +246,13 @@ fn apt_step(s: &Value, adapter: &Doc) -> Result<String, String> {
             str_of(s, "name")?
         ),
         "dpkg.reinstall" => format!("apt-get install --reinstall --only-upgrade {}", packages(s)?),
+        "net.ifupdown-dns-to-resolved" => {
+            // SPEC.md, net.ifupdown-dns-to-resolved: the same source the Python engine sends
+            format!(
+                "python3 - <<'WEND_PY'\n{}WEND_PY",
+                include_str!("../../tools/net_ifupdown_dns_to_resolved.py")
+            )
+        }
         _ => return Err(format!("the apt backend has no op {op:?}")),
     })
 }

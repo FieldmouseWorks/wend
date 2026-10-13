@@ -111,6 +111,10 @@ args = { kind = { enum = ["site", "mod", "conf"] }, name = { pattern = "[A-Za-z0
 summary = "a2dissite / a2dismod / a2disconf"
 args = { kind = { enum = ["site", "mod", "conf"] }, name = { pattern = "[A-Za-z0-9_.-]+" } }
 
+[ops."net.ifupdown-dns-to-resolved"]
+summary = "give systemd-resolved the dns-nameservers and dns-search /etc/network/interfaces names (a resolved.conf.d drop-in); fails, changing nothing, on a value that isn't an address or a plain domain"
+args = {}
+
 [checks]
 pkgdb = 'test -z "$(dpkg --audit 2>&1)" && apt-get check >/dev/null'
 current = "every binary a service runs comes from a package the release in sources.list still ships (apt-cache madison); the box lists the binaries"
