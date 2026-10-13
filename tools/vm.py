@@ -15,6 +15,10 @@ not runs/ (runs/ holds what CI proved).
                                            the same from RUN's disk after the hop before HOP (partial-pass at best)
   --uefi (before the command)              the same on UEFI firmware (OVMF) instead of BIOS: its own box, install
                                            and NVRAM, and after every boot the guest must still be running on UEFI
+  --root-fs FS, --lvm, --extra-disk GB     (before the command, EL7 kickstart on) the box installed another way:
+                                           FS overrides [vm].root_fs; --lvm puts / and swap on LVM in a VG `centos`
+                                           filling the disk, with a 500 MB /boot, as a default EL7 install does;
+                                           --extra-disk adds an empty disk of GB (repeatable). Its own box and runs
 
 Networking is QEMU user mode: nothing on the host changes. The guest reaches the mirror shim at 10.0.2.2. The guest's
 ssh and http are forwarded to fixed ports on 127.0.0.1 (10022, 10080), so one host runs one VM replay at a time; a
@@ -61,6 +65,10 @@ FIRMWARE = "bios"
 OVMF_CODE, OVMF_VARS = "/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd"
 # what the guest says it booted with; a UEFI box that comes up on anything else fell back to a path wend didn't prove
 FW_NOW = "{ [ -d /sys/firmware/efi ] && echo uefi || echo bios; } 2>/dev/null"
+# The disk layout, from the command line (main): how anaconda lays out the first disk, and the empty disks beside it.
+# The chroot box is the same either way (a chroot has no disks), so these are install choices, not other boxes: CentOS 7
+# from 7.0 to 7.2 media is XFS v4 on LVM, and rebuild-and-carry (docs/rebuild-and-carry.md) needs room on a second disk.
+LAYOUT = {"root_fs": None, "lvm": False, "extra_disks": []}
 # the chroot harness's environment for box commands (tools/sandbox.py ENV), so a hop runs the same in both tiers
 ENV = ("export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C HOME=/root TERM=dumb "
        "DEBIAN_FRONTEND=noninteractive; umask 022; ")
@@ -70,6 +78,11 @@ ENV = ("export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 DISKS = {"virtio": ["-drive", "file={disk},if=virtio,format=qcow2"],
          "lsi53c895a": ["-drive", "id=d0,file={disk},if=none,format=qcow2", "-device", "lsi53c895a,id=scsi0",
                         "-device", "scsi-hd,drive=d0,bus=scsi0.0"]}
+# each extra disk ({i} from 1), on the same controller as the first; and the first disk's name in the guest
+DISKS_EXTRA = {"virtio": ["-drive", "file={disk},if=virtio,format=qcow2"],
+               "lsi53c895a": ["-drive", "id=d{i},file={disk},if=none,format=qcow2", "-device",
+                              "scsi-hd,drive=d{i},bus=scsi0.0"]}
+FIRST_DISK = {"virtio": "vda", "lsi53c895a": "sda"}
 NICS = {"virtio": "virtio-net-pci", "e1000": "e1000"}
 # the guest's network as the live checks compare it after every boot: addresses, default route, resolvers
 NET = ("(ip -o -4 addr 2>/dev/null || /sbin/ip -o -4 addr) | "
@@ -103,9 +116,23 @@ def nvram(disk):
     return disk[:-len(".qcow2")] + ".vars.fd"
 
 
+def extras(disk):
+    """The extra disks that go with disk (LAYOUT["extra_disks"]), named after it."""
+    return [disk[:-len(".qcow2")] + f".x{i}.qcow2" for i in range(1, len(LAYOUT["extra_disks"]) + 1)]
+
+
+def layout_tag():
+    """LAYOUT as a short name for directories (empty for the box's own layout), e.g. xfs-v4-lvm-x1."""
+    return "-".join(([LAYOUT["root_fs"]] if LAYOUT["root_fs"] else []) + (["lvm"] if LAYOUT["lvm"] else []) +
+                    ([f"x{len(LAYOUT['extra_disks'])}"] if LAYOUT["extra_disks"] else []))
+
+
 def overlay(prev, disk):
-    """A new disk on top of prev, and on UEFI a copy of prev's NVRAM: each hop boots from what the last one left."""
+    """A new disk on top of prev (and of each of its extra disks), and on UEFI a copy of prev's NVRAM: each hop boots
+    from what the last one left."""
     sandbox.host(f"qemu-img create -q -f qcow2 -b {prev} -F qcow2 {disk}")
+    for p, x in zip(extras(prev), extras(disk)):
+        sandbox.host(f"qemu-img create -q -f qcow2 -b {p} -F qcow2 {x}")
     if FIRMWARE == "uefi":
         shutil.copyfile(nvram(prev), nvram(disk))
 
@@ -137,7 +164,9 @@ class Guest:
             "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF_CODE}",
             "-drive", f"if=pflash,format=raw,file={nvram(self.disk)}"]
         argv = ["qemu-system-x86_64", "-machine", "pc,accel=kvm", "-cpu", "host", "-smp", "2", "-m", "3072", *fw,
-                *[x.format(disk=self.disk) for x in DISKS[self.hw[0]]], "-netdev",
+                *[x.format(disk=self.disk) for x in DISKS[self.hw[0]]],
+                *[x.format(disk=e, i=i) for i, e in enumerate(extras(self.disk), 1) for x in DISKS_EXTRA[self.hw[0]]],
+                "-netdev",
                 f"user,id=n0,hostfwd=tcp:127.0.0.1:{SSH_FWD}-{ADDR}:{self.ssh_port},hostfwd=tcp:127.0.0.1:{HTTP_FWD}-{ADDR}:80",
                 "-device", f"{NICS[self.hw[1]]},netdev=n0,mac={MAC}", "-display", "none",
                 "-serial", f"file:{self.console}", "-monitor", f"unix:{self.monitor_path},server,nowait", *extra]
@@ -230,7 +259,19 @@ def kickstart(box_doc, adapter, key_pub):
     rel = adapter["releases"][box_doc["release"]]
     inst = rel["install"]
     end = ["%end"] if inst.get("ks_end") else []
-    fs = ROOT_FS[box_doc.get("vm", {}).get("root_fs", "ext3")]
+    fs = ROOT_FS[LAYOUT["root_fs"] or box_doc.get("vm", {}).get("root_fs", "ext3")]
+    efi = ["part /boot/efi --fstype efi --size=200"] if FIRMWARE == "uefi" else []
+    boot = f"part /boot {fs} --size={inst.get('boot_mib', 200)}"
+    if LAYOUT["lvm"]:  # anaconda's EL7 autopart: /boot, then one PV with swap and a root that fills it
+        parts = [boot, *efi, "part pv.01 --size=1 --grow", "volgroup centos pv.01",
+                 "logvol swap --vgname=centos --name=swap --size=1024",
+                 f"logvol / {fs} --vgname=centos --name=root --size=1 --grow"]
+    else:
+        parts = [boot, *efi, "part swap --size=1024", f"part / {fs} --size=1 --grow"]
+    # with extra disks, anaconda touches only the first; the others stay empty (no label, no signature)
+    only = FIRST_DISK[hardware(adapter, box_doc["release"])[0]]
+    disks = ([f"ignoredisk --only-use={only}"], f" --drives={only}", f" --boot-drive={only}") \
+        if LAYOUT["extra_disks"] else ([], "", "")
     v = backends.of(adapter).hop_vars(adapter, box_doc["release"])
     return "\n".join([
         "install", f"url --url http://{GUEST_HOST}:{adapter['mirror']['shim'].rsplit(':', 1)[1]}/{inst['tree']}",
@@ -240,10 +281,9 @@ def kickstart(box_doc, adapter, key_pub):
         "--nameserver 10.0.2.3 --hostname wend-vm.example.org",
         "rootpw --iscrypted !", "firewall --disabled", "selinux --permissive", "authconfig --enableshadow --enablemd5",
         "timezone --utc UTC",
-        f'bootloader --location=mbr --append="console=tty0 console=ttyS0,115200 {inst.get("append", "")}"'.replace(" \"", "\""),
-        "zerombr", "clearpart --all --initlabel", f"part /boot {fs} --size={inst.get('boot_part_mib', 200)}",
-        *(["part /boot/efi --fstype efi --size=200"] if FIRMWARE == "uefi" else []), "part swap --size=1024",
-        f"part / {fs} --size=1 --grow", "poweroff", "",
+        f'bootloader --location=mbr{disks[2]} --append="console=tty0 console=ttyS0,115200 {inst.get("append", "")}"'
+        .replace(" \"", "\""),
+        *disks[0], "zerombr", f"clearpart --all --initlabel{disks[1]}", *parts, "poweroff", "",
         "%packages --nobase", "kernel", *inst.get("packages", []), *box_doc["packages"], *end, "",
         "%post --log=/root/ks-post.log",
         post_install(box_doc, key_pub, before=backends.fill(adapter["hop"]["set_release"], v),
@@ -383,15 +423,19 @@ def build(box_id):
     fam = box_doc["family"]
     raw = open(os.path.join(ROOT, f"boxes/{box_id}/box.toml"), "rb").read() + \
         open(os.path.join(ROOT, f"adapters/{fam}.toml"), "rb").read() + open(os.path.abspath(__file__), "rb").read() + \
-        FIRMWARE.encode()
-    d = os.path.join(WORK, f"{box_id.replace('/', '_')}-{FIRMWARE}-{hashlib.sha256(raw).hexdigest()[:12]}")
+        FIRMWARE.encode() + (json.dumps(LAYOUT, sort_keys=True).encode() if layout_tag() else b"")
+    tag = "-".join(filter(None, [FIRMWARE, layout_tag()]))  # the default layout keeps the cache key it had
+    d = os.path.join(WORK, f"{box_id.replace('/', '_')}-{tag}-{hashlib.sha256(raw).hexdigest()[:12]}")
     base = os.path.join(d, "base.qcow2")
     if os.path.exists(base):
         return d, box_doc
     inst = load(f"adapters/{fam}.toml")["releases"][box_doc["release"]]["install"]
-    root_fs = box_doc.get("vm", {}).get("root_fs")
+    root_fs = LAYOUT["root_fs"] or box_doc.get("vm", {}).get("root_fs")
     if root_fs and root_fs not in inst.get("root_fs", []):
         raise SystemExit(f"{box_doc['release']}'s installer doesn't make {root_fs} (releases.<release>.install.root_fs)")
+    if (LAYOUT["lvm"] or LAYOUT["extra_disks"]) and not (load(f"adapters/{fam}.toml")["backend"] == "rpm" and
+                                                          inst.get("ks_end")):
+        raise SystemExit("--lvm and --extra-disk are EL7-and-later kickstart choices (logvol, ignoredisk --only-use)")
     if FIRMWARE == "uefi" and not inst.get("uefi"):
         raise SystemExit(f"{box_doc['release']}'s installer doesn't install on UEFI (adapter: releases."
                          f"{box_doc['release']}.install.uefi)")
@@ -404,6 +448,8 @@ def build(box_id):
     inst = a["releases"][box_doc["release"]]["install"]
     disk = os.path.join(d, "install.qcow2")
     sandbox.host(f"qemu-img create -q -f qcow2 {disk} 30G")
+    for x, gb in zip(extras(disk), LAYOUT["extra_disks"]):
+        sandbox.host(f"qemu-img create -q -f qcow2 {x} {gb}G")
     if FIRMWARE == "uefi":
         shutil.copyfile(OVMF_VARS, nvram(disk))
     hw = hardware(a, box_doc["release"])
@@ -480,6 +526,9 @@ def build(box_id):
     if failed:
         raise RuntimeError(f"box {box_id} fails its own checks in the VM: {sorted(failed)}\n" +
                            "\n".join(f"{n}: {o[-600:]}" for n, o in failed.items()))
+    for x, b in zip(extras(disk), extras(base)):
+        os.rename(x, b)
+        sandbox.host(f"chmod a-w {b}")
     os.rename(disk, base)
     sandbox.host(f"chmod a-w {base}")
     if FIRMWARE == "uefi":
@@ -573,6 +622,8 @@ def replay(route_path, box_id, resume=None):
             raise SystemExit(f"{resume[0]} has no passing {route['hops'][i - 1]} hop on {box_id} to resume from")
         if src.get("firmware", "bios") != FIRMWARE:
             raise SystemExit(f"{resume[0]} ran on {src.get('firmware', 'bios')}, not {FIRMWARE}")
+        if src.get("layout", {}) != {k: v for k, v in LAYOUT.items() if v}:
+            raise SystemExit(f"{resume[0]} ran with layout {src.get('layout', {})}, not this one")
         prev = os.path.abspath(os.path.join(resume[0], f"{route['hops'][i - 1]}.qcow2"))
         todo = route["hops"][i:]
         if not os.path.exists(prev):
@@ -582,7 +633,8 @@ def replay(route_path, box_id, resume=None):
                                           capture_output=True, text=True, check=True).stdout)
         key = os.path.join(os.path.dirname(chain[-1]["filename"]), "key")
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    out_dir = os.path.join(ROOT, ".wend", "vm", f"{stamp}-{box_id.replace('/', '_')}-{FIRMWARE}-{os.getpid()}")
+    tag = "-".join(filter(None, [FIRMWARE, layout_tag()]))
+    out_dir = os.path.join(ROOT, ".wend", "vm", f"{stamp}-{box_id.replace('/', '_')}-{tag}-{os.getpid()}")
     os.makedirs(out_dir)
     port = box_doc.get("vm", {}).get("ssh_port", 22)
     hw = hardware(a, route["from"])
@@ -667,7 +719,8 @@ def replay(route_path, box_id, resume=None):
         hops += prune(a, w, route["to"], box_doc, out_dir, prev, key, port, hw, start_net)
     complete = len(hops) == len(todo) + bool(route.get("finish", {}).get("prune_obsolete"))
     run = {"schema": "wend.vmrun/0", "route": check.content_id(route), "box": box_id, "from": route["from"],
-           "to": route["to"], "started": stamp, "firmware": FIRMWARE, "hops": hops,
+           "to": route["to"], "started": stamp, "firmware": FIRMWARE,
+           "layout": {k: v for k, v in LAYOUT.items() if v}, "hops": hops,
            "result": "pass" if complete and all(h["ok"] for h in hops) and not resume else
            "partial-pass" if complete and all(h["ok"] for h in hops) else "fail",
            "runner": {"kind": "vm", "host": os.uname().nodename, "kernel": os.uname().release}}
@@ -769,11 +822,20 @@ def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net):
 
 def main(args):
     global FIRMWARE
-    if args[:1] == ["--uefi"]:
-        FIRMWARE, args = "uefi", args[1:]
-        for f in (OVMF_CODE, OVMF_VARS):
-            if not os.path.exists(f):
-                raise SystemExit(f"--uefi needs OVMF ({f}; Debian and Ubuntu: the ovmf package)")
+    while args[:1] and args[0].startswith("--"):
+        if args[0] == "--uefi":
+            FIRMWARE, args = "uefi", args[1:]
+            for f in (OVMF_CODE, OVMF_VARS):
+                if not os.path.exists(f):
+                    raise SystemExit(f"--uefi needs OVMF ({f}; Debian and Ubuntu: the ovmf package)")
+        elif args[0] == "--lvm":
+            LAYOUT["lvm"], args = True, args[1:]
+        elif args[0] == "--root-fs" and len(args) > 1 and args[1] in ROOT_FS:
+            LAYOUT["root_fs"], args = args[1], args[2:]
+        elif args[0] == "--extra-disk" and len(args) > 1 and args[1].isdigit() and 1 <= int(args[1]) <= 500:
+            LAYOUT["extra_disks"], args = LAYOUT["extra_disks"] + [int(args[1])], args[2:]
+        else:
+            return __doc__
     if args[:1] == ["build"] and len(args) == 2:
         build(args[1])
         return 0

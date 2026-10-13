@@ -1391,6 +1391,15 @@ The rules:
   run on UEFI (`/sys/firmware/efi`). A start release whose installer can't install on UEFI isn't built:
   `releases.<id>.install.uefi` says it can (trusty, CentOS 7; not etch or CentOS 5, whose installers predate UEFI on
   x86-64, so no machine running them boots that way). A run records its `firmware`, and resumes only a run on the same.
+- Disk layout: by default anaconda makes a 200 MB `/boot`, swap and `/` as plain partitions on one disk. Three install
+  choices, given before the command, change that for an EL7-and-later kickstart: `--root-fs` overrides the box's
+  `root_fs`; `--lvm` lays the disk out as EL7's own autopart does (a 500 MB `/boot`, then one PV in a volume group
+  `centos` holding `swap` and a `root` that fills it, so no extents are free); `--extra-disk GB` (repeatable) adds an
+  empty disk on the same controller, which anaconda never touches (`ignoredisk --only-use`) and which carries its own
+  overlay through every hop like the first. They are install choices, not boxes: a chroot box has no disks, so the box
+  and its checks are the same either way. A layout is built and cached apart, a run records its `layout`, and resumes
+  only a run with the same. This is how the VM tier makes a CentOS 7 machine installed from 7.0 to 7.2 media (`--root-fs
+  xfs-v4 --lvm`) and gives rebuild and carry its room (`--extra-disk`, see `docs/rebuild-and-carry.md`).
 - `replay ROUTE BOX --from RUN HOP` starts from an earlier run's disk after the hop before HOP, to iterate on a late
   hop. It only resumes from a hop that passed on the same box, logs in with the ssh key of the box build that disk
   came from, and is recorded as `partial-pass` at best, never `pass`.
