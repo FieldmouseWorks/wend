@@ -1208,9 +1208,9 @@ Defaults, which the plan shows and the run records:
   fail closed: netavark's own rules allow all egress, so a shelter started without the table is quietly public.
   The table is loaded by a wend unit (`wend-shelter-net-<app>.service`, a oneshot that stays active, ordered
   `After=nftables.service firewalld.service`, with `PartOf=` and `ReloadPropagatedFrom=` on `nftables.service` and
-  an `ExecReload=` that loads the table again), and the shelter's unit has `BindsTo=` and `After=` on it. After a
+  an `ExecReload=` that loads the table again), and the shelter's unit has `BindsTo=`, `PartOf=` and `After=` on it (`BindsTo=` stops the shelter when the table goes; `PartOf=` starts it again when the table unit restarts). After a
   reboot the shelter doesn't start unless the table loaded. Restarting `nftables.service` restarts the table unit
-  and, through `BindsTo=`, the shelter with it. Reloading it (which runs `flush ruleset` on Debian and EL alike)
+  and, through `PartOf=`, the shelter with it, after the table is back. Reloading it (which runs `flush ruleset` on Debian and EL alike)
   reloads the table unit right after, which puts the table back; between nftables' flush and that reload the
   shelter's egress is open for a moment, and the spec doesn't pretend it isn't. A hand-typed `nft flush ruleset` still drops the table under a running
   shelter, which systemd can't see; the spec doesn't claim otherwise. Runtime preflight records the TCP connections and
