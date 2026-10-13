@@ -79,7 +79,7 @@ const FILESYSTEMS: &[&str] = &["ext2", "ext3", "ext4", "xfs", "btrfs", "reiserfs
 /// is mounted, its device, its type, and from its superblock whether an XFS is the old v4 format and an ext2/3/4's
 /// inode size (null when the device can't be read).
 fn mounts() -> Vec<Value> {
-    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
     let mut seen = std::collections::HashSet::new();
     let mut out = vec![];
     for l in fs::read_to_string("/proc/mounts").unwrap_or_default().lines() {
@@ -91,13 +91,23 @@ fn mounts() -> Vec<Value> {
             continue;
         }
         let mnt = unescape_mount(mnt);
-        // /proc/mounts may name the root /dev/root (2.6.18, 2.6.32): the device is the one the mount's st_dev names.
-        // One filesystem listed again (a bind mount, another name for its device, a btrfs subvolume) counts once.
-        let device = fs::metadata(&mnt)
+        // The device is the one /proc/mounts names when that node is the mount's st_dev; otherwise (2.6.18 and 2.6.32
+        // name the root /dev/root) the node st_dev names, where it exists. One filesystem listed again (a bind mount,
+        // another name for its device, a btrfs subvolume) counts once.
+        let st = fs::metadata(&mnt).ok().map(|m| m.dev());
+        let named = fs::metadata(dev)
             .ok()
-            .and_then(|m| block_device(m.dev()))
-            .unwrap_or_else(|| dev.to_string());
-        if !seen.insert((device.clone(), fstype.to_string())) {
+            .is_some_and(|m| m.file_type().is_block_device() && Some(m.rdev()) == st);
+        let device = match st {
+            Some(d) if !named => block_device(d).filter(|p| Path::new(p).exists()),
+            _ => None,
+        }
+        .unwrap_or_else(|| dev.to_string());
+        let key = match st {
+            Some(d) if libc::major(d) != 0 => d.to_string(),
+            _ => device.clone(),
+        };
+        if !seen.insert((key, fstype.to_string())) {
             continue;
         }
         let sb = superblock(&device);
@@ -126,11 +136,19 @@ fn block_device(st_dev: u64) -> Option<String> {
     let want = format!("{ma}:{mi}");
     for disk in fs::read_dir("/sys/block").ok()?.flatten() {
         let mut dirs = vec![disk.path()];
+        // its partitions: the subdirectories named after it (sda1, cciss!c0d0p1), not links such as `device`
+        let disk_name = disk.file_name();
         dirs.extend(
             fs::read_dir(disk.path())
                 .into_iter()
                 .flatten()
                 .flatten()
+                .filter(|e| {
+                    e.file_type().is_ok_and(|t| t.is_dir())
+                        && e.file_name()
+                            .to_string_lossy()
+                            .starts_with(&*disk_name.to_string_lossy())
+                })
                 .map(|e| e.path()),
         );
         for d in dirs {
