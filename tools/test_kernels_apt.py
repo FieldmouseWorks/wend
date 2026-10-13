@@ -1,0 +1,56 @@
+"""The Ubuntu old-kernel purge (adapters/ubuntu.toml, hop.kernel_before, SPEC "Kernels and the bootloader") by
+behaviour: every package of a kernel older than the running one goes, in one dpkg call, and nothing else does (the
+running kernel, a newer one not booted yet, the metapackages, linux-firmware, removed-but-configured leftovers). It runs
+the PR's own adapter text, so the gate's schema job (which judges a PR with the base branch's tools and never runs the
+PR's code) doesn't run it: `wend check` and the client job do.
+python3 tools/test_kernels_apt.py"""
+import os
+import subprocess
+import sys
+import tempfile
+import tomllib
+
+sys.dont_write_bytecode = True
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+from backends import fill  # noqa: E402
+import backends  # noqa: E402
+
+GUARD = "[ / -ef /proc/1/root ] || { echo \"not booted from this root: kernels left as they are\"; exit 0; }; "
+OLD = ["linux-image-3.13.0-24-generic", "linux-image-extra-3.13.0-24-generic", "linux-headers-3.13.0-24",
+       "linux-headers-3.13.0-24-generic", "linux-signed-image-4.4.0-9-generic", "linux-image-4.4.0-9-generic",
+       "linux-modules-4.4.0-9-generic"]
+KEEP = ["linux-image-4.4.0-21-generic", "linux-image-extra-4.4.0-21-generic", "linux-headers-4.4.0-21",
+        "linux-image-4.4.0-210-generic", "linux-image-generic", "linux-headers-generic", "linux-firmware",
+        "linux-libc-dev", "linux-tools-common"]
+GONE = ["linux-image-3.2.0-23-generic"]  # removed, config files left: not installed, nothing to purge
+
+a = tomllib.load(open(os.path.join(ROOT, "adapters", "ubuntu.toml"), "rb"))
+step = fill(a["hop"]["kernel_before"][0], backends.of(a).hop_vars(a, "bionic"))
+bad = 0
+if not step.startswith(GUARD):
+    print("WRONG   the purge doesn't start with the live-root guard")
+    bad += 1
+for name, running, dpkg_rc, want_rc, want in (
+        ("kernels older than the running one go, with all their packages", "4.4.0-21-generic", 0, 0, sorted(OLD)),
+        ("nothing older than the running kernel: dpkg isn't called", "3.13.0-24-generic", 0, 0, None),
+        ("dpkg refuses: the hop fails", "4.4.0-21-generic", 2, 1, sorted(OLD))):
+    with tempfile.TemporaryDirectory() as t:
+        os.makedirs(f"{t}/bin")
+        listing = [f"install ok installed {p}" for p in OLD + KEEP] + [f"deinstall ok config-files {p}" for p in GONE]
+        shims = {"uname": f"echo {running}",
+                 "dpkg-query": "cat <<'EOF'\n" + "\n".join(listing) + "\nEOF",
+                 "dpkg": f"echo \"$@\" > {t}/dpkg-args; exit {dpkg_rc}",
+                 "df": "echo '/dev/sda1 236M 120M 104M 54% /boot'"}
+        for tool, body in shims.items():
+            with open(f"{t}/bin/{tool}", "w") as out:
+                out.write(f"#!/bin/sh\n{body}\n")
+            os.chmod(f"{t}/bin/{tool}", 0o755)
+        p = subprocess.run(["sh", "-c", step[len(GUARD):]], capture_output=True, text=True,
+                           env={**os.environ, "PATH": f"{t}/bin:{os.environ['PATH']}"})
+        got = open(f"{t}/dpkg-args").read().split() if os.path.exists(f"{t}/dpkg-args") else None
+        got = sorted(got[1:]) if got and got[0] == "--purge" else got
+        ok = p.returncode == want_rc and got == want
+        print(("passed  " if ok else f"WRONG   rc={p.returncode} dpkg {got} {p.stdout}{p.stderr} ") + name)
+        bad += not ok
+sys.exit(1 if bad else 0)

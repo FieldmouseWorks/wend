@@ -788,6 +788,14 @@ harness, not to fixes, because the release's own tools can't carry them up the l
   grub-pc's install device, so the release's own upgrades keep it current. A box whose install device is set and
   present is left to grub-pc. It fails if `/boot` isn't on a partition of a disk it can find (md, LVM: nothing is
   installed or recorded) or `grub-install` fails.
+- **Ubuntu keeps `/boot` to two kernels** (`hop.kernel_before`). A stock trusty install puts `/boot` on a 243 MB
+  partition, and apt's autoremove keeps two older kernels beside the newest, so from focal on the next kernel and its
+  initramfs no longer fit and the hop stops half done, as real Ubuntu upgrades do. So before each hop's transaction,
+  on a machine booted from this root, the harness purges every kernel older than the running one with all of its
+  packages (image, extra modules, signed image, headers): `/boot` then holds the running kernel and the one the hop
+  brings. A kernel newer than the running one, installed but not booted yet, stays, and so do the metapackages,
+  which only depend on the newest. It uses `dpkg --purge`, which refuses rather than removing anything that still
+  depends on those packages, and the hop fails if it does.
 - **When to boot it.** EL6's binaries can't run on the EL5 kernel (EL6's apr asks for `SOCK_CLOEXEC`, so `httpd -t`
   fails), so on a real machine the `centos6` hop boots its new kernel between the transaction and the post steps
   (`releases.centos6.reboot = "before-post"`). Every other hop runs straight through, then reboots: on the hop to

@@ -81,6 +81,15 @@ set_release = "printf 'deb {mirror} {release} main restricted universe multivers
 refresh = "apt-get update"
 upgrade = ["apt-get dist-upgrade", "apt-get autoremove --purge"]
 verify = "grep -qx 'DISTRIB_CODENAME={release}' /etc/lsb-release"
+# SPEC "Kernels and the bootloader": a stock trusty install's /boot is 243 MB, and apt's autoremove keeps two old
+# kernels beside the new one, so past focal the next kernel and its initramfs don't fit and the hop dies half done.
+# Before each hop's transaction, on a machine booted from this root, the harness purges every kernel older than the
+# running one with all its packages (image, extra modules, headers), so /boot holds the running kernel and the one the
+# hop brings. A kernel newer than the running one (installed, not booted yet) stays, and so do the metapackages,
+# which only ever depend on the newest. dpkg, not apt: it refuses rather than takes anything else with it.
+kernel_before = [
+  "[ / -ef /proc/1/root ] || { echo \"not booted from this root: kernels left as they are\"; exit 0; }; L=$(dpkg-query -W -f '${Status} ${Package}\\n' 2>/dev/null | awk -v r=\"$(uname -r)\" 'function key(v, n) {split(v, n, /[.-]/); return sprintf(\"%05d%05d%05d%05d\", n[1], n[2], n[3], n[4])} BEGIN {split(r, x, \"-\"); rk = key(x[1] \"-\" x[2])} $3 == \"installed\" && $4 ~ /^linux-/ {p[$4] = 1} END {for (q in p) if (match(q, /^linux-(image|image-unsigned|signed-image|image-extra)-[0-9]+[.][0-9]+[.][0-9]+-[0-9]+/)) {a = substr(q, RSTART, RLENGTH); sub(/^linux-[a-z-]*-/, \"\", a); if (key(a) < rk) old[a] = 1} for (q in p) for (a in old) if (index(q \"-\", \"-\" a \"-\")) print q}' | sort); [ -n \"$L\" ] || exit 0; echo \"purging kernels older than the running $(uname -r):\" $L; dpkg --purge $L || exit 1; df -h /boot | tail -n1",
+]
 autoremove = "apt-get autoremove --purge"
 after = ["apt-get clean"]
 obsolete = "apt-get update >/dev/null 2>&1; apt list '?obsolete' 2>/dev/null | grep / | cut -d/ -f1"
