@@ -97,7 +97,14 @@ fn main() -> ExitCode {
     }
     if cmd == "facts" && args.len() == 1 {
         // no atlas needed: run it on the machine, judge the file anywhere (`preflight --facts`)
-        println!("{}", serde_json::to_string_pretty(&hardware::gather()).unwrap());
+        let f = match hardware::gather() {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("wend: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        println!("{}", serde_json::to_string_pretty(&f).unwrap());
         return ExitCode::SUCCESS;
     }
     let atlas = match Atlas::load(&root) {
@@ -170,7 +177,7 @@ fn cmd_preflight(atlas: &Atlas, route: &str, facts: Option<&str>, as_json: bool)
     let f = match facts {
         Some(p) => serde_json::from_str(&std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?)
             .map_err(|e| format!("{p}: {e}"))?,
-        None => hardware::gather(),
+        None => hardware::gather()?,
     };
     let v = hardware::evaluate(atlas, r, &f)?;
     if as_json {

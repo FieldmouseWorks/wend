@@ -20,7 +20,8 @@ const LEVEL_FEATURES: [&[&str]; 2] = [
 /// What preflight knows about this machine (schema `wend.hardware/2`). Read from the hardware and /proc and /sys,
 /// never from the distro's tools, so it reads the same on CentOS 5 as on trixie. The one exception is who owns a
 /// Python 2 program (SPEC "Runtime preflight"): on rpm machines only `rpm` can read its database.
-pub fn gather() -> Value {
+pub fn gather() -> Result<Value, String> {
+    let runtimes = crate::runtime::gather_live()?;
     let mut uts: libc::utsname = unsafe { std::mem::zeroed() };
     // SAFETY: uname fills the struct it is given.
     let arch = if unsafe { libc::uname(&mut uts) } == 0 {
@@ -58,7 +59,7 @@ pub fn gather() -> Value {
                 .and_then(|v| v.trim().trim_end_matches("kB").trim().parse::<u64>().ok())
         })
         .map_or(Value::Null, |kb| json!(kb / 1024));
-    json!({
+    Ok(json!({
         "schema": "wend.hardware/2",
         "arch": arch,
         "userland_bits": userland,
@@ -69,8 +70,8 @@ pub fn gather() -> Value {
         "boot_dir": boot_dir(Path::new("/boot"), &release),
         "blacklisted": blacklisted(),
         "pci": pci_devices(Path::new("/sys/bus/pci/devices"), &module_files(&release)),
-        "runtimes": crate::runtime::gather(Path::new("/proc"), Path::new("/"), &crate::runtime::Owners::new(Path::new("/"))),
-    })
+        "runtimes": runtimes,
+    }))
 }
 
 /// What `/boot` holds: whether it is a filesystem of its own, its size and free space as a package install sees them
@@ -863,7 +864,7 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
             blocked = true;
         }
         out_hops.push(
-            json!({"to": h, "ok": problems.is_empty(), "problems": problems, "runtime_problems": app,
+            json!({"to": h, "ok": problems.is_empty() && app.is_empty(), "problems": problems, "runtime_problems": app,
                              "notes": notes}),
         );
     }

@@ -44,8 +44,8 @@ can't speak the vault's TLS), as the Python harness does; `walk` checks it is up
 ### Hardware preflight
 
 ```
-wend preflight centos5-to-alma10                 # on the machine: can it land on every release the route boots?
-wend facts > box.json                            # or read the machine here...
+sudo wend preflight centos5-to-alma10            # on the machine, as root: can it land on every release the route boots?
+sudo wend facts > box.json                       # or read the machine here...
 wend preflight centos5-to-alma10 --facts box.json --json    # ...and judge it anywhere
 ```
 

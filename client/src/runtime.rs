@@ -21,8 +21,9 @@ const RUN_PARTS: &[&str] = &[
     "etc/cron.weekly",
     "etc/cron.monthly",
 ];
-/// cron's PATH, which `#!/usr/bin/env python` and a bare `python` in a job resolve through
-const PATH: &[&str] = &["usr/local/bin", "usr/bin", "bin"];
+/// cron's PATH (Debian's default, and what EL's /etc/crontab sets less the sbins), which `#!/usr/bin/env python`
+/// and a bare `python` in a job resolve through
+const PATH: &[&str] = &["usr/bin", "bin"];
 
 /// A path inside `root`, the way the machine itself would resolve it: symlinks followed, absolute targets kept
 /// inside `root`.
@@ -70,7 +71,24 @@ fn python2_of(root: &Path, path: &str) -> Option<String> {
     if let Some(minor) = c.get(2) {
         return Some(format!("2.{}", minor.as_str()));
     }
-    // `python` or `python2` that is a binary of its own: what its prefix's lib holds says which
+    // `python` or `python2` that is a binary of its own. EL5 and EL6 ship /usr/bin/python as a hard link to
+    // python2.N: a sibling python2.N with the same inode names it, even beside EPEL's python26 or python34
+    {
+        use std::os::unix::fs::MetadataExt;
+        let here = root.join(real.trim_start_matches('/'));
+        if let (Ok(m), Some(dir)) = (fs::metadata(&here), here.parent()) {
+            let two = Regex::new(r"^python(2\.\d+)$").unwrap();
+            for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+                let n = e.file_name().to_string_lossy().into_owned();
+                if let (Some(c2), Ok(m2)) = (two.captures(&n), fs::metadata(e.path())) {
+                    if m2.dev() == m.dev() && m2.ino() == m.ino() {
+                        return Some(c2[1].to_string());
+                    }
+                }
+            }
+        }
+    }
+    // otherwise what its prefix's lib holds says which
     let prefix = Path::new(&real).parent()?.parent()?.to_string_lossy().into_owned();
     let mut found = BTreeSet::new();
     let mut three = false;
@@ -93,7 +111,7 @@ fn python2_of(root: &Path, path: &str) -> Option<String> {
 }
 
 /// The interpreter a script's `#!` line names, `env` looked up through cron's PATH.
-fn shebang(root: &Path, script: &str) -> Option<String> {
+fn shebang(root: &Path, script: &str, path: &[String]) -> Option<String> {
     let mut head = vec![0u8; 256];
     let n = {
         use std::io::Read;
@@ -106,16 +124,16 @@ fn shebang(root: &Path, script: &str) -> Option<String> {
     let interp = words.next()?;
     if interp.ends_with("/env") {
         let name = words.find(|w| !w.starts_with('-') && !w.contains('='))?;
-        return lookup(root, name);
+        return lookup(root, name, path);
     }
     Some(interp.to_string())
 }
 
-fn lookup(root: &Path, name: &str) -> Option<String> {
+fn lookup(root: &Path, name: &str, path: &[String]) -> Option<String> {
     if name.starts_with('/') {
         return Some(name.to_string());
     }
-    PATH.iter().map(|d| format!("/{d}/{name}")).find(|p| {
+    path.iter().map(|d| normalize(&format!("{d}/{name}"))).find(|p| {
         root.join(p.trim_start_matches('/')).exists() || fs::read_link(root.join(p.trim_start_matches('/'))).is_ok()
     })
 }
@@ -194,8 +212,25 @@ fn unit_of(cgroup: &str) -> Option<String> {
     })
 }
 
+/// Every Python 2 user on the live machine. Only root can read every process's executable and maps and every
+/// user's crontab, and a list a normal user gathered would quietly miss them, so anyone else is refused.
+pub fn gather_live() -> Result<Vec<Value>, String> {
+    // SAFETY: geteuid has no preconditions.
+    if unsafe { libc::geteuid() } != 0 {
+        return Err(
+            "wend facts and preflight must run as root: they read every process and every crontab, and a \
+                    normal user can't see another user's"
+                .into(),
+        );
+    }
+    let root = Path::new("/");
+    Ok(gather(Path::new("/proc"), root, &Owners::new(root)))
+}
+
 /// Every Python 2 user on the machine: running processes (`proc`) and cron jobs (under `root`).
 pub fn gather(proc: &Path, root: &Path, owners: &Owners) -> Vec<Value> {
+    use std::os::unix::fs::MetadataExt;
+    let root_id = fs::metadata(root).ok().map(|m| (m.dev(), m.ino()));
     // one entry per program: httpd's workers, or a script both a service and a cron job run, count once
     let mut found: BTreeMap<String, Value> = BTreeMap::new();
     let lib = Regex::new(r"(?:libpython|/python)(2\.\d+)(?:[./]|$)").unwrap();
@@ -206,6 +241,12 @@ pub fn gather(proc: &Path, root: &Path, owners: &Owners) -> Vec<Value> {
             continue;
         }
         let d = e.path();
+        // a process in a container (docker, LXC) has a root of its own: its programs aren't this machine's
+        if let (Some(r), Ok(m)) = (root_id, fs::metadata(d.join("root"))) {
+            if (m.dev(), m.ino()) != r {
+                continue;
+            }
+        }
         let Ok(exe) = fs::read_link(d.join("exe")) else {
             continue; // a kernel thread, or gone
         };
@@ -248,8 +289,7 @@ pub fn gather(proc: &Path, root: &Path, owners: &Owners) -> Vec<Value> {
         }));
     }
     let bare = Regex::new(r"^python2?(\.\d+)?$").unwrap();
-    for job in cron_jobs(root) {
-        let (src, cmd) = job;
+    for (src, cmd, path) in cron_jobs(root) {
         let words: Vec<String> = cmd
             .split(|c: char| c.is_whitespace() || ";&|()`".contains(c))
             .filter(|w| !w.is_empty())
@@ -261,14 +301,21 @@ pub fn gather(proc: &Path, root: &Path, owners: &Owners) -> Vec<Value> {
                 cwd = normalize(w);
                 continue;
             }
-            if !(w.starts_with('/') || bare.is_match(w)) {
-                continue;
-            }
-            let Some(path) = lookup(root, w) else { continue };
-            let hit = if let Some(v) = python2_of(root, &path) {
-                Some((v, path.clone(), program_of(&words[i + 1..], &cwd)))
+            // a path (`/opt/x/job`, or `./job` after a `cd`), or a bare interpreter name through the job's PATH
+            let found_at = if w.starts_with('/') {
+                Some(w.clone())
+            } else if w.contains('/') {
+                Some(normalize(&format!("{cwd}/{w}")))
+            } else if bare.is_match(w) {
+                lookup(root, w, &path)
             } else {
-                shebang(root, &path).and_then(|interp| python2_of(root, &interp).map(|v| (v, interp, path.clone())))
+                None
+            };
+            let Some(at) = found_at else { continue };
+            let hit = if let Some(v) = python2_of(root, &at) {
+                Some((v, at.clone(), program_of(&words[i + 1..], &cwd)))
+            } else {
+                shebang(root, &at, &path).and_then(|interp| python2_of(root, &interp).map(|v| (v, interp, at.clone())))
             };
             let Some((version, interp, program)) = hit else {
                 continue;
@@ -288,8 +335,10 @@ pub fn gather(proc: &Path, root: &Path, owners: &Owners) -> Vec<Value> {
     found.into_values().collect()
 }
 
-/// (where, command) for every cron job; a run-parts file is its own command.
-fn cron_jobs(root: &Path) -> Vec<(String, String)> {
+/// (where, command, PATH) for every cron job, PATH as the crontab last set it before the job; a run-parts file is
+/// its own command.
+fn cron_jobs(root: &Path) -> Vec<(String, String, Vec<String>)> {
+    let default: Vec<String> = PATH.iter().map(|d| format!("/{d}")).collect();
     let mut out = vec![];
     let mut tables: Vec<(PathBuf, bool)> = CRONTABS.iter().map(|t| (root.join(t), true)).collect();
     for (dirs, system) in [(CRON_DIRS, true), (SPOOLS, false)] {
@@ -309,8 +358,23 @@ fn cron_jobs(root: &Path) -> Vec<(String, String)> {
     for (t, system) in tables {
         let Ok(text) = fs::read_to_string(&t) else { continue };
         let src = format!("/{}", t.strip_prefix(root).unwrap_or(&t).to_string_lossy());
+        let mut path = default.clone();
         for l in text.lines() {
             let l = l.trim();
+            if let Some(p) = l
+                .strip_prefix("PATH")
+                .map(str::trim_start)
+                .and_then(|r| r.strip_prefix('='))
+            {
+                path = p
+                    .trim()
+                    .trim_matches(|c| c == '"' || c == '\'')
+                    .split(':')
+                    .filter(|d| d.starts_with('/'))
+                    .map(str::to_string)
+                    .collect();
+                continue;
+            }
             if l.is_empty() || l.starts_with('#') || env.is_match(l) {
                 continue;
             }
@@ -322,7 +386,7 @@ fn cron_jobs(root: &Path) -> Vec<(String, String)> {
             }
             let rest = rest.trim();
             if !rest.is_empty() {
-                out.push((src.clone(), rest.to_string()));
+                out.push((src.clone(), rest.to_string(), path.clone()));
             }
         }
     }
@@ -337,14 +401,15 @@ fn cron_jobs(root: &Path) -> Vec<(String, String)> {
         fs_.sort();
         for p in fs_ {
             let abs = format!("/{}", p.strip_prefix(root).unwrap_or(&p).to_string_lossy());
-            out.push((format!("/{d}"), abs));
+            out.push((format!("/{d}"), abs, default.clone()));
         }
     }
     out
 }
 
 /// A user the machine's owner has to decide about: its program belongs to no package, or the interpreter runs
-/// inside another program (whatever code that runs is the machine's own: the distro never configures mod_wsgi).
+/// inside another program (mod_wsgi, mod_python: the code it runs is configured on this machine, and a package that
+/// ships such an app, like FreeIPA, is one no route carries across anyway).
 pub fn is_own(u: &Value) -> bool {
     u["via"] == "embedded" || u["owner"].is_null()
 }
@@ -449,6 +514,11 @@ mod tests {
             "@daily cd /opt/billing && python app.py report\n",
         );
         write(&root, "etc/cron.daily/logrotate", "#!/bin/sh\n");
+        // a crontab's own PATH, and a relative script after a cd
+        write(&root, "opt/legacy/bin/python", "ELF");
+        fs::create_dir_all(root.join("opt/legacy/lib/python2.6")).unwrap();
+        write(&root, "srv/app/nightly", "#!/usr/bin/python2.7\n");
+        write(&root, "etc/cron.d/legacy", "PATH=/opt/legacy/bin:/usr/bin:/bin\n0 4 * * * root python /opt/legacy/report.py\n15 4 * * * root cd /srv/app && ./nightly\n");
         let py = "/usr/bin/python2.7";
         process(
             &proc,
@@ -507,6 +577,8 @@ mod tests {
             vec![
                 "/opt/billing/app.py runs on Python 2.7 (billing.service)",
                 "/opt/billing/nightly.py runs on Python 2.7 (cron, /etc/cron.d/billing)",
+                "/opt/legacy/report.py runs on Python 2.6 (cron, /etc/cron.d/legacy)",
+                "/srv/app/nightly runs on Python 2.7 (cron, /etc/cron.d/legacy)",
                 "/usr/sbin/httpd has Python 2.7 loaded (httpd.service)",
             ],
             "{users:#?}"
@@ -534,6 +606,14 @@ mod tests {
         write(root, "opt/py/bin/python", "ELF");
         fs::create_dir_all(root.join("opt/py/lib/python2.6")).unwrap();
         assert_eq!(python2_of(root, "/opt/py/bin/python"), Some("2.6".into()));
+        // CentOS 5 with EPEL's python26: /usr/bin/python is a hard link to python2.4, beside python2.6
+        let c5 = t.join("c5");
+        write(&c5, "usr/bin/python2.4", "ELF 2.4");
+        fs::hard_link(c5.join("usr/bin/python2.4"), c5.join("usr/bin/python")).unwrap();
+        write(&c5, "usr/bin/python2.6", "ELF 2.6");
+        fs::create_dir_all(c5.join("usr/lib64/python2.4")).unwrap();
+        fs::create_dir_all(c5.join("usr/lib64/python2.6")).unwrap();
+        assert_eq!(python2_of(&c5, "/usr/bin/python"), Some("2.4".into()));
         assert_eq!(
             program_of(&["-W".into(), "ignore".into(), "-m".into(), "http.server".into()], "/"),
             "-m http.server"
