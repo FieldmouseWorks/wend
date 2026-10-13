@@ -929,7 +929,13 @@ kernel in it (one per `vmlinuz-<version>`, rescue images aside) with the MiB its
 `System.map`, `config` and the rest named for that version; kdump images count as other files, since EL's
 `hop.kernel_before` leaves them) and whether it is the running one; the modules the machine blacklists (`blacklist
 m`, or `install m /bin/false`, in every file of `/etc/modprobe.d`, since EL5's and lenny's are named `blacklist`
-without `.conf`, `/etc/modprobe.conf` and the distro's own `modprobe.d`); and every PCI device's slot, class, the modalias its ID files make
+without `.conf`, `/etc/modprobe.conf` and the distro's own `modprobe.d`); every mounted ext2, ext3, ext4, XFS, btrfs,
+reiserfs or JFS filesystem (from `/proc/mounts`, once each, bind mounts aside): its mount point, its device (the one
+`/proc/mounts` names when that node is the mount point's `st_dev`, else the node `st_dev` names in
+`/sys/dev/block`, or `/sys/block` before 2.6.27, since 2.6.18 and 2.6.32 list the root as `/dev/root`; one filesystem
+listed twice counts once), its type, and from its superblock whether an XFS is the old v4 format (the low nibble of
+`sb_versionnum` is 5 on v5) and an ext2/3/4's inode size (null when the device can't be read); and every PCI device's
+slot, class, the modalias its ID files make
 (`pci:v…d…sv…sd…bc…sc…i…`), the driver bound to it now, that driver's module and where the module's file is under
 `/lib/modules/<release>` (from `modules.dep`), and whether the module is from outside the kernel's own package: the
 kernel marks one built out of tree (taint `O`, from Linux 3.2), and kmod packages (ELRepo's `kmod-*`, in `extra/` and
@@ -962,7 +968,12 @@ has a `[hardware.<release>]` table:
 **Driver tables.** A driver table lists every `alias=pci:` pattern of the storage and network modules (the kernel's
 `drivers/` `scsi`, `ata`, `nvme`, `block`, `md`, `message`, `ide`, `net` and `virtio`) in the kernel package the
 hop installs, one `<module> <pattern>` per line, plus `builtin <module>` for each driver built into the kernel, with whatever aliases `modules.builtin.modinfo`
-records for it (older kernels record no device tables there: EL9's built-in `virtio_pci` has none). A device bound
+records for it (older kernels record no device tables there: EL9's built-in `virtio_pci` has none), plus `fs <type>`
+for each filesystem the kernel mounts, read from its own build config (`/boot/config-<version>`, or
+`<modules>/config` from EL9 on): built in, or a module the packages carry. ext2 and ext3 count when ext4 mounts them
+(`EXT4_USE_FOR_EXT23` to Linux 4.2, `EXT4_USE_FOR_EXT2` after, and ext3 always from 4.3, when its own driver went),
+and `fs xfs-v4` when the kernel mounts XFS's old v4 format (crc=0), which every kernel before 5.10 does and later
+ones do when built with `XFS_SUPPORT_V4`. A device bound
 now to a built-in driver whose table records no `pci:` pattern counts as driven: the one place a match is by name,
 not ID. Facts name the device's module (sysfs `driver/module`) as well as its driver, since the two can differ
 (lenny's `ide_pci_generic` registers as `PCI_IDE`). `tools/hwdata.py` makes it from the package itself: it finds the kernel in
@@ -985,7 +996,13 @@ doesn't fit in a separate `/boot`: `boot_mib` must fit in `/boot`'s size less it
 kernel's) and the kernels the hop keeps (`old_kernels`). Those are the machine's running kernel on the first hop with
 `"running"` (with any kernel another package owns, on every hop), and every kernel it has with `"autoremove"`; then
 the previous release's kernel with `"running"`, and with `"autoremove"` the two before it (the machine's running
-kernel and the first release's, on the second hop), or every kernel so far up to `autoremove_from`. A release a route
+kernel and the first release's, on the second hop), or every kernel so far up to `autoremove_from`. A hop also fails
+when a mounted filesystem's type has no `fs` line in the release's table, or it is an XFS in v4 format (or one whose
+superblock couldn't be read) and the table has no `fs xfs-v4`: from the real configs, EL10's kernel doesn't mount
+XFS v4, EL9's has no btrfs (EL10's has it back), EL6 on has no reiserfs or JFS, lenny's
+mounts only `ext4dev`, and resolute's 7.0 has no reiserfs (gone from Linux in 6.13; trixie's 6.12 still has it). An
+ext2/3/4 with 128-byte inodes mounts on every release (newer kernels warn that its dates end in 2038): a note on the
+first hop. A route never reformats `/boot`, and GRUB 2, where every route ends, reads ext2/3/4 and XFS v4 and v5. A release a route
 only passes through (`may_skip`) installs no kernel. A `/boot` on `/` is left to `disk_mib`. `ata_generic`'s,
 `ide_pci_generic`'s and `pata_acpi`'s class-wide IDE patterns count only for a device that module drives now, since their probes decline
 controllers they don't know. Facts read from a file must have every field `wend facts` writes. The same device with no driver bound is a note, not
@@ -1000,7 +1017,10 @@ Not checked yet: firmware files a driver loads; the kernel flavour a machine run
 rebuild for the new kernel (it isn't counted, so such a device is refused when no in-kernel driver has it); and in
 `/boot`, a GRUB default that isn't the running kernel (EL keeps it too), kdump images the new kernels get once kdump
 starts, kernels an admin marked manual, which `autoremove` never takes, and a kmod package's blacklist that goes when
-the hop removes the package (it is counted as staying, so such a machine may be refused when it would have landed).
+the hop removes the package (it is counted as staying, so such a machine may be refused when it would have landed);
+filesystems other than those seven (vfat, ZFS, OCFS2) and ones not mounted now (`noauto`); and LVM1 volume groups,
+which lvm2 2.03 (EL8, buster, focal on) no longer reads (every release a route starts from makes LVM2; md's 0.90
+metadata is still read by every kernel and mdadm here).
 
 ## Runtime preflight
 
@@ -1193,3 +1213,9 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
       (wend#19). Until runs carry `sources`, integrity rests on TLS to the
       mirrors and the shim's cache: EL repos run with `gpgcheck=0` (CentOS 5's keys can't check what comes later), and the shim
       keeps only complete downloads and checks hash-named metadata against its name.
+13. **A machine the route can't carry in place.** Some machines can't take a route on their own disk: CentOS 7
+    installed from 7.0 to 7.2 media has XFS v4 everywhere, which AlmaLinux 10's kernel can't mount and nothing
+    converts. Proposed: a second root beside the old one (rebuild and carry), done first as **relocate** (copy the
+    root onto a fresh filesystem, flip the boot with a one-shot trial, keep the old root as rollback, then walk the
+    existing route), with state movers for a fresh target root second. Design in `docs/rebuild-and-carry.md`; each
+    piece moves into this document in the PR that builds it.
