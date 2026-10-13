@@ -1,14 +1,17 @@
-"""Build a release's driver table (SPEC "Hardware preflight"): the PCI devices its kernel drives.
+"""Build a release's driver table (SPEC "Hardware preflight"): the PCI devices its kernel drives and the filesystems
+it mounts.
 
 Maintainer tool. For each release it finds the kernel a hop installs (EL: `kernel`, from EL8 on `kernel-core` and
 `kernel-modules`; Debian: what `linux-image-amd64` (lenny, squeeze: `linux-image-2.6-amd64`) depends on; Ubuntu: what
 `linux-image-generic` depends on, extra modules included), downloads it from the release's mirror, checks it against
 the sha256 the index lists, unpacks it and reads every storage and network module's `alias=pci:` lines straight from
-the module's `.modinfo` section (no depmod, so any kernel's modules read the same). It writes
-`adapters/drivers/<family>/<release>.txt` and prints the table's sha256 for `[hardware.<release>].drivers`.
+the module's `.modinfo` section (no depmod, so any kernel's modules read the same), and which filesystems it mounts
+from the kernel's own build config (`fs` lines). It writes `adapters/drivers/<family>/<release>.txt` and prints the
+table's sha256 for `[hardware.<release>].drivers`.
 
   python3 tools/hwdata.py el alma9 alma10
   python3 tools/hwdata.py debian            # every release the ladder boots into (not the first, not may_skip)
+  python3 tools/hwdata.py --pinned ubuntu   # rebuild from the packages the tables already name, not the newest kernel
 
 Needs curl, rpm2cpio and cpio (EL), dpkg-deb (apt), xz and zstd. Downloads go to $WEND_WORK/hwdata (default
 /var/tmp/wend/hwdata) and are reused when their hash still matches.
@@ -39,6 +42,13 @@ DIRS = ("drivers/scsi/", "drivers/ata/", "drivers/nvme/", "drivers/block/", "dri
 EL_KERNEL = {6: ["kernel"], 7: ["kernel"], 8: ["kernel-core", "kernel-modules"],
              9: ["kernel-core", "kernel-modules", "kernel-modules-core"],
              10: ["kernel-core", "kernel-modules", "kernel-modules-core"]}
+# The filesystems a machine's disks may carry, with the config symbol and module that mount each (SPEC "Hardware
+# preflight"). ext2 and ext3 can also be mounted by ext4 (below); `xfs-v4` is XFS's old on-disk format (crc=0), which
+# CONFIG_XFS_SUPPORT_V4 (Linux 5.10 on) can leave out.
+FILESYSTEMS = {"ext2": ("EXT2_FS", "fs/ext2/ext2"), "ext3": ("EXT3_FS", "fs/ext3/ext3"),
+               "ext4": ("EXT4_FS", "fs/ext4/ext4"), "xfs": ("XFS_FS", "fs/xfs/xfs"),
+               "btrfs": ("BTRFS_FS", "fs/btrfs/btrfs"), "reiserfs": ("REISERFS_FS", "fs/reiserfs/reiserfs"),
+               "jfs": ("JFS_FS", "fs/jfs/jfs")}
 RPM_NS = {"c": "http://linux.duke.edu/metadata/common", "r": "http://linux.duke.edu/metadata/repo"}
 
 
@@ -215,7 +225,47 @@ def table(pkgs):
                 if mod.replace("-", "_") in builtin and rest.startswith("alias=pci:"):
                     lines.add(f"{mod.replace('-', '_')} {rest[6:]}")
         lines.update(f"builtin {m}" for m in builtin)
+        lines.update(f"fs {f}" for f in filesystems(tmp, top))
         return os.path.basename(top), sorted(lines)
+
+
+def filesystems(tmp, top):
+    """The filesystems the kernel mounts, from its build config (/boot/config-<version>, or <modules>/config from EL9
+    on): built in, or a module the packages carry."""
+    version = os.path.basename(top)
+    path = next((p for p in (f"{tmp}/boot/config-{version}", f"{top}/config") if os.path.exists(p)), None)
+    if path is None:
+        raise SystemExit(f"{version}: no kernel config in the packages")
+    cfg = {}
+    for line in open(path):
+        if m := re.fullmatch(r"CONFIG_(\w+)=(.*)\n?", line):
+            cfg[m.group(1)] = m.group(2)
+        elif m := re.fullmatch(r"# CONFIG_(\w+) is not set\n?", line):
+            cfg[m.group(1)] = "n"
+    have = {}
+    for fs, (sym, mod) in FILESYSTEMS.items():
+        ko = any(os.path.exists(f"{top}/kernel/{mod}.ko{z}") for z in ("", ".xz", ".zst", ".gz"))
+        have[fs] = cfg.get(sym) == "y" or (cfg.get(sym) == "m" and ko)
+    # ext4 mounts ext2 and ext3 too when built to (EXT4_USE_FOR_EXT23 to Linux 4.2, EXT4_USE_FOR_EXT2 after); from
+    # 4.3 on, ext3's own driver is gone and ext4 always mounts ext3
+    major, minor = (int(x) for x in re.match(r"(\d+)\.(\d+)", version).groups())
+    for_23 = cfg.get("EXT4_USE_FOR_EXT23") == "y"
+    have["ext2"] |= have["ext4"] and (for_23 or cfg.get("EXT4_USE_FOR_EXT2") == "y")
+    have["ext3"] |= have["ext4"] and (for_23 or (major, minor) >= (4, 3))
+    # before 5.10 every XFS mounted v4; from 5.10 the kernel's config says
+    have["xfs-v4"] = have["xfs"] and cfg.get("XFS_SUPPORT_V4", "y") == "y"
+    return sorted(f for f, ok in have.items() if ok)
+
+
+def pinned(fam, release):
+    """[(package, url, sha256)] the release's current table was built from."""
+    out = []
+    for line in open(f"{ROOT}/adapters/drivers/{fam}/{release}.txt"):
+        if m := re.fullmatch(r"# (\S+) sha256:([0-9a-f]{64}) (\S+)\n", line):
+            out.append((m.group(1), m.group(3), m.group(2)))
+    if not out:
+        raise SystemExit(f"adapters/drivers/{fam}/{release}.txt names no packages")
+    return out
 
 
 def releases(adapter):
@@ -224,17 +274,22 @@ def releases(adapter):
 
 
 def main(argv):
+    use_pinned = "--pinned" in argv
+    argv = [a for a in argv if a != "--pinned"]
     if not argv:
         raise SystemExit(__doc__)
     fam = argv[0]
     adapter = tomllib.load(open(f"{ROOT}/adapters/{fam}.toml", "rb"))
     for release in argv[1:] or releases(adapter):
-        pkgs = el_kernel(adapter, release) if adapter["backend"] == "rpm" else apt_kernel(adapter, release)
+        if use_pinned:
+            pkgs = pinned(fam, release)
+        else:
+            pkgs = el_kernel(adapter, release) if adapter["backend"] == "rpm" else apt_kernel(adapter, release)
         version, lines = table(pkgs)
         out = f"{ROOT}/adapters/drivers/{fam}/{release}.txt"
         os.makedirs(os.path.dirname(out), exist_ok=True)
         head = [f"# wend driver table (SPEC \"Hardware preflight\"): the PCI storage and network devices {release}'s "
-                f"kernel {version} drives.",
+                f"kernel {version} drives, and the filesystems it mounts.",
                 "# Generated by tools/hwdata.py from these packages, checked against the release index; don't edit."]
         head += [f"# {n} sha256:{s} {u}" for n, u, s in pkgs]
         body = ("\n".join(head + lines) + "\n").encode()
