@@ -74,9 +74,24 @@ now (3.10, while the copy is made and on every rollback check) and every kernel 
 must read it makes it. Alma 10 mounts that format (it warns that dates end in 2038; `xfs_admin -O bigtime=1` fixes that, but needs xfsprogs
 5.10+ and the filesystem unmounted, so only from rescue media, and it isn't part of relocate).
 
+## Refresh GRUB first (BIOS)
+
+EL7 updates never run `grub2-install`, so `core.img` in the MBR and the modules in `/boot/grub2/i386-pc` are whatever
+the machine was installed with. GRUB's XFS v5 reader is from mid-2015 (CentOS carries it as c7 grub2 patch 0170), so
+a 7.0 or 7.1 machine's GRUB can't read the new root at all, and 7.2's may not. So before anything else, the running
+7.9's own `grub2-install` goes onto the boot disk with the old `/boot/grub2` as its prefix (what leapp's grub core
+update does): same prefix, same config, a GRUB that reads v5. It is the only write to the MBR, it runs unconditionally
+(a 7.9-installed machine just gets the same GRUB again), and a failure here stops relocate before anything else
+changes, with the old config still booting.
+
+It runs before the copy so the new root's `/boot/grub2` carries the refreshed modules too. `core.img` and every module
+under whatever prefix is active must come from the same build: GRUB modules have no version check, and once the stub
+points `prefix` at the new root, every module not yet loaded (`linux16`, `gzio`, the entries' `insmod`s) is read from
+there.
+
 ## The copy
 
-Services keep running for the first pass. Two passes:
+The new root is mounted at `/run/wend/new`. Services keep running for the first pass. Two passes:
 
 1. `rsync -aHAXS --numeric-ids` from a bind mount of `/` (`mount --bind / /run/wend/src`, so files hidden under
    mount points such as `/dev`'s static nodes come too) and of each moving filesystem, into the new root, live.
@@ -88,7 +103,9 @@ Then, in a chroot of the new root only:
 
 - fstab gets the new root's UUID and drops the lines of the filesystems that moved, including `/boot`, which becomes
   a directory in the new root holding a copy of the old `/boot` (see the flip);
-- SELinux labels are fixed offline: `setfiles` with the copy's own `file_contexts` over the whole new root. Never
+- SELinux labels are fixed offline, from outside the chroot: `setfiles -r /run/wend/new
+  /run/wend/new/etc/selinux/targeted/contexts/files/file_contexts /run/wend/new` (skipped when the copy's config says
+  `SELINUX=disabled`). Never
   `/.autorelabel`: EL7's relabel service reboots when it's done, even in permissive mode, and that reboot would land
   on the old root and end the trial;
 - `GRUB_CMDLINE_LINUX` in the copy's `/etc/default/grub` gets the new LV in `root=` and `rd.lvm.lv=` in place of the
@@ -101,34 +118,29 @@ Then, in a chroot of the new root only:
 
 ## The flip
 
-**BIOS (GRUB 2, EL7's).** The MBR's `core.img` points at the old `/boot` partition, and keeps doing so. But EL7
-updates never run `grub2-install`, so `core.img` and the modules in `/boot/grub2/i386-pc` are whatever the machine was
-installed with. GRUB's XFS v5 reader is from mid-2015 (CentOS carries it as c7 grub2 patch 0170), so a 7.0 or 7.1
-machine's GRUB can't read the new root at all, and 7.2's may not. So the flip starts with:
+**BIOS (GRUB 2, refreshed above).** The MBR's `core.img` points at the old `/boot` partition, and keeps doing so.
 
-1. **Refresh GRUB in place.** The running 7.9's own `grub2-install` onto the boot disk with the old `/boot/grub2` as
-   its prefix (what leapp's grub core update does). Same prefix and same config, only a GRUB that reads v5. This is
-   the one write to the MBR; a failure here is reported before anything else changes, and the old config still boots.
-2. **The stub.** On the old `/boot`, move `grub2/grub.cfg` to `grub2/grub.cfg.wend-old` and write a small
+1. **The stub.** On the old `/boot`, move `grub2/grub.cfg` to `grub2/grub.cfg.wend-old` and write a small
    `grub2/grub.cfg`. Entry 0 is the new root: `insmod lvm xfs`, `search --no-floppy --fs-uuid --set=root <new>`,
    `set prefix=($root)/boot/grub2`, `configfile $prefix/grub.cfg`. Setting `prefix` matters: the new root's config
    then loads its own `grubenv` (its `saved_entry`, and on EL8 its `kernelopts`), not the old `/boot`'s. Entry 1 is
    "wend rollback", `configfile /grub2/grub.cfg.wend-old`, with the old `prefix` and `grubenv`, so the old root
    comes up on its own saved default.
-3. **The trial.** The stub has variables of its own in the old `/boot`'s `grubenv`, never `saved_entry` or
+2. **The trial.** The stub has variables of its own in the old `/boot`'s `grubenv`, never `saved_entry` or
    `next_entry`, which belong to the two configs: `wend_default=1` and `wend_next=0`. The stub boots `wend_next` if
    set and clears it with `save_env` first, else `wend_default`. So the **trial boot** goes to the new root once, and
    any reset after that comes back to the old root. GRUB writes `grubenv` in place on a plain partition (it refuses on
    LVM and md), which is why the stub lives on the old `/boot`.
-4. **Flush.** GRUB doesn't replay the XFS log, so after writing the stub and `grubenv`, `fsfreeze -f /boot && fsfreeze
+3. **Flush.** GRUB doesn't replay the XFS log, so after writing the stub and `grubenv`, `fsfreeze -f /boot && fsfreeze
    -u /boot`, which writes the metadata home (a known EL7 trap with `grub2-reboot` on an XFS `/boot`).
 
 When the trial boot comes up and the box's checks pass, the commit-to-trial step mounts the old `/boot` (the new
 root's fstab no longer does; EL7's kernel, still running here, reads v4), sets `wend_default=0`, flushes it the same
 way, and unmounts it. The new root is now the default and the old one is the rollback entry.
 
-Nothing on the old root changes, and the old `/boot` changes only by the stub, the renamed config and `grubenv`.
-Undoing the flip from a rescue shell is "rename one file back".
+Nothing on the old root changes. The old `/boot` changes by the refreshed GRUB (its modules, plus the MBR and the gap
+after it), the stub, the renamed config and `grubenv`. Undoing the flip from a rescue shell is still "rename one file
+back": the refreshed GRUB reads the old config as it is.
 
 **UEFI (shim, EL7's grubx64.efi).** The ESP (vfat) is mounted at `/boot/efi` on the old root and every kernel mounts
 it, so it stays where it is and both roots mount it. The new root gets its own GRUB config directory on the ESP
@@ -153,18 +165,21 @@ On a relocated box:
   `/dev/disk/by-id`) and this step uses it;
 - the prefix becomes the new root's `/boot/grub2`, and the rollback entry moves into the new root's
   `/etc/grub.d/40_custom` (`search --no-floppy --fs-uuid --set=root <old /boot>`, `configfile
-  /grub2/grub.cfg.wend-old`; GRUB 2 still reads v4 XFS where the kernel can't);
+  /grub2/grub.cfg.wend-old`; GRUB 2 still reads v4 XFS where the kernel can't). That runs EL7's entries (`linux16`,
+  `initrd16`) under the EL8+ GRUB with its `grubenv`, whose `saved_entry` is a BLS id, so the old config falls to its
+  entry 0. The rollback boot after the last hop is what proves this works;
 - from then on the prefix is on LVM, where GRUB can't `save_env`. One-shot boots stop working (`next_entry` would
   stay set), so `wend rollback` is sticky from this point: it makes the rollback entry the default, it doesn't try it
   once.
 
 ## Rollback and commit
 
-The old root and old `/boot` are never written after the flip, except for the stub and `grubenv` on the old `/boot`.
+The old root and old `/boot` are never written after the flip, except for `grubenv` on the old `/boot`.
 So:
 
 - **Before the trial boot passes**: reset. The trial was one-shot.
-- **After**: boot the "wend rollback" entry (`wend rollback` sets it as the next boot). Data written on the new root
+- **After**: boot the "wend rollback" entry (`wend rollback` sets it as the next boot while the stub is in charge, and as the default once the EL8
+GRUB reinstall has moved the prefix onto LVM, see above). Data written on the new root
   since the flip stays there, readable from the old root only through the new LV (the old kernel mounts the new root
   fine, it made it). The run says this in words: rollback loses what happened after the flip, unless you copy it
   back.
@@ -227,13 +242,13 @@ The VM proof needs:
 - a box `el/centos7-lamp-xfsv4`: centos7-lamp's packages and checks, installed by kickstart from the 7.9 tree with
   every XFS made `-m crc=0 -n ftype=0` (exactly what 7.0 to 7.2's mkfs made; the format is the format), a 500 MB
   `/boot`, LVM `root` and `swap` filling the disk as a default install does, and a second empty 30 GB disk. Its
-  GRUB is 7.9's, so it can't show the old-`core.img` failure that step 1 of the flip exists for. Step 1 is
+  GRUB is 7.9's, so it can't show the old-`core.img` failure the GRUB refresh exists for. The refresh is
   unconditional for that reason, and a second VM case gets its `core.img` and modules from 7.0 media's grub2 (install
-  from 7.0's `pxeboot`, or put 7.0's `grub2-install` output on the disk before the update) to prove the refresh. Today
-  vm.py's kickstart is ext3 on a plain partition: the box needs `[vm]` keys for the layout (`fs`, `mkfs_options`,
+  from 7.0's `pxeboot`, or put 7.0's `grub2-install` output on the disk before the update) and boots all the way to
+  the new root to prove the refresh. Today the EL7 kickstart (remi's, landing separately) is ext3: the box needs `[vm]` keys for the layout (`fs`, `mkfs_options`,
   `lvm`, `extra_disks`), which is a VM-tier spec change in its own PR;
 - relocate as a vm.py step before the first hop, a forced reset during the trial boot (it must come back on the old
-  root), the trial again and the commit-to-trial, then the route, rebooting as usual, and a rollback boot after the
+  root), the trial again, all the way to the new root's checks, and the commit-to-trial, then the route, rebooting as usual, and a rollback boot after the
   last hop (the old root's checks pass, as they did at the start);
 - the in-place centos7-lamp route's VM proof first (or alongside), because its GRUB reinstall gap is relocate's too,
   and it's the baseline the relocated box is compared against: same checks, same final package set, plus downtime
