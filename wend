@@ -187,8 +187,11 @@ def cmd_verify(base=None, all_=False, jobs=2):
         matrix = [{"route": r, "box": b} for r, d in repo.routes.items() for b, x in repo.boxes.items()
                   if check.starts(x, d)]
     else:
-        matrix = json.loads(subprocess.run([sys.executable, "-B", f"{ROOT}/tools/affected.py", base],
-                                           capture_output=True, text=True, check=True).stdout)["include"]
+        r = subprocess.run([sys.executable, "-B", f"{ROOT}/tools/affected.py", base], capture_output=True, text=True)
+        if r.returncode:
+            print(r.stderr.strip() or "tools/affected.py failed")
+            return 1
+        matrix = json.loads(r.stdout)["include"]
     if not matrix:
         print("nothing to replay: the change touches no route, fix, box or adapter")
         return 0
