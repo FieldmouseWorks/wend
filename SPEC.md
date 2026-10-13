@@ -144,7 +144,8 @@ Adapter ops are named `<tool>.<verb>`. The adapter declares which ones its famil
 (`[ops."<name>"].args`, see [Argument specs](#argument-specs)); the Op reference defines what they do.
 
 - Debian: `apache.enable` and `apache.disable` (`kind` = site/mod/conf, `name`) compile to `a2en*`/`a2dis*`;
-  `dpkg.reinstall` (`packages`) to `apt-get install --reinstall --only-upgrade`.
+  `dpkg.reinstall` (`packages`) to `apt-get install --reinstall --only-upgrade`; Ubuntu also
+  `net.ifupdown-dns-to-resolved`.
 - EL: `rpm.bootstrap` (unpack EL6's rpm/yum stack over / with 7-Zip, because rpm 4.4 can't read xz payloads),
   `rpm.transit` (pass through EL8: EL8's rpm run from a staging dir, then a real distro-sync), `rpm.swap-release`
   (release packages by hand: epochs and vendor switches), `rpm.drop-arch` (multilib leftovers), `rpm.adopt-rpmnew`,
@@ -502,6 +503,51 @@ writes them. A package apt doesn't know fails the step. One the release no longe
 says so and carries on, so the step passes and the hop's `pkgdb` check is what fails; a fix purges such a package
 instead. A package that isn't installed is skipped, never installed (`--only-upgrade`, apt 0.8 and later: squeeze
 on). Reference: `apt-get install --reinstall --only-upgrade {packages}`.
+
+**`net.ifupdown-dns-to-resolved`** (no arguments; Ubuntu). Gives systemd-resolved the resolvers and search domains
+ifupdown's configuration names, for a box that keeps ifupdown into a release where resolved answers its lookups. A
+box that came up from trusty keeps ifupdown and resolvconf; on jammy's release pocket ifupdown's own hook that hands
+the `dns-*` options to resolved fails ("mystatedir: not found"; jammy-updates fixes it), resolvconf lists only
+resolved's stub, and resolved has no upstream server, so nothing resolves after the reboot (found replaying trusty to
+resolute in a VM, wend#13). noble ships no resolvconf at all. ifupdown says which interfaces it has up and reads its
+own configuration. The op runs on the live box before the hop's reboot: `ifquery --state` lists each interface ifup
+brought up as `PHYSICAL=LOGICAL`, the stanza it used (`auto eth0=work` and mapping patterns name the logical stanza),
+and `ifquery --no-mappings -- PHYSICAL=LOGICAL` prints that stanza's options as ifupdown parsed them (inet and inet6
+stanzas, `inherits`, sourced files); without `--no-mappings` ifquery would run the admin's `mapping` scripts again
+from the logical name and could land on another stanza. What the state says is what the op carries: an interface whose ifup failed (even for one address family), that was never brought up, or that was taken
+down by hand isn't in it, and one brought up by hand is. A box with no state (a chroot replay, or a live box whose
+`/run/network/ifstate` is gone) carries nothing, though its configuration is still parsed (`ifquery --list --all
+--exclude='*'`, which skips the per-interface check, so an `auto` name with no stanza isn't a failure) and a main
+interfaces file ifupdown can't read fails the step; an error in a sourced file is a warning ifupdown skips, at `ifup`
+as here. A value given with `ifup -o` isn't in the configuration, so the
+configuration's value is carried, as it is for a stanza edited since boot (the value the hop's reboot gives the
+hooks). A stanza deleted since boot fails the step, unless a mapping still matches its name: then ifquery prints
+nothing for it and nothing is carried, as the reboot would give its hooks nothing. A configuration ifupdown can't read fails the step, and so does a state line whose interface or stanza name starts with `-` or holds anything
+but `[A-Za-z0-9_.:@-]`. ifquery prints `name: value` per option, and ifupdown keeps an option given twice as one value
+joined by a newline, so a line without `: ` (or with whitespace in its name) continues the value before it (only a
+newline ends a line), and a value is split into words as a hook's shell splits it (space, tab, newline). Each option
+name becomes the name ifupdown's hooks receive (up to the first `=`, whose rest leads the value; `-` to `_`, ASCII
+upper case, anything else dropped), and two spellings of one `DNS_*` name on an interface fail the step, because a hook sees only the last.
+Only one interface may name resolvers: ifupdown's hook gave each interface its own link in resolved, and
+one global `DNS=` for two would send every lookup to both, so a second one fails the step (inet and inet6 stanzas of
+one interface are one interface). `DNS_NAMESERVERS` and `DNS_NAMESERVER` must be unicast addresses a resolver can be at (no scope, not link-local,
+multicast, loopback, unspecified, reserved, broadcast or IPv4-mapped); `DNS_SEARCH` and `DNS_DOMAIN` plain domain
+names; any other `DNS_*` option fails the step. The result is `/etc/systemd/resolved.conf.d/50-wend-ifupdown.conf`
+with `DNS=` and `Domains=`, written (mode 0644 in a 0755 directory) only when it is new, through the directory reached one name at a time
+from `/` without following a symlink: a symlinked `/etc`, `/etc/systemd`, `resolved.conf.d` or drop-in fails the
+step, and a directory swapped for a symlink while the op writes doesn't redirect the write;
+one that is already there must be a plain file saying the same, and a `.wend` file beside it fails the step. The
+drop-in is published with a hard link from the op's open file (`/proc/self/fd`), not a rename, so one created by
+something else while the op writes is kept and the step fails, and a temporary name replaced meanwhile fails it too. Nothing
+is written when no interface ifupdown has up names a `dns-*` option, and every refusal comes before anything is
+written. Addresses and routes stay with ifupdown, and resolved reads the drop-in at the reboot that ends the hop.
+Not seen, because ifquery's text doesn't show it, so the options are carried although no hook read them:
+`no-scripts`, and a repeated option whose second value itself reads `name: value`, which prints like a separate
+option. ifquery prints an interface's inet and inet6 stanzas together, so two spellings across them fail the step
+although each hook saw one. Needs python3.6 or later on the box (bionic
+on; the route uses it on jammy). Reference: `python3 -` with the source in `tools/net_ifupdown_dns_to_resolved.py`,
+sent as a here-document; `tools/test_net_ifupdown.py` runs it with a stand-in `ifquery`, and the VM replay proves the
+parse on a real box.
 
 ### EL ops
 
