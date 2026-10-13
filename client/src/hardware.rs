@@ -248,12 +248,12 @@ const KERNEL_FILE_PREFIXES: &[&str] = &[
     "retpoline-",
 ];
 
-/// The MiB the rescue image (`vmlinuz-0-rescue-<machine id>`, its `.hmac` and initramfs) takes, rounded up.
-/// Whether GRUB legacy's default entry boots the rescue image: EL's kernel_before keeps it then.
+/// Whether GRUB legacy's default entry boots the rescue image: EL's kernel_before keeps it then. Read as its awk
+/// reads grub.conf: `default=` and `title` at the line's start, entry 0 when nothing says otherwise.
 fn grub_default_is_rescue(conf: &str) -> bool {
-    let mut default = None;
+    let mut default = Some(0);
     let mut title: Option<usize> = None;
-    for line in conf.lines().map(str::trim) {
+    for line in conf.lines() {
         if let Some(d) = line.strip_prefix("default=") {
             default = d.trim().parse::<usize>().ok();
         } else if line.starts_with("title") {
@@ -265,6 +265,7 @@ fn grub_default_is_rescue(conf: &str) -> bool {
     false
 }
 
+/// The MiB the rescue image (`vmlinuz-0-rescue-<machine id>`, its `.hmac` and initramfs) takes, rounded up.
 fn rescue_mib(files: &[(String, u64)]) -> u64 {
     files
         .iter()
@@ -1662,6 +1663,9 @@ mod tests {
         assert!(grub_default_is_rescue(conf));
         assert!(!grub_default_is_rescue(&conf.replace("default=1", "default=0")));
         assert!(!grub_default_is_rescue(&conf.replace("default=1", "default=saved")));
+        // no default= line: GRUB boots entry 0
+        let first = "title rescue\n\tkernel /vmlinuz-0-rescue-ab ro\ntitle CentOS\n\tkernel /vmlinuz-2.6.32 ro\n";
+        assert!(grub_default_is_rescue(first));
     }
 
     /// Debian's apt autoremoves no kernel before jessie's: on the hop to jessie every kernel is still there.
