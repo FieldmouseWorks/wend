@@ -64,16 +64,19 @@ def run(query, existing=None, symlink=False, prepare=None, no_ifquery=False, rac
                 os.symlink(target, t + m.DROPIN)
         path, mask, msg = os.environ["PATH"], os.umask(0o077), None  # 077: the mode must come from the op
         os.environ["PATH"] = b if no_ifquery else f"{b}:{path}"
-        link = os.link
-        if race:  # another process acts just before the op publishes its drop-in
-            def racing(*a, **kw):
-                if race == "swap":  # resolved.conf.d moved away and a symlink to elsewhere put in its place
+        link, osopen = os.link, os.open
+        if race == "swap":  # after the checks, before the op creates its file: resolved.conf.d moved away and a
+            def swapping(path, *a, **kw):  # symlink to elsewhere put in its place
+                if str(path).endswith(".wend") and not os.path.lexists(t + "/moved"):
                     d = os.path.dirname(t + m.DROPIN)
                     os.rename(d, t + "/moved")
                     os.makedirs(t + "/elsewhere")
                     os.symlink(t + "/elsewhere", d)
-                else:
-                    open(t + m.DROPIN, "w").write("admin\n")
+                return osopen(path, *a, **kw)
+            os.open = swapping
+        elif race:  # another process creates the drop-in just before the op publishes its own
+            def racing(*a, **kw):
+                open(t + m.DROPIN, "w").write("admin\n")
                 return link(*a, **kw)
             os.link = racing
         try:
@@ -84,7 +87,7 @@ def run(query, existing=None, symlink=False, prepare=None, no_ifquery=False, rac
         except Exception as e:  # a traceback is a defect too: it prints WRONG, not a crash of this test
             msg = f"EXCEPTION {e!r}"
         finally:
-            os.environ["PATH"], _, os.link = path, os.umask(mask), link
+            os.environ["PATH"], _, os.link, os.open = path, os.umask(mask), link, osopen
         p = t + m.DROPIN
         out = open(p).read() if os.path.isfile(p) else None
         mode = (os.stat(p).st_mode & 0o777, os.stat(os.path.dirname(p)).st_mode & 0o777) if os.path.isfile(p) else None

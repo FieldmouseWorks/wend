@@ -151,9 +151,17 @@ def dropin_dir(root):
             try:
                 n = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=d)
             except FileNotFoundError:
-                os.mkdir(part, 0o755, dir_fd=d)
+                try:
+                    os.mkdir(part, 0o755, dir_fd=d)
+                except OSError as e:
+                    os.close(d)
+                    fail(f"{path} couldn't be made ({e.strerror})")
                 n = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=d)
-                os.fchmod(n, 0o755)
+                try:
+                    os.fchmod(n, 0o755)
+                except OSError:
+                    os.close(n)
+                    raise
         except OSError as e:  # O_NOFOLLOW with O_DIRECTORY refuses a symlink as ENOTDIR (or ELOOP)
             try:
                 link = stat.S_ISLNK(os.stat(part, dir_fd=d, follow_symlinks=False).st_mode)
