@@ -1,0 +1,154 @@
+{
+ "schema": "wend.run/0",
+ "route": "sha256:c640578ad3f80ac5942e3431fd8fa1c1eed8d4b00ba45e84561ee54901635c1b",
+ "box": "ubuntu/trusty-web",
+ "from": "trusty",
+ "to": "resolute",
+ "result": "pass",
+ "started": "20261013-145916",
+ "wall_seconds": 919,
+ "start_fingerprint": "sha256:faf6e82029422106de1ec4c7d5a7f28b9a2902b018a76e801f8fa7cafe968818",
+ "runner": {
+  "kind": "local",
+  "host": "vm",
+  "kernel": "6.18.44-fc-v114"
+ },
+ "hops": [
+  {
+   "to": "xenial",
+   "fired": [
+    "sha256:5743abba750f9da9dd9bfc4133f69e9b452c09b4b21ce4a7729ad7b85489efc2"
+   ],
+   "fired_names": [
+    "php7.0-module"
+   ],
+   "ok": true,
+   "seconds": 129.5,
+   "sources": {
+    "http://archive.ubuntu.com/ubuntu/dists/xenial/InRelease": "sha256:30e9ff343d9ec0b64d28d27010bf472090bb3399b4b6bc5aee077085e920e89b"
+   }
+  },
+  {
+   "to": "bionic",
+   "fired": [
+    "sha256:8a5c4d416cfd8107a752148732baa8d7e111f34bef2ef3f4b50c9f016315503d"
+   ],
+   "fired_names": [
+    "php7.2-module"
+   ],
+   "ok": true,
+   "seconds": 132.1,
+   "sources": {
+    "http://archive.ubuntu.com/ubuntu/dists/bionic/InRelease": "sha256:690bd875ab5799394af7406f32f2e698c48e772ac367d520f74ec1095662da4d"
+   }
+  },
+  {
+   "to": "focal",
+   "fired": [
+    "sha256:00191f644cba71fe74d2cea9501b9e0e915b2c49df37f4a9992bde7f1f4051fe"
+   ],
+   "fired_names": [
+    "php7.4-module"
+   ],
+   "ok": true,
+   "seconds": 119.3,
+   "sources": {
+    "http://archive.ubuntu.com/ubuntu/dists/focal/InRelease": "sha256:cc9be89a0984aeca9e3ca40ae0e6decff75aa32653a5925b04956a7c12487e99"
+   }
+  },
+  {
+   "to": "jammy",
+   "fired": [
+    "sha256:ad700dfa7244e5bafa7a490449342f5b8cce1fefb43a3f533751f04bdaddf980",
+    "sha256:0fd0f96ea39f6ebd216caef47c8bba4a059fe1054b76f41697f8c1245608dc59"
+   ],
+   "fired_names": [
+    "php8.1-module",
+    "jammy-ifupdown-dns-to-resolved"
+   ],
+   "ok": true,
+   "seconds": 153.6,
+   "sources": {
+    "http://archive.ubuntu.com/ubuntu/dists/jammy/InRelease": "sha256:c14060cd8c6d625874dfcb9523a35a395bf4865c28b6b6a82569ef326fe92dc6"
+   }
+  },
+  {
+   "to": "noble",
+   "fired": [
+    "sha256:c32cb8ed9d55188da10eac52371bd337e253ccb0e716e71fe0ef51962510c54b"
+   ],
+   "fired_names": [
+    "php8.3-module"
+   ],
+   "ok": true,
+   "seconds": 152.2,
+   "sources": {
+    "http://archive.ubuntu.com/ubuntu/dists/noble/InRelease": "sha256:cdb2f31d809f589719a53c6ad15f255b27569c4059542ada282aaa21b8e164b0"
+   }
+  },
+  {
+   "to": "resolute",
+   "fired": [
+    "sha256:57481ff558fb1fb03a7938ac2d21cdddd410af72ae4e72ad38e2eaa67ac866c9"
+   ],
+   "fired_names": [
+    "php8.5-module"
+   ],
+   "ok": true,
+   "seconds": 185.4,
+   "sources": {
+    "http://archive.ubuntu.com/ubuntu/dists/resolute/InRelease": "sha256:45f95ce276cdba3e41870516a130e03c58b8b7a79e9546b0efe9e526d255740c"
+   }
+  }
+ ],
+ "start_services": [
+  "README",
+  "apache2",
+  "cron",
+  "halt",
+  "killprocs",
+  "kmod",
+  "networking",
+  "ntp",
+  "ondemand",
+  "postfix",
+  "procps",
+  "rc",
+  "rc.local",
+  "rcS",
+  "reboot",
+  "rsync",
+  "sendsigs",
+  "single",
+  "skeleton",
+  "ssh",
+  "sudo",
+  "udev",
+  "umountfs",
+  "umountnfs.sh",
+  "umountroot",
+  "urandom"
+ ],
+ "failed_stage": "",
+ "final": {
+  "release": "DISTRIB_ID=Ubuntu\nDISTRIB_RELEASE=26.04\nDISTRIB_CODENAME=resolute\nDISTRIB_DESCRIPTION=\"Ubuntu 26.04 LTS\"",
+  "passed": [
+   "cron",
+   "current",
+   "mail",
+   "php",
+   "pkgdb",
+   "python",
+   "services",
+   "ssh",
+   "tools",
+   "web"
+  ],
+  "failed": [],
+  "failed_logs": {}
+ },
+ "obsolete_before": 19,
+ "obsolete_after": 0,
+ "model_calls": 0,
+ "log_sha256": "sha256:b808158ff561c8e85c3aad355c7ad824051536bd90b7bf4bf11fbe1da3bb5395"
+}

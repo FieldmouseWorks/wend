@@ -153,6 +153,10 @@ args = { kind = { enum = ["site", "mod", "conf"] }, name = { pattern = "[A-Za-z0
 summary = "give systemd-resolved the resolvers and search domains ifupdown names for the interfaces it has up (ifquery --state; a resolved.conf.d drop-in); fails, changing nothing, on any dns option or value it can't carry"
 args = {}
 
+[ops."apt.drop-esm-pins"]
+summary = "remove the apt pins ubuntu-advantage-tools wrote for the release being left (Pin-Priority: never, which apt 1.2 on rejects); only unowned plain files in u-a-t's exact shape"
+args = { release = { pattern = "[a-z]+" } }
+
 [checks]
 pkgdb = 'test -z "$(dpkg --audit 2>&1)" && apt-get check >/dev/null'
 current = "every binary a service runs comes from a package the release in sources.list still ships (apt-cache madison); the box lists the binaries"
@@ -168,14 +172,14 @@ services = "no explicitly installed, non-required package that ships an init scr
 # space on / the hop needs (its downloads and the release's growth; walking a copy of the machine first measures the
 # real need); `drivers`, the sha256 of
 # adapters/drivers/ubuntu/<release>.txt, the PCI disk controllers and network cards the release's kernel drives
-# (tools/hwdata.py builds it from the kernel package itself).
+# and the filesystems it mounts (tools/hwdata.py builds it from the kernel package itself).
 # `boot_mib`, the space the release's kernel takes in /boot: linux-image's and linux-modules' /boot files (measured)
 # and its initramfs, with room for an LVM or md root. xenial to jammy: the initrds the VM tier's trusty-to-resolute
 # run made on its plain-partition box (37, 50, 48 and 62 MB for the route's pinned 4.4.0-21, 4.15.0-20, 5.4.0-26 and
 # 5.15.0-25), plus 5 MiB, what lvm2 and mdadm add to the same kernels' initrds (4.7 MB on 5.4.0-26, 4.9 on
-# 5.15.0-25, built in a container with and without them), plus a little. noble and resolute: built from the
-# release's packages in a container, with lvm2 and mdadm; resolute's builds host-only, so its figure allows for real
-# hardware.
+# 5.15.0-25, built in a container with and without them), plus a little. noble: built from the release's packages
+# in a container, with lvm2 and mdadm. resolute: the same run's 79.8 MB initrd for 7.0.0-14 (a container build is
+# host-only and far smaller), its 28.6 MiB of package files, the 5 MiB, and a little.
 # `old_kernels = "running"`: hop.kernel_before purges every kernel older than the running one before the
 # transaction, so the new kernel only ever sits beside the running one (apt's autoremove would keep two, and trusty's
 # guided-LVM /boot of 243 MB stops at focal).
@@ -186,36 +190,58 @@ old_kernels = "running"
 cpu = "x86-64"
 disk_mib = 2048
 boot_mib = 56
-drivers = "sha256:f5d0794514fd9f2a5b26d6b837e5427eb79b3d2b81b44dfb9320030d6ce9f3f9"
+drivers = "sha256:70e6dcc4224916e26db105545a5207d206223025f468a4134e6abd923c085082"
 
 [hardware.bionic]
 cpu = "x86-64"
 disk_mib = 2048
 boot_mib = 70
-drivers = "sha256:e1bef70be98b23557dbef99f656a86563265545a0641053140f12cfffd5c04ad"
+drivers = "sha256:a49c30f68be2a4959cea796acb7e1a73abf9406944d67d281c829972faab09a2"
 
 [hardware.focal]
 cpu = "x86-64"
 disk_mib = 2048
 boot_mib = 71
-drivers = "sha256:821a2d9c1c3e65a38181bb8aa79e3d2c3290d6a32d7b608401545ef42f6ca0c9"
+drivers = "sha256:e13ec854cf195c9756e347592e3642325ac921605b55fbff5f20e04bb08e75fa"
 
 [hardware.jammy]
 cpu = "x86-64"
 disk_mib = 2048
 boot_mib = 88
-drivers = "sha256:2a453ad5f9c4f188a3589d85b8c45e2000bf2eae3ee4484d553ca2dde747f47a"
+drivers = "sha256:1e8aea492d848f3e11db877289957ed5e7571548322d0046c2cead9a3c7ea730"
 
 [hardware.noble]
 cpu = "x86-64"
 ram_mib = 1024
 disk_mib = 2048
 boot_mib = 106
-drivers = "sha256:f1c5c6babe929becf674f7ccea07e9ddc130bacc493304012d1dcd2dfcef5a12"
+drivers = "sha256:7fcbf810bb6c9db0bf8b27e0094130afa81c8cfd557458934e6c17551df60bfb"
 
 [hardware.resolute]
 cpu = "x86-64"
 ram_mib = 1024
 disk_mib = 2048
-boot_mib = 85
-drivers = "sha256:a7b3497a96495da38204c4691cd2f218da4346f642f96e1cc0f90affde0bfac4"
+boot_mib = 116
+drivers = "sha256:2a1d342c740b940e03149a80efeeb7e49bb8409a739536bc6a915c7c932181eb"
+
+# SPEC "Runtime preflight": the Python 2 interpreters each release a route boots into ships, by upstream version
+# ([] for none). tools/runtimes.py reads them from the release's own index (the components the hop uses); a machine
+# whose own programs run on Python 2 is told where it stops shipping before anything is touched.
+[runtimes.xenial]
+python2 = ["2.7.11"]
+
+[runtimes.bionic]
+python2 = ["2.7.15"]
+
+[runtimes.focal]
+python2 = ["2.7.18"]
+
+[runtimes.jammy]
+python2 = ["2.7.18"]
+
+[runtimes.noble]
+python2 = []
+
+[runtimes.resolute]
+python2 = []
+

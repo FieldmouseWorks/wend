@@ -284,10 +284,15 @@ set = false
 # `ram_mib`, the release's documented minimum (Red Hat's "RHEL technology capabilities and limits"); `disk_mib`, an estimate of the free space on / the hop needs (its downloads and the release's
 # growth; walking a copy of the machine first measures the real need); `drivers`, the sha256 of
 # adapters/drivers/el/<release>.txt, the PCI disk controllers and network cards the release's kernel drives
-# (tools/hwdata.py builds it from the kernel package itself).
+# and the filesystems it mounts (tools/hwdata.py builds it from the kernel package itself).
 # `boot_mib`, the space the release's kernel takes in /boot: its package's /boot files (vmlinuz, System.map, config,
-# symvers; measured) and a host-only initramfs (an estimate: a container can't build one for real hardware; CentOS 6's
-# dracut builds a generic one). `old_kernels = "running"`: hop.kernel_before removes every kernel but the running one
+# symvers; measured) and a host-only initramfs. centos7: measured on the VM tier's centos7-lamp (3.10.0-1160.119.1:
+# 28.3 MiB without its kdump image, 17.7 of it the initramfs) plus 3 MiB for an LVM or md root. centos6, alma9 and
+# alma10: estimates (a container can't build a host-only initramfs for real hardware; CentOS 6's dracut builds a
+# generic one); alma9's package files are 24.1 MiB, alma10's 24.9. alma9's also holds 8 MiB for the rescue image: the
+# first kernel a BLS release installs finds no rescue loader entry, so dracut-config-rescue's 51-dracut-rescue.install
+# copies its own vmlinuz (14.5 MiB) over an EL7 box's vmlinuz-0-rescue (6.5 MiB) and keeps the EL7 rescue initramfs
+# it finds; from then on the entry exists and alma10 adds nothing. `old_kernels = "running"`: hop.kernel_before removes every kernel but the running one
 # (and GRUB's default) before the hop installs its own, so the new kernel sits beside one other.
 boot = ["bios"]
 old_kernels = "running"
@@ -297,26 +302,41 @@ cpu = "x86-64"
 ram_mib = 1024
 disk_mib = 2048
 boot_mib = 30
-drivers = "sha256:e28f49c288939833f28c345a9dd94c3177ef767b0c7d765e5778113c026f1b71"
+drivers = "sha256:5d8c4017ddb11282325cd8f6443f39da37cd0c23598ce12c63375cd058431adc"
 
 [hardware.centos7]
 cpu = "x86-64"
 ram_mib = 1024
 disk_mib = 2048
-boot_mib = 45
-drivers = "sha256:d757df3fcde59d846e471d0c2908a8286e3ed699c652f48008094dbbbe1d9fdd"
+boot_mib = 32
+drivers = "sha256:965df193dc31f5ed07b8bf88088d8f88371058bdf99fef77c3dfe74965403335"
 
 [hardware.alma9]
 cpu = "x86-64-v2"
 ram_mib = 1536
 disk_mib = 4096
-boot_mib = 70
-drivers = "sha256:7ad88dca445a1c7e16b20214c2f7a0aba3d81b23bcd709d693d97bd96c6c9bd5"
+boot_mib = 78
+drivers = "sha256:7f5cd70e88962874ef8a0bb5143f617b54bdd77d874ce0a09e68911a0957eb28"
 
 [hardware.alma10]
 cpu = "x86-64-v3"
 ram_mib = 2048
 disk_mib = 4096
 boot_mib = 75
-drivers = "sha256:005a32d661cc840df36d29089b8b0ca4010f4e388c50976d68366e2e03734c82"
+drivers = "sha256:ee56169b981a6b8e0221d535317a4da1dc8c68cf0d035d583821ac622740a382"
 note = "AlmaLinux 10 has a separate x86_64_v2 build for older CPUs, but no wend route lands on it yet, so an x86-64-v2 machine stops at alma9"
+
+# SPEC "Runtime preflight": the Python 2 interpreters each release a route boots into ships, by upstream version
+# ([] for none). tools/runtimes.py reads them from the release's own index (the components the hop uses); a machine
+# whose own programs run on Python 2 is told where it stops shipping before anything is touched.
+[runtimes.centos6]
+python2 = ["2.6.6"]
+
+[runtimes.centos7]
+python2 = ["2.7.5"]
+
+[runtimes.alma9]
+python2 = []
+
+[runtimes.alma10]
+python2 = []

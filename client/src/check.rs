@@ -76,11 +76,14 @@ const ADAPTER_KEYS: &[&str] = &[
     "kv",
     "hardware",
     "addons",
+    "runtimes",
 ];
 /// SPEC "Hardware preflight"
 pub const CPU_LEVELS: &[&str] = &["x86-64", "x86-64-v2", "x86-64-v3"];
 const HARDWARE_KEYS: &[&str] = &["cpu", "ram_mib", "disk_mib", "boot_mib", "drivers", "note"];
 const OLD_KERNELS: &[&str] = &["running", "autoremove"];
+/// SPEC "Runtime preflight"
+pub const RUNTIMES: &[&str] = &["python2"];
 
 /// Python's re.fullmatch. A pattern Rust's regex can't compile matches nothing (and an adapter carrying one is
 /// reported by check_adapter).
@@ -358,6 +361,7 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
         }
     }
     errs.extend(check_hardware(a, wh));
+    errs.extend(check_runtimes(a, wh));
     errs
 }
 
@@ -447,6 +451,45 @@ fn check_hardware(a: &Doc, wh: &str) -> Vec<String> {
     if !missing.is_empty() {
         errs.push(format!(
             "{wh}: hardware has no table for {missing:?}, which a route can boot into"
+        ));
+    }
+    errs
+}
+
+/// SPEC "Runtime preflight": the versions of each legacy runtime every booted release ships ([] for none).
+fn check_runtimes(a: &Doc, wh: &str) -> Vec<String> {
+    let Some(Value::Object(rt)) = get(a, "runtimes") else {
+        return vec![format!("{wh}: missing the runtimes table")];
+    };
+    let mut errs = vec![];
+    let ladder = str_list(get(a, "ladder"));
+    for (r, t) in rt {
+        let Some(tm) = t.as_object().filter(|_| ladder.contains(r)) else {
+            errs.push(format!(
+                "{wh}: runtimes.{r} must be a table named for a release on the ladder"
+            ));
+            continue;
+        };
+        for k in RUNTIMES {
+            let ok = tm
+                .get(*k)
+                .and_then(Value::as_array)
+                .is_some_and(|v| v.iter().all(|x| full_v(r"\d+\.\d+(\.\d+)?", x)));
+            if !ok {
+                errs.push(format!(
+                    "{wh}: runtimes.{r}.{k} must list the versions the release ships ([] for none)"
+                ));
+            }
+        }
+        let extra: BTreeSet<String> = tm.keys().filter(|k| !RUNTIMES.contains(&k.as_str())).cloned().collect();
+        if !extra.is_empty() {
+            errs.push(format!("{wh}: runtimes.{r} has unknown keys {}", sorted(&extra)));
+        }
+    }
+    let missing: Vec<String> = booted_releases(a).into_iter().filter(|r| !rt.contains_key(r)).collect();
+    if !missing.is_empty() {
+        errs.push(format!(
+            "{wh}: runtimes has no table for {missing:?}, which a route can boot into"
         ));
     }
     errs

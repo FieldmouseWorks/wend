@@ -118,7 +118,8 @@ def hardware(adapter, release):
 FORCED_RESET = ("sleep 2; kill -TERM -1; sleep 10; kill -KILL -1; sleep 3; sync; echo 1 > /proc/sys/kernel/sysrq; "
                 "echo s > /proc/sysrq-trigger; sleep 2; echo u > /proc/sysrq-trigger; sleep 3; echo b > /proc/sysrq-trigger\n")
 # apt boxes: each installed package's version, unless `apt-cache madison` lists it from the box's sources (the release
-# pocket, set by set_release). A box with versions from elsewhere isn't the box the route starts from.
+# pocket, set by set_release, and the pockets the box asks for in [vm].pockets). A box with versions from elsewhere
+# isn't the box the route starts from.
 OFF_POCKET = (r"""l=$(dpkg-query -W -f '${Package} ${Version}\n') && [ -n "$l" ] || { echo "dpkg-query listed nothing"; """
               r"""exit 1; }; printf '%s\n' "$l" | while read p v; do apt-cache madison "$p" 2>/dev/null | """
               r"""awk -F'|' -v v="$v" '{gsub(/ /, "", $2); if ($2 == v) f = 1} END {exit !f}' || echo "$p $v"; done""")
@@ -223,7 +224,7 @@ def kickstart(box_doc, adapter, key_pub):
     NIC is eth0 as the box's network role expects), inst["ifname"] that the installer's boot line names the NIC by MAC
     (ifname=eth0:<mac>: EL7's installer then pins the ifcfg to it with HWADDR), inst["boot_part_mib"] the size of
     /boot as the release's installer makes it by default (7.9's: 1 GiB); unset, 200 MiB, a size chosen for CentOS 5,
-    whose 5.11 installer makes 100 MB, inst["ks_end"] whether sections end with %end (EL7 on; EL5's
+    whose 5.11 installer makes 100 MiB, inst["ks_end"] whether sections end with %end (EL7 on; EL5's
     anaconda doesn't know it). On UEFI, an EFI system partition. The box's customize runs in %post after the release's
     repos are set (set_release), as the chroot build runs it, with the mirror shim where the guest sees the host."""
     rel = adapter["releases"][box_doc["release"]]
@@ -330,12 +331,12 @@ class PocketProxy:
     """An http proxy on the host for debian-installer that offers a mirror's release pocket and nothing else: the
     -updates, -security, -backports and -proposed suites answer 404. Ubuntu's installer always adds -updates (its
     50mirror.ubuntu writes it whatever the preseed says) and installs from it, so without this a trusty box comes up
-    with the release's updates, while the route, and the chroot box, read the release pocket only (wend#47 is about
-    boxes that have them)."""
+    with the release's updates, while the route, and the chroot box, read the release pocket only. A box that is meant
+    to start from them (wend#47) names the pockets it wants in [vm].pockets, and those suites pass."""
 
     OTHER_POCKET = re.compile(r"/dists/[^/]+-(updates|security|backports|proposed)/")
 
-    def __init__(self, upstream):
+    def __init__(self, upstream, allow=()):
         up = upstream.rstrip("/")
 
         class H(http.server.BaseHTTPRequestHandler):
@@ -343,7 +344,8 @@ class PocketProxy:
 
             def do_GET(self):
                 # only a path on the mirror: "host:port/x" or ".evil/x" would otherwise reach another server
-                if not self.path.startswith("/") or PocketProxy.OTHER_POCKET.search(self.path) or ".." in self.path:
+                other = PocketProxy.OTHER_POCKET.search(self.path)
+                if not self.path.startswith("/") or (other and other.group(1) not in allow) or ".." in self.path:
                     return self.send_error(404)
                 try:
                     with urllib.request.urlopen(up + self.path, timeout=300) as rsp:
@@ -429,7 +431,8 @@ def build(box_id):
         for f in ("linux", "initrd.gz"):
             fetch(f"{mirror}/{inst['netboot']}/{f}", os.path.join(d, f))
         u = urllib.parse.urlsplit(mirror)
-        proxy = PocketProxy(f"{u.scheme}://{u.netloc}") if inst.get("release_pocket_only") else None
+        proxy = (PocketProxy(f"{u.scheme}://{u.netloc}", box_doc.get("vm", {}).get("pockets", []))
+                 if inst.get("release_pocket_only") else None)
         extra = gzip.compress(newc({"preseed.cfg": preseed(box_doc, a, inst, proxy).encode(),
                                     "wend-post.sh": post_install(box_doc, key_pub).encode()}))
         open(os.path.join(d, "initrd-wend.gz"), "wb").write(open(os.path.join(d, "initrd.gz"), "rb").read() + extra)
@@ -452,8 +455,9 @@ def build(box_id):
         rc, out = g.ssh("mkdir -p /etc/apt/apt.conf.d && cat > /etc/apt/apt.conf.d/00wend", stdin=a["hop"]["apt_conf"])
         if rc:
             raise RuntimeError(f"writing the harness's apt config in the box failed: {out}")
-        last = " && ".join([backends.fill(a["hop"]["set_release"], v), backends.fill(a["hop"]["refresh"], v),
-                            "apt-get dist-upgrade", "apt-get clean"])
+        last = " && ".join([backends.fill(a["hop"]["set_release"], v),
+                            *pocket_sources(box_doc["release"], box_doc.get("vm", {}).get("pockets", [])),
+                            backends.fill(a["hop"]["refresh"], v), "apt-get dist-upgrade", "apt-get clean"])
     rc, out = g.ssh(last, timeout=3600)
     if rc:
         raise RuntimeError(f"updating the installed box failed:\n{out[-2000:]}")
@@ -481,6 +485,14 @@ def build(box_id):
     if FIRMWARE == "uefi":
         os.rename(nvram(disk), nvram(base))
     return d, box_doc
+
+
+def pocket_sources(release, pockets):
+    """Shell that adds the [vm].pockets a box asks for to the sources.list set_release just wrote: each `deb` line of
+    the release, again for {release}-{pocket}, from the same mirror with the same components. check.py holds release
+    and pockets to plain words."""
+    return [f"sed -n 's/^deb \\([^ ]*\\) {release} \\(.*\\)$/deb \\1 {release}-{p} \\2/p' /etc/apt/sources.list > /tmp/wend-pocket"
+            f" && cat /tmp/wend-pocket >> /etc/apt/sources.list && rm /tmp/wend-pocket" for p in pockets]
 
 
 def checks(g, box_doc, adapter):

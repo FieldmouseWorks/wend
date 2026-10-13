@@ -122,7 +122,7 @@ services = "no explicitly installed, non-required package that ships an init scr
 # `ram_mib`, the installation guide's minimum without a desktop ("Meeting Minimum Hardware Requirements"); `disk_mib`, an estimate of the free space on / the hop needs (its downloads and the release's
 # growth; walking a copy of the machine first measures the real need); `drivers`, the sha256 of
 # adapters/drivers/debian/<release>.txt, the PCI disk controllers and network cards the release's kernel drives
-# (tools/hwdata.py builds it from the kernel package itself).
+# and the filesystems it mounts (tools/hwdata.py builds it from the kernel package itself).
 # `boot_mib`, the space the release's kernel takes in /boot: its package's /boot files (measured) and its initramfs
 # (initramfs-tools' MODULES=most, with lvm2 and mdadm: built from the release's packages in a container for buster to
 # trixie, estimated before). `old_kernels = "autoremove"`: the transaction installs the new kernel beside every kernel
@@ -139,60 +139,91 @@ cpu = "x86-64"
 ram_mib = 64
 disk_mib = 2048
 boot_mib = 12
-drivers = "sha256:a42e474a8d6c8602e4a03c5e720f386f52832304cfa67e595ead0dc256f432b3"
+drivers = "sha256:dce834beecc1c9d1d218e02e448b6c9d1171dde5adaa89925d9b6f6c3ea5900c"
 
 [hardware.squeeze]
 cpu = "x86-64"
 ram_mib = 64
 disk_mib = 2048
 boot_mib = 16
-drivers = "sha256:6f5da0b610919df2e51d4d24194117f3d856e805c244b2f076a51334fde32cd1"
+drivers = "sha256:3645347bea0d98f9d21d5d92d4fadf5da07b38318c9cfab5797762cb82594219"
 
 [hardware.wheezy]
 cpu = "x86-64"
 ram_mib = 64
 disk_mib = 2048
 boot_mib = 20
-drivers = "sha256:bbe7a92a413866a520ece112952da8bd9875a705aac4cfcf4508e1db3459d7f9"
+drivers = "sha256:0f84201262d27bb12ac497d175c779af80dc3b7af4b909e7d873fac0ac17202f"
 
 [hardware.jessie]
 cpu = "x86-64"
 ram_mib = 128
 disk_mib = 2048
 boot_mib = 26
-drivers = "sha256:1ed1613f2ac9e3f9b772ddf2b8f262c9eb332d0f9017d75f25242207a15ef47d"
+drivers = "sha256:8322e1598036a03ef659b1b1bf62afc8cd3037ab6421f4013a8e3db6056bb198"
 
 [hardware.stretch]
 cpu = "x86-64"
 ram_mib = 128
 disk_mib = 2048
 boot_mib = 32
-drivers = "sha256:0211139a49a4c0fa12de537a3a1d781cd5c34a2f3e2ea0f3973d831ecc3ee50c"
+drivers = "sha256:2330789ef11523e9c60ab92855f342f75597e23e0c749e8773b1fe6a3c2c0865"
 
 [hardware.buster]
 cpu = "x86-64"
 ram_mib = 256
 disk_mib = 2048
 boot_mib = 42
-drivers = "sha256:dbeee94e62a1becd9f135bb94b9d124b13529f42fa99f710dbe4475990082f72"
+drivers = "sha256:5a2b2f8cdecda48e8ea05744a916c903e2b26c5cf7a8f43be646f2a96ba7362d"
 
 [hardware.bullseye]
 cpu = "x86-64"
 ram_mib = 256
 disk_mib = 2048
 boot_mib = 42
-drivers = "sha256:7226f8ebb60daf4f0d5fe8c6e4e6f953dd37df9cf9b3334de14d25807971b49f"
+drivers = "sha256:d0ce55b296ca23c2e0596533b07c89d3d63cf70256a6806530f43e1aca35c4d2"
 
 [hardware.bookworm]
 cpu = "x86-64"
 ram_mib = 256
 disk_mib = 2048
 boot_mib = 48
-drivers = "sha256:71d4ad42b9ea85d8bfd5b778c515456bd88b6d65241e851c8dfbeb877b02dfb4"
+drivers = "sha256:f737a0bd4d64c2c125156a2c3d31cf6a373531eb400aca37fa72c0aa5b93d404"
 
 [hardware.trixie]
 cpu = "x86-64"
 ram_mib = 512
 disk_mib = 2048
 boot_mib = 58
-drivers = "sha256:80bab778035805af4f567958fc1635e6b4a6315ba652072816ca71ed13df3464"
+drivers = "sha256:a92330e859465be7c7c6060cabcabcd4af20d8c1018d5ef2a61e188cca77073a"
+
+# SPEC "Runtime preflight": the Python 2 interpreters each release a route boots into ships, by upstream version
+# ([] for none). tools/runtimes.py reads them from the release's own index (the components the hop uses); a machine
+# whose own programs run on Python 2 is told where it stops shipping before anything is touched.
+[runtimes.lenny]
+python2 = ["2.4.6", "2.5.2"]
+
+[runtimes.squeeze]
+python2 = ["2.5.5", "2.6.6"]
+
+[runtimes.wheezy]
+python2 = ["2.6.8", "2.7.3"]
+
+[runtimes.jessie]
+python2 = ["2.7.9"]
+
+[runtimes.stretch]
+python2 = ["2.7.13"]
+
+[runtimes.buster]
+python2 = ["2.7.16"]
+
+[runtimes.bullseye]
+python2 = ["2.7.18"]
+
+[runtimes.bookworm]
+python2 = []
+
+[runtimes.trixie]
+python2 = []
+

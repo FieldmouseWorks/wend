@@ -1,0 +1,106 @@
+# CI fixture: a CentOS 8 LAMP server the way people ran them until CentOS 8 ended in 2021: AppStream's default module
+# streams (PHP 7.2 behind php-fpm, MariaDB 10.3), EPEL 8, firewalld. Built natively on 8.5.2111, the last release.
+# Box files are trusted test code: humans review them, clients never run them.
+schema = "wend.box/0"
+family = "el"
+release = "centos8"
+arch = "x86_64"
+summary = "CentOS 8.5 LAMP: httpd 2.4 + PHP 7.2 on php-fpm (mysqlnd) + mod_ssl, MariaDB 10.3 with a real row, EPEL 8 (fail2ban guarding ssh on 2222, htop, ncdu), jq, firewalld with custom ports, NetworkManager with a static ifcfg, Python 3 libraries, postfix, chrony, cron"
+packages = ["httpd", "mod_ssl", "php", "php-fpm", "php-mysqlnd", "php-gd", "php-mbstring", "php-xml", "mariadb-server",
+            "mariadb", "openssh-server", "openssh-clients", "postfix", "cronie", "crontabs", "sudo", "perl", "curl",
+            "rsync", "jq", "python3", "python3-PyMySQL", "python3-requests", "logrotate", "chrony", "which",
+            "firewalld", "NetworkManager", "procps-ng"]
+customize = '''
+set -e
+grep -q localhost /etc/hosts 2>/dev/null || printf '127.0.0.1 localhost localhost.localdomain\n' >> /etc/hosts
+# EPEL the way most boxes got it (dnf install epel-release, from CentOS extras): the package ships the repo file and
+# the key. The build reaches EPEL 8 through the harness's mirror shim; the hops replace every repo file.
+cat > /etc/yum.repos.d/box-build.repo <<'EOF'
+[box-extras]
+name=box-extras
+baseurl=http://127.0.0.1:8085/vault.centos.org/8.5.2111/extras/x86_64/os/
+gpgcheck=0
+[box-epel]
+name=box-epel
+baseurl=http://127.0.0.1:8085/dl.fedoraproject.org/pub/epel/8/Everything/x86_64/
+gpgcheck=0
+EOF
+Y="dnf -y --disablerepo=* --enablerepo=centos8-*,box-*"
+dnf -y --disablerepo=* --enablerepo=centos8-*,box-extras install epel-release
+$Y install htop ncdu fail2ban-server fail2ban-firewalld
+rm -f /etc/yum.repos.d/box-build.repo
+rpm -q epel-release htop ncdu jq fail2ban-server fail2ban-firewalld
+mkdir -p /var/www/mysite
+cat > /var/www/mysite/index.php <<'EOF'
+<?php
+$c = @mysqli_connect("localhost", "app", "apppw", "app");
+$r = $c ? mysqli_fetch_row(mysqli_query($c, "select msg from t")) : array("no db");
+echo "hello from oldbox " . strtoupper("ok") . " " . $r[0] . "\n";
+?>
+EOF
+cat > /etc/httpd/conf.d/mysite.conf <<'EOF'
+<VirtualHost *:80>
+    ServerName mysite.local
+    DocumentRoot /var/www/mysite
+    DirectoryIndex index.php
+    <Directory /var/www/mysite>
+        Require all granted
+    </Directory>
+</VirtualHost>
+EOF
+# the owner's php.ini tuning. Not checked yet: the EL routes set the old php.ini aside (wend#54)
+sed -i -e 's/^upload_max_filesize = .*/upload_max_filesize = 64M/' -e 's/^;\?date.timezone =.*/date.timezone = Europe\/Berlin/' /etc/php.ini
+grep -q '^upload_max_filesize = 64M' /etc/php.ini
+# what httpd-init.service does on a machine's first boot: mod_ssl's self-signed localhost certificate
+/usr/libexec/httpd-ssl-gencerts
+sed -i 's/^#\?ServerName .*/ServerName oldbox.example.org/' /etc/httpd/conf/httpd.conf
+grep -q '^ServerName' /etc/httpd/conf/httpd.conf || echo 'ServerName oldbox.example.org' >> /etc/httpd/conf/httpd.conf
+/usr/bin/mysql_install_db --user=mysql --force >/dev/null
+(/usr/libexec/mysqld --user=mysql >/tmp/b.log 2>&1 &)
+i=0; while [ $i -lt 60 ] && [ ! -S /var/lib/mysql/mysql.sock ]; do sleep 1; i=$((i+1)); done
+mysql -uroot -e "create database app; create table app.t (msg varchar(64)); insert into app.t values ('row from 2021'); grant select on app.* to 'app'@'localhost' identified by 'apppw'; flush privileges;"
+mysqladmin -uroot shutdown
+sleep 3
+for t in rsa ecdsa ed25519; do ssh-keygen -q -t $t -N '' -f /etc/ssh/ssh_host_${t}_key; done
+sed -i 's/^#\?Port 22$/Port 2222/' /etc/ssh/sshd_config
+grep -q '^Port 2222' /etc/ssh/sshd_config
+cat > /etc/fail2ban/jail.local <<'EOF'
+[sshd]
+enabled = true
+port = 2222
+maxretry = 4
+EOF
+firewall-offline-cmd --add-port=2222/tcp >/dev/null
+firewall-offline-cmd --add-service=http --add-service=https >/dev/null
+postconf -e myhostname=oldbox.example.org
+useradd -m -s /bin/bash alice
+mkdir -p /home/alice/backup
+echo '0 3 * * * /usr/bin/rsync -a /var/www/ /home/alice/backup/ # nightly-backup' | crontab -u alice -
+# what an EL8 admin enables (the presets leave httpd, php-fpm, mariadb and fail2ban off)
+systemctl enable httpd php-fpm mariadb fail2ban firewalld sshd postfix crond chronyd NetworkManager
+dnf clean all >/dev/null
+mkdir -p /etc/wend/secrets && printf 'apppw' > /etc/wend/secrets/app-db && chmod 600 /etc/wend/secrets/app-db
+# the static address and MAC pin anaconda writes for a static install (QEMU's default MAC)
+mkdir -p /etc/sysconfig/network-scripts
+[ -f /etc/sysconfig/network-scripts/ifcfg-eth0 ] || printf 'TYPE=Ethernet\nDEVICE=eth0\nNAME=eth0\nHWADDR=52:54:00:12:34:56\nBOOTPROTO=none\nIPADDR=10.0.2.20\nPREFIX=24\nGATEWAY=10.0.2.2\nDNS1=10.0.2.3\nONBOOT=yes\n' > /etc/sysconfig/network-scripts/ifcfg-eth0
+'''
+# The services role flags service packages whose family wasn't on the box at the start (see el/centos5-web).
+start_hook = "rpm -qa --qf '%{NAME}\\n' | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 's/^mariadb$/mysql/' -e 's/^chrony$/ntp/' -e 's/^cronie$/vixie/' -e 's/^openssh$/openssh/' | sort -u > /var/lib/wend-expected-families"
+isolate = ["db", "site"]
+
+[roles]
+boot = "for u in httpd php-fpm mariadb sshd postfix crond fail2ban firewalld; do [ \"$(systemctl is-enabled $u 2>/dev/null)\" = enabled ] || { echo \"$u does not start at boot\"; exit 1; }; done"
+ssh = "mkdir -p /var/run/sshd /run/sshd; /usr/sbin/sshd -t && grep -q '^Port 2222' /etc/ssh/sshd_config"
+cron = "test -x /usr/sbin/crond && crontab -l -u alice | grep nightly-backup"
+python = "python3 -c 'import pymysql, requests; print(6*7)' | grep 42"
+tools = "perl -e 1 && curl -s file:///etc/redhat-release && rsync --version && sudo -V && id alice && htop --version && ncdu -v && echo '{\"a\": 42}' | jq -e '.a == 42'"
+mail = "postfix check && test \"$(postconf -h myhostname)\" = oldbox.example.org"
+php = "php /var/www/mysite/index.php | grep 'hello from oldbox OK' && M=$(php -m) && for x in gd mbstring xml mysqli; do echo \"$M\" | grep -qix $x || { echo \"php lost the $x extension\"; exit 1; }; done"
+# the firewall keeps the owner's ports open, read offline from its saved config
+firewall = "P=$(firewall-offline-cmd --list-ports) && S=$(firewall-offline-cmd --list-services) && echo \"$P\" | grep -qw 2222/tcp && echo \"$S\" | grep -qw http && echo \"$S\" | grep -qw https || { echo \"firewall lost the owner's ports: ports '$P' services '$S'\"; exit 1; }"
+fail2ban = "fail2ban-client -t >/tmp/f2b.log 2>&1 && grep -A3 '^\\[sshd\\]' /etc/fail2ban/jail.local | grep -qx 'port = 2222' || { tail -n 5 /tmp/f2b.log; exit 1; }"
+db = "mkdir -p /var/run/mysqld /run/mariadb /var/run/mariadb 2>/dev/null; chown mysql /var/run/mysqld /run/mariadb 2>/dev/null; D=$(ls /usr/libexec/mariadbd /usr/libexec/mysqld /usr/sbin/mariadbd /usr/sbin/mysqld 2>/dev/null | head -n1); rm -f /var/lib/mysql/mysql.sock /var/lib/mysql/*.pid; ($D --user=mysql >/tmp/db.log 2>&1 &); i=0; while [ $i -lt 60 ] && [ ! -S /var/lib/mysql/mysql.sock ]; do sleep 1; i=$((i+1)); done; C=$(command -v mariadb || command -v mysql); i=0; while [ $i -lt 30 ] && ! $C -uapp -papppw -N -e 'select 1' >/dev/null 2>&1; do sleep 1; i=$((i+1)); done; $C -uapp -papppw -N -e 'select msg from app.t' | grep 'row from 2021'; rc=$?; A=$(command -v mariadb-admin || command -v mysqladmin); $A -uroot shutdown >/dev/null 2>&1; i=0; while [ $i -lt 120 ] && pgrep -x 'mariadbd|mysqld' >/dev/null; do sleep 1; i=$((i+1)); done; [ $rc = 0 ] || tail -n 15 /tmp/db.log; exit $rc"
+site = "mkdir -p /var/run/mysqld /run/mariadb /var/run/mariadb 2>/dev/null; chown mysql /var/run/mysqld /run/mariadb 2>/dev/null; D=$(ls /usr/libexec/mariadbd /usr/libexec/mysqld /usr/sbin/mariadbd /usr/sbin/mysqld 2>/dev/null | head -n1); rm -f /var/lib/mysql/mysql.sock /var/lib/mysql/*.pid; ($D --user=mysql >/tmp/db.log 2>&1 &); i=0; while [ $i -lt 60 ] && [ ! -S /var/lib/mysql/mysql.sock ]; do sleep 1; i=$((i+1)); done; C=$(command -v mariadb || command -v mysql); i=0; while [ $i -lt 30 ] && ! $C -uapp -papppw -N -e 'select 1' >/dev/null 2>&1; do sleep 1; i=$((i+1)); done; mkdir -p /run/php-fpm /var/run/httpd 2>/dev/null; test -x /usr/sbin/php-fpm && /usr/sbin/php-fpm -D; /usr/sbin/httpd -k start; i=0; while [ $i -lt 20 ] && ! curl -s http://127.0.0.1/ >/dev/null; do sleep 1; i=$((i+1)); done; curl -s -H 'Host: mysite.local' http://127.0.0.1/ | tee /tmp/site.out | grep 'hello from oldbox OK row from 2021'; rc=$?; /usr/sbin/httpd -k stop >/dev/null 2>&1; pkill -x php-fpm 2>/dev/null; A=$(command -v mariadb-admin || command -v mysqladmin); $A -uroot shutdown >/dev/null 2>&1; i=0; while [ $i -lt 120 ] && pgrep -x 'mariadbd|mysqld' >/dev/null; do sleep 1; i=$((i+1)); done; [ $rc = 0 ] || { head -c 400 /tmp/site.out; tail -n 8 /var/log/httpd/error_log; }; exit $rc"
+current = "M=$(grep -o '[0-9][0-9]*' /etc/redhat-release | head -n1); for f in $(command -v php) /usr/sbin/httpd $(command -v fail2ban-server) $(ls /usr/sbin/php-fpm /usr/libexec/mariadbd /usr/libexec/mysqld /usr/sbin/mariadbd 2>/dev/null | head -n2) $(cd /etc/httpd && grep -h '^ *LoadModule php' conf.d/*.conf conf.modules.d/*.conf 2>/dev/null | awk '{print \"/etc/httpd/\" $3}'); do p=$(rpm -qf --qf '%{NAME}-%{VERSION}-%{RELEASE}' \"$(readlink -f $f)\" 2>/dev/null); echo \"$p\" | grep -qE \"[._]el${M}([._]|$)\" || { echo \"$f comes from '$p', not a release-$M package\"; exit 1; }; done"
+network = "M=$(grep -o '[0-9][0-9]*' /etc/redhat-release | head -n1); if [ $M -ge 10 ]; then K=$(grep -lx 'interface-name=eth0' /etc/NetworkManager/system-connections/*.nmconnection 2>/dev/null | head -n1); [ -n \"$K\" ] && [ \"$(stat -c %a \"$K\")\" = 600 ] && awk '/^\\[/ {s = $0} s == \"[ipv4]\" && $0 == \"method=manual\" {m = 1} END {exit !m}' \"$K\" && grep -iqx 'mac-address=52:54:00:12:34:56' \"$K\" && ! grep -qx 'autoconnect=false' \"$K\" && grep -iqx 'MACAddress=52:54:00:12:34:56' /etc/systemd/network/10-wend-eth0.link && grep -qx 'Name=eth0' /etc/systemd/network/10-wend-eth0.link && grep -Eqx 'address1=10\\.0\\.2\\.20/24(,10\\.0\\.2\\.2)?' \"$K\" && grep -Eqx '(address1=10\\.0\\.2\\.20/24,10\\.0\\.2\\.2|gateway=10\\.0\\.2\\.2)' \"$K\" || { echo 'eth0 has no 0600 autoconnecting keyfile for its MAC with the static 10.0.2.20/24 via 10.0.2.2, or no .link pinning eth0 to that MAC'; exit 1; }; else grep -qx 'IPADDR=10.0.2.20' /etc/sysconfig/network-scripts/ifcfg-eth0 || { echo 'ifcfg-eth0 lost the static 10.0.2.20'; exit 1; }; fi"
+services = "for p in $(ls /etc/rc.d/init.d/* /usr/lib/systemd/system/*.service 2>/dev/null | xargs rpm -qf --qf '%{NAME}\\n' 2>/dev/null | grep -v 'not owned' | sort -u); do case $p in dbus-daemon|dbus-broker|hostname|readonly-root|netconsole-service|systemd|systemd-udev|systemd-container) continue;; esac; f=$(echo $p | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 's/^mariadb$/mysql/' -e 's/^chrony$/ntp/' -e 's/^cronie$/vixie/' -e 's/^openssh$/openssh/'); grep -qxs \"$f\" /var/lib/wend-expected-families /var/lib/wend/added-families && continue; for c in $p $(rpm -q --provides $p | awk '{print $1}'); do rpm -q --whatrequires \"$c\" >/dev/null 2>&1 && continue 2; done; echo \"unexpected new service package: $p\"; exit 1; done"

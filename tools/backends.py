@@ -65,7 +65,7 @@ class Apt:
     name = "apt"
     # Everything an adapter may declare for this backend. check.py holds adapters to these lists, so an adapter
     # can narrow what fixes may do but never widen it past what this file implements.
-    OPS = {"apache.enable", "apache.disable", "dpkg.reinstall", "net.ifupdown-dns-to-resolved"}
+    OPS = {"apache.enable", "apache.disable", "dpkg.reinstall", "net.ifupdown-dns-to-resolved", "apt.drop-esm-pins"}
     FORCE = {"depends", "remove-essential"}
     PM_OPTIONS = {"overwrite-conflicting-files"}
 
@@ -115,6 +115,8 @@ class Apt:
             return "apt-get install --reinstall --only-upgrade " + " ".join(s["packages"])
         if op == "net.ifupdown-dns-to-resolved":
             return here_doc(NET_IFUPDOWN_DNS_TO_RESOLVED)
+        if op == "apt.drop-esm-pins":
+            return ESM_PINS.replace("{release}", s["release"])
         raise ValueError(f"the apt backend has no op {op!r}")
 
 
@@ -590,6 +592,17 @@ class Rpm:
                 f"echo \"{u} enabled, like $W\"")
 
 NET_IFCFG_TO_KEYFILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "net_ifcfg_to_keyfile.py")
+# SPEC.md, apt.drop-esm-pins: ubuntu-advantage-tools' own file names and lines, nothing else
+ESM_PINS = ("for f in /etc/apt/preferences.d/ubuntu-esm-{release} /etc/apt/preferences.d/ubuntu-esm-*-{release}; do "
+            "[ -e \"$f\" ] || [ -L \"$f\" ] || continue; "
+            "if [ -L \"$f\" ] || [ ! -f \"$f\" ]; then echo \"$f: not a plain file, left\"; continue; fi; "
+            "if dpkg -S \"$f\" >/dev/null 2>&1; then echo \"$f: a package owns it, left\"; continue; fi; "
+            "if grep -qvxE '(Package: [*]|Pin: release o=UbuntuESM[A-Za-z]*, n={release}|Pin-Priority: never|#.*|"
+            "[[:space:]]*)' \"$f\" || ! grep -qx 'Package: [*]' \"$f\" || "
+            "! grep -qxE 'Pin: release o=UbuntuESM[A-Za-z]*, n={release}' \"$f\" || ! grep -qx 'Pin-Priority: never' \"$f\"; "
+            "then "
+            "echo \"$f: not an ubuntu-advantage-tools ESM pin, left\"; continue; fi; "
+            "rm -f \"$f\" || exit 1; echo \"$f: ubuntu-advantage-tools' ESM pin for {release}, removed\"; done")
 NET_IFUPDOWN_DNS_TO_RESOLVED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "net_ifupdown_dns_to_resolved.py")
 
 

@@ -17,9 +17,11 @@ const LEVEL_FEATURES: [&[&str]; 2] = [
 
 // ---------- gathering facts ----------
 
-/// What preflight knows about this machine (schema `wend.hardware/1`). Read from the hardware and /proc and /sys,
-/// never from the distro's tools, so it reads the same on CentOS 5 as on trixie.
-pub fn gather() -> Value {
+/// What preflight knows about this machine (schema `wend.hardware/2`). Read from the hardware and /proc and /sys,
+/// never from the distro's tools, so it reads the same on CentOS 5 as on trixie. The one exception is who owns a
+/// Python 2 program (SPEC "Runtime preflight"): on rpm machines only `rpm` can read its database.
+pub fn gather() -> Result<Value, String> {
+    let runtimes = crate::runtime::gather_live()?;
     let mut uts: libc::utsname = unsafe { std::mem::zeroed() };
     // SAFETY: uname fills the struct it is given.
     let arch = if unsafe { libc::uname(&mut uts) } == 0 {
@@ -57,8 +59,8 @@ pub fn gather() -> Value {
                 .and_then(|v| v.trim().trim_end_matches("kB").trim().parse::<u64>().ok())
         })
         .map_or(Value::Null, |kb| json!(kb / 1024));
-    json!({
-        "schema": "wend.hardware/1",
+    Ok(json!({
+        "schema": "wend.hardware/2",
         "arch": arch,
         "userland_bits": userland,
         "cpu": {"model": model, "features": features, "hypervisor": hypervisor},
@@ -67,8 +69,142 @@ pub fn gather() -> Value {
         "free_mib": free_mib("/").map_or(Value::Null, |m| json!(m)),
         "boot_dir": boot_dir(Path::new("/boot"), &release),
         "blacklisted": blacklisted(),
+        "mounts": mounts(),
         "pci": pci_devices(Path::new("/sys/bus/pci/devices"), &module_files(&release)),
-    })
+        "runtimes": runtimes,
+    }))
+}
+
+/// The filesystems driver tables say whether a kernel mounts (`fs` lines); a mount of any other type isn't checked.
+const FILESYSTEMS: &[&str] = &["ext2", "ext3", "ext4", "xfs", "btrfs", "reiserfs", "jfs"];
+
+/// Every mounted disk filesystem preflight checks (one entry per filesystem; bind mounts of it are left out): where it
+/// is mounted, its device, its type, and from its superblock whether an XFS is the old v4 format and an ext2/3/4's
+/// inode size (null when the device can't be read).
+fn mounts() -> Vec<Value> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let mut seen = std::collections::HashSet::new();
+    let mut out = vec![];
+    for l in fs::read_to_string("/proc/mounts").unwrap_or_default().lines() {
+        let f: Vec<&str> = l.split(' ').collect();
+        let (Some(dev), Some(mnt), Some(fstype)) = (f.first(), f.get(1), f.get(2)) else {
+            continue;
+        };
+        if !FILESYSTEMS.contains(fstype) {
+            continue;
+        }
+        let mnt = unescape_mount(mnt);
+        // The device is the one /proc/mounts names when that node is the mount's st_dev; otherwise (2.6.18 and 2.6.32
+        // name the root /dev/root) the node st_dev names, where it exists. One filesystem listed again (a bind mount,
+        // another name for its device, a btrfs subvolume) counts once.
+        let st = fs::metadata(&mnt).ok().map(|m| m.dev());
+        let named = fs::metadata(dev)
+            .ok()
+            .is_some_and(|m| m.file_type().is_block_device() && Some(m.rdev()) == st);
+        let device = match st {
+            Some(d) if !named => block_device(d).filter(|p| Path::new(p).exists()),
+            _ => None,
+        }
+        .unwrap_or_else(|| dev.to_string());
+        let key = match st {
+            Some(d) if libc::major(d) != 0 => d.to_string(),
+            _ => device.clone(),
+        };
+        if !seen.insert((key, fstype.to_string())) {
+            continue;
+        }
+        let sb = superblock(&device);
+        let (xfs_v4, inode_size) = match (*fstype, &sb) {
+            ("xfs", Some(b)) => (json!(xfs_is_v4(b)), Value::Null),
+            ("ext2" | "ext3" | "ext4", Some(b)) => (Value::Null, json!(ext_inode_size(b))),
+            _ => (Value::Null, Value::Null),
+        };
+        out.push(
+            json!({"mount": mnt, "device": device, "fstype": fstype, "xfs_v4": xfs_v4,
+                        "inode_size": inode_size}),
+        );
+    }
+    out
+}
+
+/// The /dev path of the block device a st_dev names: `/sys/dev/block/<major>:<minor>` from Linux 2.6.27, before that
+/// the `dev` file of each disk and partition under `/sys/block` (where `cciss!c0d0` stands for `cciss/c0d0`).
+fn block_device(st_dev: u64) -> Option<String> {
+    let (ma, mi) = (libc::major(st_dev), libc::minor(st_dev));
+    if let Ok(u) = fs::read_to_string(format!("/sys/dev/block/{ma}:{mi}/uevent")) {
+        if let Some(n) = u.lines().find_map(|l| l.strip_prefix("DEVNAME=")) {
+            return Some(format!("/dev/{n}"));
+        }
+    }
+    let want = format!("{ma}:{mi}");
+    for disk in fs::read_dir("/sys/block").ok()?.flatten() {
+        let mut dirs = vec![disk.path()];
+        // its partitions: the subdirectories named after it (sda1, cciss!c0d0p1), not links such as `device`
+        let disk_name = disk.file_name();
+        dirs.extend(
+            fs::read_dir(disk.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| {
+                    e.file_type().is_ok_and(|t| t.is_dir())
+                        && e.file_name()
+                            .to_string_lossy()
+                            .starts_with(&*disk_name.to_string_lossy())
+                })
+                .map(|e| e.path()),
+        );
+        for d in dirs {
+            if fs::read_to_string(d.join("dev")).is_ok_and(|v| v.trim() == want) {
+                let name = d.file_name()?.to_string_lossy().replace('!', "/");
+                return Some(format!("/dev/{name}"));
+            }
+        }
+    }
+    None
+}
+
+/// /proc/mounts escapes a space, tab, newline and backslash in a path as octal (`\040`).
+fn unescape_mount(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = vec![];
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'\\' && i + 4 <= b.len() && b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c)) {
+            out.push((b[i + 1] - b'0') * 64 + (b[i + 2] - b'0') * 8 + (b[i + 3] - b'0'));
+            i += 4;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn superblock(device: &str) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut b = vec![0u8; 2048];
+    fs::File::open(device).ok()?.read_exact(&mut b).ok()?;
+    Some(b)
+}
+
+/// Whether an XFS superblock (magic `XFSB`) is the v4 format: the low nibble of `sb_versionnum` (big-endian, at
+/// byte 100) is 5 on v5 (crc=1) and 4 or less on v4. None when it isn't an XFS superblock.
+fn xfs_is_v4(b: &[u8]) -> Option<bool> {
+    (b.get(..4)? == b"XFSB").then(|| u16::from_be_bytes([b[100], b[101]]) & 0xf != 5)
+}
+
+/// An ext2/3/4 superblock's inode size (it starts at byte 1024; magic 0xEF53 at +56; revision 0 has 128-byte
+/// inodes, later ones say at +88). None when it isn't an ext superblock.
+fn ext_inode_size(b: &[u8]) -> Option<u64> {
+    let s = b.get(1024..1024 + 92)?;
+    if u16::from_le_bytes([s[56], s[57]]) != 0xEF53 {
+        return None;
+    }
+    if u32::from_le_bytes([s[76], s[77], s[78], s[79]]) == 0 {
+        return Some(128);
+    }
+    Some(u16::from_le_bytes([s[88], s[89]]) as u64)
 }
 
 /// What `/boot` holds: whether it is a filesystem of its own, its size and free space as a package install sees them
@@ -377,6 +513,7 @@ struct Table {
     kernel: String,
     aliases: Vec<(String, String)>,
     builtin: Vec<String>,
+    fs: Vec<String>,
 }
 
 fn parse_table(text: &str) -> Table {
@@ -384,6 +521,7 @@ fn parse_table(text: &str) -> Table {
         kernel: String::new(),
         aliases: vec![],
         builtin: vec![],
+        fs: vec![],
     };
     for l in text.lines() {
         if let Some(h) = l.strip_prefix("# ") {
@@ -396,6 +534,7 @@ fn parse_table(text: &str) -> Table {
         }
         match l.split_once(' ') {
             Some(("builtin", m)) => t.builtin.push(m.to_string()),
+            Some(("fs", f)) => t.fs.push(f.to_string()),
             Some((m, a)) => t.aliases.push((m.to_string(), a.to_string())),
             None => {}
         }
@@ -420,9 +559,12 @@ const CLASS_ONLY_MAYBE: &[&str] = &["ata_generic", "ide_pci_generic", "pata_acpi
 
 /// Facts from a file are held to the shape `gather` writes: a check whose input is missing never passes by default.
 pub fn check_facts(f: &Value) -> Result<(), String> {
-    let bad = |what: &str| Err(format!("not a wend.hardware/1 facts file: {what}"));
-    if f["schema"] != "wend.hardware/1" {
-        return bad("schema");
+    let bad = |what: &str| Err(format!("not a wend.hardware/2 facts file: {what}"));
+    if f["schema"] != "wend.hardware/2" {
+        return bad("schema (gather the facts again with this client: wend facts)");
+    }
+    if !crate::runtime::check(&f["runtimes"]) {
+        return bad("runtimes");
     }
     let b = &f["boot_dir"];
     if !(b["separate"].is_boolean() && b["total_mib"].is_u64() && b["free_mib"].is_u64())
@@ -438,6 +580,16 @@ pub fn check_facts(f: &Value) -> Result<(), String> {
         .is_some_and(|a| a.iter().all(Value::is_string))
     {
         return bad("blacklisted");
+    }
+    let mount_ok = |m: &Value| {
+        m["mount"].is_string()
+            && m["device"].is_string()
+            && m["fstype"].is_string()
+            && m.get("xfs_v4").is_some_and(|v| v.is_boolean() || v.is_null())
+            && m.get("inode_size").is_some_and(|v| v.is_u64() || v.is_null())
+    };
+    if !f["mounts"].as_array().is_some_and(|a| a.iter().all(mount_ok)) {
+        return bad("mounts");
     }
     for k in ["arch", "boot"] {
         if !f[k].is_string() {
@@ -637,6 +789,18 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
     };
     let mut route_kernels: Vec<(String, u64)> = vec![];
     let blacklist: Vec<String> = crate::atlas::strings(&facts["blacklisted"]).unwrap_or_default();
+    let mut first = true;
+    // SPEC "Runtime preflight": the machine's own Python 2 programs, and the last release that still ships Python 2
+    let own: Vec<Value> = facts["runtimes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|u| crate::runtime::is_own(u))
+        .cloned()
+        .collect();
+    let mut keeps = Some(from.to_string());
+    let mut runtime_broken = false;
+    let mut noted: Vec<String> = vec![];
 
     for h in &hops {
         let mut problems: Vec<String> = vec![];
@@ -644,7 +808,8 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
         // a release the route only passes through (may_skip) installs no kernel and is never booted, even
         // when its adapter has a table for it
         if !booted.contains(h) {
-            out_hops.push(json!({"to": h, "ok": true, "problems": [], "notes": ["not booted on this route"]}));
+            out_hops.push(json!({"to": h, "ok": true, "problems": [], "runtime_problems": [],
+                                 "notes": ["not booted on this route"]}));
             continue;
         }
         let Some(t) = get(hw, h) else {
@@ -807,13 +972,89 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
                 )),
             }
         }
+        for m in facts["mounts"].as_array().into_iter().flatten() {
+            let (fstype, mnt) = (m["fstype"].as_str().unwrap_or(""), m["mount"].as_str().unwrap_or("?"));
+            let at = format!("{mnt} ({})", m["device"].as_str().unwrap_or("?"));
+            let without = if mnt == "/" {
+                "the machine wouldn't boot"
+            } else {
+                "the machine would come up without it, or stop booting where fstab doesn't mark it nofail"
+            };
+            if !FILESYSTEMS.contains(&fstype) {
+                continue;
+            }
+            if !table.fs.iter().any(|f| f == fstype) {
+                problems.push(format!(
+                    "{h}'s kernel {} doesn't mount {fstype}, and {at} is {fstype}: {without}. \
+                     Move what it holds to a filesystem {h} mounts (ext4 or XFS) first",
+                    table.kernel
+                ));
+            } else if fstype == "xfs" && !table.fs.iter().any(|f| f == "xfs-v4") {
+                match m["xfs_v4"].as_bool() {
+                    Some(true) => problems.push(format!(
+                        "{at} is XFS in the old v4 format (crc=0), which {h}'s kernel {} doesn't mount: {without}. \
+                         Copy what it holds to an XFS made new (mkfs.xfs makes v5) first",
+                        table.kernel
+                    )),
+                    Some(false) => {}
+                    None => problems.push(format!(
+                        "{h}'s kernel {} mounts only XFS v5, and wend couldn't read {at}'s superblock to tell which \
+                         it is: run `wend facts` as root",
+                        table.kernel
+                    )),
+                }
+            }
+            if first && m["inode_size"] == json!(128) {
+                notes.push(format!(
+                    "{at} is {fstype} with 128-byte inodes: its timestamps end in 2038, and newer kernels say so \
+                     when they mount it. It mounts on every release; only a filesystem made new has room for later \
+                     dates"
+                ));
+            }
+        }
+        first = false;
+        let mut app: Vec<String> = vec![];
+        if !own.is_empty() {
+            let ships: Vec<String> = get(a, "runtimes")
+                .and_then(|r| get(r, h))
+                .and_then(|t| get(t, "python2"))
+                .and_then(crate::atlas::strings)
+                .ok_or(format!("adapters/{fam}.toml has no runtimes.{h}.python2"))?;
+            if ships.is_empty() {
+                app.push(format!(
+                    "{h} ships no Python 2, and this machine's own programs run on it: {}",
+                    own.iter().map(crate::runtime::describe).collect::<Vec<_>>().join("; ")
+                ));
+            } else {
+                for u in &own {
+                    let v = u["version"].as_str().unwrap_or("");
+                    let prog = u["program"].as_str().unwrap_or("?").to_string();
+                    if !ships.iter().any(|s| s == v || s.starts_with(&format!("{v}."))) && !noted.contains(&prog) {
+                        notes.push(format!(
+                            "{prog} runs on Python {v}; {h} ships Python {} instead. Python 2 code mostly runs on a \
+                             later 2.x, but check it does",
+                            ships.join(" and ")
+                        ));
+                        noted.push(prog);
+                    }
+                }
+            }
+        }
+        if app.is_empty() && !runtime_broken {
+            keeps = Some(h.clone());
+        } else {
+            runtime_broken = true;
+        }
         let ok = problems.is_empty() && !blocked;
         if ok {
             lands = Some(h.clone());
         } else {
             blocked = true;
         }
-        out_hops.push(json!({"to": h, "ok": problems.is_empty(), "problems": problems, "notes": notes}));
+        out_hops.push(
+            json!({"to": h, "ok": problems.is_empty() && app.is_empty(), "problems": problems, "runtime_problems": app,
+                             "notes": notes}),
+        );
     }
     let to = str_of(route, "to")?;
     Ok(json!({
@@ -825,7 +1066,9 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
         "machine": machine,
         "hops": out_hops,
         "lands_on": lands,
-        "ok": lands.as_deref() == Some(to),
+        "runtimes": own,
+        "keeps_runtimes_on": if own.is_empty() { Value::Null } else { json!(keeps) },
+        "ok": lands.as_deref() == Some(to) && !runtime_broken,
     }))
 }
 
@@ -838,22 +1081,71 @@ pub fn report(v: &Value) -> String {
     for h in v["hops"].as_array().into_iter().flatten() {
         let to = h["to"].as_str().unwrap_or("?");
         let probs = h["problems"].as_array().cloned().unwrap_or_default();
-        s += &format!("{} {to}\n", if probs.is_empty() { "ok     " } else { "NO     " });
-        for p in &probs {
+        let app = h["runtime_problems"].as_array().cloned().unwrap_or_default();
+        s += &format!(
+            "{} {to}\n",
+            if probs.is_empty() && app.is_empty() {
+                "ok     "
+            } else {
+                "NO     "
+            }
+        );
+        for p in probs.iter().chain(&app) {
             s += &format!("        {}\n", p.as_str().unwrap_or(""));
         }
         for n in h["notes"].as_array().into_iter().flatten() {
             s += &format!("        note: {}\n", n.as_str().unwrap_or(""));
         }
     }
-    s += &match (v["ok"].as_bool(), v["lands_on"].as_str()) {
-        (Some(true), _) => format!("This machine can land on {}.\n", v["to"].as_str().unwrap_or("?")),
-        (_, Some(l)) if l == v["from"].as_str().unwrap_or("") => {
+    let (from, to) = (v["from"].as_str().unwrap_or(""), v["to"].as_str().unwrap_or("?"));
+    let lands = v["lands_on"].as_str();
+    let keeps = v["keeps_runtimes_on"].as_str();
+    let order: Vec<&str> = std::iter::once(from)
+        .chain(
+            v["hops"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|h| h["to"].as_str()),
+        )
+        .collect();
+    let at = |r: &str| order.iter().position(|x| *x == r);
+    if let (Some(l), Some(k)) = (lands, keeps) {
+        // only when Python 2 goes before the hardware stops does the owner have a choice to make
+        if at(k) < at(l) {
+            // the runtime goes before the hardware stops: the owner picks
+            let stop = if k == from {
+                format!("stay on {from}: the route's first hop already leaves Python 2 behind")
+            } else {
+                format!("walk the route only to {k}, the last release that still ships Python 2")
+            };
+            let landing = if l == to {
+                to.to_string()
+            } else {
+                format!("{l}, the furthest this hardware goes")
+            };
+            s += &format!(
+                "This machine's own programs run on Python 2, and the route leaves it behind after {k}:\n{}\
+                 Pick one:\n  stop:    {stop}\n  shelter: upgrade to {landing}, and run those programs in a sealed \
+                 Python 2 userland of their own (SPEC \"Sheltering an app\"; not built yet)\n\
+                 Or port them to Python 3 and check again. Nothing was touched.\n",
+                v["runtimes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|u| format!("  {}\n", crate::runtime::describe(u)))
+                    .collect::<String>()
+            );
+            return s;
+        }
+    }
+    s += &match (v["ok"].as_bool(), lands) {
+        (Some(true), _) => format!("This machine can land on {to}.\n"),
+        (_, Some(l)) if l == from => {
             format!("This machine can't take the first hop. Nothing was touched; it stays on {l}.\n")
         }
         (_, Some(l)) => format!(
-            "This machine can't reach {}. The furthest it can land on is {l}: walk the route only that far.\n",
-            v["to"].as_str().unwrap_or("?")
+            "This machine can't reach {to}. The furthest it can land on is {l}: walk the route only that far.\n"
         ),
         _ => "This machine can't take this route. Nothing was touched.\n".into(),
     };
@@ -902,11 +1194,21 @@ mod tests {
     }
 
     fn machine(features: &[&str], vm: bool, pci: Vec<Value>) -> Value {
-        json!({"schema": "wend.hardware/1", "arch": "x86_64", "userland_bits": 64,
+        json!({"schema": "wend.hardware/2", "arch": "x86_64", "userland_bits": 64,
                "cpu": {"model": "test", "features": features, "hypervisor": vm}, "boot": "bios",
                "ram_mib": 4096, "free_mib": 20000,
                "boot_dir": {"separate": false, "total_mib": 20000, "free_mib": 20000, "kernels": []},
-               "blacklisted": [], "pci": pci})
+               "blacklisted": [], "pci": pci, "runtimes": [],
+               "mounts": [{"mount": "/", "device": "/dev/sda1", "fstype": "ext3", "xfs_v4": null, "inode_size": 256}]})
+    }
+
+    fn with_mount(mut m: Value, mount: &str, fstype: &str, xfs_v4: Value, inode_size: Value) -> Value {
+        m["mounts"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"mount": mount, "device": "/dev/sdb1", "fstype": fstype,
+                                                         "xfs_v4": xfs_v4, "inode_size": inode_size}));
+        m
     }
 
     /// A separate /boot of `total` MiB holding `kernels` (version, MiB; the last one running) and 4 MiB of other files.
@@ -1264,12 +1566,12 @@ mod tests {
         let with_xen = [("2.6.18-398.el5xen", 9), ("2.6.18-398.el5", 6)];
         let v = verdict(
             "centos5-to-alma10",
-            &with_boot(machine(&full, true, vec![]), 85, &plain),
+            &with_boot(machine(&full, true, vec![]), 70, &plain),
         );
         assert_eq!(v["lands_on"], "centos7", "{v:#}");
         let v = verdict(
             "centos5-to-alma10",
-            &with_boot(machine(&full, true, vec![]), 85, &with_xen),
+            &with_boot(machine(&full, true, vec![]), 70, &with_xen),
         );
         assert_eq!(v["lands_on"], "centos6", "{v:#}");
         let p = v["hops"][1]["problems"][0].as_str().unwrap();
@@ -1278,7 +1580,7 @@ mod tests {
         let xen_guest = [("2.6.18-398.el5", 6), ("2.6.18-398.el5xen", 9)];
         let v = verdict(
             "centos5-to-alma10",
-            &with_boot(machine(&full, true, vec![]), 85, &xen_guest),
+            &with_boot(machine(&full, true, vec![]), 70, &xen_guest),
         );
         assert_eq!(v["lands_on"], "centos6", "{v:#}");
         assert_eq!(v["hops"][0]["ok"], true, "{v:#}");
@@ -1295,7 +1597,7 @@ mod tests {
         let v = evaluate(&a, &r, &m).unwrap();
         assert_eq!(v["hops"][2]["notes"][0], "not booted on this route");
         let p = v["hops"][3]["problems"][0].as_str().unwrap();
-        assert!(p.contains("centos7's kernel (45 MiB)"), "{p}");
+        assert!(p.contains("centos7's kernel (32 MiB)"), "{p}");
     }
 
     /// Debian's apt autoremoves no kernel before jessie's: on the hop to jessie every kernel is still there.
@@ -1309,5 +1611,218 @@ mod tests {
         let v = verdict("etch-to-trixie", &with_boot(machine(&full, false, vec![]), 86, &etch));
         assert_eq!(v["hops"][3]["ok"], true, "{v:#}");
         assert_eq!(v["hops"][4]["ok"], true, "{v:#}");
+    }
+    #[test]
+    fn filesystems_a_release_doesnt_mount_stop_the_route_before_it() {
+        let full: Vec<&str> = LEVEL_FEATURES.concat();
+        let base = || machine(&full, true, vec![]);
+        // EL10's kernel is built without CONFIG_XFS_SUPPORT_V4: a CentOS 6 or early CentOS 7 XFS stops at alma9
+        let v4 = with_mount(base(), "/srv", "xfs", json!(true), Value::Null);
+        let v = verdict("centos5-to-alma10", &v4);
+        assert_eq!(v["lands_on"], "alma9", "{v:#}");
+        let p = v["hops"].as_array().unwrap().last().unwrap()["problems"][0]
+            .as_str()
+            .unwrap();
+        assert!(
+            p.contains("/srv (/dev/sdb1) is XFS in the old v4 format") && p.contains("nofail"),
+            "{p}"
+        );
+        // a v5 XFS goes all the way; one whose superblock couldn't be read can't be told apart
+        let v = verdict(
+            "centos5-to-alma10",
+            &with_mount(base(), "/srv", "xfs", json!(false), Value::Null),
+        );
+        assert_eq!(v["ok"], true, "{v:#}");
+        let v = verdict(
+            "centos5-to-alma10",
+            &with_mount(base(), "/srv", "xfs", Value::Null, Value::Null),
+        );
+        assert_eq!(v["lands_on"], "alma9", "{v:#}");
+        // Debian's and Ubuntu's kernels still mount v4
+        assert_eq!(verdict("etch-to-trixie", &v4)["ok"], true);
+        // reiserfs left Linux in 6.13: noble's kernel mounts it, resolute's doesn't
+        let r = with_mount(base(), "/", "reiserfs", Value::Null, Value::Null);
+        let v = verdict("trusty-to-resolute", &r);
+        assert_eq!(v["lands_on"], "noble", "{v:#}");
+        let p = v["hops"].as_array().unwrap().last().unwrap()["problems"][0]
+            .as_str()
+            .unwrap();
+        assert!(
+            p.contains("doesn't mount reiserfs") && p.contains("the machine wouldn't boot"),
+            "{p}"
+        );
+        // EL's kernels never had reiserfs; EL9's has no btrfs, EL10's has it back
+        assert_eq!(verdict("centos5-to-alma10", &r)["lands_on"], "centos5");
+        let b = with_mount(base(), "/home", "btrfs", Value::Null, Value::Null);
+        assert_eq!(verdict("centos5-to-alma10", &b)["lands_on"], "centos7");
+        // ext2 and ext3 mount everywhere, through ext4 where their own drivers are gone; 128-byte inodes are a note
+        let old = with_mount(
+            with_mount(base(), "/boot", "ext2", Value::Null, json!(128)),
+            "/var",
+            "ext3",
+            Value::Null,
+            json!(256),
+        );
+        for route in ["centos5-to-alma10", "etch-to-trixie", "trusty-to-resolute"] {
+            let v = verdict(route, &old);
+            assert_eq!(v["ok"], true, "{route}: {v:#}");
+            let notes: Vec<String> = v["hops"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|h| crate::atlas::strings(&h["notes"]).unwrap_or_default())
+                .collect();
+            assert_eq!(
+                notes.iter().filter(|n| n.contains("128-byte inodes")).count(),
+                1,
+                "{route}: {notes:?}"
+            );
+        }
+        // facts without mounts are refused
+        let mut bad = base();
+        bad.as_object_mut().unwrap().remove("mounts");
+        assert!(check_facts(&bad).unwrap_err().contains("mounts"));
+    }
+
+    #[test]
+    fn superblocks_and_mount_paths_are_read_like_the_kernel_writes_them() {
+        let mut x = vec![0u8; 2048];
+        x[..4].copy_from_slice(b"XFSB");
+        x[100..102].copy_from_slice(&0xb4a4u16.to_be_bytes()); // a CentOS 6 mkfs.xfs: v4 with features
+        assert_eq!(xfs_is_v4(&x), Some(true));
+        x[100..102].copy_from_slice(&0xb4a5u16.to_be_bytes());
+        assert_eq!(xfs_is_v4(&x), Some(false));
+        assert_eq!(xfs_is_v4(&[0u8; 2048]), None);
+        let mut e = vec![0u8; 2048];
+        e[1024 + 56..1024 + 58].copy_from_slice(&0xEF53u16.to_le_bytes());
+        assert_eq!(ext_inode_size(&e), Some(128)); // revision 0
+        e[1024 + 76] = 1;
+        e[1024 + 88..1024 + 90].copy_from_slice(&256u16.to_le_bytes());
+        assert_eq!(ext_inode_size(&e), Some(256));
+        assert_eq!(ext_inode_size(&x), None);
+        assert_eq!(unescape_mount("/mnt/my\\040disk\\134x"), "/mnt/my disk\\x");
+        assert_eq!(unescape_mount("/a\\04"), "/a\\04");
+        let t = parse_table("# header kernel 6.12.0 drives\nfs ext4\nfs xfs-v4\nahci pci:v*\n");
+        assert_eq!(t.fs, ["ext4", "xfs-v4"]);
+        assert_eq!(t.aliases.len(), 1);
+    }
+
+    fn app(program: &str, version: &str, via: &str, owner: Option<&str>) -> Value {
+        json!({"runtime": "python2", "version": version, "via": via, "program": program,
+               "interpreter": "/usr/bin/python2.7", "where": "billing.service", "owner": owner})
+    }
+
+    fn modern(runtimes: Vec<Value>) -> Value {
+        let mut f: Vec<&str> = LEVEL_FEATURES[0].to_vec();
+        f.extend(LEVEL_FEATURES[1]);
+        let mut m = machine(&f, false, vec![]);
+        m["runtimes"] = json!(runtimes);
+        m
+    }
+
+    /// SPEC "Runtime preflight": a CentOS 7 box whose own billing app runs on Python 2. Its hardware reaches alma10,
+    /// but Alma 9 ships no Python 2 and wend never lands on Alma 8, so the choice is stay or shelter.
+    #[test]
+    fn an_el7_python2_app_is_told_to_stay_or_shelter() {
+        let v = verdict(
+            "centos7-to-alma10",
+            &modern(vec![
+                app("/opt/billing/app.py", "2.7", "process", None),
+                app("/usr/bin/fail2ban-server", "2.7", "process", Some("fail2ban-server")),
+            ]),
+        );
+        assert_eq!(v["lands_on"], "alma10", "{v:#}");
+        assert_eq!(v["keeps_runtimes_on"], "centos7");
+        assert_eq!(v["ok"], false);
+        assert_eq!(
+            v["runtimes"].as_array().unwrap().len(),
+            1,
+            "fail2ban is the distro's: {v:#}"
+        );
+        let p = v["hops"][0]["runtime_problems"][0].as_str().unwrap();
+        assert!(
+            p.starts_with("alma9 ships no Python 2") && p.contains("/opt/billing/app.py"),
+            "{p}"
+        );
+        let r = report(&v);
+        assert!(
+            r.contains("stay on centos7") && r.contains("shelter: upgrade to alma10,"),
+            "{r}"
+        );
+        // the distro's own Python 2 alone changes nothing
+        let v = verdict(
+            "centos7-to-alma10",
+            &modern(vec![app(
+                "/usr/bin/fail2ban-server",
+                "2.7",
+                "process",
+                Some("fail2ban-server"),
+            )]),
+        );
+        assert_eq!(v["ok"], true, "{v:#}");
+        assert_eq!(v["keeps_runtimes_on"], Value::Null);
+        // mod_wsgi counts whoever owns httpd
+        let v = verdict(
+            "centos7-to-alma10",
+            &modern(vec![app("/usr/sbin/httpd", "2.7", "embedded", Some("httpd"))]),
+        );
+        assert_eq!(v["keeps_runtimes_on"], "centos7");
+    }
+
+    /// Ubuntu keeps Python 2 in universe through jammy; Debian through bullseye, with a note where an app's own
+    /// 2.x goes.
+    #[test]
+    fn apt_routes_stop_where_python2_ends() {
+        let v = verdict(
+            "trusty-to-resolute",
+            &modern(vec![app("/srv/app/run.py", "2.7", "cron", None)]),
+        );
+        assert_eq!(v["keeps_runtimes_on"], "jammy", "{v:#}");
+        assert_eq!(v["lands_on"], "resolute");
+        let r = report(&v);
+        assert!(
+            r.contains("walk the route only to jammy") && r.contains("shelter: upgrade to resolute, and run"),
+            "{r}"
+        );
+        let v = verdict(
+            "etch-to-trixie",
+            &modern(vec![app("/opt/old/job.py", "2.4", "cron", None)]),
+        );
+        assert_eq!(v["keeps_runtimes_on"], "bullseye", "{v:#}");
+        let notes = v["hops"].to_string();
+        assert_eq!(
+            notes.matches("runs on Python 2.4;").count(),
+            1,
+            "noted once, at squeeze: {notes}"
+        );
+        assert!(
+            v["hops"][1]["notes"]
+                .to_string()
+                .contains("squeeze ships Python 2.5.5 and 2.6.6"),
+            "{v:#}"
+        );
+    }
+
+    /// When the hardware stops first, the runtime isn't the owner's choice to make: the hardware verdict stands.
+    #[test]
+    fn hardware_that_stops_first_decides() {
+        let mut m = machine(V1_PENRYN, false, vec![]);
+        m["runtimes"] = json!([app("/opt/billing/app.py", "2.4", "process", None)]);
+        let v = verdict("centos5-to-alma10", &m);
+        assert_eq!(
+            (v["lands_on"].as_str(), v["keeps_runtimes_on"].as_str()),
+            (Some("centos7"), Some("centos7"))
+        );
+        let r = report(&v);
+        assert!(
+            r.contains("The furthest it can land on is centos7") && !r.contains("shelter"),
+            "{r}"
+        );
+        // facts without the runtimes this client gathers are refused, not read as "none"
+        let mut old = m.clone();
+        old.as_object_mut().unwrap().remove("runtimes");
+        let a = atlas();
+        let (_, r) = a.route("centos5-to-alma10").unwrap();
+        assert!(evaluate(&a, r, &old).unwrap_err().contains("runtimes"));
     }
 }
