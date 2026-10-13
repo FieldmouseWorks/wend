@@ -1,0 +1,208 @@
+{
+ "schema": "wend.run/0",
+ "route": "sha256:9ac608fb4ad7b0560e055f4fd87773e73d3c0514e5402a9062d33b25ab01df00",
+ "box": "debian/etch-db",
+ "from": "etch",
+ "to": "trixie",
+ "result": "pass",
+ "started": "20261012-180014",
+ "wall_seconds": 2792,
+ "start_fingerprint": "sha256:7c3fad791e637aab2e2644e2dd3f4328d2792686a79ebd086756e31ee959fc51",
+ "runner": {
+  "kind": "local",
+  "host": "remi",
+  "kernel": "7.0.0-38-generic"
+ },
+ "hops": [
+  {
+   "to": "lenny",
+   "fired": [],
+   "fired_names": [],
+   "ok": true,
+   "seconds": 83.6,
+   "sources": {
+    "http://archive.debian.org/debian/dists/lenny/Release": "sha256:91c97659233014f2aa1395bee3ec90ef3d8ac63619215c0b8aeb04f7dd128664"
+   }
+  },
+  {
+   "to": "squeeze",
+   "fired": [
+    "sha256:720c4c94affe2b027de6a7f268dcf5aae9abd15eefcd992e49a144722bf5bc85"
+   ],
+   "fired_names": [
+    "reinstall-mysql-server-5.1-after-hop"
+   ],
+   "ok": true,
+   "seconds": 205.6,
+   "sources": {
+    "http://archive.debian.org/debian/dists/squeeze/Release": "sha256:728c30b7d49a3c47a6652c7d89db403f47e0a51b5bc0c252ae4010c450431b26"
+   }
+  },
+  {
+   "to": "wheezy",
+   "fired": [
+    "sha256:0a151144716a224dbd63d842b6f436a119b07c5436b5712de58d66f66182ead0",
+    "sha256:3d60b1a095a879f9e11629209c3163c1ca2003dab6e6bf4e1396b1179854451a",
+    "sha256:c9b66b3801b09b1f4bc784727ce649d583e84bb6322eb7d1b46ecefdecf27d3a",
+    "sha256:35988fca8fe902c95be39365574b25ad3e6a03fdc1116c2056090efe4a7635df"
+   ],
+   "fired_names": [
+    "purge-stale-libdb4",
+    "wheezy-purge-dhcp3-transitional",
+    "wheezy-reinstall-module-init-tools",
+    "restore-mysql-server-5.5-after-hop"
+   ],
+   "ok": true,
+   "seconds": 165.5,
+   "sources": {
+    "http://archive.debian.org/debian/dists/wheezy/main/binary-amd64/Packages": "sha256:f3ea9ca44cc48cd4e033e8c62b40b25a200b6b17e0ccb6b9abd0741f0f786608"
+   }
+  },
+  {
+   "to": "jessie",
+   "fired": [],
+   "fired_names": [],
+   "ok": true,
+   "seconds": 176.6,
+   "sources": {
+    "http://archive.debian.org/debian/dists/jessie/Release": "sha256:f5b6409b287484bb612f6542a1ebd8cf046dcb0fdb4dcd8d677493d9aaf7d348"
+   }
+  },
+  {
+   "to": "stretch",
+   "fired": [
+    "sha256:533c751486f6f0daa2d2ab4b0cc69959ce24b0f56bb02e5aa99af823f3fdf2b8"
+   ],
+   "fired_names": [
+    "mysql55-to-mariadb"
+   ],
+   "ok": true,
+   "seconds": 443.2,
+   "sources": {
+    "http://archive.debian.org/debian/dists/stretch/Release": "sha256:fe55c42941dd43102b9490af1678e7962ea1e257ccb8f942b43770475c336eb3"
+   }
+  },
+  {
+   "to": "buster",
+   "fired": [
+    "sha256:72ec206a8a41f3114108de4378e27e2244890fee22f2963b3fde8f85dd09def6"
+   ],
+   "fired_names": [
+    "dpkg-overwrite-sysvinit-clash"
+   ],
+   "ok": true,
+   "seconds": 429.2,
+   "sources": {
+    "http://archive.debian.org/debian/dists/buster/InRelease": "sha256:d2126c57347cfe5ca81d912ddfecc02e9a741c6e100d8d8295b735f979bc1a9d"
+   }
+  },
+  {
+   "to": "bullseye",
+   "fired": [],
+   "fired_names": [],
+   "ok": true,
+   "seconds": 358.5,
+   "sources": {
+    "http://deb.debian.org/debian/dists/bullseye/InRelease": "sha256:7917d4598768bfc4a25776eb0f6bf2f7d1f13301c2dc1e16467ef170dd752d40"
+   }
+  },
+  {
+   "to": "bookworm",
+   "fired": [],
+   "fired_names": [],
+   "ok": true,
+   "seconds": 356.1,
+   "sources": {
+    "http://deb.debian.org/debian/dists/bookworm/InRelease": "sha256:77737fa4b34f2693e982cc9ee35736816c35a7778fc2d326cc1bbf5b301fe1aa"
+   }
+  },
+  {
+   "to": "trixie",
+   "fired": [
+    "sha256:ab559b09a1ccf147bd8af2ef307886a0a31d8d9233d2bfd6823adc22d11606cb"
+   ],
+   "fired_names": [
+    "drop-sysvinit-for-trixie"
+   ],
+   "ok": true,
+   "seconds": 417.0,
+   "sources": {
+    "http://deb.debian.org/debian/dists/trixie/InRelease": "sha256:0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675"
+   }
+  }
+ ],
+ "start_services": [
+  "README",
+  "bind9",
+  "bootclean",
+  "bootlogd",
+  "bootmisc.sh",
+  "checkfs.sh",
+  "checkroot.sh",
+  "cron",
+  "exim4",
+  "glibc.sh",
+  "halt",
+  "hostname.sh",
+  "hwclock.sh",
+  "ifupdown",
+  "ifupdown-clean",
+  "killprocs",
+  "libdevmapper1.02",
+  "makedev",
+  "module-init-tools",
+  "mountall-bootclean.sh",
+  "mountall.sh",
+  "mountdevsubfs.sh",
+  "mountkernfs.sh",
+  "mountnfs-bootclean.sh",
+  "mountnfs.sh",
+  "mtab.sh",
+  "mysql",
+  "mysql-ndb",
+  "mysql-ndb-mgm",
+  "networking",
+  "openbsd-inetd",
+  "procps.sh",
+  "rc",
+  "rc.local",
+  "rcS",
+  "reboot",
+  "rmnologin",
+  "rsync",
+  "sendsigs",
+  "single",
+  "skeleton",
+  "ssh",
+  "stop-bootlogd",
+  "stop-bootlogd-single",
+  "sudo",
+  "umountfs",
+  "umountnfs.sh",
+  "umountroot",
+  "urandom"
+ ],
+ "failed_stage": "",
+ "final": {
+  "release": "13.7",
+  "passed": [
+   "cron",
+   "current",
+   "db",
+   "dhcp",
+   "dns",
+   "mail",
+   "pkgdb",
+   "python",
+   "services",
+   "ssh",
+   "tools"
+  ],
+  "failed": [],
+  "failed_logs": {}
+ },
+ "obsolete_before": 59,
+ "obsolete_after": 0,
+ "model_calls": 0,
+ "log_sha256": "sha256:f5b6f9c4dd19dc9f1ad4468e5fcac1a676c2c2b4350dc41423421b73babcdee3"
+}

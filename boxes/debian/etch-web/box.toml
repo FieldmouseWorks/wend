@@ -5,7 +5,9 @@ family = "debian"
 release = "etch"
 arch = "amd64"
 summary = "etch web server: Apache 2.2 + mod_php5 vhost, postfix, ssh on 2222, cron"
-packages = ["openssh-server", "apache2", "libapache2-mod-php5", "php5-cli", "postfix", "cron", "rsync", "sudo", "python", "perl", "curl", "ntp", "logrotate", "less"]
+packages = ["openssh-server", "apache2", "libapache2-mod-php5", "php5-cli", "postfix", "cron", "rsync", "sudo", "python", "perl", "curl", "ntp", "logrotate", "less",
+            # what a real etch install (debian-installer) has and debootstrap's minbase doesn't: each one breaks a hop (wend#13)
+            "dhcp3-client", "module-init-tools"]
 customize = '''
 set -e
 touch /etc/apache2/httpd.conf
@@ -34,6 +36,7 @@ start_hook = "dpkg-query -W -f '${Package}\\n' | sed -e 's/[0-9.]*//g' -e 's/-.*
 debconf_selections = ["postfix postfix/main_mailer_type select Internet Site", "postfix postfix/mailname string oldbox.example.org"]
 
 [roles]
+dhcp = "S=/var/lib/apt/extended_states; for p in isc-dhcp-client dhcp3-client; do dpkg-query -W -f '${Status}' $p 2>/dev/null | grep -q 'ok installed' || continue; if [ -e $S ]; then [ -r $S ] || { echo \"can't read $S\"; exit 1; }; awk -v p=$p '$1==\"Package:\"{x=($2==p)} x&&$1==\"Auto-Installed:\"&&$2==1{f=1} END{exit f}' $S || continue; fi; exit 0; done; echo 'no manually installed DHCP client (a later autoremove could take it)'; exit 1"
 ssh = "mkdir -p /var/run/sshd /run/sshd; /usr/sbin/sshd -t && grep -q '^Port 2222' /etc/ssh/sshd_config"
 cron = "test -x /usr/sbin/cron && crontab -l -u alice | grep nightly-backup"
 python = "python3 -c 'print(6*7)' | grep 42 || python -c 'print 6*7' | grep 42"

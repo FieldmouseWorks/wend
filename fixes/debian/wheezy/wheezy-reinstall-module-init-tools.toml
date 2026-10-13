@@ -1,0 +1,18 @@
+# Found replaying the route on a real etch install in a VM (wend#13).
+schema = "wend.fix/0"
+family = "debian"
+hop = "wheezy"
+when = { installed = "module-init-tools" }
+restores = ["pkgdb"]
+adds = []
+
+[[post]]
+op = "dpkg.reinstall"
+packages = ["module-init-tools"]
+
+[meta]
+name = "wheezy-reinstall-module-init-tools"
+author = "claude (wend#13, hand-written from the VM replay)"
+source = "wend#13"
+note = "wheezy's module-init-tools is a transitional package for kmod. The wheezy transaction unpacks it with squeeze's dpkg, which writes no md5sums for a .deb that ships none, and wheezy's dpkg --audit then says it needs a reinstall (the pkgdb check fails). Reinstalling it under wheezy's dpkg writes them. Both etch boxes carry module-init-tools, as a real etch install does."
+fires_on = ["debian/etch-db", "debian/etch-web"]

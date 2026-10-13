@@ -104,12 +104,22 @@ for name, mutate in {
         set_release=a["hop"]["set_release"].replace(" && {addons}", "")),
     "an add-on repo for a release the adapter doesn't have": lambda a: a["addons"]["epel"]["repos"].update(
         centos4="vault.centos.org/4.9/os/x86_64"),
+    "an adapter without hardware requirements (SPEC \"Hardware preflight\")": lambda a: a.pop("hardware"),
+    "an adapter whose release asks for an unknown CPU level": lambda a: a["hardware"]["alma9"].update(cpu="v2"),
+    "an adapter missing a booted release's hardware": lambda a: a["hardware"].pop("alma10"),
 }.items():
     a = copy.deepcopy(adapters["el"])
     mutate(a)
     errs = check.check_adapter(a, "adapters/el.toml")
     print(("refused " if errs else "MISSED  ") + name + (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
     bad += not errs
+# a release's driver table is pinned: other bytes under its name, or none, fail the atlas
+a = copy.deepcopy(adapters["el"])
+a["hardware"]["alma9"]["drivers"] = "sha256:" + "0" * 64
+errs = check.driver_table_errors("el", a, "adapters/el.toml")
+print(("refused " if errs else "MISSED  ") + "a driver table that isn't the pinned one" +
+      (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
+bad += not errs
 # a pattern can dodge any finite probe, so values are also held to a fixed safe set, whatever the adapter says
 loose = copy.deepcopy(adapters)
 loose["el"]["ops"]["kv.set"]["args"]["values"] = {"table": "x[a-z;|&$ ]*"}
