@@ -3,8 +3,8 @@
 # never left in a box. The harness (tools/shelter.py) puts it at /usr/bin/podman inside a box only while that box's
 # health checks run, and puts the real podman (if any) back afterwards.
 #
-# A chroot has no podman to run, so `podman run ... <image ID> <command>` becomes: find the shelter root whose
-# shelter.lock names that image, bind it read-only onto itself, mount the declared volumes on it (:ro read-only,
+# A chroot has no podman to run, so `podman run ... localhost/wend-shelter-<app>:<digest> <command>` becomes: find
+# the shelter root whose shelter.lock names that digest, bind it read-only onto itself, mount the declared volumes on it (:ro read-only,
 # everything else read-write), a tmpfs on /tmp and /run, and the box's own /dev and a fresh /proc, then chroot into it
 # and run the command as --user. It runs in a mount namespace of its own, so nothing it mounts outlives the command.
 # Everything else (the user namespace and its uid map, capabilities, no-new-privileges, the network and its egress
@@ -44,7 +44,8 @@ if [ "$1" = __wend_inner ]; then
     container=podman $envs /usr/sbin/chroot --userspec="$uid:$gid" --groups="$gid" "$root" "$@"
 fi
 case "$1 $2" in
-  "network create"|"network exists"|"stop "*) exit 0;;  # the units' ExecStartPre and ExecStop: nothing to do here
+  "network create"|"network exists"|"stop "*|"image exists") exit 0;;  # the units' ExecStartPre and ExecStop:
+  "import -") cat >/dev/null; exit 0;;                                     # nothing to do here
 esac
 [ "$1" = run ] || { echo "wend podman stand-in: only run is supported, not: $*" >&2; exit 125; }
 shift
@@ -64,9 +65,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ $# -ge 2 ] || { echo "wend podman stand-in: no image and command" >&2; exit 125; }
-image=$1
+image=${1#localhost/wend-shelter-*:}  # shelter.start imports the root under the lock's digest as the tag
+case "$1" in localhost/wend-shelter-*:*) ;; *) image=;; esac
 shift
-case "$image" in *[!0-9a-f]*|'') echo "wend podman stand-in: run an image by its ID, not $image" >&2; exit 125;; esac
+case "$image" in *[!0-9a-f]*|'') echo "wend podman stand-in: run a shelter's image (localhost/wend-shelter-<app>:<digest>), not $image" >&2; exit 125;; esac
 case "$user" in *[!0-9:]*|*:*:*|:*|*:) echo "wend podman stand-in: --user must be uid:gid, not $user" >&2; exit 125;; esac
 root=
 for l in $SHELTERS/*/shelter.lock; do

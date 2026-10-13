@@ -462,7 +462,7 @@ def check_box(doc, adapters, where):
 # SPEC "Sheltering an app": a box's [shelter.<app>] tables, the owner's confirmed plan. Every value lands in commands
 # tools/shelter.py writes and runs as root, and in unit files, so each is held to a plain shape here.
 SHELTER_APP = r"[a-z][a-z0-9]{0,30}"
-SHELTER_KEYS = {"code", "data", "user", "unit", "cron", "sockets", "ports"}
+SHELTER_KEYS = {"code", "data", "user", "unit", "cron", "sockets", "ports", "egress"}
 ABS_PATH = r"(/[A-Za-z0-9_+-][A-Za-z0-9_.+-]*)+"  # no segment starts with a dot: no "." or "..", nothing hidden
 USER = r"[a-z_][a-z0-9_-]{0,31}"
 SERVICE_UNIT = r"[A-Za-z0-9][A-Za-z0-9_.@-]*\.service"
@@ -485,7 +485,7 @@ def check_shelter(sh, where):
             errs.append(f"{w} must be a table")
             continue
         if set(p) - SHELTER_KEYS or not {"code", "data", "user", "unit"} <= set(p):
-            errs.append(f"{w} takes code, data, user and unit, and optionally cron, sockets and ports; "
+            errs.append(f"{w} takes code, data, user and unit, and optionally cron, sockets, ports and egress; "
                         f"got {sorted(p)}")
             continue
         path = lambda x, under: isinstance(x, str) and re.fullmatch(ABS_PATH, x) and x.startswith(under)  # noqa: E731
@@ -530,6 +530,10 @@ def check_shelter(sh, where):
         m = [re.fullmatch(PUBLISH, x) if isinstance(x, str) else None for x in ports] if isinstance(ports, list) else [None]
         if not all(x and all(int(o) < 256 for o in x.groups()[:4]) and 0 < int(x.group(5)) < 65536 for x in m):
             errs.append(f"{w}.ports must list address:port strings (127.0.0.1:8080)")
+        egress = p.get("egress", [])  # the TCP destinations the owner opted in to (SPEC: private by default)
+        m = [re.fullmatch(PUBLISH, x) if isinstance(x, str) else None for x in egress] if isinstance(egress, list) else [None]
+        if not all(x and all(int(o) < 256 for o in x.groups()[:4]) and 0 < int(x.group(5)) < 65536 for x in m):
+            errs.append(f"{w}.egress must list address:port strings (192.0.2.10:443)")
     return errs
 
 

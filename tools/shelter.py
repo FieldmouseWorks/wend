@@ -491,10 +491,24 @@ def podman_run(app, plan, name, publish, command, env=()):
     vols = [f"-v {plan['code']}:{plan['code']}:ro"] + [f"-v {x}:{x}:Z,idmap" for x in plan["data"]] + \
         [f"-v /run/wend/shelter/{app}/s{i}:{os.path.dirname(x)}:Z" for i, x in enumerate(plan.get("sockets", []))]
     ports = [f"-p {p}:{p.rsplit(':', 1)[1]}" for p in plan.get("ports", [])] if publish else []
+    low = publish and any(int(p.rsplit(":", 1)[1]) < 1024 for p in plan.get("ports", []))
     return " ".join(["/usr/bin/podman run --rm", f"--name {name}", "--read-only --tmpfs /tmp --tmpfs /run",
-                     f"--uidmap 0:$S:{SUBID_SIZE} --gidmap 0:$S:{SUBID_SIZE}", "--user $U:$G",
-                     "--cap-drop=all --security-opt no-new-privileges", f"--network wend-{app}"] + ports + vols +
-                    [f"--env {e}" for e in env] + ["$I", command])
+                     f"--uidmap 0:$S:{SUBID_SIZE} --gidmap 0:$S:{SUBID_SIZE}", "--user $U:$G", "--cap-drop=all"] +
+                    (["--cap-add=NET_BIND_SERVICE"] if low else []) +
+                    ["--security-opt no-new-privileges", f"--network wend-{app}"] + ports + vols +
+                    [f"--env {e}" for e in env] + [image_ref(app), command])
+
+
+def image_ref(app):
+    """The shelter's image in podman's store: its root, imported under the lock's digest ($I) as the tag."""
+    return f"localhost/wend-shelter-{app}:$I"
+
+
+def import_pre(app):
+    """ExecStartPre= that puts the built root into podman's store once, so the unit runs a real image by the lock's
+    digest (podman, not the shelter root, then owns the files it maps into the shelter's id range)."""
+    return (f"ExecStartPre=/bin/sh -c '/usr/bin/podman image exists {image_ref(app)} || "
+            f"tar -C {SHELTER}/{app}/root -c . | /usr/bin/podman import - {image_ref(app)}'\n")
 
 
 def start_units(app, plan, release):
@@ -505,6 +519,9 @@ def start_units(app, plan, release):
     socks = plan.get("sockets", [])
     sock_units = [f"{unit}-sock{i}.socket" for i in range(len(socks))]
     after = " ".join([f"{net}.service"] + sock_units)
+    # the owner's opt-ins, one TCP destination each (the host's own addresses arrive on input, the rest on forward)
+    egress = "".join(f"    ip saddr 10.90.$K.0/24 ip daddr {e.rsplit(':', 1)[0]} tcp dport {e.rsplit(':', 1)[1]} accept\n"
+                     for e in plan.get("egress", []))
     parts = [
         "set -e",
         f"I=$(sed -n 's/^image = \"sha256:\\([0-9a-f]\\{{64\\}}\\)\"$/\\1/p' {d}/shelter.lock); "
@@ -525,15 +542,15 @@ def start_units(app, plan, release):
         f"K=$(( ($S - {SUBID_BASE}) / {SUBID_SIZE} )); MU=$(( $S + $U )); MG=$(( $S + $G ))",
         f"mkdir -p /etc/wend/shelter /etc/tmpfiles.d /run/wend/shelter/{app}",
         _heredoc(f"/etc/wend/shelter/{app}.nft",
-                 hdr + f"# Egress for the shelter's network (10.90.$K.0/24): replies and DNS to its gateway only.\n"
+                 hdr + f"# Egress for the shelter's network (10.90.$K.0/24): replies, DNS to its gateway, the plan's egress.\n"
                  f"table inet wend_shelter_{app}\ndelete table inet wend_shelter_{app}\n"
                  f"table inet wend_shelter_{app} {{\n"
                  "  chain forward {\n    type filter hook forward priority -10; policy accept;\n"
-                 "    ip saddr 10.90.$K.0/24 ct state established,related accept\n"
+                 "    ip saddr 10.90.$K.0/24 ct state established,related accept\n" + egress +
                  "    ip saddr 10.90.$K.0/24 drop\n  }\n"
                  "  chain input {\n    type filter hook input priority -10; policy accept;\n"
                  "    ip saddr 10.90.$K.0/24 ct state established,related accept\n"
-                 "    ip saddr 10.90.$K.0/24 ip daddr 10.90.$K.1 udp dport 53 accept\n"
+                 "    ip saddr 10.90.$K.0/24 ip daddr 10.90.$K.1 udp dport 53 accept\n" + egress +
                  "    ip saddr 10.90.$K.0/24 drop\n  }\n}\n"),
         _heredoc(f"/etc/systemd/system/{net}.service",
                  hdr + f"[Unit]\nDescription=wend shelter {app}: its egress table\n"
@@ -560,7 +577,8 @@ def start_units(app, plan, release):
         hdr + f"[Unit]\nDescription=wend shelter {app} ({release} userland, unpatched)\n"
         f"Wants=network-online.target\nAfter=network-online.target {after}\n"
         f"BindsTo={net}.service\nPartOf={net}.service\n" + "".join(f"Requires={s}\n" for s in sock_units) +
-        f"\n[Service]\nExecStartPre=-/usr/bin/podman network create --subnet 10.90.$K.0/24 wend-{app}\n"
+        f"\n[Service]\nExecStartPre=-/usr/bin/podman network create --subnet 10.90.$K.0/24 wend-{app}\n" +
+        import_pre(app) +
         f"ExecStart={podman_run(app, plan, f'wend-{app}', True, '$X')}\n"
         f"ExecStop=/usr/bin/podman stop -t 10 wend-{app}\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n"))
     timers = []
@@ -576,7 +594,7 @@ def start_units(app, plan, release):
             _heredoc(f"/etc/systemd/system/{name}.service",
                      hdr + f"[Unit]\nDescription=wend shelter {app}: cron line {i}\nAfter={after}\n"
                      f"BindsTo={net}.service\n" + "".join(f"Requires={s}\n" for s in sock_units) +
-                     f"\n[Service]\nType=oneshot\n"
+                     f"\n[Service]\nType=oneshot\n" + import_pre(app) +
                      f"ExecStart={podman_run(app, plan, f'wend-{app}-cron{i}', False, cmd, ['PATH=/usr/bin:/bin'])}\n")]
     parts.append(f"systemctl enable {net}.service {unit}.service {' '.join(sock_units + timers)}")
     parts.append(f"mkdir -p /var/lib/wend && printf '{''.join(x + chr(92) + 'n' for x in ADDS)}' >> {ADDED}")

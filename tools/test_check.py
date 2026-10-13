@@ -340,7 +340,10 @@ for name, sh, want in (
         ("shelter: a cron line as a string", {"billing": {**plan, "cron": [cron0["line"]]}}, True),
         ("shelter: a relative socket", {"billing": {**plan, "sockets": ["mysql.sock"]}}, True),
         ("shelter: a port out of range", {"billing": {**plan, "ports": ["127.0.0.1:99999"]}}, True),
-        ("shelter: a port with no address", {"billing": {**plan, "ports": [8080]}}, True)):
+        ("shelter: a port with no address", {"billing": {**plan, "ports": [8080]}}, True),
+        ("shelter: an egress opt-in", {"billing": {**plan, "egress": ["192.0.2.10:443"]}}, False),
+        ("shelter: egress as a host name", {"billing": {**plan, "egress": ["api.example.com:443"]}}, True),
+        ("shelter: egress with shell", {"billing": {**plan, "egress": ["192.0.2.10:443; reboot"]}}, True)):
     errs = check.check_box({**py, "shelter": sh}, adapters, "boxes/el/centos7-lamp/box.toml")
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want

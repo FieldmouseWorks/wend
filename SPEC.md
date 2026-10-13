@@ -1188,12 +1188,13 @@ Podman, from the landing release's own repos. Read from the indexes on 2026-10-1
 drops has podman 4.3 or later: alma9 and alma10 (5.8.2), bookworm (4.3.1), trixie (5.4.2), noble (4.9.3) and
 resolute (5.7.0). Their kernels are all 5.14 or later. Idmapped mounts need 5.12 for ext4 and XFS and 5.15 for
 btrfs, and don't work on NFS at all, so preflight checks each data directory's filesystem and refuses one that
-can't be idmapped. The image is built locally, loaded with `podman load`, and run by its image ID. There's no
+can't be idmapped. The image is built locally: the unit's `ExecStartPre=` imports the built root once
+(`podman import`, tagged `localhost/wend-shelter-<app>:<the lock's image digest>`), and the unit runs that tag. There's no
 registry. Its size counts toward the hop's `disk_mib`, and a `/var/lib/containers` on XFS with `ftype=0` (overlay
 storage refuses it) fails preflight.
 
 wend writes a plain systemd unit, not a quadlet (bookworm's podman has none):
-`/etc/systemd/system/wend-shelter-<app>.service` runs `podman run --rm --name wend-<app> ... <image ID>
+`/etc/systemd/system/wend-shelter-<app>.service` runs `podman run --rm --name wend-<app> ... localhost/wend-shelter-<app>:<digest>
 <the program's own command line>`. It's a harness-owned path, and the unit's header says what it is and that its
 userland is unpatched.
 
@@ -1267,7 +1268,7 @@ A cron line becomes a timer only when its schedule translates exactly to `OnCale
 schedule and the `@daily`-style names do. When both day-of-month and day-of-week are restricted, cron runs on
 either, so that becomes two `OnCalendar=` lines; when one of them starts with `*` (`*/2`), cronie wants both, so it's one line. `@reboot` becomes a oneshot at boot (not built yet: the checker
 refuses it for now). Anything else is refused at plan time.
-The timer runs the same command in the shelter (`podman run --rm ... <image ID> <command>`) with the crontab's
+The timer runs the same command in the shelter (`podman run --rm ... localhost/wend-shelter-<app>:<digest> <command>`) with the crontab's
 `PATH` and environment (built so far: cron's default `PATH=/usr/bin:/bin`). Cron's `MAILTO` doesn't carry over:
 output goes to the journal, and the plan says so.
 
@@ -1281,7 +1282,8 @@ output goes to the journal, and the plan says so.
 | `unit` | `<name>.service` | the app's own unit; its `ExecStart` (an absolute interpreter, then plain words) is the command the shelter runs |
 | `cron` | list of `{ user, line }` | each crontab line by its exact text: plain words only (no `%`, quotes, `$` or redirects), a schedule that translates exactly, an absolute interpreter; `user` is the app's own `user` (another user's jobs are an app of their own) |
 | `sockets` | list of absolute paths, one per directory | host unix sockets the app connects to, each served by its own proxy and mounted at its directory |
-| `ports` | list of `"address:port"` | published on the same host address |
+| `ports` | list of `"address:port"` | published on the same host address; one below 1024 adds `NET_BIND_SERVICE` |
+| `egress` | list of `"address:port"` | the TCP destinations the owner opted in to; the egress table accepts each and drops every other new connection |
 
 An app's name is lowercase letters and digits. Paths have no `.` or `..` segments. Unknown keys are refused, so a
 plan can't ask for host networking or privileges until the spec says how that's recorded.
@@ -1318,10 +1320,10 @@ route itself causes.
   turn all of them red in CI. And CI judges a PR with the base branch's tools, so the tools land first.
 - **CI (chroot tier):** chroots run no podman, so CI proves the userland only. While a box's checks run, the
   harness puts a stand-in at `/usr/bin/podman` (`tools/podman_standin.sh`, never shipped to clients and never left
-  in the box) whose `run` chroots into the shelter root the image ID names, with the unit's declared mounts (code
+  in the box) whose `run` chroots into the shelter root whose lock has the tag's digest, with the unit's declared mounts (code
   read-only, data read-write, the socket proxies' directories), and runs the command as `--user`, ignoring every
-  confinement flag. There's no image store: the image ID is the digest of the built root, and the root stays at its
-  path. A check that starts a shelter's socket proxies starts them from their units, as the proxy's `User=`, since
+  confinement flag. It has no image store (`import` and `image exists` do nothing): the tag's digest is the built root's, and the
+  root stays at its path. A check that starts a shelter's socket proxies starts them from their units, as the proxy's `User=`, since
   a chroot has no systemd and no user namespace. `app`, `cron` and every other check must stay green at every hop.
   It proves nothing about confinement, and the run says so (`tier = "chroot"`, `confinement_proved = false`).
 - **VM tier (remi):** the real thing, and the only proof of confinement. centos7-pyapp to alma10 under podman, with
