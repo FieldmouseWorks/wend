@@ -26,7 +26,7 @@ baseurl=http://127.0.0.1:8085/dl.fedoraproject.org/pub/epel/8/Everything/x86_64/
 gpgcheck=0
 EOF
 Y="dnf -y --disablerepo=* --enablerepo=centos8-*,box-*"
-$Y install epel-release
+dnf -y --disablerepo=* --enablerepo=centos8-*,box-extras install epel-release
 $Y install htop ncdu fail2ban-server fail2ban-firewalld
 rm -f /etc/yum.repos.d/box-build.repo
 rpm -q epel-release htop ncdu jq fail2ban-server fail2ban-firewalld
