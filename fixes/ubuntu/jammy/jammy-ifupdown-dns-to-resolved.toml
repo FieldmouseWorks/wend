@@ -1,0 +1,17 @@
+# Found replaying the route on a real trusty install in a VM (wend#13).
+schema = "wend.fix/0"
+family = "ubuntu"
+hop = "jammy"
+when = { installed = "ifupdown" }
+restores = []
+adds = []
+
+[[post]]
+op = "net.ifupdown-dns-to-resolved"
+
+[meta]
+name = "jammy-ifupdown-dns-to-resolved"
+author = "claude (wend#13, hand-written from the VM replay)"
+source = "wend#13"
+note = "A box that came up from trusty keeps ifupdown and resolvconf. On jammy's release pocket ifupdown's own hook that hands the interface's dns-* options to systemd-resolved fails (\"mystatedir: not found\"), resolvconf lists only resolved's stub, and resolved has no upstream server: after the reboot nothing resolves. The op gives resolved the resolvers of the interface ifupdown has up, as a drop-in; noble then drops resolvconf, and resolved keeps answering. A chroot has no ifupdown state, so there the op carries nothing; the VM tier proves the drop-in."
+fires_on = ["ubuntu/trusty-db", "ubuntu/trusty-web"]

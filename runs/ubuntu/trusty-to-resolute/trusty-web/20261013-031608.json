@@ -1,17 +1,17 @@
 {
  "schema": "wend.run/0",
- "route": "sha256:a4dbda4e919a520cff362f51cb5b264cfa67ca6df830cd9648eb14bb5cd703b7",
+ "route": "sha256:a33b4449dd16373b5dc97dfbe8db43a80188feac1cd234fbe55772b75798e676",
  "box": "ubuntu/trusty-web",
  "from": "trusty",
  "to": "resolute",
  "result": "pass",
- "started": "20261013-000547",
- "wall_seconds": 908,
+ "started": "20261013-031608",
+ "wall_seconds": 1547,
  "start_fingerprint": "sha256:faf6e82029422106de1ec4c7d5a7f28b9a2902b018a76e801f8fa7cafe968818",
  "runner": {
   "kind": "local",
-  "host": "vm",
-  "kernel": "6.18.44-fc-v114"
+  "host": "remi",
+  "kernel": "7.0.0-38-generic"
  },
  "hops": [
   {
@@ -23,7 +23,7 @@
     "php7.0-module"
    ],
    "ok": true,
-   "seconds": 112.4,
+   "seconds": 256.0,
    "sources": {
     "http://archive.ubuntu.com/ubuntu/dists/xenial/InRelease": "sha256:30e9ff343d9ec0b64d28d27010bf472090bb3399b4b6bc5aee077085e920e89b"
    }
@@ -37,7 +37,7 @@
     "php7.2-module"
    ],
    "ok": true,
-   "seconds": 120.7,
+   "seconds": 218.7,
    "sources": {
     "http://archive.ubuntu.com/ubuntu/dists/bionic/InRelease": "sha256:690bd875ab5799394af7406f32f2e698c48e772ac367d520f74ec1095662da4d"
    }
@@ -51,7 +51,7 @@
     "php7.4-module"
    ],
    "ok": true,
-   "seconds": 127.7,
+   "seconds": 218.7,
    "sources": {
     "http://archive.ubuntu.com/ubuntu/dists/focal/InRelease": "sha256:cc9be89a0984aeca9e3ca40ae0e6decff75aa32653a5925b04956a7c12487e99"
    }
@@ -59,13 +59,15 @@
   {
    "to": "jammy",
    "fired": [
-    "sha256:ad700dfa7244e5bafa7a490449342f5b8cce1fefb43a3f533751f04bdaddf980"
+    "sha256:ad700dfa7244e5bafa7a490449342f5b8cce1fefb43a3f533751f04bdaddf980",
+    "sha256:0fd0f96ea39f6ebd216caef47c8bba4a059fe1054b76f41697f8c1245608dc59"
    ],
    "fired_names": [
-    "php8.1-module"
+    "php8.1-module",
+    "jammy-ifupdown-dns-to-resolved"
    ],
    "ok": true,
-   "seconds": 113.1,
+   "seconds": 239.2,
    "sources": {
     "http://archive.ubuntu.com/ubuntu/dists/jammy/InRelease": "sha256:c14060cd8c6d625874dfcb9523a35a395bf4865c28b6b6a82569ef326fe92dc6"
    }
@@ -79,7 +81,7 @@
     "php8.3-module"
    ],
    "ok": true,
-   "seconds": 104.0,
+   "seconds": 270.0,
    "sources": {
     "http://archive.ubuntu.com/ubuntu/dists/noble/InRelease": "sha256:cdb2f31d809f589719a53c6ad15f255b27569c4059542ada282aaa21b8e164b0"
    }
@@ -93,7 +95,7 @@
     "php8.5-module"
    ],
    "ok": true,
-   "seconds": 162.2,
+   "seconds": 310.8,
    "sources": {
     "http://archive.ubuntu.com/ubuntu/dists/resolute/InRelease": "sha256:45f95ce276cdba3e41870516a130e03c58b8b7a79e9546b0efe9e526d255740c"
    }
@@ -148,5 +150,5 @@
  "obsolete_before": 19,
  "obsolete_after": 0,
  "model_calls": 0,
- "log_sha256": "sha256:020bca9cc80acaa3d54b259b9f8691e73bddcaac608e3fe4f1825f7cbf6d406a"
+ "log_sha256": "sha256:6512d116e8063cc4f7e516eb0689375c282506fa533169c1d04c72dfac7223b6"
 }
