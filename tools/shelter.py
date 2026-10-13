@@ -488,7 +488,7 @@ HEADER = ("# Written by wend (shelter.start) for the shelter \"{app}\": the owne
 
 def podman_run(app, plan, name, publish, command, env=()):
     """The podman command line a shelter unit runs ($S, $U, $G and $I are the start step's shell variables)."""
-    vols = [f"-v {plan['code']}:{plan['code']}:ro"] + [f"-v {x}:{x}:Z,idmap" for x in plan["data"]] + \
+    vols = [f"-v {plan['code']}:{plan['code']}:ro,idmap"] + [f"-v {x}:{x}:Z,idmap" for x in plan["data"]] + \
         [f"-v /run/wend/shelter/{app}/s{i}:{os.path.dirname(x)}:Z" for i, x in enumerate(plan.get("sockets", []))]
     ports = [f"-p {p}:{p.rsplit(':', 1)[1]}" for p in plan.get("ports", [])] if publish else []
     low = publish and any(int(p.rsplit(":", 1)[1]) < 1024 for p in plan.get("ports", []))

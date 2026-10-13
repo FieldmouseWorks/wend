@@ -1246,7 +1246,7 @@ Defaults, which the plan shows and the run records:
   the app's host user. The mapping is fixed (above), so that uid is the same at every start. An app that reaches a host service over
   TCP on `127.0.0.1` can't be served without changing its config, which wend doesn't do: the plan names it, and the
   owner's choices are `network = "host"` (opted in by name, recorded in the run as an exception) or editing the app.
-- **Mounts:** the code tree read-only. Data directories read-write (`:idmap`): the ones the program has open for
+- **Mounts:** the code tree read-only (`:ro,idmap`, so a tree only its owner can read stays readable). Data directories read-write (`:idmap`): the ones the program has open for
   writing, or has as its working directory, under `/var`, `/srv`, `/home` or `/opt`. The plan lists them, and the
   owner confirms them. Data is never copied, so the host and the shelter see the same bytes, and the box's backups
   keep working.
