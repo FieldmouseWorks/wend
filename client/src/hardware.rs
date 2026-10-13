@@ -230,12 +230,53 @@ fn parse_table(text: &str) -> Table {
     t
 }
 
+/// The devices a machine needs to boot and stay reachable, by PCI class: mass storage, Fibre Channel HBAs (a
+/// SAN-booted root) and I2O controllers hold disks; network cards and InfiniBand carry the network.
 fn kind_of(class: &str) -> Option<&'static str> {
-    match class.get(2..4) {
-        Some("01") => Some("disk controller"),
-        Some("02") => Some("network card"),
+    match (class.get(2..4), class.get(4..6)) {
+        (Some("01"), _) | (Some("0c"), Some("04")) | (Some("0e"), _) => Some("disk controller"),
+        (Some("02"), _) | (Some("0c"), Some("06")) => Some("network card"),
         _ => None,
     }
+}
+
+/// Modules whose class-wide alias claims every IDE controller but whose probe declines one it doesn't know
+/// (ata_generic and ide_pci_generic without their all-generic options, pata_acpi without ACPI timing methods): they
+/// count as a driver only for a device they already drive.
+const CLASS_ONLY_MAYBE: &[&str] = &["ata_generic", "ide_pci_generic", "pata_acpi"];
+
+/// Facts from a file are held to the shape `gather` writes: a check whose input is missing never passes by default.
+pub fn check_facts(f: &Value) -> Result<(), String> {
+    let bad = |what: &str| Err(format!("not a wend.hardware/0 facts file: {what}"));
+    if f["schema"] != "wend.hardware/0" {
+        return bad("schema");
+    }
+    for k in ["arch", "boot"] {
+        if !f[k].is_string() {
+            return bad(k);
+        }
+    }
+    for k in ["ram_mib", "free_mib", "userland_bits"] {
+        if !f[k].is_u64() {
+            return bad(k);
+        }
+    }
+    if !f["cpu"]["features"]
+        .as_array()
+        .is_some_and(|a| a.iter().all(Value::is_string))
+    {
+        return bad("cpu.features");
+    }
+    let dev_ok = |d: &Value| {
+        d["slot"].is_string()
+            && d["class"].as_str().is_some_and(|c| c.len() == 8 && c.starts_with("0x"))
+            && d["modalias"].as_str().is_some_and(|m| m.starts_with("pci:v"))
+            && (d["driver"].is_string() || d["driver"].is_null())
+    };
+    if !f["pci"].as_array().is_some_and(|a| a.iter().all(dev_ok)) {
+        return bad("pci");
+    }
+    Ok(())
 }
 
 fn vm_hint(level: usize) -> String {
@@ -255,6 +296,7 @@ fn vm_hint(level: usize) -> String {
 /// The verdict for one route on one machine's facts: every hop's problems (things that would leave the machine
 /// unbootable or unreachable), its notes, and the furthest release it can land on.
 pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, String> {
+    check_facts(facts)?;
     let fam = str_of(route, "family")?;
     let a = atlas
         .adapters
@@ -313,7 +355,7 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
             if booted.contains(h) {
                 return Err(format!("adapters/{fam}.toml has no hardware.{h} table"));
             }
-            out_hops.push(json!({"to": h, "ok": !blocked, "problems": [], "notes": ["not booted on this route"]}));
+            out_hops.push(json!({"to": h, "ok": true, "problems": [], "notes": ["not booted on this route"]}));
             continue;
         };
         let need = get(t, "cpu").and_then(Value::as_str).unwrap_or("x86-64");
@@ -339,7 +381,8 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
             problems.push(p);
         }
         if let (Some(need), Some(have)) = (get(t, "ram_mib").and_then(Value::as_u64), facts["ram_mib"].as_u64()) {
-            if have < need {
+            // MemTotal is the RAM less what the kernel keeps for itself (a 2 GiB VM shows about 1987 MiB)
+            if have * 10 < need * 9 {
                 problems.push(format!("{h} needs {need} MiB of memory; this machine has {have}"));
             }
         }
@@ -367,11 +410,12 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
             };
             let alias = d["modalias"].as_str().unwrap_or("");
             let driver = d["driver"].as_str();
-            let hit = table
-                .aliases
-                .iter()
-                .find(|(_, p)| alias_match(p.as_bytes(), alias.as_bytes()));
-            let built_in = driver.is_some_and(|dr| table.builtin.iter().any(|b| *b == dr.replace('-', "_")));
+            let norm = driver.map(|d| d.replace('-', "_"));
+            let hit = table.aliases.iter().find(|(m, p)| {
+                alias_match(p.as_bytes(), alias.as_bytes())
+                    && (!CLASS_ONLY_MAYBE.contains(&m.as_str()) || norm.as_deref() == Some(m.as_str()))
+            });
+            let built_in = norm.is_some_and(|dr| table.builtin.contains(&dr));
             if hit.is_some() || built_in {
                 continue;
             }
@@ -593,6 +637,49 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("unused disk controller"));
+    }
+
+    /// A SAN-booted EL7 server: Emulex LPe16000 (class 0x0c04), dropped from EL9's lpfc. A 2 GiB VM still counts
+    /// as 2 GiB, and a facts file missing what a check reads is refused, never judged ok.
+    #[test]
+    fn fibre_channel_ram_slack_and_bad_facts() {
+        let full: Vec<&str> = LEVEL_FEATURES.concat();
+        let fc = dev(
+            "0000:05:00.0",
+            "0x0c0400",
+            "pci:v000010DFd0000FE05sv000010DFsd0000FE05bc0Csc04i00",
+            Some("lpfc"),
+        );
+        let v = verdict("centos5-to-alma10", &machine(&full, false, vec![fc]));
+        assert_eq!(v["lands_on"], "centos7", "{v:#}");
+        let mut m = machine(&full, true, vec![]);
+        m["ram_mib"] = json!(1987);
+        assert_eq!(verdict("centos5-to-alma10", &m)["ok"], true);
+        let a = atlas();
+        let (_, r) = a.route("centos5-to-alma10").unwrap();
+        for k in ["pci", "ram_mib", "free_mib", "schema", "userland_bits"] {
+            let mut bad = machine(&full, false, vec![]);
+            bad.as_object_mut().unwrap().remove(k);
+            assert!(evaluate(&a, r, &bad).is_err(), "{k}");
+        }
+    }
+
+    /// ata_generic's class-wide alias doesn't count for an IDE controller another driver drives now.
+    #[test]
+    fn a_generic_ide_alias_is_not_a_driver() {
+        let full: Vec<&str> = LEVEL_FEATURES.concat();
+        let ide = |dr: &str| {
+            dev(
+                "0000:00:0f.0",
+                "0x01018a",
+                "pci:v0000FFFFd0000FFFFsv00000000sd00000000bc01sc01i8A",
+                Some(dr),
+            )
+        };
+        let v = verdict("etch-to-trixie", &machine(&full, false, vec![ide("pata_madeup")]));
+        assert_eq!(v["lands_on"], "etch", "{v:#}");
+        let v = verdict("etch-to-trixie", &machine(&full, false, vec![ide("ata_generic")]));
+        assert_eq!(v["ok"], true, "{v:#}");
     }
 
     #[test]

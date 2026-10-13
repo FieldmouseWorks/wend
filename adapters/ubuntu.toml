@@ -159,4 +159,4 @@ drivers = "sha256:f1c5c6babe929becf674f7ccea07e9ddc130bacc493304012d1dcd2dfcef5a
 cpu = "x86-64"
 ram_mib = 1024
 disk_mib = 2048
-drivers = "sha256:1ae935138969cde7ce95b257fffde0b7c5df91b4956893847b45c932b4f2b0e8"
+drivers = "sha256:a7b3497a96495da38204c4691cd2f218da4346f642f96e1cc0f90affde0bfac4"

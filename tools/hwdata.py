@@ -199,19 +199,22 @@ def table(pkgs):
                 for kv in modinfo(unpack(fn, open(os.path.join(dirpath, fn), "rb").read())):
                     if kv.startswith("alias=pci:"):
                         lines.add(f"{name} {kv[6:]}")
-        # Built-in drivers have no .ko. Their aliases are in modules.builtin.modinfo (Linux 5.2 on); before that only
-        # their names are known, and preflight takes a device whose driver is built in as driven.
-        if os.path.exists(f"{top}/modules.builtin.modinfo"):
-            for kv in open(f"{top}/modules.builtin.modinfo", "rb").read().split(b"\0"):
-                s = kv.decode("ascii", "replace")
-                mod, _, rest = s.partition(".")
-                if rest.startswith("alias=pci:"):
-                    lines.add(f"{mod.replace('-', '_')} {rest[6:]}")
+        # Built-in drivers have no .ko, and modules.builtin.modinfo (Linux 5.2 on) carries a built-in driver's
+        # MODULE_ALIAS lines but not its device table (EL9's built-in virtio_pci has none there). So a built-in driver
+        # is listed by name (`builtin <module>`), with whatever aliases the kernel recorded, and preflight takes a device
+        # bound to a built-in driver of that name as driven.
+        builtin = set()
         if os.path.exists(f"{top}/modules.builtin"):
             for p in open(f"{top}/modules.builtin").read().split():
                 p = p.removeprefix("kernel/")
                 if p.startswith(DIRS):
-                    lines.add(f"builtin {os.path.basename(p).split('.ko')[0].replace('-', '_')}")
+                    builtin.add(os.path.basename(p).split(".ko")[0].replace("-", "_"))
+        if os.path.exists(f"{top}/modules.builtin.modinfo"):
+            for kv in open(f"{top}/modules.builtin.modinfo", "rb").read().split(b"\0"):
+                mod, _, rest = kv.decode("ascii", "replace").partition(".")
+                if mod.replace("-", "_") in builtin and rest.startswith("alias=pci:"):
+                    lines.add(f"{mod.replace('-', '_')} {rest[6:]}")
+        lines.update(f"builtin {m}" for m in builtin)
         return os.path.basename(top), sorted(lines)
 
 

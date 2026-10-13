@@ -136,7 +136,7 @@ def check_hardware(a, where):
     for r, t in h.items():
         if r == "boot":
             continue
-        if r not in a.get("ladder", []) or not isinstance(t, dict):
+        if not isinstance(a.get("ladder"), list) or r not in a["ladder"] or not isinstance(t, dict):
             errs.append(f"{where}: hardware.{r} must be a table named for a release on the ladder")
             continue
         if set(t) - HARDWARE_KEYS:
@@ -159,7 +159,8 @@ def check_hardware(a, where):
 def driver_table_errors(fam, a, where):
     """Each release's driver table is in the atlas (adapters/drivers/<family>/<release>.txt) at the pinned hash."""
     errs = []
-    for r, t in (a.get("hardware") or {}).items():
+    h = a.get("hardware")
+    for r, t in (h if isinstance(h, dict) else {}).items():
         if r == "boot" or not isinstance(t, dict) or not isinstance(t.get("drivers"), str):
             continue
         p = f"{ROOT}/adapters/drivers/{fam}/{r}.txt"

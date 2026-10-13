@@ -827,8 +827,9 @@ has a `[hardware.<release>]` table:
 
 **Driver tables.** A driver table lists every `alias=pci:` pattern of the storage and network modules (the kernel's
 `drivers/` `scsi`, `ata`, `nvme`, `block`, `md`, `message`, `ide`, `net` and `virtio`) in the kernel package the
-hop installs, one `<module> <pattern>` per line, plus `builtin <module>` for those built in whose aliases an old
-kernel doesn't record (before Linux 5.2). `tools/hwdata.py` makes it from the package itself: it finds the kernel in
+hop installs, one `<module> <pattern>` per line, plus `builtin <module>` for each driver built into the kernel, since a kernel doesn't record a built-in
+driver's device table (`modules.builtin.modinfo` has only its `MODULE_ALIAS` lines, which are listed too). A
+device bound now to a driver the release has built in counts as driven: the one place a match is by name, not ID. `tools/hwdata.py` makes it from the package itself: it finds the kernel in
 the release's index, checks the download against the index's sha256, and reads each module's `.modinfo` section.
 The table's header names the packages and their hashes. Built from the release's own kernel, not from a vendor's
 list of what it deprecated: AlmaLinux 9's kernel still drives the LSI SAS1078 (PERC 6) and SAS2008 HBAs that RHEL
@@ -837,9 +838,12 @@ every Debian kernel keeps. The checker holds each table to its pinned hash.
 
 **The verdict.** Refused outright, before the first hop, when the architecture isn't the route's (`amd64` and
 `x86_64` are one) or the userland is 32-bit, or the firmware isn't in `boot`. Otherwise each hop fails when the CPU
-is below the release's level, memory below `ram_mib`, free space below `disk_mib`, or a disk controller or network
-card (PCI class `0x01` or `0x02`) bound to a driver now matches no pattern in the release's table and its driver
-isn't listed as built in: the machine would come up without it. The same device with no driver bound is a note, not
+is below the release's level, memory below `ram_mib` (with 10% slack: `MemTotal` is the RAM less what the kernel keeps), free space below
+`disk_mib`, or a device that holds disks or carries the network (PCI class `0x01` mass storage, `0x0c04` Fibre
+Channel, `0x0e` I2O, `0x02` network, `0x0c06` InfiniBand) bound to a driver now matches no pattern in the release's
+table and its driver isn't listed as built in: the machine would come up without it. `ata_generic`'s,
+`ide_pci_generic`'s and `pata_acpi`'s class-wide IDE patterns count only for a device that module drives now, since their probes decline
+controllers they don't know. Facts read from a file must have every field `wend facts` writes. The same device with no driver bound is a note, not
 a failure. The machine can land on the last release before the first failing hop. The client says which, says how to
 raise a VM's CPU model when the CPU is the problem and CPUID's hypervisor bit is set (most old fleets are VMs now),
 and exits non-zero unless the whole route fits. A client walking a booted machine must run preflight first and stop
