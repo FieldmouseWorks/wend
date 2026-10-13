@@ -1,13 +1,13 @@
 {
  "schema": "wend.run/0",
  "route": "sha256:9ac608fb4ad7b0560e055f4fd87773e73d3c0514e5402a9062d33b25ab01df00",
- "box": "debian/etch-db",
+ "box": "debian/etch-web",
  "from": "etch",
  "to": "trixie",
  "result": "pass",
- "started": "20261012-170230",
- "wall_seconds": 2310,
- "start_fingerprint": "sha256:7c3fad791e637aab2e2644e2dd3f4328d2792686a79ebd086756e31ee959fc51",
+ "started": "20261012-180014",
+ "wall_seconds": 2622,
+ "start_fingerprint": "sha256:6c4a2d2d043c8d03bf4d84e0e3a0c0b9a6526d6507e86dd3e3950a975d1ecd63",
  "runner": {
   "kind": "local",
   "host": "remi",
@@ -19,21 +19,17 @@
    "fired": [],
    "fired_names": [],
    "ok": true,
-   "seconds": 84.6,
+   "seconds": 81.6,
    "sources": {
     "http://archive.debian.org/debian/dists/lenny/Release": "sha256:91c97659233014f2aa1395bee3ec90ef3d8ac63619215c0b8aeb04f7dd128664"
    }
   },
   {
    "to": "squeeze",
-   "fired": [
-    "sha256:720c4c94affe2b027de6a7f268dcf5aae9abd15eefcd992e49a144722bf5bc85"
-   ],
-   "fired_names": [
-    "reinstall-mysql-server-5.1-after-hop"
-   ],
+   "fired": [],
+   "fired_names": [],
    "ok": true,
-   "seconds": 208.5,
+   "seconds": 176.3,
    "sources": {
     "http://archive.debian.org/debian/dists/squeeze/Release": "sha256:728c30b7d49a3c47a6652c7d89db403f47e0a51b5bc0c252ae4010c450431b26"
    }
@@ -43,27 +39,29 @@
    "fired": [
     "sha256:0a151144716a224dbd63d842b6f436a119b07c5436b5712de58d66f66182ead0",
     "sha256:3d60b1a095a879f9e11629209c3163c1ca2003dab6e6bf4e1396b1179854451a",
-    "sha256:c9b66b3801b09b1f4bc784727ce649d583e84bb6322eb7d1b46ecefdecf27d3a",
-    "sha256:35988fca8fe902c95be39365574b25ad3e6a03fdc1116c2056090efe4a7635df"
+    "sha256:c9b66b3801b09b1f4bc784727ce649d583e84bb6322eb7d1b46ecefdecf27d3a"
    ],
    "fired_names": [
     "purge-stale-libdb4",
     "wheezy-purge-dhcp3-transitional",
-    "wheezy-reinstall-module-init-tools",
-    "restore-mysql-server-5.5-after-hop"
+    "wheezy-reinstall-module-init-tools"
    ],
    "ok": true,
-   "seconds": 152.5,
+   "seconds": 146.8,
    "sources": {
     "http://archive.debian.org/debian/dists/wheezy/main/binary-amd64/Packages": "sha256:f3ea9ca44cc48cd4e033e8c62b40b25a200b6b17e0ccb6b9abd0741f0f786608"
    }
   },
   {
    "to": "jessie",
-   "fired": [],
-   "fired_names": [],
+   "fired": [
+    "sha256:1f2441873bf8fcd47e6ab8cd32904ac94ee40ff6c6295c6a0fc148259ea49ca0"
+   ],
+   "fired_names": [
+    "apache24-site-conf"
+   ],
    "ok": true,
-   "seconds": 227.4,
+   "seconds": 183.6,
    "sources": {
     "http://archive.debian.org/debian/dists/jessie/Release": "sha256:f5b6409b287484bb612f6542a1ebd8cf046dcb0fdb4dcd8d677493d9aaf7d348"
    }
@@ -71,13 +69,13 @@
   {
    "to": "stretch",
    "fired": [
-    "sha256:533c751486f6f0daa2d2ab4b0cc69959ce24b0f56bb02e5aa99af823f3fdf2b8"
+    "sha256:ee3e91606f0c6c45cb1c16d496b2a4b27feb70c24ca0b7b9cb5db7a1cbae5f36"
    ],
    "fired_names": [
-    "mysql55-to-mariadb"
+    "php7.0-module"
    ],
    "ok": true,
-   "seconds": 353.7,
+   "seconds": 378.9,
    "sources": {
     "http://archive.debian.org/debian/dists/stretch/Release": "sha256:fe55c42941dd43102b9490af1678e7962ea1e257ccb8f942b43770475c336eb3"
    }
@@ -85,33 +83,43 @@
   {
    "to": "buster",
    "fired": [
-    "sha256:72ec206a8a41f3114108de4378e27e2244890fee22f2963b3fde8f85dd09def6"
+    "sha256:72ec206a8a41f3114108de4378e27e2244890fee22f2963b3fde8f85dd09def6",
+    "sha256:cd17126244470ea1e9c92b9d9e4185fa2512ae910b85cdbadaf3a0a234b5fcb6"
    ],
    "fired_names": [
-    "dpkg-overwrite-sysvinit-clash"
+    "dpkg-overwrite-sysvinit-clash",
+    "php7.3-module"
    ],
    "ok": true,
-   "seconds": 215.9,
+   "seconds": 387.2,
    "sources": {
     "http://archive.debian.org/debian/dists/buster/InRelease": "sha256:d2126c57347cfe5ca81d912ddfecc02e9a741c6e100d8d8295b735f979bc1a9d"
    }
   },
   {
    "to": "bullseye",
-   "fired": [],
-   "fired_names": [],
+   "fired": [
+    "sha256:725d5b841aba6d79821c172e02993e5ddda2147220a191753df36f45665f65ab"
+   ],
+   "fired_names": [
+    "php7.4-module"
+   ],
    "ok": true,
-   "seconds": 214.5,
+   "seconds": 370.8,
    "sources": {
     "http://deb.debian.org/debian/dists/bullseye/InRelease": "sha256:7917d4598768bfc4a25776eb0f6bf2f7d1f13301c2dc1e16467ef170dd752d40"
    }
   },
   {
    "to": "bookworm",
-   "fired": [],
-   "fired_names": [],
+   "fired": [
+    "sha256:522769f3a9fe9fe23a50106a029f8bc40c443d487d0b029ad8849d59a58fa2a5"
+   ],
+   "fired_names": [
+    "php8.2-module"
+   ],
    "ok": true,
-   "seconds": 321.5,
+   "seconds": 345.1,
    "sources": {
     "http://deb.debian.org/debian/dists/bookworm/InRelease": "sha256:77737fa4b34f2693e982cc9ee35736816c35a7778fc2d326cc1bbf5b301fe1aa"
    }
@@ -119,13 +127,15 @@
   {
    "to": "trixie",
    "fired": [
-    "sha256:ab559b09a1ccf147bd8af2ef307886a0a31d8d9233d2bfd6823adc22d11606cb"
+    "sha256:ab559b09a1ccf147bd8af2ef307886a0a31d8d9233d2bfd6823adc22d11606cb",
+    "sha256:38f05c528370778204f60240321c6d33fb79f8e30478cd1476b5184c3ae53ff1"
    ],
    "fired_names": [
-    "drop-sysvinit-for-trixie"
+    "drop-sysvinit-for-trixie",
+    "php8.4-module"
    ],
    "ok": true,
-   "seconds": 368.2,
+   "seconds": 395.1,
    "sources": {
     "http://deb.debian.org/debian/dists/trixie/InRelease": "sha256:0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675"
    }
@@ -133,14 +143,13 @@
  ],
  "start_services": [
   "README",
-  "bind9",
+  "apache2",
   "bootclean",
   "bootlogd",
   "bootmisc.sh",
   "checkfs.sh",
   "checkroot.sh",
   "cron",
-  "exim4",
   "glibc.sh",
   "halt",
   "hostname.sh",
@@ -158,11 +167,10 @@
   "mountnfs-bootclean.sh",
   "mountnfs.sh",
   "mtab.sh",
-  "mysql",
-  "mysql-ndb",
-  "mysql-ndb-mgm",
   "networking",
+  "ntp",
   "openbsd-inetd",
+  "postfix",
   "procps.sh",
   "rc",
   "rc.local",
@@ -188,21 +196,21 @@
   "passed": [
    "cron",
    "current",
-   "db",
    "dhcp",
-   "dns",
    "mail",
+   "php",
    "pkgdb",
    "python",
    "services",
    "ssh",
-   "tools"
+   "tools",
+   "web"
   ],
   "failed": [],
   "failed_logs": {}
  },
- "obsolete_before": 59,
+ "obsolete_before": 58,
  "obsolete_after": 0,
  "model_calls": 0,
- "log_sha256": "sha256:258ffc0041b239cca63093e47551c1d5293154b169a21af79501b891390a4dfa"
+ "log_sha256": "sha256:f9187a47092c4065acaddd59a67fd5d9a842533f1a2bfdab280a73f2d682a907"
 }
