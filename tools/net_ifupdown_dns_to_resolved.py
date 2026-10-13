@@ -13,8 +13,7 @@ live box before the hop's reboot, so `ifquery --state` lists each interface ifup
 `ifquery --no-mappings -- PHYSICAL=LOGICAL` prints that stanza's options as ifupdown parsed them (sourced files,
 comments, continuations, misplaced options, inherits); without --no-mappings ifquery would run the admin's mapping
 scripts again from the logical name and could land on another stanza. A configuration ifupdown can't read fails the
-step. What the state says is what the op carries, in the order ifup started each interface (its state line, written
-before the interface's own `up` commands run): an interface whose ifup failed (even one family
+step. What the state says is what the op carries: an interface whose ifup failed (even one family
 of it), that was never brought up, or that was taken down by hand isn't in it; one brought up by hand is; a box with
 no state (a chroot, or a live box whose /run/network/ifstate is gone) carries nothing, though its configuration is
 still parsed (`ifquery --list --all --exclude='*'`) and a main interfaces file ifupdown can't read fails the step; an
@@ -27,6 +26,8 @@ line without ": " (or with whitespace in its name) continues the value before it
 as a hook's shell splits it (space, tab, newline; nothing else). Each option name is turned into the name ifupdown's
 hooks receive (setlocalenv: up to the first "=", whose rest leads the value; "-" to "_", ASCII upper case, anything
 else dropped), and two spellings of one DNS_* name on an interface fail the step, since a hook sees only the last.
+Only one interface may name resolvers: ifupdown's hook gave each interface its own link in resolved, and one global
+DNS= for two would send every lookup to both, so a second one fails the step.
 DNS_NAMESERVERS and DNS_NAMESERVER (what resolvconf's and ifupdown's hooks read) must be unicast addresses a resolver
 can be at; DNS_SEARCH and DNS_DOMAIN plain domain names; any other DNS_* option fails the step. The result is one
 resolved drop-in, /etc/systemd/resolved.conf.d/50-wend-ifupdown.conf, with DNS= and Domains=, written only when it
@@ -92,13 +93,13 @@ def plan():
     # skips the per-interface check, so an auto name with no stanza (which ifup -a passes over) isn't a failure.
     ifquery("--list", "--all", "--exclude=*")
     names = []
-    for n in reversed(ifquery("--state")):  # ifupdown lists its state last first; this is the order ifup started them
+    for n in ifquery("--state"):
         phys, eq, logical = n.partition("=")
         if not eq or not re.fullmatch(NAME, phys) or not re.fullmatch(NAME, logical):
             fail(f"ifquery's state has {n!r}, which isn't 'interface=stanza'")
         if n not in names:
             names.append(n)
-    dns, search = [], []
+    dns, search, carriers = [], [], []
     for iface in names:
         options, spelled = [], {}
         for line in ifquery("--no-mappings", "--", iface):
@@ -114,6 +115,8 @@ def plan():
             value = rest + eq + value if eq else value  # setlocalenv: the name ends at "=", the rest leads the value
             if not opt.startswith("DNS_"):
                 continue
+            if iface not in carriers:
+                carriers.append(iface)
             if spelled.setdefault(opt, key) != key:
                 fail(f"{iface}: {spelled[opt]} and {key} are both {opt} to ifupdown's hooks, which see only the last")
             if opt in ("DNS_NAMESERVERS", "DNS_NAMESERVER"):
@@ -129,6 +132,8 @@ def plan():
                         search.append(v.rstrip("."))
             else:
                 fail(f"{iface}: {key} isn't carried to resolved")
+    if len(carriers) > 1:  # ifupdown's hook gave each its own link; global DNS= would send every lookup to all of them
+        fail(f"{' and '.join(carriers)} each name resolvers, which resolved would need per link")
     return dns, search
 
 

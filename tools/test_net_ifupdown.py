@@ -119,10 +119,12 @@ case("an interface up from a mapped stanza (auto eth0=work) is read from that st
 msg, out, left, mode = run({"state": ["lo=lo"], "ifaces": {"lo=lo": [], "eth0=eth0": ETH0}})
 case("an interface ifupdown doesn't have up is left out", msg is None and out is None and left == [])
 msg, out, left, mode = run({"state": ["eth1=eth1", "eth0=eth0", "lo=lo"],
-                            "ifaces": {"lo=lo": [], "eth0=eth0": ["dns-nameservers: 10.6.6.6"],
-                                       "eth1=eth1": ["dns-nameservers: 10.6.6.7"]}})
-case("servers in bring-up order (ifupdown lists its state last first)",
-     msg is None and out is not None and "DNS=10.6.6.6 10.6.6.7\n" in out)
+                            "ifaces": {"lo=lo": [], "eth0=eth0": ETH0, "eth1=eth1": ["address: 192.0.2.7"]}})
+case("a second interface without dns options doesn't matter", msg is None and out == WANT)
+msg, out, left, mode = run({"state": ["eth1=eth1", "eth0=eth0", "lo=lo"],
+                            "ifaces": {"lo=lo": [], "eth0=eth0": ETH0, "eth1=eth1": ["dns-search: corp.example"]}})
+case("two interfaces naming resolvers are refused (resolved would need them per link)",
+     refused(msg, "per link") and out is None and left == [])
 msg, out, left, mode = run(with_eth0([x.replace("dns-nameservers", "dns-nameserver") for x in ETH0]))
 case("dns-nameserver (singular), which resolvconf's and ifupdown's hooks read too", msg is None and out == WANT)
 msg, out, left, mode = run(with_eth0([x.replace("dns-nameservers", "d.ns_Nameservers") for x in ETH0]))
