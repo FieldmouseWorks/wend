@@ -1,0 +1,142 @@
+# CI fixture: a CentOS 7 server whose reason to exist is the owner's own Python 2 app, the case SPEC "Runtime
+# preflight" stops at and "Sheltering an app" carries across: a small JSON API (BaseHTTPServer, MySQLdb over MariaDB's
+# socket) run by its own systemd unit and user, plus a nightly cron job. A centos7-lamp sibling without the web stack.
+# EPEL is installed because the stuck EL7 fleet has it (and the centos7 route's transit is the one for EPEL boxes).
+# Box files are trusted test code: humans review them, clients never run them.
+schema = "wend.box/0"
+family = "el"
+release = "centos7"
+arch = "x86_64"
+summary = "CentOS 7.9 with the owner's Python 2.7 app: a BaseHTTPServer JSON API on 127.0.0.1:8080 reading MariaDB 5.5 through MySQLdb over the socket, writing to /var/lib/billing, run by billing.service as user billing, and a nightly cron job; EPEL, NetworkManager with a static ifcfg, sshd on 2222, postfix, cron"
+packages = ["mariadb-server", "mariadb", "openssh-server", "openssh-clients", "postfix", "cronie", "crontabs", "sudo",
+            "perl", "curl", "rsync", "python", "MySQL-python", "which", "NetworkManager", "initscripts", "procps-ng"]
+customize = '''
+set -e
+grep -q localhost /etc/hosts 2>/dev/null || printf '127.0.0.1 localhost localhost.localdomain\n' >> /etc/hosts
+# EPEL the way most boxes got it (yum install epel-release, from CentOS extras); the hops replace every repo file
+cat > /etc/yum.repos.d/box-build.repo <<'EOF'
+[box-extras]
+name=box-extras
+baseurl=http://127.0.0.1:8085/vault.centos.org/7.9.2009/extras/x86_64/
+gpgcheck=0
+EOF
+yum -y --disablerepo=* --enablerepo=centos7-*,box-* install epel-release
+rm -f /etc/yum.repos.d/box-build.repo
+rpm -q epel-release
+/usr/bin/mysql_install_db --user=mysql --force >/dev/null
+(/usr/libexec/mysqld --user=mysql >/tmp/b.log 2>&1 &)
+i=0; while [ $i -lt 60 ] && [ ! -S /var/lib/mysql/mysql.sock ]; do sleep 1; i=$((i+1)); done
+mysql -uroot -e "create database app; create table app.t (msg varchar(64)); insert into app.t values ('row from 2017'); grant select on app.* to 'app'@'localhost' identified by 'apppw'; flush privileges;"
+mysqladmin -uroot shutdown
+sleep 3
+# the owner's app: its own user, code under /opt, data under /var/lib, a unit of its own, a job in its crontab
+useradd -r -d /var/lib/billing -s /sbin/nologin billing
+mkdir -p /opt/billing /var/lib/billing
+cat > /opt/billing/app.py <<'EOF'
+#!/usr/bin/python
+# billing: the JSON API the business runs on. Written for Python 2 in 2015 and never ported.
+import BaseHTTPServer
+import json
+import time
+
+import MySQLdb
+
+LOG = "/var/lib/billing/hits.log"
+
+
+class Handler(BaseHTTPServer.BaseHTTPRequestHandler):
+    def do_GET(self):
+        try:
+            db = MySQLdb.connect(host="localhost", user="app", passwd="apppw", db="app")
+            cur = db.cursor()
+            cur.execute("select msg from t")
+            body, code = json.dumps({"msg": cur.fetchone()[0], "path": self.path}), 200
+            db.close()
+        except Exception, e:
+            body, code = json.dumps({"error": str(e)}), 500
+        log = open(LOG, "a")
+        log.write("%d %s %d\n" % (time.time(), self.path, code))
+        log.close()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body + "\n")
+
+
+if __name__ == "__main__":
+    print "billing listening on 127.0.0.1:8080"
+    BaseHTTPServer.HTTPServer(("127.0.0.1", 8080), Handler).serve_forever()
+EOF
+cat > /opt/billing/nightly.py <<'EOF'
+#!/usr/bin/python
+# billing's nightly report
+import time
+
+import MySQLdb
+
+db = MySQLdb.connect(host="localhost", user="app", passwd="apppw", db="app")
+cur = db.cursor()
+cur.execute("select count(*), max(msg) from t")
+n, last = cur.fetchone()
+out = open("/var/lib/billing/nightly.out", "w")
+print >>out, "nightly %s rows=%d last=%s" % (time.strftime("%Y-%m-%d"), n, last)
+out.close()
+EOF
+chmod 755 /opt/billing/app.py /opt/billing/nightly.py
+chown billing:billing /var/lib/billing
+chmod 750 /var/lib/billing
+cat > /etc/systemd/system/billing.service <<'EOF'
+[Unit]
+Description=billing JSON API
+After=network.target mariadb.service
+
+[Service]
+User=billing
+ExecStart=/usr/bin/python /opt/billing/app.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+echo '30 2 * * * /usr/bin/python /opt/billing/nightly.py' | crontab -u billing -
+for t in rsa ecdsa ed25519; do ssh-keygen -q -t $t -N '' -f /etc/ssh/ssh_host_${t}_key; done
+sed -i 's/^#\?Port 22$/Port 2222/' /etc/ssh/sshd_config
+grep -q '^Port 2222' /etc/ssh/sshd_config
+postconf -e myhostname=oldbox.example.org
+systemctl enable mariadb sshd postfix crond NetworkManager billing
+yum clean all >/dev/null
+# the static address and MAC pin anaconda writes for a static install (QEMU's default MAC)
+mkdir -p /etc/sysconfig/network-scripts
+[ -f /etc/sysconfig/network-scripts/ifcfg-eth0 ] || printf 'TYPE=Ethernet\nDEVICE=eth0\nNAME=eth0\nHWADDR=52:54:00:12:34:56\nBOOTPROTO=none\nIPADDR=10.0.2.20\nPREFIX=24\nGATEWAY=10.0.2.2\nDNS1=10.0.2.3\nONBOOT=yes\n' > /etc/sysconfig/network-scripts/ifcfg-eth0
+'''
+# The services role flags service packages whose family wasn't on the box at the start (see el/centos5-web).
+start_hook = "rpm -qa --qf '%{NAME}\\n' | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 's/^mariadb$/mysql/' -e 's/^cronie$/vixie/' -e 's/^openssh$/openssh/' | sort -u > /var/lib/wend-expected-families"
+isolate = ["db", "app", "cron"]
+
+# The owner's confirmed plan for the app (SPEC "Sheltering an app"): what `wend preflight --shelter` proposes and the
+# owner confirms, given to the walk as box input.
+[shelter.billing]
+code = "/opt/billing"
+data = ["/var/lib/billing"]
+user = "billing"
+unit = "billing.service"
+cron = [{ user = "billing", line = "30 2 * * * /usr/bin/python /opt/billing/nightly.py" }]
+sockets = ["/var/lib/mysql/mysql.sock"]
+ports = ["127.0.0.1:8080"]
+
+[roles]
+boot = "for u in mariadb sshd postfix crond; do [ \"$(systemctl is-enabled $u 2>/dev/null)\" = enabled ] || { echo \"$u does not start at boot\"; exit 1; }; done"
+ssh = "mkdir -p /var/run/sshd /run/sshd; /usr/sbin/sshd -t && grep -q '^Port 2222' /etc/ssh/sshd_config"
+db = "mkdir -p /var/run/mysqld /run/mariadb /var/run/mariadb 2>/dev/null; chown mysql /var/run/mysqld /run/mariadb 2>/dev/null; D=$(ls /usr/libexec/mariadbd /usr/libexec/mysqld /usr/sbin/mariadbd /usr/sbin/mysqld 2>/dev/null | head -n1); rm -f /var/lib/mysql/mysql.sock /var/lib/mysql/*.pid; ($D --user=mysql >/tmp/db.log 2>&1 &); i=0; while [ $i -lt 60 ] && [ ! -S /var/lib/mysql/mysql.sock ]; do sleep 1; i=$((i+1)); done; C=$(command -v mariadb || command -v mysql); i=0; while [ $i -lt 30 ] && ! $C -uapp -papppw -N -e 'select 1' >/dev/null 2>&1; do sleep 1; i=$((i+1)); done; $C -uapp -papppw -N -e 'select msg from app.t' | grep 'row from 2017'; rc=$?; A=$(command -v mariadb-admin || command -v mysqladmin); $A -uroot shutdown >/dev/null 2>&1; i=0; while [ $i -lt 120 ] && pgrep -x 'mariadbd|mysqld' >/dev/null; do sleep 1; i=$((i+1)); done; [ $rc = 0 ] || tail -n 15 /tmp/db.log; exit $rc"
+# The app: whatever the box has enabled for billing (its own unit, or the shelter's), started from the unit's own
+# ExecStart and User= the way systemd would, with the database up; the socket proxies a shelter unit needs are started
+# from their units too (no systemd in a chroot). A chroot has no user namespace either, so the program runs as its own
+# uid, not the mapped one: the proxy's directories belong to that user here, where tmpfiles.d gives them to the mapped
+# uid on a real machine. Then the row over HTTP, and the request in the app's own log.
+app = "mkdir -p /var/run/mysqld /run/mariadb /var/run/mariadb 2>/dev/null; chown mysql /var/run/mysqld /run/mariadb 2>/dev/null; D=$(ls /usr/libexec/mariadbd /usr/libexec/mysqld /usr/sbin/mariadbd /usr/sbin/mysqld 2>/dev/null | head -n1); rm -f /var/lib/mysql/mysql.sock /var/lib/mysql/*.pid; ($D --user=mysql >/tmp/db.log 2>&1 &); i=0; while [ $i -lt 60 ] && [ ! -S /var/lib/mysql/mysql.sock ]; do sleep 1; i=$((i+1)); done; S=; for u in billing wend-shelter-billing; do [ \"$(systemctl is-enabled $u.service 2>/dev/null)\" = enabled ] && S=$u && break; done; [ -n \"$S\" ] || { echo 'no unit for billing is enabled'; exit 1; }; F=/etc/systemd/system/$S.service; X=$(sed -n 's/^ExecStart=//p' $F | head -n1); U=$(sed -n 's/^User=//p' $F | head -n1); rm -f /tmp/app.pid /tmp/proxy.*.pid; n=0; for k in $(ls /etc/systemd/system/$S-*.socket 2>/dev/null); do L=$(sed -n 's/^ListenStream=//p' $k); V=${k%.socket}.service; PU=$(sed -n 's/^User=//p' $V); PX=$(sed -n 's/^ExecStart=//p' $V); PA=$(command -v systemd-socket-activate || echo /usr/lib/systemd/systemd-activate); mkdir -p ${L%/*}; chown $PU ${L%/*} ${L%/*/*}; rm -f $L; n=$((n+1)); (sh -c 'echo $$ > /tmp/proxy.$3.pid; exec setsid runuser -u \"$1\" -- $2' x \"$PU\" \"$PA -l $L $PX\" $n >>/tmp/proxy.log 2>&1 &); done; sleep 1; (sh -c 'echo $$ > /tmp/app.pid; if [ -n \"$1\" ]; then exec setsid runuser -u \"$1\" -- $2; else exec setsid $2; fi' x \"$U\" \"$X\" >/tmp/app.log 2>&1 &); i=0; while [ $i -lt 30 ] && ! curl -s http://127.0.0.1:8080/ >/dev/null; do sleep 1; i=$((i+1)); done; T=probe$$; curl -s \"http://127.0.0.1:8080/row?t=$T\" | tee /tmp/app.out | grep '\"msg\": \"row from 2017\"' && grep -q \"/row?t=$T 200\" /var/lib/billing/hits.log; rc=$?; kill -TERM -- -$(cat /tmp/app.pid) 2>/dev/null; for q in /tmp/proxy.*.pid; do [ -f $q ] && kill -TERM -- -$(cat $q) 2>/dev/null; done; A=$(command -v mariadb-admin || command -v mysqladmin); $A -uroot shutdown >/dev/null 2>&1; i=0; while [ $i -lt 120 ] && pgrep -x 'mariadbd|mysqld' >/dev/null; do sleep 1; i=$((i+1)); done; [ $rc = 0 ] || { echo \"ran $S: $X\"; head -c 400 /tmp/app.out; tail -n 8 /tmp/app.log /tmp/proxy.log 2>/dev/null; }; exit $rc"
+# The nightly job: the line in billing's crontab, or the shelter's timer when that has taken the line over, run once
+# with the database up; then what it wrote.
+cron = "test -x /usr/sbin/crond || { echo 'no crond'; exit 1; }; mkdir -p /var/run/mysqld /run/mariadb /var/run/mariadb 2>/dev/null; chown mysql /var/run/mysqld /run/mariadb 2>/dev/null; D=$(ls /usr/libexec/mariadbd /usr/libexec/mysqld /usr/sbin/mariadbd /usr/sbin/mysqld 2>/dev/null | head -n1); rm -f /var/lib/mysql/mysql.sock /var/lib/mysql/*.pid; ($D --user=mysql >/tmp/db.log 2>&1 &); i=0; while [ $i -lt 60 ] && [ ! -S /var/lib/mysql/mysql.sock ]; do sleep 1; i=$((i+1)); done; U=billing; S=; C=$(crontab -l -u billing 2>/dev/null | grep -v '^[[:space:]]*#' | awk 'NF >= 6 {for (i = 6; i <= NF; i++) printf \"%s%s\", $i, (i < NF ? \" \" : \"\\n\"); exit}'); if [ -z \"$C\" ]; then T=$(ls /etc/systemd/system/timers.target.wants/wend-shelter-billing-*.timer 2>/dev/null | head -n1); if [ -n \"$T\" ]; then V=/etc/systemd/system/$(basename ${T%.timer}).service; C=$(sed -n 's/^ExecStart=//p' $V | head -n1); U=$(sed -n 's/^User=//p' $V | head -n1); S=wend-shelter-billing; fi; fi; [ -n \"$C\" ] || { echo 'nothing runs the nightly job: no crontab line and no timer'; exit 1; }; rm -f /tmp/proxy.*.pid; n=0; for k in $( [ -n \"$S\" ] && ls /etc/systemd/system/$S-*.socket 2>/dev/null); do L=$(sed -n 's/^ListenStream=//p' $k); V=${k%.socket}.service; PU=$(sed -n 's/^User=//p' $V); PX=$(sed -n 's/^ExecStart=//p' $V); PA=$(command -v systemd-socket-activate || echo /usr/lib/systemd/systemd-activate); mkdir -p ${L%/*}; chown $PU ${L%/*} ${L%/*/*}; rm -f $L; n=$((n+1)); (sh -c 'echo $$ > /tmp/proxy.$3.pid; exec setsid runuser -u \"$1\" -- $2' x \"$PU\" \"$PA -l $L $PX\" $n >>/tmp/proxy.log 2>&1 &); done; sleep 1; rm -f /var/lib/billing/nightly.out; if [ -n \"$U\" ]; then runuser -u $U -- sh -c \"$C\"; else sh -c \"$C\"; fi >/tmp/cron.log 2>&1; grep 'rows=1 last=row from 2017' /var/lib/billing/nightly.out; rc=$?; for q in /tmp/proxy.*.pid; do [ -f $q ] && kill -TERM -- -$(cat $q) 2>/dev/null; done; A=$(command -v mariadb-admin || command -v mysqladmin); $A -uroot shutdown >/dev/null 2>&1; i=0; while [ $i -lt 120 ] && pgrep -x 'mariadbd|mysqld' >/dev/null; do sleep 1; i=$((i+1)); done; [ $rc = 0 ] || { echo \"ran: $C\"; tail -n 8 /tmp/cron.log /tmp/proxy.log 2>/dev/null; }; exit $rc"
+current = "M=$(grep -o '[0-9][0-9]*' /etc/redhat-release | head -n1); for f in /usr/sbin/sshd /usr/sbin/crond $(ls /usr/libexec/mariadbd /usr/libexec/mysqld /usr/sbin/mariadbd 2>/dev/null | head -n1); do p=$(rpm -qf --qf '%{NAME}-%{VERSION}-%{RELEASE}' \"$(readlink -f $f)\" 2>/dev/null); echo \"$p\" | grep -qE \"[._]el${M}([._]|$)\" || { echo \"$f comes from '$p', not a release-$M package\"; exit 1; }; done"
+network = "M=$(grep -o '[0-9][0-9]*' /etc/redhat-release | head -n1); if [ $M -ge 10 ]; then K=$(grep -lx 'interface-name=eth0' /etc/NetworkManager/system-connections/*.nmconnection 2>/dev/null | head -n1); [ -n \"$K\" ] && [ \"$(stat -c %a \"$K\")\" = 600 ] && awk '/^\\[/ {s = $0} s == \"[ipv4]\" && $0 == \"method=manual\" {m = 1} END {exit !m}' \"$K\" && grep -iqx 'mac-address=52:54:00:12:34:56' \"$K\" && ! grep -qx 'autoconnect=false' \"$K\" && grep -iqx 'MACAddress=52:54:00:12:34:56' /etc/systemd/network/10-wend-eth0.link && grep -qx 'Name=eth0' /etc/systemd/network/10-wend-eth0.link && grep -Eqx 'address1=10\\.0\\.2\\.20/24(,10\\.0\\.2\\.2)?' \"$K\" && grep -Eqx '(address1=10\\.0\\.2\\.20/24,10\\.0\\.2\\.2|gateway=10\\.0\\.2\\.2)' \"$K\" || { echo 'eth0 has no 0600 autoconnecting keyfile for its MAC with the static 10.0.2.20/24 via 10.0.2.2, or no .link pinning eth0 to that MAC'; exit 1; }; else grep -qx 'IPADDR=10.0.2.20' /etc/sysconfig/network-scripts/ifcfg-eth0 || { echo 'ifcfg-eth0 lost the static 10.0.2.20'; exit 1; }; fi"
+services = "for p in $(ls /etc/rc.d/init.d/* /usr/lib/systemd/system/*.service 2>/dev/null | xargs rpm -qf --qf '%{NAME}\\n' 2>/dev/null | grep -v 'not owned' | sort -u); do case $p in dbus-daemon|dbus-broker|hostname|readonly-root|netconsole-service|systemd|systemd-udev|systemd-container) continue;; esac; f=$(echo $p | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 's/^mariadb$/mysql/' -e 's/^cronie$/vixie/' -e 's/^openssh$/openssh/'); grep -qxs \"$f\" /var/lib/wend-expected-families /var/lib/wend/added-families && continue; for c in $p $(rpm -q --provides $p | awk '{print $1}'); do rpm -q --whatrequires \"$c\" >/dev/null 2>&1 && continue 2; done; echo \"unexpected new service package: $p\"; exit 1; done"

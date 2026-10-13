@@ -13,4 +13,4 @@ op = "service.record"
 name = "el9-record-boot-services"
 author = "claude-code / opus 5.5 (agent, hand-written)"
 note = "A box that started on EL7 has no SysV record. The EL8 pass-through erases module-stream packages (httpd, mariadb) and with them their enablement links, so el9-carry-boot-services finds nothing to follow. This records the enabled units before the transit; on a box upgraded from SysV the earlier record is kept and this changes nothing."
-fires_on = ["el/centos7-lamp"]
+fires_on = ["el/centos7-lamp", "el/centos7-pyapp"]
