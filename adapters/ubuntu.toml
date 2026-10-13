@@ -164,8 +164,8 @@ services = "no explicitly installed, non-required package that ships an init scr
 
 [hardware]
 # SPEC "Hardware preflight": what a machine needs before a route boots it into each release, checked before the first
-# hop touches anything. `boot` is the firmware wend's kernel steps are proven to carry a real machine through (the VM
-# tier boots its guests by BIOS); a UEFI machine is refused until a UEFI replay proves it. Per release: `cpu`, the
+# hop touches anything. `boot` is the firmware wend's kernel steps are proven to carry a real machine through (a VM
+# replay of every box on the routes, by BIOS or with tools/vm.py --uefi); any other mode is refused. Per release: `cpu`, the
 # release's x86-64 level (its glibc refuses anything lower: "Fatal glibc error: CPU does not support x86-64-v2");
 # `ram_mib`, Ubuntu Server's documented minimum for a cloud image (24.04's figure, which 26.04's docs still give;
 # 16.04 to 22.04 publish none we could find, so those releases have no ram_mib); `disk_mib`, an estimate of the free
@@ -182,8 +182,9 @@ services = "no explicitly installed, non-required package that ships an init scr
 # host-only and far smaller), its 28.6 MiB of package files, the 5 MiB, and a little.
 # `old_kernels = "running"`: hop.kernel_before purges every kernel older than the running one before the
 # transaction, so the new kernel only ever sits beside the running one (apt's autoremove would keep two, and trusty's
-# guided-LVM /boot of 243 MB stops at focal).
-boot = ["bios"]
+# guided-LVM /boot of 243 MB stops at focal). `boot`: trusty-web and trusty-db passed trusty -> resolute on UEFI
+# (tools/vm.py --uefi, OVMF without Secure Boot) as on BIOS, rebooting onto UEFI at every hop (wend#13).
+boot = ["bios", "uefi"]
 old_kernels = "running"
 
 [hardware.xenial]

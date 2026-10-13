@@ -415,13 +415,14 @@ fn check_hardware(a: &Doc, wh: &str) -> Vec<String> {
         return vec![format!("{wh}: missing the hardware table")];
     };
     let mut errs = vec![];
-    let boot_ok = h
-        .get("boot")
-        .and_then(Value::as_array)
-        .is_some_and(|b| !b.is_empty() && b.iter().all(|x| matches!(x.as_str(), Some("bios" | "uefi"))));
+    let boot_ok = h.get("boot").and_then(Value::as_array).is_some_and(|b| {
+        !b.is_empty()
+            && b.iter()
+                .all(|x| matches!(x.as_str(), Some("bios" | "uefi" | "uefi-secureboot")))
+    });
     if !boot_ok {
         errs.push(format!(
-            "{wh}: hardware.boot must list the firmware modes proven, from bios and uefi"
+            "{wh}: hardware.boot must list the firmware modes proven, from bios, uefi and uefi-secureboot"
         ));
     }
     if !h

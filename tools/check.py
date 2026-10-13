@@ -166,8 +166,8 @@ def check_hardware(a, where):
         return [f"{where}: missing the hardware table"]
     errs = []
     boot = h.get("boot")
-    if not (isinstance(boot, list) and boot and all(b in ("bios", "uefi") for b in boot)):
-        errs.append(f"{where}: hardware.boot must list the firmware modes proven, from bios and uefi")
+    if not (isinstance(boot, list) and boot and all(b in ("bios", "uefi", "uefi-secureboot") for b in boot)):
+        errs.append(f"{where}: hardware.boot must list the firmware modes proven, from bios, uefi and uefi-secureboot")
     if h.get("old_kernels") not in OLD_KERNELS:
         errs.append(f"{where}: hardware.old_kernels must be one of {list(OLD_KERNELS)}")
     if "autoremove_from" in h and not (h.get("old_kernels") == "autoremove" and isinstance(a.get("ladder"), list)

@@ -929,11 +929,12 @@ refuses the CPU, or its kernel no longer drives the disk controller the root is 
 anything, a client walking a real machine checks that the machine can land on every release the route boots it into,
 and refuses, or names the furthest release it can land on, when it can't. `wend preflight ROUTE` does this.
 
-**Facts.** `wend facts` reads the machine (schema `wend.hardware/2`; its `runtimes` are SPEC "Runtime preflight"): the kernel's architecture (`uname -m`) and
+**Facts.** `wend facts` reads the machine (schema `wend.hardware/3`; its `runtimes` are SPEC "Runtime preflight"): the kernel's architecture (`uname -m`) and
 the userland's word size (the ELF class of `/bin/sh`); the CPU's x86-64 level features from CPUID itself, never
 `/proc/cpuinfo`, since an old kernel doesn't name features newer than itself (2.6.18 has no `avx2`), and the XSAVE
 bit, not OSXSAVE, since the old kernel may not have turned it on and the new one will; CPUID's hypervisor bit;
-firmware (`/sys/firmware/efi` means UEFI); `MemTotal`; free space on `/`; `/boot`: whether it is a filesystem of its
+firmware (`/sys/firmware/efi` means UEFI; `uefi-secureboot` when the firmware's `SecureBoot` variable says on, or
+can't be read: a Secure Boot chain is its own claim, so an unknown state fails closed); `MemTotal`; free space on `/`; `/boot`: whether it is a filesystem of its
 own, its size and free space as a package install sees them (root's reserved blocks left out of both), and each
 kernel in it (one per `vmlinuz-<version>`, rescue images aside) with the MiB its files take (`vmlinuz`, initramfs,
 `System.map`, `config` and the rest named for that version; kdump images count as other files, since EL's
@@ -953,8 +954,11 @@ kernel marks one built out of tree (taint `O`, from Linux 3.2), and kmod package
 taint flag, shows one. Facts can be gathered on the machine and judged anywhere (`--facts FILE`).
 
 **Requirements.** The adapter's `[hardware]` table holds them. `boot` lists the firmware modes wend's kernel steps
-are proven to carry a machine through; the VM tier boots its guests by BIOS, so every adapter says `["bios"]` until a
-UEFI replay proves more. `old_kernels` says which kernels sit in `/boot` beside the one a hop installs: `"running"`
+are proven to carry a machine through (`bios`, `uefi`, `uefi-secureboot`): the VM tier boots its guests by BIOS, and
+with `--uefi` by UEFI without Secure Boot, and an adapter names a mode only when a replay of every box on its routes
+passed in it. Ubuntu says `["bios", "uefi"]` (trusty -> resolute on OVMF, wend#13); Debian and EL say `["bios"]`
+(etch and CentOS 5 have no way to install or boot on x86-64 UEFI, and the CentOS 7 route waits on wend#75). No
+adapter says `uefi-secureboot` yet: no replay has walked shim, signed GRUB and signed kernels under enrolled keys. `old_kernels` says which kernels sit in `/boot` beside the one a hop installs: `"running"`
 (EL: `hop.kernel_before` removes every kernel but the running one first, and only those of `kernel`,
 `kernel-core` and `kernel-modules*`: a kernel another package owns, such as EL5's `kernel-xen`, `kernel-PAE` and
 `kernel-debug`, ELRepo's `kernel-lt` and `kernel-ml`, or Oracle's UEK, which preflight knows by its version's
@@ -1045,7 +1049,7 @@ the owner picks: **stop** there, or **shelter** those programs and go all the wa
 Porting them to Python 3 is the third way, and it's the owner's (or their agent's) to do. `wend preflight` does this
 as part of the same verdict.
 
-**Facts.** `wend facts` (schema `wend.hardware/2`) lists every Python 2 user under `runtimes`, each with the
+**Facts.** `wend facts` (schema `wend.hardware/3`) lists every Python 2 user under `runtimes`, each with the
 interpreter's `version` (`2.7`), `via`, `program`, `interpreter`, `where` and `owner`:
 
 | `via` | found by | `program` |
@@ -1438,7 +1442,8 @@ The rules:
   kernel as an EFI stub), the installer makes an EFI system partition (kickstart `part /boot/efi`; debian-installer's
   atomic recipe makes one itself), and each disk carries its own copy of the NVRAM, made from the one before it, so a
   hop boots from the boot entries the last one left. After the install and after every reboot the guest has to still
-  run on UEFI (`/sys/firmware/efi`). A start release whose installer can't install on UEFI isn't built:
+  run on UEFI (`/sys/firmware/efi`), and each hop records the boot chain it left (`efibootmgr -v` and the hash of
+  every `.efi` on the system partition). A start release whose installer can't install on UEFI isn't built:
   `releases.<id>.install.uefi` says it can (trusty, CentOS 7; not etch or CentOS 5, whose installers predate UEFI on
   x86-64, so no machine running them boots that way). A run records its `firmware`, and resumes only a run on the same.
 - Disk layout: by default anaconda makes `/boot` (the release's default size), swap and `/` as plain partitions on one
