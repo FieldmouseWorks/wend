@@ -1,0 +1,20 @@
+# Discovered by agent (claude-code / opus 5.5) on el/centos7-lamp.
+schema = "wend.fix/0"
+family = "el"
+hop = "alma10"
+when = { installed = "iptables-ebtables" }
+restores = ["pkgdb", "box:firewall"]
+adds = []
+
+[[pre]]
+op = "force-remove"
+packages = ["iptables-ebtables"]
+purge = true
+force = ["depends"]
+
+[meta]
+name = "el10-drop-el8-iptables-ebtables"
+author = "agent (claude-code / opus 5.5)"
+found_on = "el/centos7-lamp"
+fires_on = ["el/centos7-lamp"]
+reason = "EL7's ebtables (firewalld needs it) became EL8's iptables-ebtables in the EL8 pass-through; EL9 ships no package of that name, so the EL8 one stays through EL9, and EL10's iptables-nft now ships the ebtables-nft files it holds. Removing it before the EL10 transaction lets iptables-nft (which provides ebtables on EL9+) take over."

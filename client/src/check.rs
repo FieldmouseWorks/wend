@@ -7,7 +7,7 @@
 
 use crate::atlas::{get, strings, Atlas, Doc};
 use crate::backend::caps;
-use crate::canon::content_id;
+use crate::canon::{content_id, sha256_hex};
 use regex::Regex;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -53,6 +53,7 @@ const UNSAFE: &[&str] = &[
 /// Whatever an adapter's patterns say, a value a fix passes to an adapter op is held to this too: no shell
 /// metacharacters, no printf %, and no leading - (it would read as an option).
 const SAFE_VALUE: &str = r"[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*";
+const REPO_URL: &str = r"[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)+";
 const ADAPTER_KEYS: &[&str] = &[
     "schema",
     "family",
@@ -73,7 +74,13 @@ const ADAPTER_KEYS: &[&str] = &[
     "ops",
     "checks",
     "kv",
+    "hardware",
+    "addons",
 ];
+/// SPEC "Hardware preflight"
+pub const CPU_LEVELS: &[&str] = &["x86-64", "x86-64-v2", "x86-64-v3"];
+const HARDWARE_KEYS: &[&str] = &["cpu", "ram_mib", "disk_mib", "boot_mib", "drivers", "note"];
+const OLD_KERNELS: &[&str] = &["running", "autoremove"];
 
 /// Python's re.fullmatch. A pattern Rust's regex can't compile matches nothing (and an adapter carrying one is
 /// reported by check_adapter).
@@ -205,6 +212,7 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
         "ops",
         "checks",
         "kv",
+        "addons",
     ] {
         want_shape(a, k, "table", wh, &mut errs);
     }
@@ -294,6 +302,48 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
             }
         }
     }
+    // SPEC "Add-on repositories": their values land in root shell commands
+    if get(a, "addons")
+        .and_then(Value::as_object)
+        .is_some_and(|x| !x.is_empty())
+        && !get(a, "hop")
+            .and_then(|h| get(h, "set_release"))
+            .and_then(Value::as_str)
+            .is_some_and(|s| s.contains("{addons}"))
+    {
+        errs.push(format!(
+            "{wh}: an adapter with addons must put {{addons}} in hop.set_release"
+        ));
+    }
+    if let Some(Value::Object(addons)) = get(a, "addons") {
+        let rels = get(a, "releases");
+        for (n, ad) in addons {
+            let fields = ad
+                .as_object()
+                .map(|o| o.keys().map(String::as_str).collect::<BTreeSet<_>>());
+            let repos_ok = get(ad, "repos").and_then(Value::as_object).is_some_and(|rs| {
+                !rs.is_empty()
+                    && rs.iter().all(|(r, u)| {
+                        let rel = rels.and_then(|x| get(x, r));
+                        rel.is_some()
+                            && full_v(REPO_URL, u)
+                            && !rel.and_then(|x| get(x, "repos")).is_some_and(|x| get(x, n).is_some())
+                    })
+            });
+            let ok = b.name == "rpm"
+                && full("[a-z0-9]+", n)
+                && fields == Some(BTreeSet::from(["marker", "repos", "vendor"]))
+                && get(ad, "marker").is_some_and(|m| full_v(PKG, m))
+                && get(ad, "vendor").is_some_and(|v| full_v("[A-Za-z0-9][A-Za-z0-9 .,-]*", v))
+                && repos_ok;
+            if !ok {
+                errs.push(format!(
+                    "{wh}: addons.{n} needs a plain name, a marker package, a plain vendor, and repos (host/path) \
+                     for releases the adapter has, on the rpm backend"
+                ));
+            }
+        }
+    }
     if let Some(Value::Object(kv)) = get(a, "kv") {
         for (p, d) in kv {
             if get(d, "set").is_some_and(|s| !s.is_boolean()) {
@@ -305,6 +355,125 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
             if !ok {
                 errs.push(format!("{wh}: kv.{p:?} needs a path under /etc and plain keys"));
             }
+        }
+    }
+    errs.extend(check_hardware(a, wh));
+    errs
+}
+
+/// Every release a route can boot a machine into: the ladder after its first release, less may_skip.
+pub fn booted_releases(a: &Doc) -> Vec<String> {
+    let skip = str_list(get(a, "may_skip"));
+    str_list(get(a, "ladder"))
+        .into_iter()
+        .skip(1)
+        .filter(|r| !skip.contains(r))
+        .collect()
+}
+
+/// SPEC "Hardware preflight": what a machine needs before a route boots it into each release.
+fn check_hardware(a: &Doc, wh: &str) -> Vec<String> {
+    let Some(Value::Object(h)) = get(a, "hardware") else {
+        return vec![format!("{wh}: missing the hardware table")];
+    };
+    let mut errs = vec![];
+    let boot_ok = h
+        .get("boot")
+        .and_then(Value::as_array)
+        .is_some_and(|b| !b.is_empty() && b.iter().all(|x| matches!(x.as_str(), Some("bios" | "uefi"))));
+    if !boot_ok {
+        errs.push(format!(
+            "{wh}: hardware.boot must list the firmware modes proven, from bios and uefi"
+        ));
+    }
+    if !h
+        .get("old_kernels")
+        .and_then(Value::as_str)
+        .is_some_and(|k| OLD_KERNELS.contains(&k))
+    {
+        errs.push(format!("{wh}: hardware.old_kernels must be one of {OLD_KERNELS:?}"));
+    }
+    let ladder = str_list(get(a, "ladder"));
+    if let Some(f) = h.get("autoremove_from") {
+        let ok = h.get("old_kernels").and_then(Value::as_str) == Some("autoremove")
+            && f.as_str().is_some_and(|f| ladder.iter().any(|r| r == f));
+        if !ok {
+            errs.push(format!(
+                "{wh}: hardware.autoremove_from must name a release on the ladder, with old_kernels = \"autoremove\""
+            ));
+        }
+    }
+    for (r, t) in h {
+        if r == "boot" || r == "old_kernels" || r == "autoremove_from" {
+            continue;
+        }
+        let Some(tm) = t.as_object().filter(|_| ladder.contains(r)) else {
+            errs.push(format!(
+                "{wh}: hardware.{r} must be a table named for a release on the ladder"
+            ));
+            continue;
+        };
+        let extra: BTreeSet<String> = tm
+            .keys()
+            .filter(|k| !HARDWARE_KEYS.contains(&k.as_str()))
+            .cloned()
+            .collect();
+        if !extra.is_empty() {
+            errs.push(format!("{wh}: hardware.{r} has unknown keys {}", sorted(&extra)));
+        }
+        if !tm
+            .get("cpu")
+            .and_then(Value::as_str)
+            .is_some_and(|c| CPU_LEVELS.contains(&c))
+        {
+            errs.push(format!("{wh}: hardware.{r}.cpu must be one of {CPU_LEVELS:?}"));
+        }
+        for k in ["ram_mib", "disk_mib", "boot_mib"] {
+            // ram_mib is optional: some releases publish no minimum
+            if (k != "ram_mib" || tm.contains_key(k)) && !tm.get(k).and_then(Value::as_i64).is_some_and(|n| n >= 1) {
+                errs.push(format!("{wh}: hardware.{r}.{k} must be a whole number of MiB"));
+            }
+        }
+        if !tm.get("drivers").is_some_and(|d| full_v("sha256:[0-9a-f]{64}", d)) {
+            errs.push(format!(
+                "{wh}: hardware.{r}.drivers must be the sha256 of its driver table"
+            ));
+        }
+        if tm.get("note").is_some_and(|n| !n.is_string()) {
+            errs.push(format!("{wh}: hardware.{r}.note must be a string"));
+        }
+    }
+    let missing: Vec<String> = booted_releases(a).into_iter().filter(|r| !h.contains_key(r)).collect();
+    if !missing.is_empty() {
+        errs.push(format!(
+            "{wh}: hardware has no table for {missing:?}, which a route can boot into"
+        ));
+    }
+    errs
+}
+
+/// Each release's driver table is in the atlas (adapters/drivers/<family>/<release>.txt) at the pinned hash.
+pub fn driver_table_errors(atlas: &Atlas, fam: &str, a: &Doc, wh: &str) -> Vec<String> {
+    let mut errs = vec![];
+    let Some(Value::Object(h)) = get(a, "hardware") else {
+        return errs;
+    };
+    for (r, t) in h {
+        let Some(want) = get(t, "drivers").and_then(Value::as_str) else {
+            continue;
+        };
+        if r == "boot" || r == "old_kernels" || r == "autoremove_from" {
+            continue;
+        }
+        let got = atlas.drivers.get(&format!("{fam}/{r}")).map(|b| sha256_hex(b));
+        if got.as_deref().map(|g| format!("sha256:{g}")).as_deref() != Some(want) {
+            errs.push(format!(
+                "{wh}: hardware.{r}.drivers: adapters/drivers/{fam}/{r}.txt {}, not the pinned one",
+                match got {
+                    None => "is missing".to_string(),
+                    Some(g) => format!("has sha256 {}...", &g[..12]),
+                }
+            ));
         }
     }
     errs
@@ -886,6 +1055,7 @@ pub fn check_atlas(atlas: &Atlas) -> Vec<String> {
     let mut errs = vec![];
     for (fam, a) in &atlas.adapters {
         errs.extend(check_adapter(a, &format!("adapters/{fam}.toml")));
+        errs.extend(driver_table_errors(atlas, fam, a, &format!("adapters/{fam}.toml")));
     }
     let mut seen: BTreeMap<String, &String> = BTreeMap::new();
     for (p, d) in &atlas.fixes {

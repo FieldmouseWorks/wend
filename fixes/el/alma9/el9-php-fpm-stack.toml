@@ -16,4 +16,4 @@ author = "claude-opus-5-5 medium (dep-lab guided run A)"
 curated_by = "claude (wend port to typed ops)"
 source = "dep-lab centos/fixes-v3.json: a9-install-web-php"
 note = "EL9 has no mod_php: PHP runs as php-fpm behind httpd. el9-enable-php-fpm enables php-fpm at boot wherever httpd starts."
-fires_on = ["el/centos5-web"]
+fires_on = ["el/centos5-web", "el/centos7-lamp"]

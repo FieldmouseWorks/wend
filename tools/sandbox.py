@@ -202,7 +202,8 @@ def resolve(base_url, seeds):
                  "req": [e.get("name") for e in f.findall("r:requires/r:entry", ns) if not e.get("name").startswith("rpmlib(")]}
         for name in [n] + [e.get("name") for e in f.findall("r:provides/r:entry", ns)] + [e.text for e in f.findall("c:file", ns)]:
             prov.setdefault(name, []).append(n)
-    want, todo = set(), list(seeds)
+    # a seed may be a name another package provides (centos-release is centos-linux-release on CentOS 8)
+    want, todo = set(), [n if n in pk else sorted(prov.get(n, [n]), key=lambda x: (len(x), x))[0] for n in seeds]
     while todo:
         n = todo.pop()
         if n in want:
@@ -226,7 +227,9 @@ def build_el(root, box_doc, adapter):
     rc, log = host(f"cd {root}/tmp/boot && printf '%s\\n' {' '.join(urls)} | xargs -P8 -n1 curl -sfO")
     if rc:
         raise RuntimeError("downloading the seed packages failed:\n" + tail(log, 2000))
-    rc, log = host(f"cd {root} && for f in tmp/boot/*.rpm; do rpm2cpio $f | cpio -idm --quiet 2>/dev/null; done; "
+    # filesystem first: from EL7 on it makes /lib64, /bin, ... symlinks into /usr, which the other packages unpack through
+    rc, log = host(f"cd {root} && for f in tmp/boot/filesystem-*.rpm tmp/boot/*.rpm; do rpm2cpio $f | cpio -idm --quiet "
+                   "2>/dev/null; done; "
                    f"ln -sf /proc/mounts {root}/etc/mtab")
     if rc:
         raise RuntimeError("unpacking the seed packages failed:\n" + tail(log, 2000))

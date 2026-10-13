@@ -15,4 +15,4 @@ author = "claude-opus-5-5 medium (dep-lab guided run A)"
 curated_by = "claude (wend port to typed ops)"
 source = "dep-lab centos/fixes-v3.json: a10-mariadb-clean-stop"
 note = "Stops MariaDB 10.5 with innodb_fast_shutdown=0 before the hop: MariaDB 10.11 refuses 10.5's redo log after an unclean stop."
-fires_on = ["el/centos5-web"]
+fires_on = ["el/centos5-web", "el/centos7-lamp"]

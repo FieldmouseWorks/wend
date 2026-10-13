@@ -34,9 +34,13 @@ UNSAFE = ["%", "'", '"', " ", "\t", "\n", "$", "`", ";", "&", "|", "<", ">", "("
 # Whatever an adapter's patterns say, a value a fix passes to an adapter op is held to this too: no shell
 # metacharacters, no printf %, and no leading - (it would read as an option).
 SAFE_VALUE = r"[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*"
+REPO_URL = r"[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)+"
 ADAPTER_KEYS = {"schema", "family", "backend", "release_file", "ladder", "may_skip", "harness_owned", "writable",
                 "managed", "force", "releases", "mirror", "hop", "predicates", "pm_options", "box", "ops", "checks",
-                "kv"}
+                "kv", "hardware", "addons"}
+CPU_LEVELS = ("x86-64", "x86-64-v2", "x86-64-v3")  # SPEC "Hardware preflight"
+HARDWARE_KEYS = {"cpu", "ram_mib", "disk_mib", "boot_mib", "drivers", "note"}
+OLD_KERNELS = ("running", "autoremove")
 
 
 def family(pkg):
@@ -108,9 +112,85 @@ def check_adapter(a, where):
     for r, rel in a.get("releases", {}).items():  # SPEC "Kernels and the bootloader"
         if isinstance(rel, dict) and rel.get("reboot", "before-post") != "before-post":
             errs.append(f"{where}: releases.{r}.reboot can only be \"before-post\"")
+    errs += check_hardware(a, where)
+    if not isinstance(a.get("addons", {}), dict):
+        return errs + [f"{where}: addons must be a table"]
+    for n, ad in a.get("addons", {}).items():  # SPEC "Add-on repositories": their values land in root shell commands
+        rels = a.get("releases", {})
+        if a.get("backend") != "rpm" or not re.fullmatch(r"[a-z0-9]+", n) or not isinstance(ad, dict) or \
+                set(ad) != {"marker", "vendor", "repos"} or not isinstance(ad["marker"], str) or \
+                not re.fullmatch(PKG, ad["marker"]) or not isinstance(ad["vendor"], str) or \
+                not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 .,-]*", ad["vendor"]) or not isinstance(ad["repos"], dict) or \
+                not ad["repos"] or not all(r in rels and isinstance(u, str) and re.fullmatch(REPO_URL, u) and
+                                           n not in rels[r].get("repos", {}) for r, u in ad["repos"].items()):
+            errs.append(f"{where}: addons.{n} needs a plain name, a marker package, a plain vendor, and repos "
+                        "(host/path) for releases the adapter has, on the rpm backend")
+    if a.get("addons") and "{addons}" not in str(a.get("hop", {}).get("set_release", "")):
+        errs.append(f"{where}: an adapter with addons must put {{addons}} in hop.set_release")
     for k in ("kernel_before", "kernel_after"):
         if k in a.get("hop", {}) and not (isinstance(a["hop"][k], list) and all(isinstance(c, str) for c in a["hop"][k])):
             errs.append(f"{where}: hop.{k} must be a list of commands")
+    return errs
+
+
+def booted_releases(a):
+    """Every release a route can boot a machine into: the ladder after its first release, less may_skip."""
+    ladder = a.get("ladder") if isinstance(a.get("ladder"), list) else []
+    skip = a.get("may_skip") if isinstance(a.get("may_skip"), list) else []
+    return [r for r in ladder[1:] if r not in skip]
+
+
+def check_hardware(a, where):
+    """SPEC "Hardware preflight": what a machine needs before a route boots it into each release."""
+    h = a.get("hardware")
+    if not isinstance(h, dict):
+        return [f"{where}: missing the hardware table"]
+    errs = []
+    boot = h.get("boot")
+    if not (isinstance(boot, list) and boot and all(b in ("bios", "uefi") for b in boot)):
+        errs.append(f"{where}: hardware.boot must list the firmware modes proven, from bios and uefi")
+    if h.get("old_kernels") not in OLD_KERNELS:
+        errs.append(f"{where}: hardware.old_kernels must be one of {list(OLD_KERNELS)}")
+    if "autoremove_from" in h and not (h.get("old_kernels") == "autoremove" and isinstance(a.get("ladder"), list)
+                                       and h["autoremove_from"] in a["ladder"]
+                                       and isinstance(h["autoremove_from"], str)):
+        errs.append(f"{where}: hardware.autoremove_from must name a release on the ladder, with old_kernels = "
+                    f"\"autoremove\"")
+    for r, t in h.items():
+        if r in ("boot", "old_kernels", "autoremove_from"):
+            continue
+        if not isinstance(a.get("ladder"), list) or r not in a["ladder"] or not isinstance(t, dict):
+            errs.append(f"{where}: hardware.{r} must be a table named for a release on the ladder")
+            continue
+        if set(t) - HARDWARE_KEYS:
+            errs.append(f"{where}: hardware.{r} has unknown keys {sorted(set(t) - HARDWARE_KEYS)}")
+        if t.get("cpu") not in CPU_LEVELS:
+            errs.append(f"{where}: hardware.{r}.cpu must be one of {list(CPU_LEVELS)}")
+        for k in ("ram_mib", "disk_mib", "boot_mib"):  # ram_mib is optional: some releases publish no minimum
+            if (k != "ram_mib" or k in t) and (type(t.get(k)) is not int or t[k] < 1):
+                errs.append(f"{where}: hardware.{r}.{k} must be a whole number of MiB")
+        if not isinstance(t.get("drivers"), str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", t["drivers"]):
+            errs.append(f"{where}: hardware.{r}.drivers must be the sha256 of its driver table")
+        if "note" in t and not isinstance(t["note"], str):
+            errs.append(f"{where}: hardware.{r}.note must be a string")
+    missing = [r for r in booted_releases(a) if r not in h]
+    if missing:
+        errs.append(f"{where}: hardware has no table for {missing}, which a route can boot into")
+    return errs
+
+
+def driver_table_errors(fam, a, where):
+    """Each release's driver table is in the atlas (adapters/drivers/<family>/<release>.txt) at the pinned hash."""
+    errs = []
+    h = a.get("hardware")
+    for r, t in (h if isinstance(h, dict) else {}).items():
+        if r in ("boot", "old_kernels", "autoremove_from") or not isinstance(t, dict) or not isinstance(t.get("drivers"), str):
+            continue
+        p = f"{ROOT}/adapters/drivers/{fam}/{r}.txt"
+        got = "sha256:" + hashlib.sha256(open(p, "rb").read()).hexdigest() if os.path.isfile(p) else None
+        if got != t["drivers"]:
+            errs.append(f"{where}: hardware.{r}.drivers: adapters/drivers/{fam}/{r}.txt "
+                        f"{'is missing' if got is None else 'has sha256 ' + got[7:19] + '...'}, not the pinned one")
     return errs
 
 
@@ -377,6 +457,34 @@ def decoy_errors(runs, routes_by_id, fixes_by_id):
     return errs
 
 
+def starts(box, route):
+    """A route is replayed on the boxes of its family that start at its `from` (tools/affected.py, CONTRIBUTING.md).
+    A box that starts elsewhere can't walk it: a centos7 box can't take a centos5 route's hop to centos6."""
+    return box.get("family") == route.get("family") and box.get("release") == route.get("from")
+
+
+def pairing_errors(routes, boxes, fixes):
+    """CI replays a route only where it starts, so a route with no box at its `from` would be replayed nowhere, and a
+    fix claiming a box that no route pinning it is replayed on would have that claim never checked."""
+    errs = []
+    pinned_by = {}
+    for p, r in routes.items():
+        if not any(starts(b, r) for b in boxes.values()):
+            errs.append(f"{os.path.relpath(p, ROOT)}: no {r.get('family')} box starts at {r.get('from')}, so CI would "
+                        "replay this route nowhere; add the box first (AGENTS.md step 2)")
+        for ref in r.get("fixes", []):
+            pinned_by.setdefault(ref.get("id"), []).append(r)
+    for p, f in fixes.items():
+        rs = pinned_by.get(content_id(f), [])
+        for b in f.get("meta", {}).get("fires_on", []):
+            if b not in boxes:
+                errs.append(f"{os.path.relpath(p, ROOT)}: fires_on names {b}, which is not a box")
+            elif rs and not any(starts(boxes[b], r) for r in rs):
+                errs.append(f"{os.path.relpath(p, ROOT)}: fires_on names {b}, which starts where no route pinning "
+                            "this fix starts, so CI never replays it there")
+    return errs
+
+
 # ---------- compiling: the backends in backends.py; the lab's ol.py/co.py are the references ----------
 
 def compile_when(w, family="debian"):
@@ -441,6 +549,7 @@ def main(argv):
     errs = []
     for fam, a in adapters.items():
         errs += check_adapter(a, f"adapters/{fam}.toml")
+        errs += driver_table_errors(fam, a, f"adapters/{fam}.toml")
     by_id = {}
     for p, d in fixes.items():
         rel = os.path.relpath(p, ROOT)
@@ -460,6 +569,7 @@ def main(argv):
     for p, d in runs.items():
         errs += check_run(d, routes_by_id, boxes, os.path.relpath(p, ROOT))
     errs += decoy_errors(runs, routes_by_id, fixes_by_id)
+    errs += pairing_errors(routes, boxes, fixes)
     if "--ids" in argv:
         for i, (rel, _) in by_id.items():
             print(i[:19], rel)

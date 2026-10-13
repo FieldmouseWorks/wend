@@ -14,4 +14,4 @@ name = "el10-network-keyfiles"
 author = "claude (wend#13, hand-written from the VM replay)"
 source = "wend#13"
 note = "EL10's NetworkManager has no ifcfg-rh plugin, so the static ifcfg-eth0 that EL9's NetworkManager still read (el9-networkmanager) is ignored after the reboot: the box comes up on DHCP as ens3 (10.0.2.15 instead of 10.0.2.20 in the VM) and nothing reaches it. net.ifcfg-to-keyfile turns each profile into a keyfile and pins the name to its MAC before the transaction. The precondition is NetworkManager itself: the op converts nothing on a box with no ifcfg profiles and refuses, changing nothing, any it can't carry. The network role checks the keyfile in a chroot; the VM replay proves the box answers on its address after the reboot."
-fires_on = ["el/centos5-dns", "el/centos5-web"]
+fires_on = ["el/centos5-dns", "el/centos5-web", "el/centos7-lamp"]

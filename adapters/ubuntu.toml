@@ -81,6 +81,19 @@ set_release = "printf 'deb {mirror} {release} main restricted universe multivers
 refresh = "apt-get update"
 upgrade = ["apt-get dist-upgrade", "apt-get autoremove --purge"]
 verify = "grep -qx 'DISTRIB_CODENAME={release}' /etc/lsb-release"
+# SPEC "Kernels and the bootloader": a trusty install with guided LVM puts /boot on 243 MB, and apt's autoremove
+# keeps two old kernels beside the new one, so past focal the next kernel and its initramfs don't fit and the hop dies half done.
+# Before each hop's transaction, on a machine booted from this root, the harness purges every kernel older than the
+# running one with all its packages (image, extra modules, headers), so /boot holds the running kernel and the one the
+# hop brings. A kernel newer than the running one (installed, not booted yet) stays. So does an old kernel that
+# something still depends on (a metapackage pinned to it, say, while the machine runs an -updates or HWE kernel) or
+# that is on hold: each old kernel is tried with dpkg --no-act first and kept and named if dpkg would refuse. Preflight
+# counts neither those nor a newer kernel waiting for a reboot, so after the purge the hop goes on only if /boot has
+# the room the release's kernel needs (hardware.<release>.boot_mib), and otherwise stops here, before its transaction. A machine running a kernel that
+# isn't Ubuntu's (a provider's) keeps all of them. dpkg, not apt: it never takes anything else with it.
+kernel_before = [
+  "[ / -ef /proc/1/root ] || { echo \"not booted from this root: kernels left as they are\"; exit 0; }; case $(uname -r) in [0-9]*.[0-9]*.[0-9]*-[0-9]*-*) ;; *) echo \"the running kernel $(uname -r) is not an Ubuntu one: kernels left as they are\"; exit 0;; esac; O=$(dpkg-query -W -f '${Status} ${Package}\\n' 2>/dev/null | awk -v r=\"$(uname -r)\" 'function key(v, n) {split(v, n, /[.-]/); return sprintf(\"%05d%05d%05d%05d\", n[1], n[2], n[3], n[4])} BEGIN {split(r, x, \"-\"); rk = key(x[1] \"-\" x[2])} $3 == \"installed\" && $4 ~ /^linux-/ {p[$4] = 1; h[$4] = ($1 == \"hold\")} END {for (q in p) if (match(q, /^linux-(image|image-unsigned|signed-image|image-extra)-[0-9]+[.][0-9]+[.][0-9]+-[0-9]+/)) {a = substr(q, RSTART, RLENGTH); sub(/^linux-[a-z-]*-/, \"\", a); if (key(a) < rk) old[a] = 1} for (q in p) for (a in old) if (index(q \"-\", \"-\" a \"-\")) print a, q, h[q]}' | sort); L=; K=; for a in $(echo \"$O\" | cut -d' ' -f1 | sort -u); do P=$(echo \"$O\" | awk -v a=\"$a\" '$1 == a {print $2}'); if echo \"$O\" | awk -v a=\"$a\" '$1 == a && $3 == 1 {f = 1} END {exit !f}'; then K=\"$K $a\"; echo \"keeping the kernel $a: a package of it is on hold\"; elif dpkg --no-act --purge $P >/dev/null 2>&1; then L=\"$L $P\"; else K=\"$K $a\"; echo \"keeping the kernel $a: something still depends on it:\" $(dpkg --no-act --purge $P 2>&1 | sed -n 's/^ *\\(.* depends on .*\\)[.]$/\\1/p' | sort -u | head -n 3); fi; done; if [ -n \"$L\" ]; then echo \"purging kernels older than the running $(uname -r):\" $L; dpkg --purge $L || exit 1; fi; F=$(df -Pm /boot | awk 'NR == 2 {print $4}'); echo \"/boot has $F MiB free\"; [ \"${F:-0}\" -ge {boot_mib} ] || { echo \"/boot has $F MiB free and {release}'s kernel needs about {boot_mib}; it holds $(cd /boot && echo vmlinuz-*)${K:+ (kept:$K)}: remove the kernels it doesn't need (take them off hold, or remove what depends on them), or grow /boot\"; exit 1; }",
+]
 autoremove = "apt-get autoremove --purge"
 after = ["apt-get clean"]
 obsolete = "apt-get update >/dev/null 2>&1; apt list '?obsolete' 2>/dev/null | grep / | cut -d/ -f1"
@@ -119,3 +132,65 @@ args = {}
 pkgdb = 'test -z "$(dpkg --audit 2>&1)" && apt-get check >/dev/null'
 current = "every binary a service runs comes from a package the release in sources.list still ships (apt-cache madison); the box lists the binaries"
 services = "no explicitly installed, non-required package that ships an init script or unit belongs to a name family the box did not have at the start"
+
+[hardware]
+# SPEC "Hardware preflight": what a machine needs before a route boots it into each release, checked before the first
+# hop touches anything. `boot` is the firmware wend's kernel steps are proven to carry a real machine through (the VM
+# tier boots its guests by BIOS); a UEFI machine is refused until a UEFI replay proves it. Per release: `cpu`, the
+# release's x86-64 level (its glibc refuses anything lower: "Fatal glibc error: CPU does not support x86-64-v2");
+# `ram_mib`, Ubuntu Server's documented minimum for a cloud image (24.04's figure, which 26.04's docs still give;
+# 16.04 to 22.04 publish none we could find, so those releases have no ram_mib); `disk_mib`, an estimate of the free
+# space on / the hop needs (its downloads and the release's growth; walking a copy of the machine first measures the
+# real need); `drivers`, the sha256 of
+# adapters/drivers/ubuntu/<release>.txt, the PCI disk controllers and network cards the release's kernel drives
+# (tools/hwdata.py builds it from the kernel package itself).
+# `boot_mib`, the space the release's kernel takes in /boot: linux-image's and linux-modules' /boot files (measured)
+# and its initramfs, with room for an LVM or md root. xenial to jammy: the initrds the VM tier's trusty-to-resolute
+# run made on its plain-partition box (37, 50, 48 and 62 MB for the route's pinned 4.4.0-21, 4.15.0-20, 5.4.0-26 and
+# 5.15.0-25), plus 5 MiB, what lvm2 and mdadm add to the same kernels' initrds (4.7 MB on 5.4.0-26, 4.9 on
+# 5.15.0-25, built in a container with and without them), plus a little. noble and resolute: built from the
+# release's packages in a container, with lvm2 and mdadm; resolute's builds host-only, so its figure allows for real
+# hardware.
+# `old_kernels = "running"`: hop.kernel_before purges every kernel older than the running one before the
+# transaction, so the new kernel only ever sits beside the running one (apt's autoremove would keep two, and trusty's
+# guided-LVM /boot of 243 MB stops at focal).
+boot = ["bios"]
+old_kernels = "running"
+
+[hardware.xenial]
+cpu = "x86-64"
+disk_mib = 2048
+boot_mib = 56
+drivers = "sha256:f5d0794514fd9f2a5b26d6b837e5427eb79b3d2b81b44dfb9320030d6ce9f3f9"
+
+[hardware.bionic]
+cpu = "x86-64"
+disk_mib = 2048
+boot_mib = 70
+drivers = "sha256:e1bef70be98b23557dbef99f656a86563265545a0641053140f12cfffd5c04ad"
+
+[hardware.focal]
+cpu = "x86-64"
+disk_mib = 2048
+boot_mib = 71
+drivers = "sha256:821a2d9c1c3e65a38181bb8aa79e3d2c3290d6a32d7b608401545ef42f6ca0c9"
+
+[hardware.jammy]
+cpu = "x86-64"
+disk_mib = 2048
+boot_mib = 88
+drivers = "sha256:2a453ad5f9c4f188a3589d85b8c45e2000bf2eae3ee4484d553ca2dde747f47a"
+
+[hardware.noble]
+cpu = "x86-64"
+ram_mib = 1024
+disk_mib = 2048
+boot_mib = 106
+drivers = "sha256:f1c5c6babe929becf674f7ccea07e9ddc130bacc493304012d1dcd2dfcef5a12"
+
+[hardware.resolute]
+cpu = "x86-64"
+ram_mib = 1024
+disk_mib = 2048
+boot_mib = 85
+drivers = "sha256:a7b3497a96495da38204c4691cd2f218da4346f642f96e1cc0f90affde0bfac4"

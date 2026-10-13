@@ -99,12 +99,29 @@ for name, mutate in {
     "an adapter declaring an op its backend doesn't implement": lambda a: a["ops"].update(
         {"shell.run": {"summary": "x", "args": {"cmd": {"pattern": "[a-z]+"}}}}),
     "an adapter without a backend": lambda a: a.pop("backend"),
+    "an add-on whose vendor would break out of the shell": lambda a: a["addons"]["epel"].update(vendor='x"; rm -rf /'),
+    "add-ons that the hops never add to their repo files": lambda a: a["hop"].update(
+        set_release=a["hop"]["set_release"].replace(" && {addons}", "")),
+    "an add-on repo for a release the adapter doesn't have": lambda a: a["addons"]["epel"]["repos"].update(
+        centos4="vault.centos.org/4.9/os/x86_64"),
+    "an adapter without hardware requirements (SPEC \"Hardware preflight\")": lambda a: a.pop("hardware"),
+    "an adapter whose release asks for an unknown CPU level": lambda a: a["hardware"]["alma9"].update(cpu="v2"),
+    "an adapter missing a booted release's hardware": lambda a: a["hardware"].pop("alma10"),
+    "an adapter that doesn't say which old kernels a hop keeps in /boot": lambda a: a["hardware"].pop("old_kernels"),
+    "an adapter whose release has no /boot footprint": lambda a: a["hardware"]["alma9"].pop("boot_mib"),
 }.items():
     a = copy.deepcopy(adapters["el"])
     mutate(a)
     errs = check.check_adapter(a, "adapters/el.toml")
     print(("refused " if errs else "MISSED  ") + name + (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
     bad += not errs
+# a release's driver table is pinned: other bytes under its name, or none, fail the atlas
+a = copy.deepcopy(adapters["el"])
+a["hardware"]["alma9"]["drivers"] = "sha256:" + "0" * 64
+errs = check.driver_table_errors("el", a, "adapters/el.toml")
+print(("refused " if errs else "MISSED  ") + "a driver table that isn't the pinned one" +
+      (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
+bad += not errs
 # a pattern can dodge any finite probe, so values are also held to a fixed safe set, whatever the adapter says
 loose = copy.deepcopy(adapters)
 loose["el"]["ops"]["kv.set"]["args"]["values"] = {"table": "x[a-z;|&$ ]*"}
@@ -205,6 +222,23 @@ next(h for h in fake["hops"] if h["to"] == "squeeze")["fired"].append(check.cont
 for name, run, want in (("decoy hit: the MySQL fix fired on the web box", fake, True),
                         ("honest web run has no decoy errors", web_run, False)):
     got = bool(check.decoy_errors({path_: run}, {rid: route}, by_id))
+    print(("refused " if got else "passed  ") + name if got == want else "WRONG   " + name)
+    bad += got != want
+# pairing: CI replays a route only on boxes that start at its `from`, so neither a route nor a claim may go unreplayed
+_, _, _, boxes_, _ = check.load_all()
+rpath = next(p for p, r in routes_.items() if r is route)
+claimed = next(d for d in fixes_.values() if check.content_id(d) in {x["id"] for x in route["fixes"]}
+               and d["meta"].get("fires_on"))
+cpath = next(p for p, d in fixes_.items() if d is claimed)
+moved = {b: ({**d, "release": "lenny"} if b == claimed["meta"]["fires_on"][0] else d) for b, d in boxes_.items()}
+for name, args, want in (
+        ("a route that starts where no box starts", ({rpath: {**route, "from": "lenny"}}, boxes_, {}), True),
+        ("a fires_on box that starts where no route pinning the fix starts", ({rpath: route}, moved, {cpath: claimed}),
+         True),
+        ("a fires_on box that is not a box",
+         ({rpath: route}, boxes_, {cpath: {**claimed, "meta": {**claimed["meta"], "fires_on": ["debian/no"]}}}), True),
+        ("the real routes, boxes and claims", (routes_, boxes_, fixes_), False)):
+    got = bool(check.pairing_errors(*args))
     print(("refused " if got else "passed  ") + name if got == want else "WRONG   " + name)
     bad += got != want
 assert check.content_id(good) != check.content_id({**good, "when": {"installed": "x"}})
@@ -313,8 +347,10 @@ for hop in adapters["ubuntu"]["ladder"][1:]:
     first, _ = _walk.Walk.hop_parts(w_, hop, [])
     rel = adapters["ubuntu"]["releases"].get(hop)
     up = rel["upgrade"] if hop in ("xenial", "jammy") else adapters["ubuntu"]["hop"]["upgrade"]
+    kb = [_walk.fill(c, w_.vars) for c in adapters["ubuntu"]["hop"]["kernel_before"]]
     ok = first[-len(up):] == up and (("policy-rc.d" in "".join(first)) == (hop == "xenial")) and \
-        (("usrmerge" in "".join(first)) == (hop == "jammy"))
-    print(("passed  " if ok else "WRONG   ") + f"ubuntu {hop}: the hop's own upgrade, and only xenial's and jammy's extras")
+        (("usrmerge" in "".join(first)) == (hop == "jammy")) and first[2:2 + len(kb)] == kb
+    print(("passed  " if ok else "WRONG   ") + f"ubuntu {hop}: old kernels purged after refresh, the hop's own upgrade, only xenial's and jammy's "
+          "extras")
     bad += not ok
 sys.exit(1 if bad else 0)

@@ -245,6 +245,36 @@ def type_corpus():
     adapter("kv keys string", lambda a: a["kv"]["/etc/my.cnf"].update(keys="abc"))
     adapter("path spec not a list name", lambda a: a["ops"]["kv.set"]["args"]["path"].update(path=1))
     adapter("pm_options a list", lambda a: a.update(pm_options=["x"]))
+    # SPEC "Hardware preflight"
+    adapter("no hardware table", lambda a: a.pop("hardware"))
+    adapter("hardware boot empty", lambda a: a["hardware"].update(boot=[]))
+    adapter("hardware boot unknown", lambda a: a["hardware"].update(boot=["bios", "coreboot"]))
+    adapter("hardware cpu unknown level", lambda a: a["hardware"]["alma9"].update(cpu="x86-64-v4"))
+    adapter("hardware ram a string", lambda a: a["hardware"]["alma9"].update(ram_mib="2048"))
+    adapter("hardware ram a bool", lambda a: a["hardware"]["alma9"].update(ram_mib=True))
+    adapter("hardware ram absent is fine", lambda a: a["hardware"]["alma9"].pop("ram_mib"))
+    adapter("hardware disk absent", lambda a: a["hardware"]["alma9"].pop("disk_mib"))
+    adapter("hardware disk zero", lambda a: a["hardware"]["alma9"].update(disk_mib=0))
+    adapter("hardware drivers not a hash", lambda a: a["hardware"]["alma9"].update(drivers="alma9.txt"))
+    adapter("hardware unknown key", lambda a: a["hardware"]["alma9"].update(gpu="any"))
+    adapter("hardware note a list", lambda a: a["hardware"]["alma9"].update(note=["x"]))
+    adapter("hardware for a release off the ladder", lambda a: a["hardware"].update(
+        rocky9=dict(a["hardware"]["alma9"])))
+    adapter("hardware missing a booted release", lambda a: a["hardware"].pop("centos7"))
+    adapter("hardware old_kernels absent", lambda a: a["hardware"].pop("old_kernels"))
+    adapter("hardware old_kernels unknown", lambda a: a["hardware"].update(old_kernels="all"))
+    adapter("hardware old_kernels a list", lambda a: a["hardware"].update(old_kernels=["running"]))
+    adapter("hardware boot_mib absent", lambda a: a["hardware"]["alma9"].pop("boot_mib"))
+    adapter("hardware boot_mib a float", lambda a: a["hardware"]["alma9"].update(boot_mib=70.5))
+    adapter("hardware autoremove_from off the ladder", lambda a: a["hardware"].update(
+        old_kernels="autoremove", autoremove_from="jessie"))
+    adapter("hardware autoremove_from with running", lambda a: a["hardware"].update(autoremove_from="centos7"))
+    adapter("hardware autoremove_from a list", lambda a: a["hardware"].update(
+        old_kernels="autoremove", autoremove_from=["centos7"]))
+    adapter("hardware autoremove_from is fine", lambda a: a["hardware"].update(
+        old_kernels="autoremove", autoremove_from="centos7"))
+    adapter("hardware for a skipped release is fine", lambda a: a["hardware"].update(
+        alma8=dict(a["hardware"]["alma9"])))
     # routes, judged with the real fixes
     r0 = copy.deepcopy(next(d for d in routes.values() if d["family"] == "el"))
     for label, mut in [("baseline", lambda r: None),

@@ -17,6 +17,9 @@ pub struct Atlas {
     pub fixes: BTreeMap<String, Doc>,
     pub routes: BTreeMap<String, Doc>,
     pub runs: BTreeMap<String, Doc>,
+    /// "family/release" -> that release's driver table (SPEC "Hardware preflight"), as bytes: the adapter pins it by
+    /// sha256
+    pub drivers: BTreeMap<String, Vec<u8>>,
 }
 
 pub fn parse_toml(text: &str) -> Result<Doc, String> {
@@ -67,6 +70,7 @@ impl Atlas {
             fixes: BTreeMap::new(),
             routes: BTreeMap::new(),
             runs: BTreeMap::new(),
+            drivers: BTreeMap::new(),
         };
         let mut ps = vec![];
         files(&root.join("adapters"), 0, "toml", &mut ps);
@@ -77,6 +81,14 @@ impl Atlas {
             let fam = p.file_stem().unwrap().to_string_lossy().into_owned();
             a.adapters
                 .insert(fam, parse_toml(&read(&p)?).map_err(|e| format!("{}: {e}", rel(&p)))?);
+        }
+        let mut ps = vec![];
+        files(&root.join("adapters").join("drivers"), 1, "txt", &mut ps);
+        for p in ps {
+            let fam = p.parent().and_then(Path::file_name).unwrap().to_string_lossy();
+            let rel_ = p.file_stem().unwrap().to_string_lossy();
+            let bytes = fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+            a.drivers.insert(format!("{fam}/{rel_}"), bytes);
         }
         let mut ps = vec![];
         files(&root.join("fixes"), 2, "toml", &mut ps);

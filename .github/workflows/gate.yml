@@ -55,7 +55,9 @@ jobs:
       - id: m
         run: |
           rm -rf tools adapters && cp -r .base/tools .base/adapters . && rm -rf .base
-          echo "matrix=$(python3 -B tools/affected.py origin/${{ github.base_ref }})" >> "$GITHUB_OUTPUT"
+          # assigned first: a refusal inside "$(...)" in an echo would leave plan green with an empty matrix
+          m=$(python3 -B tools/affected.py origin/${{ github.base_ref }})
+          echo "matrix=$m" >> "$GITHUB_OUTPUT"
 
   replay:
     needs: plan

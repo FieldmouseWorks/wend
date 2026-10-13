@@ -242,8 +242,9 @@ name = "purge-stale-libdb4"                  # must agree with the fix's meta.na
 ```
 
 `hops` lists every release on the ladder after `from`, up to `to`. The one exception is a release the adapter
-lists in `may_skip`: a route may cross it inside one hop. EL lists `alma8`, because the box only ever passes through
-EL8 (`rpm.transit`) on the hop to EL9. No health check runs on a release the route skips.
+lists in `may_skip`: a route may leave it out. EL lists `alma8`, because the box only ever passes through EL8
+(`rpm.transit`) on the hop to EL9, and `centos8`, where boxes start but no route lands. No health check runs on a
+release the route skips. `wend discover` leaves `may_skip` releases out of a new route's hops.
 
 A route is a **map, not a playlist**. It pins a *set* of fixes by id, and the client applies whichever ones hold on
 each hop. In dep-lab, stitching fixes from three different runs into one map beat replaying any single run, and the
@@ -343,9 +344,10 @@ web = "apache2ctl -t && ..."
 
 ### Decoys
 
-Every box is a decoy for every fix that doesn't claim it. On a passing run, each pinned fix must have fired on
-exactly the boxes in its `fires_on`. If it fired somewhere unclaimed, it's a decoy hit and the PR fails. If it didn't
-fire where it claims, that fails too: the claim is stale or the precondition broke. dep-lab's round 3 is the
+Every box that starts at a route's `from` release is a decoy for each of that route's fixes that doesn't claim it (a box
+that starts elsewhere can't walk the route, so CI doesn't replay it there). On a passing run, each pinned fix must have
+fired on exactly the boxes in its `fires_on`. If it fired somewhere unclaimed, it's a decoy hit and the PR fails. If it
+didn't fire where it claims, that fails too: the claim is stale or the precondition broke. dep-lab's round 3 is the
 reference case. Box A must not touch the three MySQL fixes, and box B must not touch the six Apache/PHP ones. The
 checker enforces this over the runs it has. CI produces fresh runs.
 
@@ -393,8 +395,9 @@ See `adapters/ubuntu.toml`. The Debian adapter's engine on Ubuntu's own ladder. 
 
 See `adapters/el.toml`. Notes that matter:
 
-- The ladder crosses vendors: `centos5 centos6 centos7 alma8 alma9 alma10`. A family isn't a distro; release ids
-  carry the vendor.
+- The ladder crosses vendors: `centos5 centos6 centos7 centos8 alma8 alma9 alma10`. A family isn't a distro; release
+  ids carry the vendor. CentOS 8 and AlmaLinux 8 sit side by side: routes from EL7 and earlier skip both (EL8 is
+  crossed inside the hop to EL9), and a route from CentOS 8 goes straight to EL9 with its own dnf.
 - The package manager changes mid-ladder (yum through 7, dnf from 8), and so does the upgrade verb: `upgrade` on EL6,
   `distro-sync` from EL7 (EL6's grep is newer than EL7's). Each release can set its own `upgrade` in the adapter.
 - The harness owns `/etc/yum.repos.d` and clears the vendor .repo files every release package drops (they point at
@@ -408,6 +411,30 @@ See `adapters/el.toml`. Notes that matter:
   "nothing requires it, by name or by any capability it provides" instead.
 - `current`: the service binaries come from a package whose dist tag is the running major (`[._]el$MAJOR`).
 - Boxes can name roles that start daemons in `isolate`; those checks run in a network namespace of their own.
+
+#### Add-on repositories
+
+Most real EL machines carry more than the vendor's repos: EPEL above all (EPEL's own mirror statistics are how the
+stuck EL7 fleet is counted). The adapter's `[addons.<name>]` tables name the ones the harness knows how to carry:
+`marker` (the package whose presence means the box uses it, EPEL: `epel-release`), `vendor` (the rpm `VENDOR` of its
+packages, EPEL: `Fedora Project`) and `repos` (release id = host/path, through the shim, like `releases.*.repos`).
+
+- Every hop's `set_release` appends `{addons}`: for each add-on with a repo for the release being entered, the add-on's
+  repo goes into the harness's repo file as `[<release>-<name>]` if its marker is installed at that moment. A box
+  without the marker never sees the repo: no hop's repos or `rpm.transit`'s `new` repos ship a marker, so no fix can
+  pull add-on packages onto it. On a box with the marker, a fix's `install` can pull any of the add-on's packages
+  (unsigned, like the vendor's: `gpgcheck=0` behind the shim).
+- `rpm.transit` lets the add-on vendor's packages through its refusal when the marker is installed, and then requires,
+  before it changes anything, that each of them has a package of the same name in the release's repos or the
+  release's add-on repos (renames don't count). Anything without one is named and the op fails: a fix on the same hop
+  has to remove or replace it first, the same way it would for the vendor's own dropped packages. After the download
+  it checks again that each of them was actually fetched.
+- The add-on repos' metadata is pinned in the hop's `sources` like the vendor's (repo ids `<release>-<name>` and, for
+  `rpm.transit`'s `new`, the same `<release>-<name>`). The transit's `old` repos (used only to install EL7's dnf)
+  get no add-on repos.
+- An adapter with `[addons]` must put `{addons}` in `hop.set_release`, or it would carry an add-on through the
+  transit and then drop it from the hops after.
+- Software Collections, vendor SIG repos and other third-party repos are not add-ons: `rpm.transit` still refuses them.
 
 ## Op reference
 
@@ -558,18 +585,24 @@ reach: rpm 4.11 (EL7) can't install packages with rich dependencies. Effect: eve
 `release`'s version of it, installed by `release`'s own rpm; `reinstall` is installed again (the release's first
 distro-sync erases some packages the box needs); the package manager is `release`'s dnf with a `yum` front end;
 nothing from older releases is left in the rpm database (their files stay, unowned). So it refuses, before
-touching anything, if any installed package (gpg-pubkey aside) has a vendor other than `remove`'s, or is one of that
+touching anything, if any installed package (gpg-pubkey aside) has a vendor other than `remove`'s (or an installed
+add-on's: see "Add-on repositories", which also says what it then requires of those packages), or is one of that
 vendor's add-on repos (EL: names starting `rh-`, `devtoolset-` or `centos-release-`, except the base
-`centos-release-notes`; that is, Software Collections and SIGs). EPEL, vendor, SIG and locally built RPMs would
-otherwise lose their package records. Fails if the box doesn't say it is `release` afterwards.
+`centos-release-notes`; that is, Software Collections and SIGs). EPEL without its marker, vendor, SIG and locally
+built RPMs would otherwise lose their package records. The vendor is read last in each line, so a vendor string
+containing the separator can't pass as another package's. Fails if the box doesn't say it is `release` afterwards.
 A fix with a non-empty `reinstall` must pass the install rule. Reference, with work dir `/var/lib/wend/boot`, and
 repos kept in private `reposdir`s so `/etc/yum.repos.d` stays the harness's:
 1. Write a repo file for `transit.from`'s repos plus `transit.extra_repos` (`old`), and one for `release`'s repos
-   (`new`).
+   (`new`). Installed add-ons add their repo for `release` to `new`. Before that, if any add-on vendor's package is
+   installed: read the package names in the primary metadata (gzip or xz) of `release`'s repos and its add-on repos,
+   and refuse, naming them, if any of those packages has no package of the same name there. Only the work dir has
+   changed at that point.
 2. `yum install dnf` from `old` (CentOS 7 extras ships an EL7 dnf).
 3. With that dnf and `new`: `--downloadonly` distro-sync into the work dir, `--releasever` = the release's major,
    `--allowerasing --setopt=best=False` (EL7's dnf 4.0 has no `--nobest`), no weak deps, no protected packages. Its exit code is ignored; the step fails if
-   `rpm`, `rpm-libs`, `glibc`, `dnf` or `python3-dnf` wasn't downloaded. Also fetch `transit.release_package` from
+   `rpm`, `rpm-libs`, `glibc`, `dnf` or `python3-dnf` wasn't downloaded, or any of the add-on packages wasn't (as
+   with the first five, EL7's dnf is still installed when that fails). Also fetch `transit.release_package` from
    `PKGLIST(BASE)` if the sync didn't.
 4. `rpm -e dnf` (the EL7 one), rebuild the database, and unpack every downloaded package into a staging dir.
 5. `rpm -e --nodeps --noscripts {remove}` (the old release package), then run the staged rpm through the staged
@@ -662,10 +695,17 @@ wins, and an empty value or `none`, `off`, `no`, `false`, `null` (any case) mean
 systemd: the old packages' scriptlets delete their runlevel links when the new ones replace them, and systemd's
 presets leave most units disabled (on EL, every one but a few base services). Effect: `/var/lib/wend/sysv-enabled`
 lists, one per line, every service with an `S` link in the default runlevel (`initdefault` in `/etc/inittab`, else 3).
+On a box that already runs systemd (`systemctl` exists), it lists the box's enabled service units instead, by unit
+name (`systemctl list-unit-files --type=service --state=enabled`): EL7 boxes need it before the EL8 pass-through,
+whose distro-sync erases module-stream packages (httpd, mariadb, php) along with their enablement links.
 Only the first record is kept: if the file exists, it is left as it is, so it always holds the box's own state. It
 is only allowed in `pre` (after the upgrade the links are gone), and it stays on the box afterwards: a later route
-that uses `service.enable` reads the same record, which is what the box ran under SysV, not what it runs today. That
-is why `service.enable` also accepts a `like` service that is enabled now. Fails if `/etc/rc.d/rc<L>.d` doesn't exist. Reference: `ls /etc/rc.d/rc$L.d | sed -n 's/^S[0-9][0-9]//p' | sort -u`.
+that uses `service.enable` reads the same record, which is what the box ran at its first record, not what it runs
+today. That is why `service.enable` also accepts a `like` service that is enabled now. SysV: fails if
+`/etc/rc.d/rc<L>.d` doesn't exist; reference `ls /etc/rc.d/rc$L.d | sed -n 's/^S[0-9][0-9]//p' | sort -u`. systemd:
+fails if the list is empty (nothing is recorded then); reference `systemctl list-unit-files --type=service
+--state=enabled --no-legend`, first column without `.service`. On EL7, SysV-script services enabled with chkconfig
+(`network`) are not in that list.
 
 **`service.enable`** `unit` (`[A-Za-z0-9][A-Za-z0-9_.-]*`, so `NetworkManager`), `like` (a list of the same, at least one). Enables `unit` at
 boot if any service in `like` started at boot: it is in the SysV record, or `systemctl is-enabled` says `enabled`
@@ -743,18 +783,20 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `schema`, `family`, `backend` | `wend.adapter/0`; the family's name; `apt` or `rpm` (required) |
 | `release_file` | the file whose content names the running release (shown in runs and checks) |
 | `ladder` | every release in order; a hop goes one step along it |
-| `may_skip` | releases a route may cross inside one hop (see Route) |
+| `may_skip` | releases a route may leave out of its hops (see Route) |
 | `harness_owned` | path prefixes no fix may write |
 | `writable`, `managed` | the allowlists (globs) named by `write-file` (`writable`) and the `rpm.*` file ops (`managed`). Nothing under `/etc/wend/` is ever on either |
 | `[kv."<path>"]` | the files `kv.*` may touch: `keys` (the only keys it may set or unset; never one that grants access) and `set` (false for files with sections, which only take `kv.unset`) |
 | `force` | required: the `force-remove` flags this family allows, a subset of its backend's (apt: `depends`, `remove-essential`; rpm: `depends`, `scripts`) |
 | `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`), and optional `releases.<id>.upgrade` like rpm's. rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader"). apt: a start release may have `releases.<id>.install` too |
+| `[addons.<name>]` | rpm: `marker`, `vendor`, `repos` (see "Add-on repositories") |
 | `[mirror]` | rpm: `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts) |
 | `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), `autoremove`, `obsolete`, `installed_list`, `kernel_newest` (the VM tier's newest-kernel query); apt also `apt_conf`, the harness's apt config |
 | `[predicates]` | `installed`, `file`, `file-contains`, `mysql-option` command templates |
 | `[pm_options.<name>]` | `path`, `content`. apt: only `overwrite-conflicting-files`; rpm: none |
 | `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear. Whatever a `pattern`, `list` or `table` says, every value a fix passes through one must also match `[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*`: no quote, whitespace, backslash, glob character, `%`, any of `` $`;&|<>(){}~ ``, or leading `-` |
 | `[checks]` | universal health checks: `pkgdb` is a command; `current` and `services` are described in words and built by the harness from the box |
+| `[hardware]` | required: what a machine needs before a route boots it into each release (see "Hardware preflight"): `boot`, `old_kernels`, and a table per release a route can boot into |
 | `[box]` | how to build a fresh box of this family (rpm: `seeds`, the packages to bootstrap a root from; apt: optional `debootstrap_script`, a script name under the host's `/usr/share/debootstrap/scripts`) |
 
 These checks narrow what an adapter lets fixes do (ops, force flags, argument values). They don't judge an adapter's
@@ -765,7 +807,8 @@ other brace syntax is touched, so `${...}` and `%{...}` pass through). Values fo
 
 - apt: `{mirror}` (archive or current, see `[releases]`), `{release}`.
 - rpm: `{release}`, `{major}`, `{shim}`, `{repofile}` (a yum repo file with one section `[<release>-<name>]` per repo,
-  `baseurl=SHIM/<repo>/`, `gpgcheck=0`, newlines as `\n` for printf), `{pm}` (`dnf` if installed, else `yum`),
+  `baseurl=SHIM/<repo>/`, `gpgcheck=0`, newlines as `\n` for printf), `{addons}` (the shell that appends each installed
+  add-on's repo for the release to `/etc/yum.repos.d/ladder.repo`; `true` if none has one), `{pm}` (`dnf` if installed, else `yum`),
   `{clean_repos}` (`CLEAN_REPOS`), `{dnf_opts}` (`--releasever={major} --allowerasing
   --setopt=install_weak_deps=False --setopt=protected_packages=`).
 
@@ -826,6 +869,20 @@ harness, not to fixes, because the release's own tools can't carry them up the l
   grub-pc's install device, so the release's own upgrades keep it current. A box whose install device is set and
   present is left to grub-pc. It fails if `/boot` isn't on a partition of a disk it can find (md, LVM: nothing is
   installed or recorded) or `grub-install` fails.
+- **Ubuntu keeps `/boot` to two kernels** (`hop.kernel_before`). A trusty install with guided LVM puts `/boot` on a
+  243 MB partition, and apt's autoremove keeps two older kernels beside the newest, so from focal on the next kernel
+  and its initramfs no longer fit and the hop stops half done, as real Ubuntu upgrades do. So before each hop's
+  transaction, on a machine booted from this root, the harness purges every kernel older than the running one with
+  all of its packages (image, extra modules, signed image, headers): `/boot` then holds the running kernel and the
+  one the hop brings. A kernel newer than the running one, installed but not booted yet, stays. So does an old kernel
+  that is on hold, or that something still depends on (a metapackage still pinned to it while the machine runs an
+  `-updates` or HWE kernel): each is tried with `dpkg --no-act --purge` first and, if dpkg would refuse, kept and
+  named. Preflight counts neither those nor a newer kernel waiting for a reboot, so after the purge the hop goes on
+  only if `/boot` has the room the release's kernel needs (its `hardware.<release>.boot_mib`, which apt adapters'
+  hop steps get as `{boot_mib}`), and otherwise stops there, before its transaction, listing the kernels in `/boot`.
+  A machine running a kernel that isn't Ubuntu's (`uname -r` not shaped `X.Y.Z-N-flavour`, a provider's) keeps every
+  kernel, and preflight doesn't count that case either. The purge is `dpkg --purge`, never apt, so nothing else goes
+  with it.
 - **When to boot it.** EL6's binaries can't run on the EL5 kernel (EL6's apr asks for `SOCK_CLOEXEC`, so `httpd -t`
   fails), so on a real machine the `centos6` hop boots its new kernel between the transaction and the post steps
   (`releases.centos6.reboot = "before-post"`). Every other hop runs straight through, then reboots: on the hop to
@@ -834,6 +891,96 @@ harness, not to fixes, because the release's own tools can't carry them up the l
 The VM tier proves these steps (it reboots where `reboot` says, and after every hop). A client running a route on a
 real machine must reboot at the same points; the client doesn't walk a live root yet, so it doesn't split a hop.
 The checker holds `reboot` to `"before-post"` and the kernel steps to lists of commands.
+
+## Hardware preflight
+
+A route that reaches its last hop on a CI box can still brick a real machine halfway: the new release's glibc
+refuses the CPU, or its kernel no longer drives the disk controller the root is on. So before the first hop touches
+anything, a client walking a real machine checks that the machine can land on every release the route boots it into,
+and refuses, or names the furthest release it can land on, when it can't. `wend preflight ROUTE` does this.
+
+**Facts.** `wend facts` reads the machine (schema `wend.hardware/1`): the kernel's architecture (`uname -m`) and
+the userland's word size (the ELF class of `/bin/sh`); the CPU's x86-64 level features from CPUID itself, never
+`/proc/cpuinfo`, since an old kernel doesn't name features newer than itself (2.6.18 has no `avx2`), and the XSAVE
+bit, not OSXSAVE, since the old kernel may not have turned it on and the new one will; CPUID's hypervisor bit;
+firmware (`/sys/firmware/efi` means UEFI); `MemTotal`; free space on `/`; `/boot`: whether it is a filesystem of its
+own, its size and free space as a package install sees them (root's reserved blocks left out of both), and each
+kernel in it (one per `vmlinuz-<version>`, rescue images aside) with the MiB its files take (`vmlinuz`, initramfs,
+`System.map`, `config` and the rest named for that version; kdump images count as other files, since EL's
+`hop.kernel_before` leaves them) and whether it is the running one; the modules the machine blacklists (`blacklist
+m`, or `install m /bin/false`, in every file of `/etc/modprobe.d`, since EL5's and lenny's are named `blacklist`
+without `.conf`, `/etc/modprobe.conf` and the distro's own `modprobe.d`); and every PCI device's slot, class, the modalias its ID files make
+(`pci:v…d…sv…sd…bc…sc…i…`), the driver bound to it now, that driver's module and where the module's file is under
+`/lib/modules/<release>` (from `modules.dep`), and whether the module is from outside the kernel's own package: the
+kernel marks one built out of tree (taint `O`, from Linux 3.2), and kmod packages (ELRepo's `kmod-*`, in `extra/` and
+`weak-updates/`) and DKMS (`updates/dkms/`) install theirs outside `kernel/`, which is how EL5's 2.6.18, with no
+taint flag, shows one. Facts can be gathered on the machine and judged anywhere (`--facts FILE`).
+
+**Requirements.** The adapter's `[hardware]` table holds them. `boot` lists the firmware modes wend's kernel steps
+are proven to carry a machine through; the VM tier boots its guests by BIOS, so every adapter says `["bios"]` until a
+UEFI replay proves more. `old_kernels` says which kernels sit in `/boot` beside the one a hop installs: `"running"`
+(EL: `hop.kernel_before` removes every kernel but the running one first, and only those of `kernel`,
+`kernel-core` and `kernel-modules*`: a kernel another package owns, such as EL5's `kernel-xen`, `kernel-PAE` and
+`kernel-debug`, ELRepo's `kernel-lt` and `kernel-ml`, or Oracle's UEK, which preflight knows by its version's
+suffix, stays on every hop; Ubuntu: `hop.kernel_before` purges every kernel older than the running one) or
+`"autoremove"` (Debian's apt: the transaction installs the new kernel beside every kernel
+already there, and `autoremove` only afterwards takes old ones, keeping the running kernel and the newest, so from
+the third hop on the new kernel sits beside the two before it). With `"autoremove"`, an optional `autoremove_from`
+names the release whose apt first does that: before apt 1.0, `NeverAutoRemove "^linux-image.*"` kept every kernel,
+so on Debian every kernel stays through the hop to jessie. Every release a route can boot into (the ladder after its first release, less `may_skip`)
+has a `[hardware.<release>]` table:
+
+| key | meaning |
+|---|---|
+| `cpu` | `x86-64`, `x86-64-v2` or `x86-64-v3`: the release's level. The levels are the psABI's: v2 adds `cx16`, `lahf_lm`, `popcnt`, `sse3`, `sse4_1`, `sse4_2`, `ssse3`; v3 adds `avx`, `avx2`, `bmi1`, `bmi2`, `f16c`, `fma`, `lzcnt`, `movbe`, `xsave`. EL9 is v2 and EL10 v3 (its glibc stops a lower CPU at the first exec: "Fatal glibc error: CPU does not support x86-64-v2") |
+| `ram_mib` | optional: the release's documented minimum memory without a desktop. Absent when the vendor publishes none (Ubuntu 16.04 to 22.04) |
+| `disk_mib` | an estimate of the free space on `/` the hop needs: its downloads and the release's growth. Walking a copy of the machine first (open question 12) measures the real need |
+| `boot_mib` | the space the release's kernel takes in `/boot`: its package's `/boot` files, measured, and its initramfs, built from the release's own packages in a container where that builds what a machine gets (initramfs-tools' `MODULES=most`), estimated where it can't (EL's host-only dracut, releases too old for an https mirror). The VM tier's `/boot` listings are what to check them against |
+| `drivers` | the sha256 of `adapters/drivers/<family>/<release>.txt`, the release's driver table |
+| `note` | optional: said when the CPU check fails (where a machine that falls short can go instead) |
+
+**Driver tables.** A driver table lists every `alias=pci:` pattern of the storage and network modules (the kernel's
+`drivers/` `scsi`, `ata`, `nvme`, `block`, `md`, `message`, `ide`, `net` and `virtio`) in the kernel package the
+hop installs, one `<module> <pattern>` per line, plus `builtin <module>` for each driver built into the kernel, with whatever aliases `modules.builtin.modinfo`
+records for it (older kernels record no device tables there: EL9's built-in `virtio_pci` has none). A device bound
+now to a built-in driver whose table records no `pci:` pattern counts as driven: the one place a match is by name,
+not ID. Facts name the device's module (sysfs `driver/module`) as well as its driver, since the two can differ
+(lenny's `ide_pci_generic` registers as `PCI_IDE`). `tools/hwdata.py` makes it from the package itself: it finds the kernel in
+the release's index, checks the download against the index's sha256, and reads each module's `.modinfo` section.
+The table's header names the packages and their hashes. Built from the release's own kernel, not from a vendor's
+list of what it deprecated: AlmaLinux 9's kernel still drives the LSI SAS1078 (PERC 6) and SAS2008 HBAs that RHEL
+dropped in 8, and RHEL 7 dropped `sym53c8xx` (the LSI 53C895A that QEMU emulates and the VM tier gives etch), which
+every Debian kernel keeps. The checker holds each table to its pinned hash.
+
+**The verdict.** Refused outright, before the first hop, when the architecture isn't the route's (`amd64` and
+`x86_64` are one) or the userland is 32-bit, or the firmware isn't in `boot`. Otherwise each hop fails when the CPU
+is below the release's level, memory below `ram_mib` (with 10% slack: `MemTotal` is the RAM less what the kernel keeps), free space below
+`disk_mib`, or a device that holds disks or carries the network (PCI class `0x01` mass storage, `0x0c04` Fibre
+Channel, `0x0e` I2O, `0x02` network, `0x0c06` InfiniBand) bound to a driver now matches no pattern in the release's
+table and its driver isn't listed as built in: the machine would come up without it. A pattern of a module the
+machine blacklists doesn't count, unless that module drives the device now (kmod-r8168 blacklists the kernel's own
+r8169). A module from outside the kernel's package never follows to the release's kernel: the device needs one of
+that kernel's own drivers, and when it has one the verdict notes which takes over. A hop also fails when its kernel
+doesn't fit in a separate `/boot`: `boot_mib` must fit in `/boot`'s size less its other files (what isn't a
+kernel's) and the kernels the hop keeps (`old_kernels`). Those are the machine's running kernel on the first hop with
+`"running"` (with any kernel another package owns, on every hop), and every kernel it has with `"autoremove"`; then
+the previous release's kernel with `"running"`, and with `"autoremove"` the two before it (the machine's running
+kernel and the first release's, on the second hop), or every kernel so far up to `autoremove_from`. A release a route
+only passes through (`may_skip`) installs no kernel. A `/boot` on `/` is left to `disk_mib`. `ata_generic`'s,
+`ide_pci_generic`'s and `pata_acpi`'s class-wide IDE patterns count only for a device that module drives now, since their probes decline
+controllers they don't know. Facts read from a file must have every field `wend facts` writes. The same device with no driver bound is a note, not
+a failure. The machine can land on the last release before the first failing hop. The client says which, says how to
+raise a VM's CPU model when the CPU is the problem and CPUID's hypervisor bit is set (most old fleets are VMs now),
+and exits non-zero unless the whole route fits. A client walking a booted machine must run preflight first and stop
+before the first hop that fails it. A walk may stop early at the release preflight names; it never starts a hop it
+fails.
+
+Not checked yet: firmware files a driver loads; the kernel flavour a machine runs (Ubuntu's tables are
+`linux-image-generic` with its extra modules; a machine on `linux-virtual` has fewer); a DKMS module that would
+rebuild for the new kernel (it isn't counted, so such a device is refused when no in-kernel driver has it); and in
+`/boot`, a GRUB default that isn't the running kernel (EL keeps it too), kdump images the new kernels get once kdump
+starts, kernels an admin marked manual, which `autoremove` never takes, and a kmod package's blacklist that goes when
+the hop removes the package (it is counted as staying, so such a machine may be refused when it would have landed).
 
 ## VM tier (maintainer-run)
 
@@ -914,7 +1061,8 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
    files no package owns any more.
 4. **The `installed` predicate.** Plain `rpm -q` was enough on both boxes. No qualifier until a box needs one.
 5. **Release ids across vendors.** One ladder, vendor in the release id. A route may skip a release the adapter lists
-   in `may_skip` (EL8, crossed inside one hop by `rpm.transit`).
+   in `may_skip` (EL8, crossed inside one hop by `rpm.transit`; CentOS 8, where boxes start but no route lands).
+   Two vendors at one major version are two ladder entries, in the order a route could pass them.
 6. **Ordering and interaction.** Yes, once: on the hop to EL9, the database password rehash and the slow shutdown
    have to run on EL7, before `rpm.transit` replaces the server. Route order handles it (pre steps run in the order
    the route pins fixes), and the route says so. No fix needs to see another fix's effect in its `when`.

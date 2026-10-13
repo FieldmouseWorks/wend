@@ -7,10 +7,12 @@ backend = "rpm"
 release_file = "/etc/redhat-release"
 
 # Release ids carry the vendor: the ladder crosses from CentOS to AlmaLinux at 8 (open question 5 in SPEC.md).
-ladder = ["centos5", "centos6", "centos7", "alma8", "alma9", "alma10"]
-# A route may pass through these in one hop. EL8 is only ever a bootstrap step: rpm.transit lands the box on EL8 and
-# the same hop's transaction takes it on to EL9, so no health check ever runs on EL8.
-may_skip = ["alma8"]
+ladder = ["centos5", "centos6", "centos7", "centos8", "alma8", "alma9", "alma10"]
+# A route may leave these out of its hops. EL8 is only ever a bootstrap step: rpm.transit lands the box on EL8 and
+# the same hop's transaction takes it on to EL9, so no health check ever runs on EL8. CentOS 8 is where boxes start,
+# never where a route lands (it ended in 2021): routes from EL7 and earlier step over it, and routes from it go
+# straight to EL9 with EL8's own dnf.
+may_skip = ["centos8", "alma8"]
 
 # The harness owns the repo configuration, like sources.list on Debian, and clears the vendor .repo files every
 # release package drops there (they point at mirrors that are gone).
@@ -80,6 +82,11 @@ repos = { base = "vault.centos.org/7.9.2009/os/x86_64", updates = "vault.centos.
 # el6's grep is newer than el7's, so `upgrade` leaves it behind; distro-sync takes everything to el7's version
 upgrade = ["yum -y distro-sync"]
 
+[releases.centos8]
+major = 8
+pm = "dnf"
+repos = { baseos = "vault.centos.org/8.5.2111/BaseOS/x86_64/os", appstream = "vault.centos.org/8.5.2111/AppStream/x86_64/os" }
+
 [releases.alma8]
 major = 8
 pm = "dnf"
@@ -111,10 +118,20 @@ upgrade = ["rm -f /etc/dnf/modules.d/*.module",
            "{clean_repos}; O='{dnf_opts} --nobest --setopt=module_platform_id=platform:el10 --setopt=retries=10'; dnf -y $O --downloadonly distro-sync >/tmp/wend-dl.log 2>&1 || dnf -y $O --downloadonly distro-sync",
            "dnf -y {dnf_opts} --nobest --setopt=module_platform_id=platform:el10 distro-sync"]
 
+# Add-on repositories (SPEC "Add-on repositories"). A box with the marker package installed keeps the add-on along the
+# route: every hop's repo file also lists the add-on's repo for the release it enters, and rpm.transit lets the
+# vendor's packages through, but only if each one has a package of the same name in the next release's repos or
+# add-on repos. Anything else still stops the transit before it changes the box, so a fix has to remove or replace it.
+# EPEL's own key and repo files come with epel-release; the harness owns /etc/yum.repos.d like the vendor's.
+[addons.epel]
+marker = "epel-release"
+vendor = "Fedora Project"
+repos = { centos7 = "archives.fedoraproject.org/pub/archive/epel/7/x86_64", centos8 = "dl.fedoraproject.org/pub/epel/8/Everything/x86_64", alma8 = "dl.fedoraproject.org/pub/epel/8/Everything/x86_64", alma9 = "dl.fedoraproject.org/pub/epel/9/Everything/x86_64", alma10 = "dl.fedoraproject.org/pub/epel/10/Everything/x86_64" }
+
 [hop]
 # What the harness runs for every hop, around the fixes' pre and post steps. {placeholders} come from the release
 # being entered (SPEC.md, "Adapter format"); fixes can't change any of it.
-set_release = "rm -f /etc/yum.repos.d/*.repo && printf '{repofile}' > /etc/yum.repos.d/ladder.repo"
+set_release = "rm -f /etc/yum.repos.d/*.repo && printf '{repofile}' > /etc/yum.repos.d/ladder.repo && {addons}"
 refresh = "rm -f /var/lib/rpm/__db.*; rpm --rebuilddb && {pm} clean all"
 upgrade = ["{pm} -y distro-sync"]
 verify = "grep -q 'release {major}[. ]' /etc/redhat-release"
@@ -160,7 +177,8 @@ file-contains = "grep -qF '{text}' {path}"
 mysql-option = '''g=$( (mysqld --verbose --help || /usr/sbin/mysqld --verbose --help || /usr/libexec/mysqld --verbose --help || mariadbd --verbose --help || /usr/sbin/mariadbd --verbose --help || /usr/libexec/mariadbd --verbose --help) 2>/dev/null | sed -n 's/^The following groups are read: //p' | head -n 1); [ -n "$g" ] && my_print_defaults --defaults-file={path} $g 2>/dev/null | awk -v k='--{key}' -v v='{value}' -v any={any} '{ n = $0; sub(/=.*/, "", n); gsub(/_/, "-", n); if (n == k) { f = 1; x = $0; sub(/^[^=]*=?/, "", x) } } END { exit !(f && (any || x == v)) }''''
 
 [box]
-# Seed packages for building a CentOS 5 root from the vault (tools/sandbox.py build_el); yum installs the rest.
+# Seed packages for building a root from the release's first repo (tools/sandbox.py build_el); yum installs the rest.
+# A seed is a package name or something one provides (CentOS 8's centos-linux-release provides centos-release).
 seeds = ["bash", "yum", "centos-release", "rpm", "coreutils", "passwd", "shadow-utils", "vim-minimal", "findutils",
          "grep", "sed", "gzip", "tar"]
 
@@ -225,7 +243,7 @@ summary = "PHP 8.1+ throws from mysqli where it used to warn; restore the old de
 args = {}
 
 [ops."service.record"]
-summary = "write down which SysV services start in the default runlevel, before the hop that brings systemd (the first record is kept)"
+summary = "write down which services start at boot (SysV: the default runlevel's, before the hop that brings systemd; a systemd box: its enabled service units), before a hop that loses them; the first record is kept"
 args = {}
 
 [ops."net.ifcfg-to-keyfile"]
@@ -251,3 +269,48 @@ set = true
 [kv."/etc/my.cnf"]
 keys = ["old_passwords"]
 set = false
+
+[hardware]
+# SPEC "Hardware preflight": what a machine needs before a route boots it into each release, checked before the first
+# hop touches anything. `boot` is the firmware wend's kernel steps are proven to carry a real machine through (the VM
+# tier boots its guests by BIOS); a UEFI machine is refused until a UEFI replay proves it. Per release: `cpu`, the
+# release's x86-64 level (its glibc refuses anything lower: "Fatal glibc error: CPU does not support x86-64-v2");
+# `ram_mib`, the release's documented minimum (Red Hat's "RHEL technology capabilities and limits"); `disk_mib`, an estimate of the free space on / the hop needs (its downloads and the release's
+# growth; walking a copy of the machine first measures the real need); `drivers`, the sha256 of
+# adapters/drivers/el/<release>.txt, the PCI disk controllers and network cards the release's kernel drives
+# (tools/hwdata.py builds it from the kernel package itself).
+# `boot_mib`, the space the release's kernel takes in /boot: its package's /boot files (vmlinuz, System.map, config,
+# symvers; measured) and a host-only initramfs (an estimate: a container can't build one for real hardware; CentOS 6's
+# dracut builds a generic one). `old_kernels = "running"`: hop.kernel_before removes every kernel but the running one
+# (and GRUB's default) before the hop installs its own, so the new kernel sits beside one other.
+boot = ["bios"]
+old_kernels = "running"
+
+[hardware.centos6]
+cpu = "x86-64"
+ram_mib = 1024
+disk_mib = 2048
+boot_mib = 30
+drivers = "sha256:e28f49c288939833f28c345a9dd94c3177ef767b0c7d765e5778113c026f1b71"
+
+[hardware.centos7]
+cpu = "x86-64"
+ram_mib = 1024
+disk_mib = 2048
+boot_mib = 45
+drivers = "sha256:d757df3fcde59d846e471d0c2908a8286e3ed699c652f48008094dbbbe1d9fdd"
+
+[hardware.alma9]
+cpu = "x86-64-v2"
+ram_mib = 1536
+disk_mib = 4096
+boot_mib = 70
+drivers = "sha256:7ad88dca445a1c7e16b20214c2f7a0aba3d81b23bcd709d693d97bd96c6c9bd5"
+
+[hardware.alma10]
+cpu = "x86-64-v3"
+ram_mib = 2048
+disk_mib = 4096
+boot_mib = 75
+drivers = "sha256:005a32d661cc840df36d29089b8b0ca4010f4e388c50976d68366e2e03734c82"
+note = "AlmaLinux 10 has a separate x86_64_v2 build for older CPUs, but no wend route lands on it yet, so an x86-64-v2 machine stops at alma9"
