@@ -417,14 +417,19 @@ packages, EPEL: `Fedora Project`) and `repos` (release id = host/path, through t
 
 - Every hop's `set_release` appends `{addons}`: for each add-on with a repo for the release being entered, the add-on's
   repo goes into the harness's repo file as `[<release>-<name>]` if its marker is installed at that moment. A box
-  without the marker never sees the repo, so no fix can pull add-on packages onto it.
+  without the marker never sees the repo: no hop's repos or `rpm.transit`'s `new` repos ship a marker, so no fix can
+  pull add-on packages onto it. On a box with the marker, a fix's `install` can pull any of the add-on's packages
+  (unsigned, like the vendor's: `gpgcheck=0` behind the shim).
 - `rpm.transit` lets the add-on vendor's packages through its refusal when the marker is installed, and then requires,
   before it changes anything, that each of them has a package of the same name in the release's repos or the
   release's add-on repos (renames don't count). Anything without one is named and the op fails: a fix on the same hop
   has to remove or replace it first, the same way it would for the vendor's own dropped packages. After the download
   it checks again that each of them was actually fetched.
 - The add-on repos' metadata is pinned in the hop's `sources` like the vendor's (repo ids `<release>-<name>` and, for
-  `rpm.transit`, `boot-<name>`).
+  `rpm.transit`'s `new`, the same `<release>-<name>`). The transit's `old` repos (used only to install EL7's dnf)
+  get no add-on repos.
+- An adapter with `[addons]` must put `{addons}` in `hop.set_release`, or it would carry an add-on through the
+  transit and then drop it from the hops after.
 - Software Collections, vendor SIG repos and other third-party repos are not add-ons: `rpm.transit` still refuses them.
 
 ## Op reference
@@ -541,17 +546,21 @@ nothing from older releases is left in the rpm database (their files stay, unown
 touching anything, if any installed package (gpg-pubkey aside) has a vendor other than `remove`'s (or an installed
 add-on's: see "Add-on repositories", which also says what it then requires of those packages), or is one of that
 vendor's add-on repos (EL: names starting `rh-`, `devtoolset-` or `centos-release-`, except the base
-`centos-release-notes`; that is, Software Collections and SIGs). EPEL, vendor, SIG and locally built RPMs would
-otherwise lose their package records. Fails if the box doesn't say it is `release` afterwards.
+`centos-release-notes`; that is, Software Collections and SIGs). EPEL without its marker, vendor, SIG and locally
+built RPMs would otherwise lose their package records. The vendor is read last in each line, so a vendor string
+containing the separator can't pass as another package's. Fails if the box doesn't say it is `release` afterwards.
 A fix with a non-empty `reinstall` must pass the install rule. Reference, with work dir `/var/lib/wend/boot`, and
 repos kept in private `reposdir`s so `/etc/yum.repos.d` stays the harness's:
 1. Write a repo file for `transit.from`'s repos plus `transit.extra_repos` (`old`), and one for `release`'s repos
-   (`new`). Installed add-ons add their repo for `transit.from` to `old` as `boot-<name>` and their repo for
-   `release` to `new`.
+   (`new`). Installed add-ons add their repo for `release` to `new`. Before that, if any add-on vendor's package is
+   installed: read the package names in the primary metadata (gzip or xz) of `release`'s repos and its add-on repos,
+   and refuse, naming them, if any of those packages has no package of the same name there. Only the work dir has
+   changed at that point.
 2. `yum install dnf` from `old` (CentOS 7 extras ships an EL7 dnf).
 3. With that dnf and `new`: `--downloadonly` distro-sync into the work dir, `--releasever` = the release's major,
    `--allowerasing --setopt=best=False` (EL7's dnf 4.0 has no `--nobest`), no weak deps, no protected packages. Its exit code is ignored; the step fails if
-   `rpm`, `rpm-libs`, `glibc`, `dnf` or `python3-dnf` wasn't downloaded. Also fetch `transit.release_package` from
+   `rpm`, `rpm-libs`, `glibc`, `dnf` or `python3-dnf` wasn't downloaded, or any of the add-on packages wasn't (as
+   with the first five, EL7's dnf is still installed when that fails). Also fetch `transit.release_package` from
    `PKGLIST(BASE)` if the sync didn't.
 4. `rpm -e dnf` (the EL7 one), rebuild the database, and unpack every downloaded package into a staging dir.
 5. `rpm -e --nodeps --noscripts {remove}` (the old release package), then run the staged rpm through the staged
@@ -649,8 +658,12 @@ name (`systemctl list-unit-files --type=service --state=enabled`): EL7 boxes nee
 whose distro-sync erases module-stream packages (httpd, mariadb, php) along with their enablement links.
 Only the first record is kept: if the file exists, it is left as it is, so it always holds the box's own state. It
 is only allowed in `pre` (after the upgrade the links are gone), and it stays on the box afterwards: a later route
-that uses `service.enable` reads the same record, which is what the box ran under SysV, not what it runs today. That
-is why `service.enable` also accepts a `like` service that is enabled now. Fails if `/etc/rc.d/rc<L>.d` doesn't exist. Reference: `ls /etc/rc.d/rc$L.d | sed -n 's/^S[0-9][0-9]//p' | sort -u`.
+that uses `service.enable` reads the same record, which is what the box ran at its first record, not what it runs
+today. That is why `service.enable` also accepts a `like` service that is enabled now. SysV: fails if
+`/etc/rc.d/rc<L>.d` doesn't exist; reference `ls /etc/rc.d/rc$L.d | sed -n 's/^S[0-9][0-9]//p' | sort -u`. systemd:
+fails if the list is empty (nothing is recorded then); reference `systemctl list-unit-files --type=service
+--state=enabled --no-legend`, first column without `.service`. On EL7, SysV-script services enabled with chkconfig
+(`network`) are not in that list.
 
 **`service.enable`** `unit` (`[A-Za-z0-9][A-Za-z0-9_.-]*`, so `NetworkManager`), `like` (a list of the same, at least one). Enables `unit` at
 boot if any service in `like` started at boot: it is in the SysV record, or `systemctl is-enabled` says `enabled`

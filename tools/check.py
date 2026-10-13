@@ -121,6 +121,8 @@ def check_adapter(a, where):
                                            n not in rels[r].get("repos", {}) for r, u in ad["repos"].items()):
             errs.append(f"{where}: addons.{n} needs a plain name, a marker package, a plain vendor, and repos "
                         "(host/path) for releases the adapter has, on the rpm backend")
+    if a.get("addons") and "{addons}" not in str(a.get("hop", {}).get("set_release", "")):
+        errs.append(f"{where}: an adapter with addons must put {{addons}} in hop.set_release")
     for k in ("kernel_before", "kernel_after"):
         if k in a.get("hop", {}) and not (isinstance(a["hop"][k], list) and all(isinstance(c, str) for c in a["hop"][k])):
             errs.append(f"{where}: hop.{k} must be a list of commands")

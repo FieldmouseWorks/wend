@@ -173,7 +173,7 @@ pub fn hop_vars(adapter: &Doc, release: &str) -> Result<Vars, String> {
                 ("shim".into(), shim.into()),
                 ("repofile".into(), repo_file(adapter, release, shim)?.replace('\n', "\\n")),
                 ("addons".into(), {
-                    let a = addon_repos(adapter, release, shim, "/etc/yum.repos.d/ladder.repo", None);
+                    let a = addon_repos(adapter, release, shim, "/etc/yum.repos.d/ladder.repo");
                     if a.is_empty() { "true".into() } else { a }
                 }),
                 ("pm".into(), "$(command -v dnf || command -v yum)".into()),
@@ -279,6 +279,8 @@ const SAVED: &str = "/var/lib/wend/saved";
 const SYSV_RECORD: &str = "/var/lib/wend/sysv-enabled";
 /// <hop>/<repo id>.repomd.xml: metadata an op fetched through repos the hop then drops
 pub const SOURCES: &str = "/var/lib/wend/sources";
+/// awk: x = everything after the second | (a vendor may contain |; names and NVRAs can't)
+const VENDOR_LAST: &str = "{x = $0; sub(/^[^|]*[|][^|]*[|]/, \"\", x)}";
 /// package file names (name-version-release.arch.rpm) to package names, one per line
 const NAMES: &str = "awk '{sub(/-[^-]*-[^-]*$/, \"\"); print}'";
 
@@ -313,12 +315,12 @@ fn repo_file(adapter: &Doc, release: &str, shim: &str) -> Result<String, String>
 }
 
 /// SPEC "Add-on repositories": shell that appends each add-on's repo for `release` to `file`, as
-/// [<prefix or release>-<addon>], when the add-on's marker package is installed. Empty when no add-on has one.
-fn addon_repos(adapter: &Doc, release: &str, shim: &str, file: &str, prefix: Option<&str>) -> String {
+/// [<release>-<addon>], when the add-on's marker package is installed. Empty when no add-on has one.
+fn addon_repos(adapter: &Doc, release: &str, shim: &str, file: &str) -> String {
     let mut out = vec![];
     for (n, a) in get(adapter, "addons").and_then(Value::as_object).into_iter().flatten() {
         if let Some(u) = get(a, "repos").and_then(|r| get(r, release)) {
-            let rid = format!("{}-{n}", prefix.unwrap_or(release));
+            let rid = format!("{release}-{n}");
             let marker = get(a, "marker").map(scalar).unwrap_or_default();
             out.push(format!(
                 "if rpm -q {marker} >/dev/null 2>&1; then printf '[{rid}]\\nname={rid}\\nbaseurl={shim}/{}/\\n\
@@ -327,7 +329,8 @@ fn addon_repos(adapter: &Doc, release: &str, shim: &str, file: &str, prefix: Opt
             ));
         }
     }
-    out.join("; ")
+    // each `if` is true when its marker is absent
+    out.join(" && ")
 }
 
 /// Shell that sets A to |vendor|vendor|... for every add-on whose marker package is installed.
@@ -348,26 +351,15 @@ fn addon_vendors(adapter: &Doc) -> String {
     out
 }
 
-/// {repo id: repomd.xml URL} for every add-on repo a hop (<release>-<addon>) or rpm.transit (boot-<addon>) uses.
+/// {repo id: repomd.xml URL} for every add-on repo a hop or rpm.transit uses (<release>-<addon>).
 pub fn addon_repo_ids(adapter: &Doc) -> Vec<(String, String)> {
     let mut ids = vec![];
-    let rels = get(adapter, "releases").and_then(Value::as_object);
     for (n, a) in get(adapter, "addons").and_then(Value::as_object).into_iter().flatten() {
-        let repos = get(a, "repos").and_then(Value::as_object);
-        for (rel, u) in repos.into_iter().flatten() {
+        for (rel, u) in get(a, "repos").and_then(Value::as_object).into_iter().flatten() {
             ids.push((
                 format!("{rel}-{n}"),
                 format!("https://{}/repodata/repomd.xml", scalar(u)),
             ));
-        }
-        for r in rels.into_iter().flatten().map(|(_, r)| r) {
-            let from = get(r, "transit").and_then(|t| get(t, "from")).and_then(Value::as_str);
-            if let Some(u) = from.and_then(|f| repos.and_then(|rs| rs.get(f))) {
-                ids.push((
-                    format!("boot-{n}"),
-                    format!("https://{}/repodata/repomd.xml", scalar(u)),
-                ));
-            }
         }
     }
     ids
@@ -378,8 +370,9 @@ fn package_names(base: &str, out: &str) -> String {
     format!(
         "R=$(curl -sf {base}/repodata/repomd.xml | grep -o 'href=\"[^\"]*primary.xml[.a-z]*\"' | head -n1 | \
          sed 's/href=\"//;s/\"//') && test -n \"$R\" && curl -sf -o {out}.z {base}/$R && \
-         case $R in *.xz) xz -dc;; *.gz) gzip -dc;; *) cat;; esac < {out}.z | grep -o '<name>[^<]*</name>' | \
-         sed 's/<[^>]*>//g' >> {out} && rm -f {out}.z && test -s {out} || \
+         case $R in *.xz) xz -dc < {out}.z > {out}.x;; *.gz) gzip -dc < {out}.z > {out}.x;; *) false;; esac && \
+         grep -o '<name>[^<]*</name>' {out}.x | sed 's/<[^>]*>//g' > {out}.one && test -s {out}.one && \
+         cat {out}.one >> {out} && rm -f {out}.z {out}.x {out}.one || \
          {{ echo 'no package list from {base}'; exit 1; }}"
     )
 }
@@ -697,16 +690,11 @@ fn transit(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
             succ.push(format!("{shim}/{}", scalar(u)));
         }
     }
-    let from = str_of(boot, "from")?;
     let mut repo_lines =
         format!("printf '{old_repos}' > {b}/old/boot.repo; printf '{new_repos}' > {b}/new/ladder.repo");
-    for x in [
-        addon_repos(adapter, from, shim, &format!("{b}/old/boot.repo"), Some("boot")),
-        addon_repos(adapter, target, shim, &format!("{b}/new/ladder.repo"), None),
-    ] {
-        if !x.is_empty() {
-            repo_lines.push_str(&format!("; {x}"));
-        }
+    let x = addon_repos(adapter, target, shim, &format!("{b}/new/ladder.repo"));
+    if !x.is_empty() {
+        repo_lines.push_str(&format!("; {x}"));
     }
     Ok([
         [
@@ -714,11 +702,11 @@ fn transit(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
             // the add-on's marker is installed, and the next step requires a successor for each of them.
             &format!(
                 "{}V=$(rpm -q --qf '%{{VENDOR}}' {remove}); T=$(rpm -qa --qf \
-                 '%{{VENDOR}}|%{{NAME}}|%{{NAME}}-%{{VERSION}}-%{{RELEASE}}.%{{ARCH}}\\n' | awk -F'|' -v v=\"$V\" -v a=\"$A\" ",
+                 '%{{NAME}}|%{{NAME}}-%{{VERSION}}-%{{RELEASE}}.%{{ARCH}}|%{{VENDOR}}\\n' | awk -F'|' -v v=\"$V\" -v a=\"$A\" ",
                 addon_vendors(adapter)
             ),
-            "'$2 != \"gpg-pubkey\" && !index(a, \"|\" $1 \"|\") && ($1 != v || ",
-            "$2 ~ /^(rh-|devtoolset-|centos-release-.)/ && $2 != \"centos-release-notes\") {print $3}'); [ -z \"$T\" ] || ",
+            &format!("'{VENDOR_LAST} $1 != \"gpg-pubkey\" && !index(a, \"|\" x \"|\") && (x != v || "),
+            "$1 ~ /^(rh-|devtoolset-|centos-release-.)/ && $1 != \"centos-release-notes\") {print $2}'); [ -z \"$T\" ] || ",
             "{ printf 'refusing, not plain %s packages: ' \"$V\"; printf '%s ' $T; echo; exit 1; }",
         ]
         .concat(),
@@ -726,7 +714,8 @@ fn transit(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
         // every add-on package needs a package of the same name in the release's repos or its add-on repos, or it
         // would be dropped from the database at the end: refuse before changing anything, naming them
         format!(
-            "P=$(rpm -qa --qf '%{{VENDOR}}|%{{NAME}}\\n' | awk -F'|' -v a=\"$A\" 'index(a, \"|\" $1 \"|\") {{print $2}}' | \
+            "P=$(rpm -qa --qf '%{{NAME}}|%{{NAME}}|%{{VENDOR}}\\n' | awk -F'|' -v a=\"$A\" '{VENDOR_LAST} index(a, \"|\" x \"|\") \
+             {{print $1}}' | \
              sort -u); if [ -n \"$P\" ]; then : > {b}/names; {}M=$(for n in $P; do grep -qxF \"$n\" {b}/names || echo $n; \
              done); [ -z \"$M\" ] || {{ echo \"refusing, no {target} package for these add-on packages (a fix must \
              remove or replace them first):\" $M; exit 1; }}; fi",
@@ -878,7 +867,8 @@ fn service_record() -> String {
         // a systemd box (EL7 on) records its enabled service units instead, by unit name
         "if command -v systemctl >/dev/null 2>&1; then mkdir -p /var/lib/wend && systemctl list-unit-files ",
         "--type=service --state=enabled --no-legend | awk '{sub(/\\.service$/, \"\", $1); print $1}' | sort -u ",
-        &format!("> {r}.new && mv {r}.new {r} && echo \"systemd starts: $(tr '\\n' ' ' < {r})\"; exit $?; fi; "),
+        &format!("> {r}.new && test -s {r}.new && mv {r}.new {r} && echo \"systemd starts: $(tr '\\n' ' ' < {r})\"; "),
+        &format!("R=$?; rm -f {r}.new; exit $R; fi; "),
         "L=$(sed -n 's/^id:\\([0-9]\\):initdefault:.*/\\1/p' /etc/inittab 2>/dev/null | head -n 1); ",
         "[ -n \"$L\" ] || L=3; [ -d /etc/rc.d/rc$L.d ] || { echo \"no /etc/rc.d/rc$L.d: no SysV runlevels to record\"; exit 1; }; ",
         &format!("mkdir -p /var/lib/wend && ls /etc/rc.d/rc$L.d | sed -n 's/^S[0-9][0-9]//p' | sort -u > {r}.new && "),

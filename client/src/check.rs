@@ -298,6 +298,18 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
         }
     }
     // SPEC "Add-on repositories": their values land in root shell commands
+    if get(a, "addons")
+        .and_then(Value::as_object)
+        .is_some_and(|x| !x.is_empty())
+        && !get(a, "hop")
+            .and_then(|h| get(h, "set_release"))
+            .and_then(Value::as_str)
+            .is_some_and(|s| s.contains("{addons}"))
+    {
+        errs.push(format!(
+            "{wh}: an adapter with addons must put {{addons}} in hop.set_release"
+        ));
+    }
     if let Some(Value::Object(addons)) = get(a, "addons") {
         let rels = get(a, "releases");
         for (n, ad) in addons {
