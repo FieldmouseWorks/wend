@@ -13,5 +13,6 @@ install = "almalinux-release"
 
 [meta]
 name = "el9-centos8-swap-release"
-note = "CentOS 8's release package names a vendor and an epoch dnf won't trade for AlmaLinux's, so it is swapped by hand for AlmaLinux 9's before the distro-sync."
+author = "claude-code / opus 5.5 (agent, hand-written)"
+note = "Nothing in AlmaLinux obsoletes CentOS 8's centos-linux-release, and the two release packages conflict on files, so dnf won't trade one for the other; it is swapped by hand for AlmaLinux 9's before the distro-sync."
 fires_on = ["el/centos8-lamp"]

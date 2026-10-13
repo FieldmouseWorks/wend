@@ -36,10 +36,6 @@ id = "sha256:5ba8445d57679f7eef5794e4dda7f855a95a7ee8a6dd196e0b4720724abda483"
 name = "el9-php-xml"
 
 [[fixes]]
-id = "sha256:608d59864a7bbcc47c69815e74183389e4865933edae0fb17dcc9e3b9e6770b7"
-name = "el9-php-mysqlnd"
-
-[[fixes]]
 id = "sha256:f4341598b841b3e004c75aca526d92da77a6997f6164bc1b44423eb82f55c36a"
 name = "el9-mariadb-server"
 
@@ -54,10 +50,6 @@ name = "el9-mariadb-config"
 [[fixes]]
 id = "sha256:c5de001649525a86c2727b966232869401546ceb6cd0e982e39ec46ceb3fecf9"
 name = "el9-httpd-config"
-
-[[fixes]]
-id = "sha256:7aa2ee229b394192cc90f13098dea996af758664709e416eb8add860aabeeb9c"
-name = "el9-drop-orphaned-polkit"
 
 [[fixes]]
 id = "sha256:645af92e570ed65e10a8d48297fcc9012a6a2e7723cceb4eac2084a73a27522d"
