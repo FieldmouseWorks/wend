@@ -296,6 +296,8 @@ for name, vm, want in (("the web box's own [vm]", web.get("vm", {}), False),
                        ("[vm] ssh_port out of range", {**web["vm"], "ssh_port": 70000}, True),
                        ("[vm] an empty live check", {**web["vm"], "live": {"x": ""}}, True),
                        ("[vm] an unknown key", {**web["vm"], "hostname": "x"}, True),
+                       ("[vm] root_fs xfs-v4", {**web["vm"], "root_fs": "xfs-v4"}, False),
+                       ("[vm] an unknown root_fs", {**web["vm"], "root_fs": "btrfs"}, True),
                        ("[vm] a skipped role with no live check", {**web["vm"], "live": {"site": web["vm"]["live"]["site"]}},
                         True)):
     errs = check.check_box({**web, "vm": vm}, adapters, "boxes/el/centos5-web/box.toml")
