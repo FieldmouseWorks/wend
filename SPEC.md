@@ -407,6 +407,13 @@ See `adapters/el.toml`. Notes that matter:
   `http://127.0.0.1:<port>/<host>/<path>`, for a fixed list of hosts, and caching what it fetched.
 - No EL release has an in-place path through a chroot (Leapp and redhat-upgrade-tool reboot), so every hop is a plain
   transaction plus fixes.
+- On a live box the hop to EL9 runs its transaction offline, as a chroot does (`SYSTEMD_OFFLINE=1`: systemctl skips
+  the starts, restarts and `daemon-reexec` scriptlets ask for). Otherwise systemd's `%post` re-executes PID 1 as EL9's
+  systemd on EL7's 3.10 kernel, which never sees a stopped unit's cgroup empty, and the first scriptlet that waits on
+  a stop or start (audit's) hangs the transaction (wend#75). The old daemons run on until the hop's reboot, except sshd:
+  its listener re-executes `/usr/sbin/sshd` for every connection and can't hand its state to a newer binary, so it is
+  restarted after `rpm.transit` and after the transaction, and the step fails unless a new connection gets the ssh
+  greeting.
 - `installed` is `rpm -q`. "Explicitly installed" doesn't exist before yum 3 on EL6, so a box's services check uses
   "nothing requires it, by name or by any capability it provides" instead.
 - `current`: the service binaries come from a package whose dist tag is the running major (`[._]el$MAJOR`).

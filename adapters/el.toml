@@ -105,9 +105,21 @@ repos = { baseos = "repo.almalinux.org/almalinux/9/BaseOS/x86_64/os", appstream 
 # EL8 module streams don't exist on EL9: reset them, and tell dnf which platform it is on (a chroot has no os-release
 # it trusts yet). EL9's rpm only reads EL8's Berkeley DB read-only, so the database is rebuilt (as sqlite) before any
 # fix installs anything.
-upgrade = ["rm -f /etc/dnf/modules.d/*.module",
-           "{clean_repos}; dnf -y {dnf_opts} --nobest --setopt=module_platform_id=platform:el9 distro-sync",
-           "/usr/sbin/ldconfig; rm -f /var/lib/rpm/__db.*; rpmdb --rebuilddb && rpm -q rpm"]
+#
+# On a live box (wend#75) the transaction runs offline, as it does in a chroot: SYSTEMD_OFFLINE=1 makes EL8's and EL9's
+# systemctl skip every start, restart and daemon-reexec the scriptlets ask for ("Running in chroot, ignoring"). Without
+# it systemd's %post re-executes PID 1 as EL9's systemd on the old release's kernel (EL7's 3.10), which never sees a
+# stopped unit's cgroup empty, so a scriptlet that waits on a stop or start (audit's %post) hangs the transaction. The
+# old daemons keep running until the reboot that ends the hop. sshd is the exception: the running listener re-executes
+# /usr/sbin/sshd for every new connection, and an older listener can't hand its state to a newer binary, so once
+# rpm.transit or the transaction replaces it nobody can log in. It is restarted after each (its config checked with
+# sshd -t first), and the step fails unless a new connection gets the ssh greeting. A chroot box runs no sshd and
+# skips both.
+upgrade = ["[ / -ef /proc/1/root ] && [ -d /run/systemd/system ] && systemctl -q is-active sshd || { echo \"sshd: not a running systemd service on this root, left alone\"; exit 0; }; /usr/sbin/sshd -t || { echo \"the installed sshd rejects its configuration: restarting it would lock ssh out\"; exit 1; }; timeout 120 systemctl restart sshd || { echo \"systemctl restart sshd failed or hung\"; exit 1; }; L=$(/usr/sbin/sshd -T 2>/dev/null | awk '$1 == \"listenaddress\" {print $2}'); A=$(echo \"$L\" | grep -v '^\\[' | head -n1); [ -n \"$A\" ] || A=$(echo \"$L\" | head -n1); H=${A%:*}; P=${A##*:}; H=${H#[}; H=${H%]}; case \"$H\" in 0.0.0.0|\"\") H=127.0.0.1;; ::) H=::1;; esac; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do timeout 5 bash -c \"exec 3<>/dev/tcp/$H/${P:-22} && head -c 4 <&3\" 2>/dev/null | grep -q '^SSH-' && { echo \"sshd restarted: a new connection to $H port ${P:-22} gets its greeting\"; exit 0; }; sleep 1; done; echo \"sshd restarted, but a new connection to $H port ${P:-22} gets no greeting\"; exit 1",
+           "rm -f /etc/dnf/modules.d/*.module",
+           "{clean_repos}; SYSTEMD_OFFLINE=1 dnf -y {dnf_opts} --nobest --setopt=module_platform_id=platform:el9 distro-sync",
+           "/usr/sbin/ldconfig; rm -f /var/lib/rpm/__db.*; rpmdb --rebuilddb && rpm -q rpm",
+           "[ / -ef /proc/1/root ] && [ -d /run/systemd/system ] && systemctl -q is-active sshd || { echo \"sshd: not a running systemd service on this root, left alone\"; exit 0; }; /usr/sbin/sshd -t || { echo \"the installed sshd rejects its configuration: restarting it would lock ssh out\"; exit 1; }; timeout 120 systemctl restart sshd || { echo \"systemctl restart sshd failed or hung\"; exit 1; }; L=$(/usr/sbin/sshd -T 2>/dev/null | awk '$1 == \"listenaddress\" {print $2}'); A=$(echo \"$L\" | grep -v '^\\[' | head -n1); [ -n \"$A\" ] || A=$(echo \"$L\" | head -n1); H=${A%:*}; P=${A##*:}; H=${H#[}; H=${H%]}; case \"$H\" in 0.0.0.0|\"\") H=127.0.0.1;; ::) H=::1;; esac; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do timeout 5 bash -c \"exec 3<>/dev/tcp/$H/${P:-22} && head -c 4 <&3\" 2>/dev/null | grep -q '^SSH-' && { echo \"sshd restarted: a new connection to $H port ${P:-22} gets its greeting\"; exit 0; }; sleep 1; done; echo \"sshd restarted, but a new connection to $H port ${P:-22} gets no greeting\"; exit 1"]
 
 [releases.alma10]
 major = 10
