@@ -124,6 +124,8 @@ msg, out, left, mode = run(with_eth0(["description: uplink\u2028dns-nameservers:
 case("only a newline ends a line, as in ifquery's output", msg is None and out == WANT)
 msg, out, left, mode = run(with_eth0(ETH0 + ["d=ns-search: evil.example"]))
 case("an option name ends at its first = (setlocalenv), so d=ns-search isn't DNS_SEARCH", msg is None and out == WANT)
+msg, out, left, mode = run(with_eth0([x.replace("example.org", "example.org.") for x in ETH0]))
+case("a search domain's trailing dot is dropped", msg is None and out == WANT)
 for name, q, why, kw in (
         ("a nameserver that is loopback", with_eth0(ETH0 + ["dns-nameservers: 127.0.0.1"]), "isn't a unicast", {}),
         ("a reserved address", with_eth0(ETH0 + ["dns-nameservers: 240.0.0.1"]), "isn't a unicast", {}),
@@ -133,6 +135,20 @@ for name, q, why, kw in (
         ("a second line of a nameserver value with ': ' in it", with_eth0(ETH0[:3] + ["dns-nameservers: 10.0.2.3",
                                                                                    "10.0.2.4 x: y"]),
          "isn't an address", {}),
+        ("a value a hook sees as one word (\\v inside)", with_eth0(ETH0 + ["dns-nameservers: 10.3.3.3\v10.3.3.4"]),
+         "isn't an address", {}),
+        ("a search value a hook sees as one word (\\xa0 inside)",
+         with_eth0(ETH0 + ["dns-search: a.example\xa0b.example"]), "isn't a plain domain", {}),
+        ("a second line a hook sees as a word (\\xa0 alone)", with_eth0(ETH0 + ["\xa0"]), "isn't a plain domain",
+         {}),
+        ("a key with = whose rest leads the hook's value", with_eth0(ETH0[:3] + ["dns-nameservers=9.9.9.9: 1.1.1.1"]),
+         "isn't an address", {}),
+        ("a second line with a tab in its key", with_eth0(ETH0[:3] + ["dns-nameservers: 10.0.2.3",
+                                                                     "dns-name\tservers: 6.6.6.6"]),
+         "isn't an address", {}),
+        ("a file where the drop-in's directory goes", BOOT, "isn't a directory",
+         {"prepare": lambda p: (os.makedirs(os.path.dirname(os.path.dirname(p))),
+                                open(os.path.dirname(p), "w").write("x"))}),
         ("a continuation before any option", with_eth0(["10.0.2.3"] + ETH0), "before any option", {}),
         ("an interface name that reads as an option", with_eth0(ETH0, {"auto": ["lo", "--help"], "hotplug": []}),
          "isn't an interface name", {}),
@@ -145,7 +161,7 @@ for name, q, why, kw in (
          {"prepare": lambda p: (os.makedirs(os.path.dirname(p)), open(p + ".wend", "w").write("x"))}),
         ("a directory where the drop-in goes", BOOT, "exists already", {"prepare": lambda p: os.makedirs(p)})):
     msg, out, left, mode = run(q, **kw)
-    unchanged = left == [] or (".wend" in why and left == [DROP + ".wend"])
+    unchanged = left == ([DROP + ".wend"] if ".wend" in why else [os.path.dirname(DROP)] if "directory" in why else [])
     case(f"{name} is refused before anything changes", refused(msg, why) and out is None and unchanged)
 for name, q, why in (
         ("ifupdown failing to read its configuration", {"fail": True}, "misplaced option"),

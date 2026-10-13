@@ -487,9 +487,10 @@ resolute in a VM, wend#13). noble ships no resolvconf at all. ifupdown reads its
 each one's options as ifupdown parsed them (inet and inet6 stanzas, `inherits`, sourced files); a configuration it
 can't read fails the step, and so does an interface name that starts with `-` or holds anything but
 `[A-Za-z0-9_.:@-]`. ifquery prints `name: value` per option, and ifupdown keeps an option given twice as one value
-joined by a newline, so a line without `: ` continues the value before it (only a newline ends a line). Each option
-name becomes the name ifupdown's hooks receive (up to the first `=`, `-` to `_`, ASCII upper case, anything else
-dropped), and two spellings of one `DNS_*` name on an interface fail the step, because a hook sees only the last.
+joined by a newline, so a line without `: ` (or with whitespace in its name) continues the value before it (only a
+newline ends a line), and a value is split into words as a hook's shell splits it (space, tab, newline). Each option
+name becomes the name ifupdown's hooks receive (up to the first `=`, whose rest leads the value; `-` to `_`, ASCII
+upper case, anything else dropped), and two spellings of one `DNS_*` name on an interface fail the step, because a hook sees only the last.
 `DNS_NAMESERVERS` and `DNS_NAMESERVER` must be unicast addresses a resolver can be at (no scope, not link-local,
 multicast, loopback, unspecified, reserved, broadcast or IPv4-mapped); `DNS_SEARCH` and `DNS_DOMAIN` plain domain
 names; any other `DNS_*` option fails the step. The result is `/etc/systemd/resolved.conf.d/50-wend-ifupdown.conf`
