@@ -231,7 +231,11 @@ fn boot_dir(dir: &Path, running: &str) -> Value {
         "free_mib": free,
         "kernels": boot_kernels(&files, running),
         "rescue_mib": rescue_mib(&files),
-        "rescue_default": fs::read_to_string(dir.join("grub/grub.conf")).is_ok_and(|g| grub_default_is_rescue(&g)),
+        // an unreadable grub.conf (EL5's and EL6's are 0600, and facts can run without root) may name it too
+        "rescue_default": match fs::read_to_string(dir.join("grub/grub.conf")) {
+            Ok(g) => grub_default_is_rescue(&g),
+            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+        },
     })
 }
 
