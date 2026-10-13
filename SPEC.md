@@ -1095,7 +1095,7 @@ libraries the hop may take away even though its files stay; and runtimes other t
 ## Sheltering an app (draft: chroot tier built)
 
 This section designs the **shelter** choice that runtime preflight offers. The chroot (CI) tier is built in the
-reference harness (`tools/shelter.py`), together with the box that needs it (`el/centos7-pyapp`); the client's ops,
+reference harness (`tools/shelter.py`), and the box that needs it (`el/centos7-pyapp`) lands right after it; the client's ops,
 the preflight plan and the VM tier come after it, each with its own PR.
 
 ### What it is, and what it isn't
@@ -1307,7 +1307,7 @@ route itself causes.
 
 ### Proof
 
-- **The box lands with the chroot tier, not before it**: `el/centos7-pyapp` is a centos7-lamp sibling with a
+- **The box lands after the chroot tier, never before it**: `el/centos7-pyapp` is a centos7-lamp sibling with a
   Python 2 service (a small BaseHTTPServer JSON API reading MariaDB through MySQLdb over the socket, writing to
   `/var/lib/billing`), its systemd unit, a nightly cron job, and the owner's plan (`[shelter.billing]`). Its `app`
   check starts whatever the box has enabled for billing (its own unit, or the shelter's) from the unit's
@@ -1315,7 +1315,7 @@ route itself causes.
   that has taken the line over, and reads what it wrote. Neither names Python. The box can't land alone: on the hop
   to alma9 its app and cron checks go red, and a walk rolls back any hop that loses a passing check, so every
   centos7 route would fail on it. Every box that starts at centos7 is a decoy for every centos7 route, so that would
-  turn all of them red in CI.
+  turn all of them red in CI. And CI judges a PR with the base branch's tools, so the tools land first.
 - **CI (chroot tier):** chroots run no podman, so CI proves the userland only. While a box's checks run, the
   harness puts a stand-in at `/usr/bin/podman` (`tools/podman_standin.sh`, never shipped to clients and never left
   in the box) whose `run` chroots into the shelter root the image ID names, with the unit's declared mounts (code

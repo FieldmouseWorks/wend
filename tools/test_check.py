@@ -306,11 +306,13 @@ for name, vm, want in (("the web box's own [vm]", web.get("vm", {}), False),
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
 # a box's [shelter.<app>] plan (SPEC "Sheltering an app"): every value lands in root commands and unit files
-py = check.load_all()[3]["el/centos7-pyapp"]
-plan = py["shelter"]["billing"]
+py = check.load_all()[3]["el/centos7-lamp"]  # any EL7 box: the plan below is what el/centos7-pyapp carries
+plan = {"code": "/opt/billing", "data": ["/var/lib/billing"], "user": "billing", "unit": "billing.service",
+        "cron": [{"user": "billing", "line": "30 2 * * * /usr/bin/python /opt/billing/nightly.py"}],
+        "sockets": ["/var/lib/mysql/mysql.sock"], "ports": ["127.0.0.1:8080"]}
 cron0 = plan["cron"][0]
 for name, sh, want in (
-        ("the pyapp box's own plan", py["shelter"], False),
+        ("the pyapp box's own plan", {"billing": plan}, False),
         ("shelter: not a table of apps", {"code": "/opt/billing"}, True),
         ("shelter: an app name with a space", {"bill ing": plan}, True),
         ("shelter: an unknown key (a privileged container)", {"billing": {**plan, "privileged": True}}, True),
@@ -338,7 +340,7 @@ for name, sh, want in (
         ("shelter: a relative socket", {"billing": {**plan, "sockets": ["mysql.sock"]}}, True),
         ("shelter: a port out of range", {"billing": {**plan, "ports": ["127.0.0.1:99999"]}}, True),
         ("shelter: a port with no address", {"billing": {**plan, "ports": [8080]}}, True)):
-    errs = check.check_box({**py, "shelter": sh}, adapters, "boxes/el/centos7-pyapp/box.toml")
+    errs = check.check_box({**py, "shelter": sh}, adapters, "boxes/el/centos7-lamp/box.toml")
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
 # the kernel handover's place in a hop (SPEC "Kernels and the bootloader"): right after refresh, and right after the
