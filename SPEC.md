@@ -874,17 +874,17 @@ harness, not to fixes, because the release's own tools can't carry them up the l
   the files of kernels that no package owns and that aren't running or GRUB's default, so the release's kernel fits
   in `/boot` (the VM tier's CentOS 5 /boot is 200 MiB), its kdump image with it. This is how the previous hop's kernel,
   once a reboot has moved off it, finally goes. The rescue image (`vmlinuz-0-rescue-<machine id>`, its initramfs and BLS
-  entry) goes too, unless it is or may be GRUB legacy's default (`default=saved` keeps it): it is the old release's
-  kernel with a generic initramfs (62 MiB on EL7), and EL9's `51-dracut-rescue.install`, finding no BLS entry for it,
-  copies the new `vmlinuz` over the old one and keeps EL7's initramfs. No hop builds another: `hop.kernel_before` sets
-  `dracut_rescue_image="no"` in a drop-in (`/etc/dracut.conf.d/99-wend-no-rescue.conf`) that `hop.after` removes, since
-  a generic image of 54 MiB (Alma 9) or 65 MiB (Alma 10) doesn't fit the VM tier's 200 MiB CentOS 5 `/boot` beside two
-  kernels. The machine lands without a rescue image, and its next kernel update builds one for the release it runs, as
-  EL does when none exists. None of the kernel steps acts unless the machine is booted from this root (`/` is PID 1's
-  root): in a chroot of someone's disk the records, files and boot entries are left as they are, since `uname -r` there
-  is the host's kernel, not the box's. The fallback the running kernel's entry gives is a manual one: GRUB legacy has no
-  `fallback=` set, so a hop that fails between the two halves leaves the default on the running
-  kernel's entry, which still boots.
+  entry) goes too, unless it is or may be GRUB's default (GRUB legacy's `default=saved`, GRUB 2's `saved_entry`): it is
+  the old release's kernel with a generic initramfs (62 MiB on EL7), and EL9's `51-dracut-rescue.install`, finding no
+  BLS entry for it, copies the new `vmlinuz` over the old one and keeps EL7's initramfs. No hop builds another:
+  `hop.kernel_before` sets `dracut_rescue_image="no"` in a drop-in (`/etc/dracut.conf.d/99-wend-no-rescue.conf`) that
+  `hop.after` removes, since a generic image of 54 MiB (Alma 9) or 65 MiB (Alma 10) doesn't fit the VM tier's 200 MiB
+  CentOS 5 `/boot` beside two kernels. The machine lands without a rescue image, and its next kernel update builds one
+  for the release it runs, as EL does when none exists. None of the kernel steps acts unless the machine is booted from
+  this root (`/` is PID 1's root): in a chroot of someone's disk the records, files and boot entries are left as they
+  are, since `uname -r` there is the host's kernel, not the box's. The fallback the running kernel's entry gives is a
+  manual one: GRUB legacy has no `fallback=` set, so a hop that fails between the two halves leaves the default on the
+  running kernel's entry, which still boots.
 - **The release's kernel is installed after the transaction** (`hop.kernel_after`), since the transaction itself only
   syncs what the database lists.
 - **GRUB legacy stays.** From EL8 on, kernels only get BLS entries, which GRUB legacy can't read, and GRUB2 can't be
@@ -943,7 +943,7 @@ firmware (`/sys/firmware/efi` means UEFI); `MemTotal`; free space on `/`; `/boot
 own, its size and free space as a package install sees them (root's reserved blocks left out of both), and each
 kernel in it (one per `vmlinuz-<version>`, rescue images aside) with the MiB its files take (`vmlinuz`, initramfs,
 kdump image, `System.map`, `config` and the rest named for that version) and whether it is the running one, and the
-MiB the rescue image takes and whether GRUB legacy's default may boot it; the modules the machine blacklists (`blacklist
+MiB the rescue image takes and whether GRUB's default may boot it; the modules the machine blacklists (`blacklist
 m`, or `install m /bin/false`, in every file of `/etc/modprobe.d`, since EL5's and lenny's are named `blacklist`
 without `.conf`, `/etc/modprobe.conf` and the distro's own `modprobe.d`); every mounted ext2, ext3, ext4, XFS, btrfs,
 reiserfs or JFS filesystem (from `/proc/mounts`, once each, bind mounts aside): its mount point, its device (the one
@@ -1009,8 +1009,8 @@ machine blacklists doesn't count, unless that module drives the device now (kmod
 r8169). A module from outside the kernel's package never follows to the release's kernel: the device needs one of
 that kernel's own drivers, and when it has one the verdict notes which takes over. A hop also fails when its kernel
 doesn't fit in a separate `/boot`: `boot_mib` must fit in `/boot`'s size less its other files (what isn't a kernel's;
-with `"running"`, the rescue image isn't one either, since `hop.kernel_before` drops it, unless GRUB legacy's default
-may boot it) and the kernels the hop keeps (`old_kernels`). Those are the machine's running kernel on the first hop with
+with `"running"`, the rescue image isn't one either, since `hop.kernel_before` drops it, unless GRUB's default may
+boot it) and the kernels the hop keeps (`old_kernels`). Those are the machine's running kernel on the first hop with
 `"running"` (with any kernel another package owns, on every hop), and every kernel it has with `"autoremove"`; then the
 previous release's kernel with `"running"`, and with `"autoremove"` the two before it (the machine's running kernel and
 the first release's, on the second hop), or every kernel so far up to `autoremove_from`. A hop also fails
@@ -1033,12 +1033,11 @@ Not checked yet: firmware files a driver loads; the kernel flavour a machine run
 `linux-image-generic` with its extra modules; a machine on `linux-virtual` has fewer); a DKMS module that would
 rebuild for the new kernel (it isn't counted, so such a device is refused when no in-kernel driver has it); and in
 `/boot`, a GRUB default that isn't the running kernel (EL keeps it too), kdump images the new kernels get once kdump
-starts, a rescue image EL7's GRUB 2 boots by default (`saved_entry`; counted as dropped), kernels an admin marked
-manual, which `autoremove` never takes, and a kmod package's blacklist that goes when the hop removes the package (it is
-counted as staying, so such a machine may be refused when it would have landed);
-filesystems other than those seven (vfat, ZFS, OCFS2) and ones not mounted now (`noauto`); and LVM1 volume groups,
-which lvm2 2.03 (EL8, buster, focal on) no longer reads (every release a route starts from makes LVM2; md's 0.90
-metadata is still read by every kernel and mdadm here).
+starts, kernels an admin marked manual, which `autoremove` never takes, and a kmod package's blacklist that goes when
+the hop removes the package (it is counted as staying, so such a machine may be refused when it would have landed);
+filesystems other than those seven (vfat, ZFS, OCFS2) and ones not mounted now (`noauto`); and LVM1 volume groups, which
+lvm2 2.03 (EL8, buster, focal on) no longer reads (every release a route starts from makes LVM2; md's 0.90 metadata is
+still read by every kernel and mdadm here).
 
 ## Runtime preflight
 

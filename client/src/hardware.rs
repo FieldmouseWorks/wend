@@ -235,6 +235,10 @@ fn boot_dir(dir: &Path, running: &str) -> Value {
         "rescue_default": match fs::read_to_string(dir.join("grub/grub.conf")) {
             Ok(g) => grub_default_is_rescue(&g),
             Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+        } || match fs::read_to_string(dir.join("grub2/grubenv")) {
+            // GRUB 2's saved default (EL7's menu title, EL8 on a BLS id), as kernel_before greps it
+            Ok(g) => g.lines().any(|l| l.starts_with("saved_entry=") && l.contains("0-rescue")),
+            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
         },
     })
 }
