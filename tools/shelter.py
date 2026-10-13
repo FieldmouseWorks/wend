@@ -148,7 +148,8 @@ def _field(text, name, lo, hi):
 
 def cron_calendar(line):
     """A crontab line (five fields or an @name, then the command) as (OnCalendar= values, command). Every standard
-    five-field schedule translates; day-of-month and day-of-week both restricted means either, so two values. ValueError
+    five-field schedule translates; day-of-month and day-of-week both restricted means either, so two values, unless
+    one of them starts with `*` (`*/2`), where cronie wants both. ValueError
     for anything else (@reboot, a stepped range, a name with a step): SPEC "The ops", refused at plan time."""
     words = line.split()
     if words and words[0].startswith("@"):
@@ -159,9 +160,9 @@ def cron_calendar(line):
         raise ValueError("a cron line has five schedule fields and a command")
     m, h, dom, mon, dow = (_field(w, *f) for w, f in zip(words[:5], FIELDS))
     when = f"*-{mon}-{dom} {h}:{m}:00"
-    if dom != "*" and dow != "*":
-        cal = [when, f"{dow} *-{mon}-* {h}:{m}:00"]
-    elif dow != "*":
+    if dom != "*" and dow != "*" and not words[2].startswith("*") and not words[4].startswith("*"):
+        cal = [when, f"{dow} *-{mon}-* {h}:{m}:00"]  # cron runs on either day field
+    elif dow != "*":  # cronie: a day field starting with * means both must match
         cal = [f"{dow} {when}"]
     else:
         cal = [when]
@@ -303,6 +304,19 @@ def programs(box, plan):
     return progs
 
 
+def _host_write(root, path, text):
+    """Write a file into a box copy from the host, never through a symlink the box's package scripts planted."""
+    real = os.path.realpath(root)
+    d, name = os.path.split(f"{real}{path}")
+    if not backends.plain_dir(real, d):
+        raise Refused(f"{os.path.dirname(path)} in the box isn't a plain directory")
+    if os.path.lexists(f"{d}/{name}"):
+        os.unlink(f"{d}/{name}")
+    fd = os.open(f"{d}/{name}", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+
+
 CMD = r"/[A-Za-z0-9_./+-]+( [A-Za-z0-9_./=:@,+-]+)*"  # an absolute interpreter, then plain words
 
 
@@ -324,8 +338,7 @@ def build(box, adapter, release, app, plan, scratch, log):
     log(f"shelter {app}: finding what its programs load")
     s = box.copy_to(scratch)
     try:
-        with open(f"{scratch}/tmp/wend-shelter-runner.py", "w") as f:
-            f.write(RUNNER)
+        _host_write(scratch, "/tmp/wend-shelter-runner.py", RUNNER)
         files = set()
         interps = set()
         for p in progs:
@@ -348,9 +361,8 @@ def build(box, adapter, release, app, plan, scratch, log):
         skip = ("/proc/", "/sys/", "/dev/", "/tmp/", "/run/", "/var/run/", plan["code"] + "/") + \
             tuple(x + "/" for x in plan["data"])
         files = sorted(f for f in files if not f.startswith(skip) and f not in ("/tmp/wend-shelter-runner.py",))
-        with open(f"{scratch}/tmp/wend-files", "w") as fh:
-            fh.write("\n".join(files + [os.path.realpath(f"{scratch}{i}")[len(os.path.realpath(scratch)):]
-                                        for i in interps]) + "\n")
+        _host_write(scratch, "/tmp/wend-files", "\n".join(files + [
+            os.path.realpath(f"{scratch}{i}")[len(os.path.realpath(scratch)):] for i in interps]) + "\n")
         rc, out = s.run("while read f; do [ -f \"$f\" ] || continue; o=$(rpm -qf --qf '%{NAME}\\n' \"$f\" 2>/dev/null "
                         "| head -n1) && echo \"OWNED $o $f\" || echo \"UNOWNED - $f\"; done < /tmp/wend-files")
         owners, unowned = set(), []

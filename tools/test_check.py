@@ -343,6 +343,14 @@ for name, sh, want in (
     errs = check.check_box({**py, "shelter": sh}, adapters, "boxes/el/centos7-lamp/box.toml")
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
+# cron schedules as timers: both day fields restricted means either, unless one starts with * (cronie: both)
+import shelter  # noqa: E402
+for line, want in (("30 2 1,15 * 1 /x", ["*-*-01,15 02:30:00", "Mon *-*-* 02:30:00"]),
+                   ("30 2 */2 * 1 /x", ["Mon *-*-1/2 02:30:00"]),
+                   ("30 2 * * mon-fri /x", ["Mon,Tue,Wed,Thu,Fri *-*-* 02:30:00"])):
+    got = shelter.cron_calendar(line)[0]
+    print(("passed  " if got == want else f"WRONG   {got} ") + f"cron {line!r}")
+    bad += got != want
 # the kernel handover's place in a hop (SPEC "Kernels and the bootloader"): right after refresh, and right after the
 # upgrade; Debian has only the second. Parity holds the client to the same order.
 import walk as _walk  # noqa: E402

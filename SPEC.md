@@ -1201,7 +1201,7 @@ Defaults, which the plan shows and the run records:
 - `--read-only` root, with a tmpfs `/tmp` and `/run`
 - a fixed user namespace, so the container's root isn't the host's root: `shelter.start` reserves a 65536-id range
   for the shelter in `/etc/subuid` and `/etc/subgid` under the name `wend-<app>` (a harness-owned line, so nothing
-  else allocates it), records it in the lock, and runs with explicit `--uidmap`/`--gidmap` over that range. Not
+  else allocates it), records it in the run, and runs with explicit `--uidmap`/`--gidmap` over that range. Not
   `--userns=auto`, which picks a new range at every start. The program runs as its own uid inside, which maps to the
   same unprivileged host uid every time
 - data mounts with `:idmap`, so the program writes them as the host uid that owns them now, and nothing on the
@@ -1265,7 +1265,7 @@ step (no shell), each with preconditions and checks, and recorded in the run's `
 
 A cron line becomes a timer only when its schedule translates exactly to `OnCalendar=`. Every standard five-field
 schedule and the `@daily`-style names do. When both day-of-month and day-of-week are restricted, cron runs on
-either, so that becomes two `OnCalendar=` lines. `@reboot` becomes a oneshot at boot (not built yet: the checker
+either, so that becomes two `OnCalendar=` lines; when one of them starts with `*` (`*/2`), cronie wants both, so it's one line. `@reboot` becomes a oneshot at boot (not built yet: the checker
 refuses it for now). Anything else is refused at plan time.
 The timer runs the same command in the shelter (`podman run --rm ... <image ID> <command>`) with the crontab's
 `PATH` and environment (built so far: cron's default `PATH=/usr/bin:/bin`). Cron's `MAILTO` doesn't carry over:
