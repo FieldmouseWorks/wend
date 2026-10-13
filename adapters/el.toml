@@ -8,7 +8,7 @@ release_file = "/etc/redhat-release"
 
 # Release ids carry the vendor: the ladder crosses from CentOS to AlmaLinux at 8 (open question 5 in SPEC.md).
 ladder = ["centos5", "centos6", "centos7", "centos8", "alma8", "alma9", "alma10"]
-# A route may pass through these in one hop. EL8 is only ever a bootstrap step: rpm.transit lands the box on EL8 and
+# A route may leave these out of its hops. EL8 is only ever a bootstrap step: rpm.transit lands the box on EL8 and
 # the same hop's transaction takes it on to EL9, so no health check ever runs on EL8. CentOS 8 is where boxes start,
 # never where a route lands (it ended in 2021): routes from EL7 and earlier step over it, and routes from it go
 # straight to EL9 with EL8's own dnf.

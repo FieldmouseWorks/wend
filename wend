@@ -121,7 +121,7 @@ def cmd_discover(family, frm, to, box, max_calls=12):
     repo = Repo()
     a = repo.adapters[family]
     lad = a["ladder"]
-    hops = lad[lad.index(frm) + 1: lad.index(to) + 1]
+    hops = [r for r in lad[lad.index(frm) + 1: lad.index(to) + 1] if r not in a.get("may_skip", [])]
     rpath = f"routes/{family}/{frm}-to-{to}.toml"
     if rpath not in repo.routes:  # a new route starts with every existing fix of the family on its hops pinned
         repo.routes[rpath] = {"schema": "wend.route/0", "family": family, "arch": repo.boxes[box].get("arch", "amd64"),
