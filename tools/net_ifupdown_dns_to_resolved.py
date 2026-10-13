@@ -208,13 +208,20 @@ def main(root=""):
         try:
             with os.fdopen(fd, "w") as out:
                 out.write(text)
+                out.flush()
                 os.fchmod(out.fileno(), 0o644)
-            # link, not rename: a drop-in created since the check above is kept, never replaced
-            os.link(name + ".wend", name, src_dir_fd=d, dst_dir_fd=d, follow_symlinks=False)
+                # link, not rename: a drop-in created since the check above is kept, never replaced. The link is made
+                # from the open file itself (/proc/self/fd), so whatever is put at the .wend name meanwhile isn't it
+                os.link(f"/proc/self/fd/{out.fileno()}", name, dst_dir_fd=d, follow_symlinks=True)
         except FileExistsError:
             fail(f"{DROPIN} appeared while it was being written")
+        except FileNotFoundError:  # the .wend name was removed or replaced, so the open file has no link left to share
+            fail(f"{DROPIN}.wend was replaced while it was being written")
         finally:
-            os.unlink(name + ".wend", dir_fd=d)
+            try:
+                os.unlink(name + ".wend", dir_fd=d)
+            except FileNotFoundError:
+                pass
     finally:
         os.close(d)
     print(f"{DROPIN}: DNS={' '.join(dns) or '-'} Domains={' '.join(search) or '-'}")

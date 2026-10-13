@@ -537,8 +537,8 @@ with `DNS=` and `Domains=`, written (mode 0644 in a 0755 directory) only when it
 from `/` without following a symlink: a symlinked `/etc`, `/etc/systemd`, `resolved.conf.d` or drop-in fails the
 step, and a directory swapped for a symlink while the op writes doesn't redirect the write;
 one that is already there must be a plain file saying the same, and a `.wend` file beside it fails the step. The
-drop-in is published with a hard link, not a rename, so one created by something else while the op writes is kept
-and the step fails. Nothing
+drop-in is published with a hard link from the op's open file (`/proc/self/fd`), not a rename, so one created by
+something else while the op writes is kept and the step fails, and a temporary name replaced meanwhile fails it too. Nothing
 is written when no interface ifupdown has up names a `dns-*` option, and every refusal comes before anything is
 written. Addresses and routes stay with ifupdown, and resolved reads the drop-in at the reboot that ends the hop.
 Not seen, because ifquery's text doesn't show it, so the options are carried although no hook read them:

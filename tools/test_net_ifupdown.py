@@ -74,6 +74,14 @@ def run(query, existing=None, symlink=False, prepare=None, no_ifquery=False, rac
                     os.symlink(t + "/elsewhere", d)
                 return osopen(path, *a, **kw)
             os.open = swapping
+        elif race == "tmpswap":  # the op's own temporary name replaced by a symlink just before it publishes
+            def tmpswapping(*a, **kw):
+                os.makedirs(t + "/elsewhere")
+                open(t + "/elsewhere/x", "w").write("[Resolve]\nDNS=6.6.6.6\n")
+                os.unlink(t + m.DROPIN + ".wend")
+                os.symlink(t + "/elsewhere/x", t + m.DROPIN + ".wend")
+                return link(*a, **kw)
+            os.link = tmpswapping
         elif race:  # another process creates the drop-in just before the op publishes its own
             def racing(*a, **kw):
                 open(t + m.DROPIN, "w").write("admin\n")
@@ -119,6 +127,9 @@ case("a drop-in that says something else is refused, not replaced",
 msg, out, left, mode = run(BOOT, race=True)
 case("a drop-in created while the op writes is kept, not replaced",
      refused(msg, "appeared while") and out == "admin\n" and left == [DROP])
+msg, out, left, mode = run(BOOT, race="tmpswap")
+case("a temporary file swapped for a symlink before the publish doesn't become the drop-in",
+     refused(msg, "was replaced") and out is None and left == ["elsewhere/x"])
 msg, out, left, mode = run(BOOT, race="swap")
 case("a directory swapped for a symlink while the op writes doesn't redirect the write",
      msg is None and not [n for n in left if n.startswith("elsewhere/")] and "moved/50-wend-ifupdown.conf" in left)
