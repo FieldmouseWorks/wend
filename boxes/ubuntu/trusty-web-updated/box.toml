@@ -15,8 +15,8 @@ sed -n 's/^deb \([^ ]*\) trusty \(.*\)$/deb \1 trusty-updates \2\ndeb \1 trusty-
 cat /tmp/pockets >> /etc/apt/sources.list
 rm /tmp/pockets
 apt-get update
-apt-get dist-upgrade
-apt-get install ubuntu-advantage-tools
+apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade
+apt-get -y install ubuntu-advantage-tools
 grep -qx 'Pin-Priority: never' /etc/apt/preferences.d/ubuntu-esm-infra-trusty
 mkdir -p /var/www/mysite
 printf '<?php echo "hello from oldbox " . strtoupper("ok") . "\\n"; ?>\n' > /var/www/mysite/index.php
@@ -56,4 +56,6 @@ current = "for f in $(command -v php) $(sed -n 's/^LoadModule [^ ]* //p' /etc/ap
 # box; the live checks ask the running services after every reboot.
 [vm]
 ssh_port = 2222
+# the VM installer starts it from -updates and -security too (tools/vm.py, SPEC "VM tier"), as the chroot box does
+pockets = ["updates", "security"]
 live = { daemons = "for i in $(seq 1 30); do ok=1; for p in apache2 master cron sshd; do pgrep -x $p >/dev/null || ok=0; done; [ $ok = 1 ] && exit 0; sleep 2; done; for p in apache2 master cron sshd; do pgrep -x $p >/dev/null || echo \"$p is not running\"; done; exit 1", site = "for i in $(seq 1 30); do curl -s -H 'Host: mysite.local' http://127.0.0.1/ | grep -q 'hello from oldbox OK' && exit 0; sleep 2; done; curl -s -H 'Host: mysite.local' http://127.0.0.1/ | head -c 300; exit 1" }
