@@ -989,16 +989,20 @@ the hop removes the package (it is counted as staying, so such a machine may be 
 
 A chroot can't test kernels, bootloaders, init or networking (open question 10). `tools/vm.py` replays a route on a
 box installed in a KVM guest by its release's own installer: anaconda with a kickstart for EL, debian-installer with a
-preseed for Debian (appended to the installer's initrd, so it needs no network to be read). Both are made from
-`box.toml`: its packages, `customize` and `start_hook` (and Debian's `debconf_selections`), a static address and the
+preseed for Debian and Ubuntu (appended to the installer's initrd, so it needs no network to be read). Both are made from
+`box.toml`: its packages, `customize` and `start_hook` (and the apt boxes' `debconf_selections`), a static address and the
 release's kernel and bootloader. The box is then brought to the release's last packages, as the chroot build does
-(Debian: the harness's `hop.apt_conf` first, then `set_release`, `refresh` and `apt-get dist-upgrade`, which on a
-frozen archive changes nothing the installer didn't already fetch). Each hop compiles exactly the commands the chroot harness
+(apt: the harness's `hop.apt_conf` first, then `set_release`, `refresh` and `apt-get dist-upgrade`, which on a
+frozen release pocket changes nothing the installer didn't already fetch). An apt box must then hold only versions
+its `sources.list` offers (`apt-cache madison`), or the build fails naming them: a box with packages from another
+pocket isn't the box the route starts from. Each hop compiles exactly the commands the chroot harness
 runs (the same `hop_cmds`), runs them inside the running guest, and reboots it for real (checked by `boot_id`).
 After every hop:
 
 - the guest has to come back reachable over ssh on the box's port (`[vm].ssh_port`);
-- its addresses, default route and resolvers have to be the ones it booted with at the start;
+- its addresses, default route and resolvers have to be the ones it booted with at the start. The resolvers are
+  `/etc/resolv.conf`'s, with systemd-resolved's local stub (`127.0.0.53`) standing for the upstream servers resolved
+  lists in `/run/systemd/resolve/resolv.conf`, so the stub appearing on a release isn't a change;
 - the box's checks have to keep passing, running on the live box. Roles that start their own daemons are listed in
   `[vm].skip`, and `[vm].live` gives their live forms, which ask the running services instead.
 
@@ -1010,10 +1014,12 @@ The VM box differs from the chroot box in ways a replay can show: it has what th
 bootloader, a 200 MB `/boot`), SELinux is permissive and the firewall off (kickstart `selinux --permissive`,
 `firewall --disabled`), and `customize` runs before the release's last updates, not after. The kickstart is EL5's
 format for now. A Debian VM box has what debian-installer's minimal install adds (a kernel metapackage, GRUB legacy on
-etch, `iproute`, which the harness's own network check reads). The adapter gives the preseed lines that differ by
-installer version (disk path, partman names); the rest of the preseed is etch's spelling, the only Debian start
-release with an installer table so far. Its static address is not the one QEMU's DHCP hands out and the forwards point at it, so a box that
-falls back to DHCP is unreachable and fails the hop.
+etch, `iproute`, which the harness's own network check reads); an Ubuntu one what trusty's installer adds (GRUB 2,
+`linux-generic`). The adapter gives the preseed lines that differ by installer version (keymap, mirror country, disk
+path, partman names). Ubuntu's installer always adds the release's `-updates` pocket and installs from it, so for a
+release with `release_pocket_only` the harness gives the installer a mirror (a proxy on the host) that answers 404
+for every `-updates`, `-security`, `-backports` and `-proposed` suite. Its static address is not the one QEMU's DHCP
+hands out and the forwards point at it, so a box that falls back to DHCP is unreachable and fails the hop.
 
 The rules:
 
@@ -1031,9 +1037,10 @@ The rules:
   good disk and reboots; a kept attempt is the next base. As in the chroot walk, a removal the prune drops never fails
   the run; a guest that doesn't come up from the last good disk, or a box it can't read, does. It records what was obsolete before and after.
 - Adapter: `releases.<id>.install` names a start release's installer. EL: its `tree` through the shim and the
-  `pxeboot` dir in it (the shim answers single byte ranges, which anaconda uses to read package headers). Debian: the
-  `netboot` dir under the archive, `preseed` (the version's own preseed lines) and `late` (shell the installer runs at
-  the end, for the bootloader's serial console). `disk` (`virtio`, `lsi53c895a`) and `nic` (`virtio`, `e1000`) name
+  `pxeboot` dir in it (the shim answers single byte ranges, which anaconda uses to read package headers). apt (Debian,
+  Ubuntu): the `netboot` dir under the start release's mirror, `preseed` (the version's own preseed lines),
+  `packages` (what the install needs besides the box's), `release_pocket_only` and `late` (shell the installer runs
+  at the end, for the bootloader's serial console). `disk` (`virtio`, `lsi53c895a`) and `nic` (`virtio`, `e1000`) name
   the emulated hardware, default virtio: the machine keeps them through every hop, so the start release's kernel has
   to know them (etch's has no virtio). `hop.kernel_newest` prints the newest installed kernel as `uname -r` names it;
   after every reboot it has to be the running one.

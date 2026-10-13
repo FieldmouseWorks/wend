@@ -42,3 +42,10 @@ db = "mkdir -p /run/mysqld /var/run/mysqld; chown mysql /run/mysqld /var/run/mys
 dns = "named-checkconf && named-checkzone example.org /etc/bind/db.example.org"
 mail = "exim4 -bV >/dev/null && exim4 -bt alice@localhost | grep -i local_user && grep oldbox /etc/mailname"
 current = "for f in $(command -v mariadbd || command -v mysqld || echo /usr/sbin/mysqld); do f=$(readlink -f \"$f\"); p=$(dpkg -S \"$f\" 2>/dev/null | grep -v ^diversion | head -n1 | cut -d: -f1); test -n \"$p\" && test -n \"$(apt-cache madison \"$p\")\" || { echo \"$f comes from package '$p', which the current release does not ship\"; exit 1; }; done"
+
+# tools/vm.py: the same box installed in a VM by trusty's debian-installer. db starts its own mysqld, which a running
+# box already has; the live checks ask the running services instead, after every reboot.
+[vm]
+ssh_port = 2222
+skip = ["db"]
+live = { daemons = "for i in $(seq 1 30); do ok=1; for p in named exim4 cron sshd; do pgrep -x $p >/dev/null || ok=0; done; pgrep -x 'mysqld|mariadbd' >/dev/null || ok=0; [ $ok = 1 ] && exit 0; sleep 2; done; for p in named exim4 cron sshd; do pgrep -x $p >/dev/null || echo \"$p is not running\"; done; pgrep -x 'mysqld|mariadbd' >/dev/null || echo 'no mysqld or mariadbd is running'; exit 1", db = "for i in $(seq 1 30); do C=$(command -v mariadb || command -v mysql); $C -uroot -N -e 'select msg from app.t' 2>/dev/null | grep -q 'hello from oldbox' && exit 0; sleep 2; done; $C -uroot -N -e 'select msg from app.t'; exit 1" }

@@ -34,7 +34,10 @@ current_from = "bullseye"
 # The machine is one etch's kernel knows (no virtio; QEMU's AHCI is newer than its ahci driver), and every later
 # kernel too: an LSI SCSI disk stays sda from etch to trixie. The preseed lines are etch's installer's own spellings
 # (devfs disk path, partman recipe and menu names). GRUB legacy gets the serial console in its kopt line.
-install = { netboot = "dists/etch/main/installer-amd64/current/images/netboot/debian-installer/amd64", disk = "lsi53c895a", nic = "e1000", preseed = [
+# iproute: the harness's own network check (NET) reads `ip`, which etch's minimal install doesn't have.
+install = { netboot = "dists/etch/main/installer-amd64/current/images/netboot/debian-installer/amd64", disk = "lsi53c895a", nic = "e1000", packages = ["iproute"], preseed = [
+  "d-i console-keymaps-at/keymap select us",
+  "d-i mirror/country string enter information manually",
   "d-i partman-auto/disk string /dev/discs/disc0/disc",
   "d-i partman-auto/choose_recipe select All files in one partition (recommended for new users)",
   "d-i partman/choose_partition select Finish partitioning and write changes to disk",
