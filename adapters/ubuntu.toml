@@ -136,36 +136,49 @@ services = "no explicitly installed, non-required package that ships an init scr
 # real need); `drivers`, the sha256 of
 # adapters/drivers/ubuntu/<release>.txt, the PCI disk controllers and network cards the release's kernel drives
 # (tools/hwdata.py builds it from the kernel package itself).
+# `boot_mib`, the space the release's kernel takes in /boot: linux-image's and linux-modules' /boot files (measured)
+# and the initramfs linux-generic builds, with lvm2 and mdadm (built from the release's packages in a container for
+# bionic to resolute; xenial's is an estimate; resolute's builds host-only, so its figure allows for real hardware).
+# `old_kernels = "autoremove"`: the transaction installs the new kernel beside every kernel already there, and
+# autoremove only afterwards takes the old ones, keeping the running kernel and the newest, so from the third hop on
+# the new kernel sits beside the two before it.
 boot = ["bios"]
+old_kernels = "autoremove"
 
 [hardware.xenial]
 cpu = "x86-64"
 disk_mib = 2048
+boot_mib = 56
 drivers = "sha256:f5d0794514fd9f2a5b26d6b837e5427eb79b3d2b81b44dfb9320030d6ce9f3f9"
 
 [hardware.bionic]
 cpu = "x86-64"
 disk_mib = 2048
+boot_mib = 64
 drivers = "sha256:e1bef70be98b23557dbef99f656a86563265545a0641053140f12cfffd5c04ad"
 
 [hardware.focal]
 cpu = "x86-64"
 disk_mib = 2048
+boot_mib = 88
 drivers = "sha256:821a2d9c1c3e65a38181bb8aa79e3d2c3290d6a32d7b608401545ef42f6ca0c9"
 
 [hardware.jammy]
 cpu = "x86-64"
 disk_mib = 2048
+boot_mib = 105
 drivers = "sha256:2a453ad5f9c4f188a3589d85b8c45e2000bf2eae3ee4484d553ca2dde747f47a"
 
 [hardware.noble]
 cpu = "x86-64"
 ram_mib = 1024
 disk_mib = 2048
+boot_mib = 106
 drivers = "sha256:f1c5c6babe929becf674f7ccea07e9ddc130bacc493304012d1dcd2dfcef5a12"
 
 [hardware.resolute]
 cpu = "x86-64"
 ram_mib = 1024
 disk_mib = 2048
+boot_mib = 85
 drivers = "sha256:a7b3497a96495da38204c4691cd2f218da4346f642f96e1cc0f90affde0bfac4"

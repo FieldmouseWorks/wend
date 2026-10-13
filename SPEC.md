@@ -716,7 +716,7 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `[pm_options.<name>]` | `path`, `content`. apt: only `overwrite-conflicting-files`; rpm: none |
 | `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear. Whatever a `pattern`, `list` or `table` says, every value a fix passes through one must also match `[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*`: no quote, whitespace, backslash, glob character, `%`, any of `` $`;&|<>(){}~ ``, or leading `-` |
 | `[checks]` | universal health checks: `pkgdb` is a command; `current` and `services` are described in words and built by the harness from the box |
-| `[hardware]` | required: what a machine needs before a route boots it into each release (see "Hardware preflight"): `boot`, and a table per release a route can boot into |
+| `[hardware]` | required: what a machine needs before a route boots it into each release (see "Hardware preflight"): `boot`, `old_kernels`, and a table per release a route can boot into |
 | `[box]` | how to build a fresh box of this family (rpm: `seeds`, the packages to bootstrap a root from; apt: optional `debootstrap_script`, a script name under the host's `/usr/share/debootstrap/scripts`) |
 
 These checks narrow what an adapter lets fixes do (ops, force flags, argument values). They don't judge an adapter's
@@ -812,17 +812,34 @@ refuses the CPU, or its kernel no longer drives the disk controller the root is 
 anything, a client walking a real machine checks that the machine can land on every release the route boots it into,
 and refuses, or names the furthest release it can land on, when it can't. `wend preflight ROUTE` does this.
 
-**Facts.** `wend facts` reads the machine (schema `wend.hardware/0`): the kernel's architecture (`uname -m`) and
+**Facts.** `wend facts` reads the machine (schema `wend.hardware/1`): the kernel's architecture (`uname -m`) and
 the userland's word size (the ELF class of `/bin/sh`); the CPU's x86-64 level features from CPUID itself, never
 `/proc/cpuinfo`, since an old kernel doesn't name features newer than itself (2.6.18 has no `avx2`), and the XSAVE
 bit, not OSXSAVE, since the old kernel may not have turned it on and the new one will; CPUID's hypervisor bit;
-firmware (`/sys/firmware/efi` means UEFI); `MemTotal`; free space on `/`; and every PCI device's slot, class, the
-modalias its ID files make (`pci:v…d…sv…sd…bc…sc…i…`) and the driver bound to it now. Facts can be gathered on the
-machine and judged anywhere (`--facts FILE`).
+firmware (`/sys/firmware/efi` means UEFI); `MemTotal`; free space on `/`; `/boot`: whether it is a filesystem of its
+own, its size and free space as a package install sees them (root's reserved blocks left out of both), and each
+kernel in it (one per `vmlinuz-<version>`, rescue images aside) with the MiB its files take (`vmlinuz`, initramfs,
+`System.map`, `config` and the rest named for that version; kdump images count as other files, since EL's
+`hop.kernel_before` leaves them) and whether it is the running one; the modules the machine blacklists (`blacklist
+m`, or `install m /bin/false`, in every file of `/etc/modprobe.d`, since EL5's and lenny's are named `blacklist`
+without `.conf`, `/etc/modprobe.conf` and the distro's own `modprobe.d`); and every PCI device's slot, class, the modalias its ID files make
+(`pci:v…d…sv…sd…bc…sc…i…`), the driver bound to it now, that driver's module and where the module's file is under
+`/lib/modules/<release>` (from `modules.dep`), and whether the module is from outside the kernel's own package: the
+kernel marks one built out of tree (taint `O`, from Linux 3.2), and kmod packages (ELRepo's `kmod-*`, in `extra/` and
+`weak-updates/`) and DKMS (`updates/dkms/`) install theirs outside `kernel/`, which is how EL5's 2.6.18, with no
+taint flag, shows one. Facts can be gathered on the machine and judged anywhere (`--facts FILE`).
 
 **Requirements.** The adapter's `[hardware]` table holds them. `boot` lists the firmware modes wend's kernel steps
 are proven to carry a machine through; the VM tier boots its guests by BIOS, so every adapter says `["bios"]` until a
-UEFI replay proves more. Every release a route can boot into (the ladder after its first release, less `may_skip`)
+UEFI replay proves more. `old_kernels` says which kernels sit in `/boot` beside the one a hop installs: `"running"`
+(EL: `hop.kernel_before` removes every kernel but the running one first, and only those of `kernel`,
+`kernel-core` and `kernel-modules*`: a kernel another package owns, such as EL5's `kernel-xen`, `kernel-PAE` and
+`kernel-debug`, ELRepo's `kernel-lt` and `kernel-ml`, or Oracle's UEK, which preflight knows by its version's
+suffix, stays on every hop) or `"autoremove"` (apt: the transaction installs the new kernel beside every kernel
+already there, and `autoremove` only afterwards takes old ones, keeping the running kernel and the newest, so from
+the third hop on the new kernel sits beside the two before it). With `"autoremove"`, an optional `autoremove_from`
+names the release whose apt first does that: before apt 1.0, `NeverAutoRemove "^linux-image.*"` kept every kernel,
+so on Debian every kernel stays through the hop to jessie. Every release a route can boot into (the ladder after its first release, less `may_skip`)
 has a `[hardware.<release>]` table:
 
 | key | meaning |
@@ -830,6 +847,7 @@ has a `[hardware.<release>]` table:
 | `cpu` | `x86-64`, `x86-64-v2` or `x86-64-v3`: the release's level. The levels are the psABI's: v2 adds `cx16`, `lahf_lm`, `popcnt`, `sse3`, `sse4_1`, `sse4_2`, `ssse3`; v3 adds `avx`, `avx2`, `bmi1`, `bmi2`, `f16c`, `fma`, `lzcnt`, `movbe`, `xsave`. EL9 is v2 and EL10 v3 (its glibc stops a lower CPU at the first exec: "Fatal glibc error: CPU does not support x86-64-v2") |
 | `ram_mib` | optional: the release's documented minimum memory without a desktop. Absent when the vendor publishes none (Ubuntu 16.04 to 22.04) |
 | `disk_mib` | an estimate of the free space on `/` the hop needs: its downloads and the release's growth. Walking a copy of the machine first (open question 12) measures the real need |
+| `boot_mib` | the space the release's kernel takes in `/boot`: its package's `/boot` files, measured, and its initramfs, built from the release's own packages in a container where that builds what a machine gets (initramfs-tools' `MODULES=most`), estimated where it can't (EL's host-only dracut, releases too old for an https mirror). The VM tier's `/boot` listings are what to check them against |
 | `drivers` | the sha256 of `adapters/drivers/<family>/<release>.txt`, the release's driver table |
 | `note` | optional: said when the CPU check fails (where a machine that falls short can go instead) |
 
@@ -851,7 +869,16 @@ every Debian kernel keeps. The checker holds each table to its pinned hash.
 is below the release's level, memory below `ram_mib` (with 10% slack: `MemTotal` is the RAM less what the kernel keeps), free space below
 `disk_mib`, or a device that holds disks or carries the network (PCI class `0x01` mass storage, `0x0c04` Fibre
 Channel, `0x0e` I2O, `0x02` network, `0x0c06` InfiniBand) bound to a driver now matches no pattern in the release's
-table and its driver isn't listed as built in: the machine would come up without it. `ata_generic`'s,
+table and its driver isn't listed as built in: the machine would come up without it. A pattern of a module the
+machine blacklists doesn't count, unless that module drives the device now (kmod-r8168 blacklists the kernel's own
+r8169). A module from outside the kernel's package never follows to the release's kernel: the device needs one of
+that kernel's own drivers, and when it has one the verdict notes which takes over. A hop also fails when its kernel
+doesn't fit in a separate `/boot`: `boot_mib` must fit in `/boot`'s size less its other files (what isn't a
+kernel's) and the kernels the hop keeps (`old_kernels`). Those are the machine's running kernel on the first hop with
+`"running"` (with any kernel another package owns, on every hop), and every kernel it has with `"autoremove"`; then
+the previous release's kernel with `"running"`, and with `"autoremove"` the two before it (the machine's running
+kernel and the first release's, on the second hop), or every kernel so far up to `autoremove_from`. A release a route
+only passes through (`may_skip`) installs no kernel. A `/boot` on `/` is left to `disk_mib`. `ata_generic`'s,
 `ide_pci_generic`'s and `pata_acpi`'s class-wide IDE patterns count only for a device that module drives now, since their probes decline
 controllers they don't know. Facts read from a file must have every field `wend facts` writes. The same device with no driver bound is a note, not
 a failure. The machine can land on the last release before the first failing hop. The client says which, says how to
@@ -860,9 +887,12 @@ and exits non-zero unless the whole route fits. A client walking a booted machin
 before the first hop that fails it. A walk may stop early at the release preflight names; it never starts a hop it
 fails.
 
-Not checked yet: `/boot`'s size (CentOS 5's 200 MB is proven by the VM tier), drivers from outside the release's
-kernel (ELRepo's `kmod-*`, DKMS), firmware files a driver loads, and the kernel flavour a machine runs (Ubuntu's
-tables are `linux-image-generic` with its extra modules; a machine on `linux-virtual` has fewer).
+Not checked yet: firmware files a driver loads; the kernel flavour a machine runs (Ubuntu's tables are
+`linux-image-generic` with its extra modules; a machine on `linux-virtual` has fewer); a DKMS module that would
+rebuild for the new kernel (it isn't counted, so such a device is refused when no in-kernel driver has it); and in
+`/boot`, a GRUB default that isn't the running kernel (EL keeps it too), kdump images the new kernels get once kdump
+starts, kernels an admin marked manual, which `autoremove` never takes, and a kmod package's blacklist that goes when
+the hop removes the package (it is counted as staying, so such a machine may be refused when it would have landed).
 
 ## VM tier (maintainer-run)
 

@@ -260,6 +260,18 @@ def type_corpus():
     adapter("hardware for a release off the ladder", lambda a: a["hardware"].update(
         rocky9=dict(a["hardware"]["alma9"])))
     adapter("hardware missing a booted release", lambda a: a["hardware"].pop("centos7"))
+    adapter("hardware old_kernels absent", lambda a: a["hardware"].pop("old_kernels"))
+    adapter("hardware old_kernels unknown", lambda a: a["hardware"].update(old_kernels="all"))
+    adapter("hardware old_kernels a list", lambda a: a["hardware"].update(old_kernels=["running"]))
+    adapter("hardware boot_mib absent", lambda a: a["hardware"]["alma9"].pop("boot_mib"))
+    adapter("hardware boot_mib a float", lambda a: a["hardware"]["alma9"].update(boot_mib=70.5))
+    adapter("hardware autoremove_from off the ladder", lambda a: a["hardware"].update(
+        old_kernels="autoremove", autoremove_from="jessie"))
+    adapter("hardware autoremove_from with running", lambda a: a["hardware"].update(autoremove_from="centos7"))
+    adapter("hardware autoremove_from a list", lambda a: a["hardware"].update(
+        old_kernels="autoremove", autoremove_from=["centos7"]))
+    adapter("hardware autoremove_from is fine", lambda a: a["hardware"].update(
+        old_kernels="autoremove", autoremove_from="centos7"))
     adapter("hardware for a skipped release is fine", lambda a: a["hardware"].update(
         alma8=dict(a["hardware"]["alma9"])))
     # routes, judged with the real fixes

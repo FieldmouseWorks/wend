@@ -102,6 +102,8 @@ for name, mutate in {
     "an adapter without hardware requirements (SPEC \"Hardware preflight\")": lambda a: a.pop("hardware"),
     "an adapter whose release asks for an unknown CPU level": lambda a: a["hardware"]["alma9"].update(cpu="v2"),
     "an adapter missing a booted release's hardware": lambda a: a["hardware"].pop("alma10"),
+    "an adapter that doesn't say which old kernels a hop keeps in /boot": lambda a: a["hardware"].pop("old_kernels"),
+    "an adapter whose release has no /boot footprint": lambda a: a["hardware"]["alma9"].pop("boot_mib"),
 }.items():
     a = copy.deepcopy(adapters["el"])
     mutate(a)
