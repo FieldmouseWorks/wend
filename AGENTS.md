@@ -122,9 +122,9 @@ If you edit a fix, its id changes. Run `python3 wend check --repin`.
 sudo -E python3 wend verify --base origin/main
 ```
 
-This runs the schema check, replays every route your change touches on **every** box in the family (the boxes your
-fixes don't claim are the decoys), then the decoy check. It writes `.wend/pr-evidence.md`. Don't open a PR until it
-says `VERIFIED`.
+This runs the schema check, replays every route your change touches on **every** box in the family that starts where the
+route starts (the boxes your fixes don't claim are the decoys), then the decoy check. It writes `.wend/pr-evidence.md`.
+Don't open a PR until it says `VERIFIED`.
 
 ## 7. Open the PR
 

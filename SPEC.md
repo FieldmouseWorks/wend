@@ -342,9 +342,10 @@ web = "apache2ctl -t && ..."
 
 ### Decoys
 
-Every box is a decoy for every fix that doesn't claim it. On a passing run, each pinned fix must have fired on
-exactly the boxes in its `fires_on`. If it fired somewhere unclaimed, it's a decoy hit and the PR fails. If it didn't
-fire where it claims, that fails too: the claim is stale or the precondition broke. dep-lab's round 3 is the
+Every box that starts at a route's `from` release is a decoy for each of that route's fixes that doesn't claim it (a box
+that starts elsewhere can't walk the route, so CI doesn't replay it there). On a passing run, each pinned fix must have
+fired on exactly the boxes in its `fires_on`. If it fired somewhere unclaimed, it's a decoy hit and the PR fails. If it
+didn't fire where it claims, that fails too: the claim is stale or the precondition broke. dep-lab's round 3 is the
 reference case. Box A must not touch the three MySQL fixes, and box B must not touch the six Apache/PHP ones. The
 checker enforces this over the runs it has. CI produces fresh runs.
 
