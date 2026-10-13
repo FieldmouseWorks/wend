@@ -8,7 +8,7 @@
   ./wend discover FAMILY FROM TO BOX        walk FROM->TO on BOX; a model fills in hops that break   (root, WEND_MODEL)
   ./wend report RUN.json [--redact WORD]    a route broke and you won't fix it yourself: build a scrubbed gap report,
                                             show it, print a prefilled issue link. Sends nothing.
-  ./wend verify [--base REF | --all]        exactly what CI runs: check, replay what changed on every box, decoys
+  ./wend verify [--base REF | --all]        exactly what CI runs: check, replay what changed where it starts, decoys
                                             writes .wend/pr-evidence.md for the PR body                 (root)
 
 ROUTE is a path like routes/debian/etch-to-trixie.toml; BOX is an id like debian/etch-web.
@@ -185,7 +185,7 @@ def cmd_verify(base=None, all_=False, jobs=2):
     need_root({d["family"] for d in repo.boxes.values()})
     if all_ or not base:
         matrix = [{"route": r, "box": b} for r, d in repo.routes.items() for b, x in repo.boxes.items()
-                  if x["family"] == d["family"]]
+                  if check.starts(x, d)]
     else:
         matrix = json.loads(subprocess.run([sys.executable, "-B", f"{ROOT}/tools/affected.py", base],
                                            capture_output=True, text=True, check=True).stdout)["include"]

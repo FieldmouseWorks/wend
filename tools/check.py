@@ -457,6 +457,34 @@ def decoy_errors(runs, routes_by_id, fixes_by_id):
     return errs
 
 
+def starts(box, route):
+    """A route is replayed on the boxes of its family that start at its `from` (tools/affected.py, CONTRIBUTING.md).
+    A box that starts elsewhere can't walk it: a centos7 box can't take a centos5 route's hop to centos6."""
+    return box.get("family") == route.get("family") and box.get("release") == route.get("from")
+
+
+def pairing_errors(routes, boxes, fixes):
+    """CI replays a route only where it starts, so a route with no box at its `from` would be replayed nowhere, and a
+    fix claiming a box that no route pinning it is replayed on would have that claim never checked."""
+    errs = []
+    pinned_by = {}
+    for p, r in routes.items():
+        if not any(starts(b, r) for b in boxes.values()):
+            errs.append(f"{os.path.relpath(p, ROOT)}: no {r.get('family')} box starts at {r.get('from')}, so CI would "
+                        "replay this route nowhere; add the box first (AGENTS.md step 2)")
+        for ref in r.get("fixes", []):
+            pinned_by.setdefault(ref.get("id"), []).append(r)
+    for p, f in fixes.items():
+        rs = pinned_by.get(content_id(f), [])
+        for b in f.get("meta", {}).get("fires_on", []):
+            if b not in boxes:
+                errs.append(f"{os.path.relpath(p, ROOT)}: fires_on names {b}, which is not a box")
+            elif rs and not any(starts(boxes[b], r) for r in rs):
+                errs.append(f"{os.path.relpath(p, ROOT)}: fires_on names {b}, which starts where no route pinning "
+                            "this fix starts, so CI never replays it there")
+    return errs
+
+
 # ---------- compiling: the backends in backends.py; the lab's ol.py/co.py are the references ----------
 
 def compile_when(w, family="debian"):
@@ -541,6 +569,7 @@ def main(argv):
     for p, d in runs.items():
         errs += check_run(d, routes_by_id, boxes, os.path.relpath(p, ROOT))
     errs += decoy_errors(runs, routes_by_id, fixes_by_id)
+    errs += pairing_errors(routes, boxes, fixes)
     if "--ids" in argv:
         for i, (rel, _) in by_id.items():
             print(i[:19], rel)
