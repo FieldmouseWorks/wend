@@ -120,58 +120,76 @@ services = "no explicitly installed, non-required package that ships an init scr
 # growth; walking a copy of the machine first measures the real need); `drivers`, the sha256 of
 # adapters/drivers/debian/<release>.txt, the PCI disk controllers and network cards the release's kernel drives
 # (tools/hwdata.py builds it from the kernel package itself).
+# `boot_mib`, the space the release's kernel takes in /boot: its package's /boot files (measured) and its initramfs
+# (initramfs-tools' MODULES=most, with lvm2 and mdadm: built from the release's packages in a container for buster to
+# trixie, estimated before). `old_kernels = "autoremove"`: the transaction installs the new kernel beside every kernel
+# already there, and autoremove only afterwards takes the old ones, keeping the running kernel and the newest, so from
+# the third hop on the new kernel sits beside the two before it. Before apt 1.0 that never happened: lenny's to
+# wheezy's apt never autoremove a kernel (01autoremove's `NeverAutoRemove "^linux-image.*"`), so through the hop to
+# jessie, whose apt brings the running-and-newest rule, every kernel stays (`autoremove_from`).
 boot = ["bios"]
+old_kernels = "autoremove"
+autoremove_from = "jessie"
 
 [hardware.lenny]
 cpu = "x86-64"
 ram_mib = 64
 disk_mib = 2048
+boot_mib = 12
 drivers = "sha256:a42e474a8d6c8602e4a03c5e720f386f52832304cfa67e595ead0dc256f432b3"
 
 [hardware.squeeze]
 cpu = "x86-64"
 ram_mib = 64
 disk_mib = 2048
+boot_mib = 16
 drivers = "sha256:6f5da0b610919df2e51d4d24194117f3d856e805c244b2f076a51334fde32cd1"
 
 [hardware.wheezy]
 cpu = "x86-64"
 ram_mib = 64
 disk_mib = 2048
+boot_mib = 20
 drivers = "sha256:bbe7a92a413866a520ece112952da8bd9875a705aac4cfcf4508e1db3459d7f9"
 
 [hardware.jessie]
 cpu = "x86-64"
 ram_mib = 128
 disk_mib = 2048
+boot_mib = 26
 drivers = "sha256:1ed1613f2ac9e3f9b772ddf2b8f262c9eb332d0f9017d75f25242207a15ef47d"
 
 [hardware.stretch]
 cpu = "x86-64"
 ram_mib = 128
 disk_mib = 2048
+boot_mib = 32
 drivers = "sha256:0211139a49a4c0fa12de537a3a1d781cd5c34a2f3e2ea0f3973d831ecc3ee50c"
 
 [hardware.buster]
 cpu = "x86-64"
 ram_mib = 256
 disk_mib = 2048
+boot_mib = 42
 drivers = "sha256:dbeee94e62a1becd9f135bb94b9d124b13529f42fa99f710dbe4475990082f72"
 
 [hardware.bullseye]
 cpu = "x86-64"
 ram_mib = 256
 disk_mib = 2048
+boot_mib = 42
 drivers = "sha256:7226f8ebb60daf4f0d5fe8c6e4e6f953dd37df9cf9b3334de14d25807971b49f"
 
 [hardware.bookworm]
 cpu = "x86-64"
 ram_mib = 256
 disk_mib = 2048
+boot_mib = 48
 drivers = "sha256:71d4ad42b9ea85d8bfd5b778c515456bd88b6d65241e851c8dfbeb877b02dfb4"
 
 [hardware.trixie]
 cpu = "x86-64"
 ram_mib = 512
 disk_mib = 2048
+boot_mib = 58
 drivers = "sha256:80bab778035805af4f567958fc1635e6b4a6315ba652072816ca71ed13df3464"

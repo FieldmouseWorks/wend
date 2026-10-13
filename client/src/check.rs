@@ -77,7 +77,8 @@ const ADAPTER_KEYS: &[&str] = &[
 ];
 /// SPEC "Hardware preflight"
 pub const CPU_LEVELS: &[&str] = &["x86-64", "x86-64-v2", "x86-64-v3"];
-const HARDWARE_KEYS: &[&str] = &["cpu", "ram_mib", "disk_mib", "drivers", "note"];
+const HARDWARE_KEYS: &[&str] = &["cpu", "ram_mib", "disk_mib", "boot_mib", "drivers", "note"];
+const OLD_KERNELS: &[&str] = &["running", "autoremove"];
 
 /// Python's re.fullmatch. A pattern Rust's regex can't compile matches nothing (and an adapter carrying one is
 /// reported by check_adapter).
@@ -340,9 +341,25 @@ fn check_hardware(a: &Doc, wh: &str) -> Vec<String> {
             "{wh}: hardware.boot must list the firmware modes proven, from bios and uefi"
         ));
     }
+    if !h
+        .get("old_kernels")
+        .and_then(Value::as_str)
+        .is_some_and(|k| OLD_KERNELS.contains(&k))
+    {
+        errs.push(format!("{wh}: hardware.old_kernels must be one of {OLD_KERNELS:?}"));
+    }
     let ladder = str_list(get(a, "ladder"));
+    if let Some(f) = h.get("autoremove_from") {
+        let ok = h.get("old_kernels").and_then(Value::as_str) == Some("autoremove")
+            && f.as_str().is_some_and(|f| ladder.iter().any(|r| r == f));
+        if !ok {
+            errs.push(format!(
+                "{wh}: hardware.autoremove_from must name a release on the ladder, with old_kernels = \"autoremove\""
+            ));
+        }
+    }
     for (r, t) in h {
-        if r == "boot" {
+        if r == "boot" || r == "old_kernels" || r == "autoremove_from" {
             continue;
         }
         let Some(tm) = t.as_object().filter(|_| ladder.contains(r)) else {
@@ -366,9 +383,9 @@ fn check_hardware(a: &Doc, wh: &str) -> Vec<String> {
         {
             errs.push(format!("{wh}: hardware.{r}.cpu must be one of {CPU_LEVELS:?}"));
         }
-        for k in ["ram_mib", "disk_mib"] {
+        for k in ["ram_mib", "disk_mib", "boot_mib"] {
             // ram_mib is optional: some releases publish no minimum
-            if (k == "disk_mib" || tm.contains_key(k)) && !tm.get(k).and_then(Value::as_i64).is_some_and(|n| n >= 1) {
+            if (k != "ram_mib" || tm.contains_key(k)) && !tm.get(k).and_then(Value::as_i64).is_some_and(|n| n >= 1) {
                 errs.push(format!("{wh}: hardware.{r}.{k} must be a whole number of MiB"));
             }
         }
@@ -400,7 +417,7 @@ pub fn driver_table_errors(atlas: &Atlas, fam: &str, a: &Doc, wh: &str) -> Vec<S
         let Some(want) = get(t, "drivers").and_then(Value::as_str) else {
             continue;
         };
-        if r == "boot" {
+        if r == "boot" || r == "old_kernels" || r == "autoremove_from" {
             continue;
         }
         let got = atlas.drivers.get(&format!("{fam}/{r}")).map(|b| sha256_hex(b));
