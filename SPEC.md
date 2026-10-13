@@ -1016,7 +1016,9 @@ Not checked yet: firmware files a driver loads; the kernel flavour a machine run
 `linux-image-generic` with its extra modules; a machine on `linux-virtual` has fewer); a DKMS module that would
 rebuild for the new kernel (it isn't counted, so such a device is refused when no in-kernel driver has it); and in
 `/boot`, a GRUB default that isn't the running kernel (EL keeps it too), kdump images the new kernels get once kdump
-starts, kernels an admin marked manual, which `autoremove` never takes, and a kmod package's blacklist that goes when
+starts, a rescue image dracut-config-rescue builds from scratch on the first kernel of a BLS release (EL9 on) when the
+machine has none (an EL7 machine's is kept, and only its vmlinuz replaced: `boot_mib` holds that), kernels an admin
+marked manual, which `autoremove` never takes, and a kmod package's blacklist that goes when
 the hop removes the package (it is counted as staying, so such a machine may be refused when it would have landed);
 filesystems other than those seven (vfat, ZFS, OCFS2) and ones not mounted now (`noauto`); and LVM1 volume groups,
 which lvm2 2.03 (EL8, buster, focal on) no longer reads (every release a route starts from makes LVM2; md's 0.90

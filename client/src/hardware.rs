@@ -1462,12 +1462,12 @@ mod tests {
         let with_xen = [("2.6.18-398.el5xen", 9), ("2.6.18-398.el5", 6)];
         let v = verdict(
             "centos5-to-alma10",
-            &with_boot(machine(&full, true, vec![]), 85, &plain),
+            &with_boot(machine(&full, true, vec![]), 70, &plain),
         );
         assert_eq!(v["lands_on"], "centos7", "{v:#}");
         let v = verdict(
             "centos5-to-alma10",
-            &with_boot(machine(&full, true, vec![]), 85, &with_xen),
+            &with_boot(machine(&full, true, vec![]), 70, &with_xen),
         );
         assert_eq!(v["lands_on"], "centos6", "{v:#}");
         let p = v["hops"][1]["problems"][0].as_str().unwrap();
@@ -1476,7 +1476,7 @@ mod tests {
         let xen_guest = [("2.6.18-398.el5", 6), ("2.6.18-398.el5xen", 9)];
         let v = verdict(
             "centos5-to-alma10",
-            &with_boot(machine(&full, true, vec![]), 85, &xen_guest),
+            &with_boot(machine(&full, true, vec![]), 70, &xen_guest),
         );
         assert_eq!(v["lands_on"], "centos6", "{v:#}");
         assert_eq!(v["hops"][0]["ok"], true, "{v:#}");
@@ -1493,7 +1493,7 @@ mod tests {
         let v = evaluate(&a, &r, &m).unwrap();
         assert_eq!(v["hops"][2]["notes"][0], "not booted on this route");
         let p = v["hops"][3]["problems"][0].as_str().unwrap();
-        assert!(p.contains("centos7's kernel (45 MiB)"), "{p}");
+        assert!(p.contains("centos7's kernel (32 MiB)"), "{p}");
     }
 
     /// Debian's apt autoremoves no kernel before jessie's: on the hop to jessie every kernel is still there.
