@@ -1357,8 +1357,10 @@ The rules:
   ssh and http are forwarded to fixed ports on `127.0.0.1`, so a host runs one VM replay at a time.
 - Box: an optional `[vm]` table with `ssh_port` (default 22), `skip` (roles that start their own daemons, which a
   running box already has) and `live` (role name to shell: the live forms of those checks; every skipped role needs
-  one, so skipping never drops a check), `pockets` (`updates` and/or `security`, once each: the box starts from
-  those pockets as well as the release pocket, as a fully updated server does; only on a release whose install is
+  one, so skipping never drops a check), `pockets` (`updates`, `security` and/or `backports`, once each: the box
+  starts from those pockets as well as the release pocket, as a fully updated server does; `backports` because
+  trusty's installer also writes an active `-backports` line, which a `customize` that runs `apt-get update` fetches,
+  and apt pins it `NotAutomatic`, so it adds an index, not packages; only on a release whose install is
   `release_pocket_only`; wend#47; the route's hops still read the release pocket only, so `pockets` changes the start,
   never the walk) and `root_fs`, the filesystem the installer makes for `/` and `/boot`, one
   its start release's installer offers (`releases.<id>.install.root_fs`; CentOS 7: `ext3`, `xfs`, v5 and EL 7.3's
