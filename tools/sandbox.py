@@ -202,7 +202,8 @@ def resolve(base_url, seeds):
                  "req": [e.get("name") for e in f.findall("r:requires/r:entry", ns) if not e.get("name").startswith("rpmlib(")]}
         for name in [n] + [e.get("name") for e in f.findall("r:provides/r:entry", ns)] + [e.text for e in f.findall("c:file", ns)]:
             prov.setdefault(name, []).append(n)
-    want, todo = set(), list(seeds)
+    # a seed may be a name another package provides (centos-release is centos-linux-release on CentOS 8)
+    want, todo = set(), [n if n in pk else sorted(prov.get(n, [n]), key=lambda x: (len(x), x))[0] for n in seeds]
     while todo:
         n = todo.pop()
         if n in want:

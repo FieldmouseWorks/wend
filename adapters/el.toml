@@ -7,10 +7,12 @@ backend = "rpm"
 release_file = "/etc/redhat-release"
 
 # Release ids carry the vendor: the ladder crosses from CentOS to AlmaLinux at 8 (open question 5 in SPEC.md).
-ladder = ["centos5", "centos6", "centos7", "alma8", "alma9", "alma10"]
+ladder = ["centos5", "centos6", "centos7", "centos8", "alma8", "alma9", "alma10"]
 # A route may pass through these in one hop. EL8 is only ever a bootstrap step: rpm.transit lands the box on EL8 and
-# the same hop's transaction takes it on to EL9, so no health check ever runs on EL8.
-may_skip = ["alma8"]
+# the same hop's transaction takes it on to EL9, so no health check ever runs on EL8. CentOS 8 is where boxes start,
+# never where a route lands (it ended in 2021): routes from EL7 and earlier step over it, and routes from it go
+# straight to EL9 with EL8's own dnf.
+may_skip = ["centos8", "alma8"]
 
 # The harness owns the repo configuration, like sources.list on Debian, and clears the vendor .repo files every
 # release package drops there (they point at mirrors that are gone).
@@ -80,6 +82,11 @@ repos = { base = "vault.centos.org/7.9.2009/os/x86_64", updates = "vault.centos.
 # el6's grep is newer than el7's, so `upgrade` leaves it behind; distro-sync takes everything to el7's version
 upgrade = ["yum -y distro-sync"]
 
+[releases.centos8]
+major = 8
+pm = "dnf"
+repos = { baseos = "vault.centos.org/8.5.2111/BaseOS/x86_64/os", appstream = "vault.centos.org/8.5.2111/AppStream/x86_64/os" }
+
 [releases.alma8]
 major = 8
 pm = "dnf"
@@ -119,7 +126,7 @@ upgrade = ["rm -f /etc/dnf/modules.d/*.module",
 [addons.epel]
 marker = "epel-release"
 vendor = "Fedora Project"
-repos = { centos7 = "archives.fedoraproject.org/pub/archive/epel/7/x86_64", alma8 = "dl.fedoraproject.org/pub/epel/8/Everything/x86_64", alma9 = "dl.fedoraproject.org/pub/epel/9/Everything/x86_64", alma10 = "dl.fedoraproject.org/pub/epel/10/Everything/x86_64" }
+repos = { centos7 = "archives.fedoraproject.org/pub/archive/epel/7/x86_64", centos8 = "dl.fedoraproject.org/pub/epel/8/Everything/x86_64", alma8 = "dl.fedoraproject.org/pub/epel/8/Everything/x86_64", alma9 = "dl.fedoraproject.org/pub/epel/9/Everything/x86_64", alma10 = "dl.fedoraproject.org/pub/epel/10/Everything/x86_64" }
 
 [hop]
 # What the harness runs for every hop, around the fixes' pre and post steps. {placeholders} come from the release
@@ -170,7 +177,8 @@ file-contains = "grep -qF '{text}' {path}"
 mysql-option = '''g=$( (mysqld --verbose --help || /usr/sbin/mysqld --verbose --help || /usr/libexec/mysqld --verbose --help || mariadbd --verbose --help || /usr/sbin/mariadbd --verbose --help || /usr/libexec/mariadbd --verbose --help) 2>/dev/null | sed -n 's/^The following groups are read: //p' | head -n 1); [ -n "$g" ] && my_print_defaults --defaults-file={path} $g 2>/dev/null | awk -v k='--{key}' -v v='{value}' -v any={any} '{ n = $0; sub(/=.*/, "", n); gsub(/_/, "-", n); if (n == k) { f = 1; x = $0; sub(/^[^=]*=?/, "", x) } } END { exit !(f && (any || x == v)) }''''
 
 [box]
-# Seed packages for building a CentOS 5 root from the vault (tools/sandbox.py build_el); yum installs the rest.
+# Seed packages for building a root from the release's first repo (tools/sandbox.py build_el); yum installs the rest.
+# A seed is a package name or something one provides (CentOS 8's centos-linux-release provides centos-release).
 seeds = ["bash", "yum", "centos-release", "rpm", "coreutils", "passwd", "shadow-utils", "vim-minimal", "findutils",
          "grep", "sed", "gzip", "tar"]
 
