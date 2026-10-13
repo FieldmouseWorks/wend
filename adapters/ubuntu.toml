@@ -153,6 +153,10 @@ args = { kind = { enum = ["site", "mod", "conf"] }, name = { pattern = "[A-Za-z0
 summary = "give systemd-resolved the resolvers and search domains ifupdown names for the interfaces it has up (ifquery --state; a resolved.conf.d drop-in); fails, changing nothing, on any dns option or value it can't carry"
 args = {}
 
+[ops."apt.drop-esm-pins"]
+summary = "remove the apt pins ubuntu-advantage-tools wrote for the release being left (Pin-Priority: never, which apt 1.2 on rejects); only unowned plain files in u-a-t's exact shape"
+args = { release = { pattern = "[a-z]+" } }
+
 [checks]
 pkgdb = 'test -z "$(dpkg --audit 2>&1)" && apt-get check >/dev/null'
 current = "every binary a service runs comes from a package the release in sources.list still ships (apt-cache madison); the box lists the binaries"

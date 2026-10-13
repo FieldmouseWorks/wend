@@ -145,7 +145,7 @@ Adapter ops are named `<tool>.<verb>`. The adapter declares which ones its famil
 
 - Debian: `apache.enable` and `apache.disable` (`kind` = site/mod/conf, `name`) compile to `a2en*`/`a2dis*`;
   `dpkg.reinstall` (`packages`) to `apt-get install --reinstall --only-upgrade`; Ubuntu also
-  `net.ifupdown-dns-to-resolved`.
+  `net.ifupdown-dns-to-resolved` and `apt.drop-esm-pins` (`release`).
 - EL: `rpm.bootstrap` (unpack EL6's rpm/yum stack over / with 7-Zip, because rpm 4.4 can't read xz payloads),
   `rpm.transit` (pass through EL8: EL8's rpm run from a staging dir, then a real distro-sync), `rpm.swap-release`
   (release packages by hand: epochs and vendor switches), `rpm.drop-arch` (multilib leftovers), `rpm.adopt-rpmnew`,
@@ -503,6 +503,19 @@ writes them. A package apt doesn't know fails the step. One the release no longe
 says so and carries on, so the step passes and the hop's `pkgdb` check is what fails; a fix purges such a package
 instead. A package that isn't installed is skipped, never installed (`--only-upgrade`, apt 0.8 and later: squeeze
 on). Reference: `apt-get install --reinstall --only-upgrade {packages}`.
+
+**`apt.drop-esm-pins`** `release` (`[a-z]+`; Ubuntu). Removes the apt pins ubuntu-advantage-tools wrote for
+`release`, for a box leaving it. u-a-t 19.7ubuntu0.2 (trusty-updates) writes
+`/etc/apt/preferences.d/ubuntu-esm-infra-trusty`, a file no package owns, pinning its ESM source with
+`Pin-Priority: never`; trusty's apt takes that, xenial's apt 1.2 refuses every command over it ("No priority (or
+zero) specified for pin"), so after the xenial transaction autoremove and every later apt call fail (wend#47). The
+op looks at `ubuntu-esm-{release}` and `ubuntu-esm-*-{release}` in `/etc/apt/preferences.d` and removes one only
+when it is a plain file (not a symlink), `dpkg -S` names no package for it, every line is u-a-t's own (`Package: *`,
+`Pin: release o=UbuntuESM..., n={release}`, `Pin-Priority: never`, a comment or a blank line) and it pins to
+`never`. Anything else is left, with a line saying why, and the step passes: a pin apt can read does no harm, and one
+it can't fails the transaction that follows. The ESM source list beside it is already set aside with the other
+third-party sources (`set_release`). Reference: a `for` loop over the two names, in `tools/backends.py`
+(`ESM_PINS`); `tools/test_esm_pins.py` runs it against a stand-in directory and `dpkg`.
 
 **`net.ifupdown-dns-to-resolved`** (no arguments; Ubuntu). Gives systemd-resolved the resolvers and search domains
 ifupdown's configuration names, for a box that keeps ifupdown into a release where resolved answers its lookups. A
