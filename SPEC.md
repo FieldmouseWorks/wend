@@ -1187,9 +1187,11 @@ userland is unpatched.
 
 Defaults, which the plan shows and the run records:
 - `--read-only` root, with a tmpfs `/tmp` and `/run`
-- `--userns=auto:size=65536`, so the container's root isn't the host's root, with a `containers` range in
-  `/etc/subuid` and `/etc/subgid` that `shelter.start` adds (a harness-owned line). The program runs as its own
-  uid inside, which maps to an unprivileged host uid
+- a fixed user namespace, so the container's root isn't the host's root: `shelter.start` reserves a 65536-id range
+  for the shelter in `/etc/subuid` and `/etc/subgid` under the name `wend-<app>` (a harness-owned line, so nothing
+  else allocates it), records it in the lock, and runs with explicit `--uidmap`/`--gidmap` over that range. Not
+  `--userns=auto`, which picks a new range at every start. The program runs as its own uid inside, which maps to the
+  same unprivileged host uid every time
 - data mounts with `:idmap`, so the program writes them as the host uid that owns them now, and nothing on the
   host is chowned
 - `--cap-drop=all` (plus `NET_BIND_SERVICE` only if it listens below 1024) and `--security-opt no-new-privileges`
@@ -1205,10 +1207,12 @@ Defaults, which the plan shows and the run records:
   (replies on published ports) and DNS to the network's gateway (aardvark-dns) when the network has DNS. It has to
   fail closed: netavark's own rules allow all egress, so a shelter started without the table is quietly public.
   The table is loaded by a wend unit (`wend-shelter-net-<app>.service`, a oneshot that stays active, ordered
-  `After=nftables.service firewalld.service` with `PartOf=nftables.service`), and the shelter's unit has
-  `BindsTo=` and `After=` on it. After a reboot the shelter doesn't start unless the table loaded, and restarting
-  or reloading `nftables.service` (which runs `flush ruleset` on Debian and EL alike) restarts the table unit and,
-  through `BindsTo=`, the shelter with it. A hand-typed `nft flush ruleset` still drops the table under a running
+  `After=nftables.service firewalld.service`, with `PartOf=` and `ReloadPropagatedFrom=` on `nftables.service` and
+  an `ExecReload=` that loads the table again), and the shelter's unit has `BindsTo=` and `After=` on it. After a
+  reboot the shelter doesn't start unless the table loaded. Restarting `nftables.service` restarts the table unit
+  and, through `BindsTo=`, the shelter with it. Reloading it (which runs `flush ruleset` on Debian and EL alike)
+  reloads the table unit right after, which puts the table back; between nftables' flush and that reload the
+  shelter's egress is open for a moment, and the spec doesn't pretend it isn't. A hand-typed `nft flush ruleset` still drops the table under a running
   shelter, which systemd can't see; the spec doesn't claim otherwise. Runtime preflight records the TCP connections and
   listening sockets each sheltered program actually has (`/proc/<pid>/net/tcp*` matched to its socket inodes,
   sampled while facts are gathered), and the plan prefills the opt-ins from them, so "private" rarely breaks a
@@ -1225,7 +1229,8 @@ Defaults, which the plan shows and the run records:
   `container_file_t` (`:Z`) like the app's other directories; whether `container_t` may also `connectto` the
   proxy's domain is something only the VM tier shows, and if SELinux denies it, `shelter.start`'s check fails and
   the hop rolls back. The app inside runs as a mapped uid, and that directory has no `:idmap`, so the proxy's
-  socket is owned by that mapped uid (`SocketUser=`, mode 0600), not by the app's host user. An app that reaches a host service over
+  socket and its directory are owned by that mapped uid (`SocketUser=`, mode 0600; the directory 0700), not by
+  the app's host user. The mapping is fixed (above), so that uid is the same at every start. An app that reaches a host service over
   TCP on `127.0.0.1` can't be served without changing its config, which wend doesn't do: the plan names it, and the
   owner's choices are `network = "host"` (opted in by name, recorded in the run as an exception) or editing the app.
 - **Mounts:** the code tree read-only. Data directories read-write (`:idmap`): the ones the program has open for
@@ -1244,7 +1249,7 @@ step (no shell), each with preconditions and checks, and recorded in the run's `
 | `shelter.build` | on `keeps_runtimes_on`: before the first hop, or in the pre phase of the hop that drops Python 2 | builds the root and the lock (above); needs the free space the plan computed |
 | `shelter.prove` | right after `shelter.build` | runs the app's checks against the shelter root in the sandbox (a chroot), with the real data mounted read-only; refuses the route if the app doesn't run there |
 | `shelter.stop-native` | pre phase of the hop that drops Python 2 | stops and disables the app's own service unit, and comments out each cron line that runs a sheltered program with a `# wend-shelter:<app>` marker (the original goes under `/var/lib/wend/saved`; the precondition is the line's exact text). Nothing is deleted, so rolling the hop back restores both |
-| `shelter.start` | post phase of that hop | installs podman (an `install` op of the landing release), adds the subuid/subgid range, the network, the nftables unit and the socket proxies, loads the image, writes and enables the unit, and writes one systemd timer per moved cron line |
+| `shelter.start` | post phase of that hop | installs podman (an `install` op of the landing release), reserves the shelter's subuid/subgid range, the network, the nftables unit and the socket proxies, loads the image, writes and enables the unit, and writes one systemd timer per moved cron line |
 
 A cron line becomes a timer only when its schedule translates exactly to `OnCalendar=`. Every standard five-field
 schedule and the `@daily`-style names do. When both day-of-month and day-of-week are restricted, cron runs on
