@@ -36,9 +36,10 @@ A PR merges only after all five layers pass, in this order.
 
 ### 2. Replay in CI (automatic, ~15 min per route per box)
 
-`tools/affected.py` works out what the PR touches. CI then replays each affected route, from scratch, on **every**
-box of its family, in a chroot on a stock `ubuntu-24.04` runner. No model is involved. Each hop is rolled back if any
-health check fails, and a route passes only if every hop is kept and the final state is fully green, including:
+`tools/affected.py` works out what the PR touches. CI then replays each affected route, from scratch, on **every** box
+of its family that starts at the route's `from` release, in a chroot on a stock `ubuntu-24.04` runner. No model is
+involved. Each hop is rolled back if any health check fails, and a route passes only if every hop is kept and the final
+state is fully green, including:
 
 - `pkgdb`: the package database is consistent
 - `current`: running services come from packages the release still ships, so nothing passes with 2014's PHP still loaded
@@ -48,17 +49,20 @@ What gets replayed:
 
 | PR changes | replayed |
 |---|---|
-| a fix | every route that pins its old or new id, on every box of the family |
-| a route | that route, on every box of the family |
-| a box | every route of the family, on that box |
-| an adapter | everything in the family |
+| a fix | every route that pins its old or new id, on every box of the family that starts where the route starts |
+| a route | that route, on every box of the family that starts where it starts |
+| a box | every route of the family that starts at the box's release, on that box |
+| an adapter | every route of the family, on every box that starts where the route starts |
+
+A box that starts at another release can't walk the route (a CentOS 7 box can't take the CentOS 5 route's hop to
+CentOS 6), so it isn't replayed there and isn't a decoy for that route's fixes.
 
 ### 3. Decoy boxes (automatic)
 
-Every box is a decoy for every fix that doesn't list it in `fires_on`. On each fresh run, a fix that fires on an
-unclaimed box fails the PR. So does a fix that claims a box and then doesn't fire there. This catches the loose
-precondition: in dep-lab, a fix gated on `/etc/mysql/my.cnf` installed a database server on a web box, and every
-health check passed. If your fix is honest and the decoy is still wrong, the fix is too broad. Narrow the `when`;
+Every box a route is replayed on is a decoy for every fix that doesn't list it in `fires_on`. On each fresh run, a fix
+that fires on an unclaimed box fails the PR. So does a fix that claims a box and then doesn't fire there. This catches
+the loose precondition: in dep-lab, a fix gated on `/etc/mysql/my.cnf` installed a database server on a web box, and
+every health check passed. If your fix is honest and the decoy is still wrong, the fix is too broad. Narrow the `when`;
 don't widen `fires_on`.
 
 ### 4. Claude review (automatic, minutes)

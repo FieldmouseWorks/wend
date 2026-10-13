@@ -224,6 +224,23 @@ for name, run, want in (("decoy hit: the MySQL fix fired on the web box", fake, 
     got = bool(check.decoy_errors({path_: run}, {rid: route}, by_id))
     print(("refused " if got else "passed  ") + name if got == want else "WRONG   " + name)
     bad += got != want
+# pairing: CI replays a route only on boxes that start at its `from`, so neither a route nor a claim may go unreplayed
+_, _, _, boxes_, _ = check.load_all()
+rpath = next(p for p, r in routes_.items() if r is route)
+claimed = next(d for d in fixes_.values() if check.content_id(d) in {x["id"] for x in route["fixes"]}
+               and d["meta"].get("fires_on"))
+cpath = next(p for p, d in fixes_.items() if d is claimed)
+moved = {b: ({**d, "release": "lenny"} if b == claimed["meta"]["fires_on"][0] else d) for b, d in boxes_.items()}
+for name, args, want in (
+        ("a route that starts where no box starts", ({rpath: {**route, "from": "lenny"}}, boxes_, {}), True),
+        ("a fires_on box that starts where no route pinning the fix starts", ({rpath: route}, moved, {cpath: claimed}),
+         True),
+        ("a fires_on box that is not a box",
+         ({rpath: route}, boxes_, {cpath: {**claimed, "meta": {**claimed["meta"], "fires_on": ["debian/no"]}}}), True),
+        ("the real routes, boxes and claims", (routes_, boxes_, fixes_), False)):
+    got = bool(check.pairing_errors(*args))
+    print(("refused " if got else "passed  ") + name if got == want else "WRONG   " + name)
+    bad += got != want
 assert check.content_id(good) != check.content_id({**good, "when": {"installed": "x"}})
 assert check.content_id(good) == check.content_id({**good, "meta": {"name": "renamed"}}), "meta must not change ids"
 print("ids: content changes the id, renaming does not")

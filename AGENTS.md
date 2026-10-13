@@ -106,8 +106,8 @@ Expect about 15 minutes for a 9-hop Debian route, plus model time. A strong mode
 
 For each new file under `fixes/`, ask:
 
-- **Is the precondition as narrow as possible?** It will be tested on every other box in the family, and firing
-  there fails your PR.
+- **Is the precondition as narrow as possible?** It will be tested on every other box in the family that starts where
+  your route starts, and firing there fails your PR.
 - **Does it fix the real problem,** or just the symptom a check looks at?
 - **Is it one problem?** Split it if not, but keep load-bearing steps like `repair` with the step that needs them.
 - **Did it name something local** (one site's config file)? Then it's a local fix. Say so in `meta.note`.
@@ -122,9 +122,9 @@ If you edit a fix, its id changes. Run `python3 wend check --repin`.
 sudo -E python3 wend verify --base origin/main
 ```
 
-This runs the schema check, replays every route your change touches on **every** box in the family (the boxes your
-fixes don't claim are the decoys), then the decoy check. It writes `.wend/pr-evidence.md`. Don't open a PR until it
-says `VERIFIED`.
+This runs the schema check, replays every route your change touches on **every** box in the family that starts where the
+route starts (the boxes your fixes don't claim are the decoys), then the decoy check. It writes `.wend/pr-evidence.md`.
+Don't open a PR until it says `VERIFIED`.
 
 ## 7. Open the PR
 
