@@ -493,7 +493,7 @@ def podman_run(app, plan, name, publish, command, env=()):
     """The podman command line a shelter unit runs ($S, $U, $G, $I and $K are the start step's shell variables).
     One SELinux level per shelter, s0:c<K>,c1023, for all its containers: :Z relabels a volume for the container
     that mounts it, and with podman's random level per container a cron container's start relabels the data
-    directory away from the running shelter (SPEC "How it runs on the host")."""
+    directory away from the running shelter (SPEC "How it runs on the host"). Its socket proxies run at the same level."""
     vols = [f"-v {plan['code']}:{plan['code']}:ro,idmap"] + [f"-v {x}:{x}:Z,idmap" for x in plan["data"]] + \
         [f"-v /run/wend/shelter/{app}/s{i}:{os.path.dirname(x)}:Z" for i, x in enumerate(plan.get("sockets", []))]
     # 0.0.0.0 is published; a program listening on 127.0.0.1 listens on the shelter's own loopback, which podman's
@@ -578,11 +578,16 @@ def start_units(app, plan, release):
                   "if command -v selinuxenabled >/dev/null && selinuxenabled; then restorecon -R /usr/libexec/wend; fi"]
     if socks:
         # container_t may connect to an unconfined service's socket only by this rule; the socket systemd made for
-        # the proxy carries the proxy's domain. Loaded where SELinux is on (the chroot tier has none)
+        # the proxy carries the proxy's context. The constraint holds it to the same level on both ends: the socket
+        # proxy runs at its shelter's level (below), every other unconfined service at s0, and every other container
+        # at a level of its own, so the rule reaches one shelter's proxies from that shelter and nothing else on the
+        # host. Loaded where SELinux is on (the chroot tier has none)
         parts += [_heredoc(f"/etc/wend/shelter/{CIL}.cil",
                            ";; Written by wend (shelter.start): a shelter reaches a host socket through wend's proxy,\n"
-                           ";; which runs unconfined. SPEC \"How it runs on the host\".\n"
-                           "(allow container_t unconfined_service_t (unix_stream_socket (connectto)))\n"),
+                           ";; which runs unconfined at the shelter's own level. SPEC \"How it runs on the host\".\n"
+                           "(allow container_t unconfined_service_t (unix_stream_socket (connectto)))\n"
+                           "(mlsconstrain (unix_stream_socket (connectto))\n"
+                           "    (or (neq t1 container_t) (or (neq t2 unconfined_service_t) (and (eq l1 l2) (eq h1 h2)))))\n"),
                   "if command -v selinuxenabled >/dev/null && selinuxenabled; then "
                   f"semodule -i /etc/wend/shelter/{CIL}.cil; fi"]
     parts += [
@@ -623,7 +628,10 @@ def start_units(app, plan, release):
             _heredoc(f"/etc/systemd/system/{unit}-sock{i}.service",
                      hdr + f"[Unit]\nDescription=wend shelter {app}: proxy to {s}\n"
                      f"Requires={unit}-sock{i}.socket\nAfter={unit}-sock{i}.socket\n\n"
-                     f"[Service]\nUser={plan['user']}\nExecStart={PROXYD} {s}\n")]
+                     f"[Service]\nUser={plan['user']}\n"
+                     # the socket's label too (systemd labels it from SELinuxContext=); ignored without SELinux
+                     "SELinuxContext=system_u:system_r:unconfined_service_t:s0:c$K,c1023\n"
+                     f"ExecStart={PROXYD} {s}\n")]
     port_units = []
     for i, p in enumerate(x for x in plan.get("ports", []) if x.startswith("127.0.0.1:")):
         # outside the wend-shelter-<app>-* names, which the chroot tier's checks start themselves; there the program
@@ -852,15 +860,23 @@ def vm_probe(app, plan, outside):
         f"{outside} refused'; fi",
         f"if nft list table inet wend_shelter_{app} >/dev/null 2>&1; then ok 'the egress table is loaded'; else "
         "no 'no egress table'; fi",
-        "systemctl start nftables.service >/dev/null 2>&1; if systemctl reload nftables.service; then sleep 3; "
+        # a marker table no unit puts back: gone afterwards means the reload (restart) really flushed the ruleset
+        "systemctl start nftables.service || no 'nftables.service would not start'; "
+        "nft add table inet wend_probe_marker; if systemctl reload nftables.service; then sleep 3; "
+        "if nft list table inet wend_probe_marker >/dev/null 2>&1; then no 'the nftables reload flushed nothing (proves "
+        "nothing)'; nft delete table inet wend_probe_marker; fi; "
         f"if nft list table inet wend_shelter_{app} >/dev/null 2>&1; then ok 'the egress table is back after an "
         "nftables reload'; else no 'an nftables reload dropped the egress table'; fi; "
         "if up; then ok 'the shelter answers after the reload'; else no 'the shelter stopped answering after an nftables "
         "reload'; fi; if eg; then no 'egress opened after the reload'; else ok 'egress still refused after the reload'; "
         "fi; else no 'nftables.service would not reload'; fi",
-        f"if systemctl restart nftables.service; then sleep 3; if nft list table inet wend_shelter_{app} >/dev/null 2>&1 "
+        "nft add table inet wend_probe_marker; "
+        f"if systemctl restart nftables.service; then sleep 3; if nft list table inet wend_probe_marker >/dev/null 2>&1; "
+        "then no 'the nftables restart flushed nothing (proves nothing)'; nft delete table inet wend_probe_marker; fi; "
+        f"if nft list table inet wend_shelter_{app} >/dev/null 2>&1 "
         "&& up; then ok 'the table and the shelter are back after an nftables restart'; else no 'after an nftables "
-        "restart: table or shelter missing'; fi; else no 'nftables.service would not restart'; fi",
+        "restart: table or shelter missing'; fi; else no 'nftables.service would not restart'; "
+        "nft delete table inet wend_probe_marker 2>/dev/null; fi",
         "fact selinux_end \"$(getenforce 2>/dev/null || echo none)\"",
         "exit $f"]
     return "\n".join(lines) + "\n"
@@ -900,7 +916,7 @@ VM_ENFORCE_OFF = (
 
 def vm_denials(app, out):
     """The AVC denials of an enforcing window that touch the shelter: its domain, its files, its units, its proxies
-    (wend's copy of systemd-socket-proxyd, nsenter, the stock proxy's domain), the sockets they bridge."""
+    (wend's scripts, the systemd-socket-proxyd they exec, nsenter, the stock proxy's domain), the sockets they bridge."""
     return [x for x in out.splitlines() if "avc:" in x and
             re.search(rf"container_t|container_file_t|wend-shelter-{app}|wend-{app}|/run/wend/|/usr/libexec/wend/|"
                       r"systemd_socket_proxyd|comm=\"systemd-socket-|comm=\"shelter-port-pr|comm=\"nsenter\"|"

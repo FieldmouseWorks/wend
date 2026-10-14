@@ -457,10 +457,12 @@ _ok = (f"ExecStart={shelter.PROXYD} /var/lib/mysql/mysql.sock" in _pp.splitlines
        "(allow container_t unconfined_service_t (unix_stream_socket (connectto)))" in _pp and
        f"exec {shelter.STOCK_PROXYD} " in _pp and "install -m 0755 /usr/lib/systemd" not in _pp and
        "/bin/sh /etc/wend" not in _pp and
-       _pp.count("--security-opt label=level:s0:c$K,c1023") == 1 + len(_pyplan.get("cron", [])))
+       _pp.count("--security-opt label=level:s0:c$K,c1023") == 1 + len(_pyplan.get("cron", [])) and
+       "SELinuxContext=system_u:system_r:unconfined_service_t:s0:c$K,c1023" in _pp.splitlines() and
+       "(or (neq t1 container_t) (or (neq t2 unconfined_service_t) (and (eq l1 l2) (eq h1 h2)))))" in _pp)
 _r = _sp.run(["bash", "-n"], input=_pp, text=True, capture_output=True)
 print(("passed  " if _ok and _r.returncode == 0 else f"WRONG   {_r.stderr[:300]} ") +
-      "the proxies run /usr/libexec/wend's copy, one SELinux level per shelter, the start step parses")
+      "the proxies start from /usr/libexec/wend's scripts, one SELinux level per shelter, the start step parses")
 bad += not (_ok and _r.returncode == 0)
 _avc = ['type=AVC msg=audit(1.1:2): avc:  denied  { search } for  pid=9 comm="systemd-socket-" name="1" '
         'scontext=system_u:system_r:systemd_socket_proxyd_t:s0 tcontext=system_u:system_r:init_t:s0 tclass=dir',
