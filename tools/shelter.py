@@ -916,8 +916,8 @@ VM_ENFORCE_OFF = (
 
 def vm_denials(app, out):
     """The AVC denials of an enforcing window that touch the shelter: its domain, its files, its units, its proxies
-    (wend's scripts, the systemd-socket-proxyd they exec, nsenter, the stock proxy's domain), the sockets they bridge."""
+    (wend's scripts, the systemd-socket-proxyd they exec, nsenter, the stock proxy's domain). Not every socket's or
+    unconfined service's: with dontaudit off, the rest of the host's denials say nothing about the shelter."""
     return [x for x in out.splitlines() if "avc:" in x and
             re.search(rf"container_t|container_file_t|wend-shelter-{app}|wend-{app}|/run/wend/|/usr/libexec/wend/|"
-                      r"systemd_socket_proxyd|comm=\"systemd-socket-|comm=\"shelter-port-pr|comm=\"nsenter\"|"
-                      r"unconfined_service_t.*tclass=unix_stream_socket|\.sock\b", x)]
+                      r"systemd_socket_proxyd|comm=\"systemd-socket-|comm=\"shelter-port-pr|comm=\"nsenter\"", x)]

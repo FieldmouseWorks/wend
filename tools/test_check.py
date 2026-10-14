@@ -467,9 +467,11 @@ bad += not (_ok and _r.returncode == 0)
 _avc = ['type=AVC msg=audit(1.1:2): avc:  denied  { search } for  pid=9 comm="systemd-socket-" name="1" '
         'scontext=system_u:system_r:systemd_socket_proxyd_t:s0 tcontext=system_u:system_r:init_t:s0 tclass=dir',
         'type=AVC msg=audit(1.1:3): avc:  denied  { read } for  pid=9 comm="sshd" name="x" '
-        'scontext=system_u:system_r:sshd_t:s0 tcontext=system_u:object_r:etc_t:s0 tclass=file']
+        'scontext=system_u:system_r:sshd_t:s0 tcontext=system_u:object_r:etc_t:s0 tclass=file',
+        'type=AVC msg=audit(1.1:4): avc:  denied  { write } for  pid=9 comm="foo" name="foo.sock" '
+        'scontext=system_u:system_r:foo_t:s0 tcontext=system_u:object_r:foo_var_run_t:s0 tclass=sock_file']
 _d = shelter.vm_denials("billing", "\n".join(_avc))
-print(("passed  " if _d == _avc[:1] else f"WRONG   {_d} ") + "the denial list keeps a proxy's denial, not sshd's")
+print(("passed  " if _d == _avc[:1] else f"WRONG   {_d} ") + "the denial list keeps a proxy's denial, not sshd's or another service's socket's")
 bad += _d != _avc[:1]
 _on = shelter.vm_enforce_on("billing")
 _ok = _on.index("semodule -DB") < _on.index("setenforce 1") and "semodule -B" in _on and "semodule -B" in shelter.VM_ENFORCE_OFF
