@@ -1,0 +1,13 @@
+10:05:49 installing el/centos7-pyapp (centos7) in a VM; this takes 10 to 20 minutes
+127.0.0.1 - - [14/Oct/2026 10:05:57] "GET /ks.cfg HTTP/1.1" 200 -
+10:14:12 installed and updated; checking the box
+[elevate 10:15:09] setup: 'rm -f /etc/yum.repos.d/*.repo && curl -fsSo /etc/yum.repos.d/CentOS-Base.repo https://el7.repo.almal' -> rc=0
+[elevate 10:15:31] setup: 'yum clean all && yum upgrade -y' -> rc=0
+[elevate 10:18:14] alma8: 'yum install -y http://repo.almalinux.org/elevate/elevate-release-latest-el7.noarch.rpm' -> rc=0
+[elevate 10:18:36] alma8: 'yum install -y leapp-upgrade leapp-data-almalinux' -> rc=0
+[elevate 10:19:38] alma8: 'leapp preupgrade' -> rc=1
+[elevate 10:19:50] alma8: 'echo PermitRootLogin yes >> /etc/ssh/sshd_config' -> rc=0
+[elevate 10:20:01] alma8: 'rmmod pata_acpi' -> rc=0
+[elevate 10:20:13] alma8: 'leapp answer --section remove_pam_pkcs11_module_check.confirm=True' -> rc=0
+[elevate 10:20:55] alma8: 'leapp preupgrade' -> rc=1
+[elevate 10:21:02] done: reached centos7; 3 interventions; run in .wend/elevate/20261014-101430-el_centos7-pyapp-bios

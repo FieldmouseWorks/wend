@@ -1,0 +1,3 @@
+[elevate 10:05:24] setup: "rm -f /etc/yum.repos.d/*.repo && printf '[baseos]\nname=CentOS Linux 8 - BaseOS\nbaseurl=https://vault" -> rc=0
+[elevate 10:05:45] alma8: 'curl -fsSO https://raw.githubusercontent.com/AlmaLinux/almalinux-deploy/master/almalinux-deploy.sh &' -> rc=1
+[elevate 10:05:49] done: reached centos8; 0 interventions; run in .wend/elevate/20261014-100447-el_centos8-lamp-bios

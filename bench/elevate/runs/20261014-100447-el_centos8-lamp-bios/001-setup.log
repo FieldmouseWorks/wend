@@ -1,0 +1,37 @@
+$ rm -f /etc/yum.repos.d/*.repo && printf '[baseos]
+name=CentOS Linux 8 - BaseOS
+baseurl=https://vault.centos.org/8.5.2111/BaseOS/$basearch/os/
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial
+
+[appstream]
+name=CentOS Linux 8 - AppStream
+baseurl=https://vault.centos.org/8.5.2111/AppStream/$basearch/os/
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial
+
+[extras]
+name=CentOS Linux 8 - extras
+baseurl=https://vault.centos.org/8.5.2111/extras/$basearch/os/
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial
+
+' > /etc/yum.repos.d/CentOS-Vault.repo && printf '[epel]
+name=Extra Packages for Enterprise Linux 8 - $basearch
+metalink=https://mirrors.fedoraproject.org/metalink?repo=epel-8&arch=$basearch&infra=$infra&content=$contentdir
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-8
+' > /etc/yum.repos.d/epel.repo && dnf clean all && dnf makecache
+0 files removed
+CentOS Linux 8 - BaseOS                          16 MB/s | 4.6 MB     00:00    
+CentOS Linux 8 - AppStream                       28 MB/s | 8.4 MB     00:00    
+CentOS Linux 8 - extras                          80 kB/s |  10 kB     00:00    
+Extra Packages for Enterprise Linux 8 - x86_64   14 MB/s |  14 MB     00:00    
+Last metadata expiration check: 0:00:01 ago on Wed Oct 14 17:05:17 2026.
+Metadata cache created.
+
+# rc=0

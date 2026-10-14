@@ -1,0 +1,10 @@
+[elevate 09:58:35] setup: 'rm -f /etc/yum.repos.d/*.repo && curl -fsSo /etc/yum.repos.d/CentOS-Base.repo https://el7.repo.almal' -> rc=0
+[elevate 09:58:57] setup: 'yum clean all && yum upgrade -y' -> rc=0
+[elevate 10:01:39] alma8: 'yum install -y http://repo.almalinux.org/elevate/elevate-release-latest-el7.noarch.rpm' -> rc=0
+[elevate 10:02:01] alma8: 'yum install -y leapp-upgrade leapp-data-almalinux' -> rc=0
+[elevate 10:03:24] alma8: 'leapp preupgrade' -> rc=1
+[elevate 10:03:36] alma8: 'rmmod pata_acpi' -> rc=0
+[elevate 10:03:47] alma8: 'echo PermitRootLogin yes >> /etc/ssh/sshd_config' -> rc=0
+[elevate 10:03:59] alma8: 'leapp answer --section remove_pam_pkcs11_module_check.confirm=True' -> rc=0
+[elevate 10:04:41] alma8: 'leapp preupgrade' -> rc=1
+[elevate 10:04:46] done: reached centos7; 3 interventions; run in .wend/elevate/20261014-095752-el_centos7-lamp-bios

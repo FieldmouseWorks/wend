@@ -1,0 +1,75 @@
+$ curl -fsSO https://raw.githubusercontent.com/AlmaLinux/almalinux-deploy/master/almalinux-deploy.sh && bash almalinux-deploy.sh
+[0;32mCheck root privileges                                                 OK[0m
+[0;32mCheck centos-8.x86_64 is supported                                    OK[0m
+[0;32mEnabled repositories list created                                     OK[0m
+[0;32mDownload RPM-GPG-KEY-AlmaLinux                                        OK[0m
+[0;32mImport RPM-GPG-KEY-AlmaLinux to RPM DB                                OK[0m
+[0;32mDownload almalinux-release package                                    OK[0m
+[0;32mVerify almalinux-release package                                      OK[0m
+[0;32mYour OS is supported                                                  OK[0m
+warning: file /etc/yum.repos.d/CentOS-Linux-Sources.repo: remove failed: No such file or directory
+warning: file /etc/yum.repos.d/CentOS-Linux-PowerTools.repo: remove failed: No such file or directory
+warning: file /etc/yum.repos.d/CentOS-Linux-Plus.repo: remove failed: No such file or directory
+warning: file /etc/yum.repos.d/CentOS-Linux-Media.repo: remove failed: No such file or directory
+warning: file /etc/yum.repos.d/CentOS-Linux-HighAvailability.repo: remove failed: No such file or directory
+warning: file /etc/yum.repos.d/CentOS-Linux-FastTrack.repo: remove failed: No such file or directory
+warning: file /etc/yum.repos.d/CentOS-Linux-Extras.repo: remove failed: No such file or directory
+warning: file /etc/yum.repos.d/CentOS-Linux-Devel.repo: remove failed: No such file or directory
+warning: file /etc/yum.repos.d/CentOS-Linux-Debuginfo.repo: remove failed: No such file or directory
+warning: file /etc/yum.repos.d/CentOS-Linux-ContinuousRelease.repo: remove failed: No such file or directory
+warning: file /etc/yum.repos.d/CentOS-Linux-BaseOS.repo: remove failed: No such file or directory
+warning: file /etc/yum.repos.d/CentOS-Linux-AppStream.repo: remove failed: No such file or directory
+[0;32mRemove OS specific rpm packages                                       OK[0m
+Verifying...                          ########################################
+Preparing...                          ########################################
+Updating / installing...
+almalinux-release-8.10-1.el8          ########################################
+[0;32mInstall almalinux-release package                                     OK[0m
+[0;32mRemove centos-logos-httpd packages                                    OK[0m
+[0;31mInstall almalinux-logos-httpd packages                                ERROR[0m
+    Repository baseos is listed more than once in the configuration
+    Repository appstream is listed more than once in the configuration
+    Repository extras is listed more than once in the configuration
+    Extra Packages for Enterprise Linux 8 - x86_64   29 MB/s |  14 MB     00:00
+    Last metadata expiration check: 0:00:01 ago on Wed Oct 14 17:05:28 2026.
+    No match for argument: almalinux-logos-httpd
+    Error: Unable to find a match: almalinux-logos-httpd
+[0;32mInstall almalinux-logos-httpd packages                                OK[0m
+[0;32mBackup of alternatives is done                                        OK[0m
+Repository baseos is listed more than once in the configuration
+Repository appstream is listed more than once in the configuration
+Repository extras is listed more than once in the configuration
+[0;32mEnabled AlmaLinux repositories that were before the migration         OK[0m
+Repository baseos is listed more than once in the configuration
+Repository appstream is listed more than once in the configuration
+Repository extras is listed more than once in the configuration
+CentOS Linux 8 - BaseOS                         131 kB/s | 3.9 kB     00:00    
+CentOS Linux 8 - AppStream                      156 kB/s | 4.3 kB     00:00    
+CentOS Linux 8 - extras                          56 kB/s | 1.5 kB     00:00    
+
+epel-release.noarch                          8-22.el8                       epel
+fail2ban-firewalld.noarch                    1.0.2-3.el8                    epel
+fail2ban-server.noarch                       1.0.2-3.el8                    epel
+htop.x86_64                                  3.2.1-1.el8                    epel
+ncdu.x86_64                                  1.22-1.el8                     epel
+Repository baseos is listed more than once in the configuration
+Repository appstream is listed more than once in the configuration
+Repository extras is listed more than once in the configuration
+AlmaLinux 8 - PowerTools                         11 MB/s | 6.9 MB     00:00    
+Last metadata expiration check: 0:00:01 ago on Wed Oct 14 17:05:32 2026.
+Error: 
+ Problem 1: package fail2ban-server-1.0.2-3.el8.noarch requires (fail2ban-selinux if selinux-policy-targeted), but none of the providers can be installed
+  - cannot install the best update candidate for package selinux-policy-targeted-3.14.3-80.el8_5.2.noarch
+  - cannot install the best update candidate for package fail2ban-server-0.11.2-1.el8.noarch
+  - nothing provides selinux-policy >= 3.14.3-108.el8_7.1 needed by fail2ban-selinux-1.0.2-3.el8.noarch
+  - nothing provides selinux-policy-base >= 3.14.3-108.el8_7.1 needed by fail2ban-selinux-1.0.2-3.el8.noarch
+ Problem 2: problem with installed package selinux-policy-targeted-3.14.3-80.el8_5.2.noarch
+  - package fail2ban-server-1.0.2-3.el8.noarch requires (fail2ban-selinux if selinux-policy-targeted), but none of the providers can be installed
+  - problem with installed package fail2ban-server-0.11.2-1.el8.noarch
+  - fail2ban-server-0.11.2-1.el8.noarch does not belong to a distupgrade repository
+  - nothing provides selinux-policy >= 3.14.3-108.el8_7.1 needed by fail2ban-selinux-1.0.2-3.el8.noarch
+  - nothing provides selinux-policy-base >= 3.14.3-108.el8_7.1 needed by fail2ban-selinux-1.0.2-3.el8.noarch
+(try to add '--skip-broken' to skip uninstallable packages or '--nobest' to use not only best candidate packages)
+[0;31mRun dnf distro-sync -y. Exit code: 1                                  ERROR[0m
+
+# rc=1

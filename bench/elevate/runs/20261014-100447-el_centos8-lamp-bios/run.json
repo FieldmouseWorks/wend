@@ -1,0 +1,42 @@
+{
+ "schema": "wend.elevate-vs/0",
+ "box": "el/centos8-lamp",
+ "from": "centos8",
+ "started": "20261014-100447",
+ "firmware": "bios",
+ "layout": {},
+ "start_checks": {
+  "pkgdb": true,
+  "boot": true,
+  "ssh": true,
+  "cron": true,
+  "python": true,
+  "tools": true,
+  "mail": true,
+  "php": true,
+  "firewall": true,
+  "fail2ban": true,
+  "current": true,
+  "network": true,
+  "services": true,
+  "live:boot_entries": true,
+  "live:daemons": true,
+  "live:db": true,
+  "live:site": true
+ },
+ "stages": [
+  {
+   "stage": "alma8-deploy",
+   "ok": false,
+   "detail": "el8                    epel\nfail2ban-server.noarch                       1.0.2-3.el8                    epel\nhtop.x86_64                                  3.2.1-1.el8                    epel\nncdu.x86_64                                  1.22-1.el8                     epel\nRepository baseos is listed more than once in the configuration\nRepository appstream is listed more than once in the configuration\nRepository extras is listed more than once in the configuration\nAlmaLinux 8 - PowerTools                         11 MB/s | 6.9 MB     00:00    \nLast metadata expiration check: 0:00:01 ago on Wed Oct 14 17:05:32 2026.\nError: \n Problem 1: package fail2ban-server-1.0.2-3.el8.noarch requires (fail2ban-selinux if selinux-policy-targeted), but none of the providers can be installed\n  - cannot install the best update candidate for package selinux-policy-targeted-3.14.3-80.el8_5.2.noarch\n  - cannot install the best update candidate for package fail2ban-server-0.11.2-1.el8.noarch\n  - nothing provides selinux-policy >= 3.14.3-108.el8_7.1 needed by fail2ban-selinux-1.0.2-3.el8.noarch\n  - nothing provides selinux-policy-base >= 3.14.3-108.el8_7.1 needed by fail2ban-selinux-1.0.2-3.el8.noarch\n Problem 2: problem with installed package selinux-policy-targeted-3.14.3-80.el8_5.2.noarch\n  - package fail2ban-server-1.0.2-3.el8.noarch requires (fail2ban-selinux if selinux-policy-targeted), but none of the providers can be installed\n  - problem with installed package fail2ban-server-0.11.2-1.el8.noarch\n  - fail2ban-server-0.11.2-1.el8.noarch does not belong to a distupgrade repository\n  - nothing provides selinux-policy >= 3.14.3-108.el8_7.1 needed by fail2ban-selinux-1.0.2-3.el8.noarch\n  - nothing provides selinux-policy-base >= 3.14.3-108.el8_7.1 needed by fail2ban-selinux-1.0.2-3.el8.noarch\n(try to add '--skip-broken' to skip uninstallable packages or '--nobest' to use not only best candidate packages)\n\u001b[0;31mRun dnf distro-sync -y. Exit code: 1                                  ERROR\u001b[0m\n",
+   "seconds": 21
+  }
+ ],
+ "interventions": [],
+ "seconds": 32,
+ "reached": "centos8",
+ "runner": {
+  "host": "remi",
+  "kernel": "7.0.0-38-generic"
+ }
+}

@@ -1,0 +1,368 @@
+$ leapp preupgrade
+==> Processing phase `configuration_phase`
+====> * ipu_workflow_config
+        IPU workflow config actor
+==> Processing phase `FactsCollection`
+====> * vendor_repositories_mapping
+        Scan the vendor repository mapping files and provide the data to other actors.
+====> * system_facts
+        Provides data about many facts from system.
+====> * check_enabled_vendor_repos
+        Create a list of vendors whose repositories are present on the system and enabled.
+====> * vendor_repo_signature_scanner
+        Produce VendorSignatures messages for the vendor signature files inside the
+====> * scanclienablerepo
+        Produce CustomTargetRepository based on the LEAPP_ENABLE_REPOS in config.
+====> * copy_dnf_conf_into_target_userspace
+        Copy dnf.conf into target userspace
+====> * scan_pkg_manager
+        Provides data about package manager (yum/dnf)
+====> * scan_kernel_cmdline
+        No documentation has been provided for the scan_kernel_cmdline actor.
+====> * network_manager_read_config
+        Provides data about NetworkManager configuration.
+====> * read_openssh_config
+        Collect information about the OpenSSH configuration.
+====> * scan_vendor_repofiles
+        Load and produce custom repository data from vendor-provided files.
+====> * scanzfcp
+        In case of s390x architecture, check whether ZFCP is used.
+====> * repository_mapping
+        Produces message containing repository mapping based on provided file.
+====> * scan_grub_device_name
+        Find the name of the block devices where GRUB is located
+====> * pam_modules_scanner
+        Scan the pam directory for services and modules used in them
+====> * scan_custom_modifications_actor
+        Collects information about files in leapp directories that have been modified or newly added.
+====> * sssd_facts
+        Check SSSD configuration for changes in RHEL8 and report them in model.
+====> * scan_fips
+        Determine whether the source system has FIPS enabled.
+====> * sctp_read_status
+        Determines whether or not the SCTP kernel module might be wanted.
+====> * removed_pam_modules_scanner
+        Scan PAM configuration for modules that are not available in RHEL-8.
+====> * scan_grub_config
+        Scan grub configuration files for errors.
+====> * scanmemory
+        Scan Memory of the machine.
+====> * rpm_scanner
+        Provides data about installed RPM Packages.
+Loaded plugins: fastestmirror
+Loading mirror speeds from cached hostfile
+====> * check_kde_apps
+        Actor checks which KDE apps are installed.
+====> * scandasd
+        In case of s390x architecture, check whether DASD is used.
+====> * firewalld_facts_actor
+        Provide data about firewalld
+====> * checkrhui
+        Check if system is using RHUI infrastructure (on public cloud) and send messages to
+====> * source_boot_loader_scanner
+        Scans the boot loader configuration on the source system.
+====> * trusted_gpg_keys_scanner
+        Scan for trusted GPG keys.
+====> * selinuxcontentscanner
+        Scan the system for any SELinux customizations
+====> * root_scanner
+        Scan the system root directory and produce a message containing
+====> * udevadm_info
+        Produces data exported by the "udevadm info" command.
+====> * tcp_wrappers_config_read
+        Parse tcp_wrappers configuration files /etc/hosts.{allow,deny}.
+====> * load_device_driver_deprecation_data
+        Loads deprecation data for drivers and devices (PCI & CPU)
+====> * authselect_scanner
+        Detect what authselect configuration should be suggested to administrator.
+====> * scan_systemd_source
+        Provides info about systemd on the source system
+====> * persistentnetnames
+        Get network interface information for physical ethernet interfaces of the original system.
+====> * scan_target_os_image
+        Scans the provided target OS ISO image to use as a content source for the IPU, if any.
+====> * satellite_upgrade_facts
+        Report which Satellite packages require updates and how to handle PostgreSQL data
+====> * register_yum_adjustment
+        Registers a workaround which will adjust the yum directories during the upgrade.
+====> * transaction_workarounds
+        Provides additional RPM transaction tasks based on bundled RPM packages.
+====> * check_grub_legacy
+        Check whether GRUB Legacy is installed in the MBR.
+====> * scan_source_files
+        Scan files (explicitly specified) of the source system.
+====> * distribution_signed_rpm_scanner
+        Provide data about distribution plus vendors signed & unsigned RPM packages.
+====> * get_enabled_modules
+        Provides data about which module streams are enabled on the source system.
+====> * used_repository_scanner
+        Scan used enabled repositories
+====> * scan_sap_hana
+        Gathers information related to SAP HANA instances on the system.
+====> * vsftpd_config_read
+        Reads vsftpd configuration files (/etc/vsftpd/*.conf) and extracts necessary information.
+====> * scan_subscription_manager_info
+        Scans the current system for subscription manager information
+====> * scan_grub_device_partition_layout
+        Scan all identified GRUB devices for their partition layout.
+====> * storage_scanner
+        Provides data about storage settings.
+====> * scan_custom_repofile
+        Scan the custom /etc/leapp/files/leapp_upgrade_repositories.repo repo file.
+====> * remove_obsolete_gpg_keys
+        Remove obsoleted RPM GPG keys.
+====> * scan_files_for_target_userspace
+        Scan the source system and identify files that will be copied into the target userspace when it is created.
+====> * satellite_upgrade_services
+        Reconfigure Satellite services
+====> * ipa_scanner
+        Scan system for ipa-client and ipa-server status
+====> * multipath_conf_read
+        Read multipath configuration files and extract the necessary information
+====> * scan_source_kernel
+        Scan the source system kernel.
+====> * biosdevname
+        Enable biosdevname on the target RHEL system if all interfaces on the source RHEL
+====> * get_installed_desktops
+        Actor checks if kde or gnome desktop environments
+====> * pci_devices_scanner
+        Provides data about existing PCI Devices.
+====> * persistentnetnamesdisable
+        Disable systemd-udevd persistent network naming on machine with single eth0 NIC
+====> * luks_scanner
+        Provides data about active LUKS devices.
+====> * xfs_info_scanner
+        This actor scans all mounted mountpoints for XFS information
+====> * repositories_blacklist
+        Exclude target repositories provided by Red Hat without support.
+====> * scancpu
+        Scan CPUs of the machine.
+====> * quagga_daemons
+        Active quagga daemons check.
+====> * spamassassin_config_read
+        Reads spamc configuration (/etc/mail/spamassassin/spamc.conf), the
+====> * detect_kernel_drivers
+        Matches all currently loaded kernel drivers against known deprecated and removed drivers.
+====> * rpm_transaction_config_tasks_collector
+        Provides additional RPM transaction tasks from /etc/leapp/transaction.
+====> * cups_scanner
+        Gather facts about CUPS features which needs to be migrated
+====> * scan_dynamic_linker_configuration
+        Scan the dynamic linker configuration and find modifications.
+====> * pes_events_scanner
+        Provides data about package events from Package Evolution Service.
+====> * setuptargetrepos
+        Produces list of repositories that should be available to be used by Upgrade process.
+==> Processing phase `Checks`
+====> * check_rhsmsku
+        Ensure the system is subscribed to the subscription manager
+====> * check_first_partition_offset
+        Check whether the first partition starts at the offset >=1MiB.
+====> * check_ha_cluster
+        Check if HA Cluster is in use. If yes, inhibit the upgrade process.
+====> * check_openssl_conf
+        Check whether the openssl configuration and openssl-IBMCA.
+====> * open_ssh_use_privilege_separation
+        UsePrivilegeSeparation configuration option was removed.
+====> * checkacpid
+        Check if acpid is installed. If yes, write information about non-compatible changes.
+====> * checkhybridimage
+        Check if the system is using Azure hybrid image.
+====> * quagga_report
+        Checking for babeld on RHEL-7.
+====> * check_dynamic_linker_configuration
+        Check for customization of dynamic linker configuration.
+====> * python_inform_user
+        This actor informs the user of differences in Python version and support in RHEL 8.
+====> * check_removed_envvars
+        Check for usage of removed environment variables and inhibit the upgrade
+====> * check_bind
+        Actor parsing BIND configuration and checking for known issues in it.
+====> * check_microarchitecture
+        Inhibit if RHEL9 microarchitecture requirements are not satisfied
+====> * check_root_symlinks
+        Check if the symlinks /bin and /lib are relative, not absolute.
+====> * check_grub_core
+        Check whether we are on legacy (BIOS) system and instruct Leapp to upgrade GRUB core
+====> * check_persistent_mounts
+        Check if mounts required to be persistent are mounted in persistent fashion.
+====> * cephvolumescan
+        Retrieves the list of encrypted Ceph OSD
+====> * checkmemory
+        The actor check the size of RAM against RHEL8 minimal hardware requirements
+====> * detect_grub_config_error
+        Check grub configuration for various errors.
+====> * checkfstabxfsoptions
+        Check the FSTAB file for the deprecated / removed XFS mount options.
+====> * check_sap_hana
+        If SAP HANA has been detected, several checks are performed to ensure a successful upgrade.
+====> * spamassassin_config_check
+        Reports changes in spamassassin between RHEL-7 and RHEL-8
+====> * efi_check_boot
+        Adjust EFI boot entry for first reboot
+====> * removed_pam_modules
+        Check for modules that are not available in RHEL 8 anymore
+====> * check_mount_options
+        Check for mount options preventing the upgrade.
+====> * check_etc_releasever
+        Check releasever info and provide a guidance based on the facts
+====> * sctp_checks
+        Parses collected SCTP information and take necessary actions.
+====> * checkgrep
+        Check if Grep is installed. If yes, write information about non-compatible changes.
+====> * check_fstab_mount_order
+        Checks order of entries in /etc/fstab based on their mount point and inhibits upgrade if overshadowing is detected.
+====> * check_yum_plugins_enabled
+        Checks that the required yum plugins are enabled.
+====> * check_detected_devices_and_drivers
+        Checks whether or not detected devices and drivers are usable on the target system.
+====> * check_firewalld
+        Check for certain firewalld configuration that may prevent an upgrade.
+====> * check_installed_devel_kernels
+        Inhibit IPU (in-place upgrade) when multiple devel kernels are installed.
+====> * bacula_check
+        Actor checking for presence of Bacula installation.
+====> * check_installed_debug_kernels
+        Inhibit IPU (in-place upgrade) when multiple debug kernels are installed.
+====> * check_memcached
+        Check for incompatible changes in memcached configuration.
+====> * check_skipped_repositories
+        Produces a report if any repositories enabled on the system are going to be skipped.
+====> * tcp_wrappers_check
+        Check the list of packages previously compiled with TCP wrappers support
+====> * check_luks
+        Check if any encrypted partitions are in use and whether they are supported for the upgrade.
+====> * check_brltty
+        Check if brltty is installed, check whether configuration update is needed.
+====> * check_system_arch
+        Check if system is running at a supported architecture. If no, inhibit the upgrade process.
+====> * check_btrfs
+        Check if Btrfs filesystem is in use. If yes, inhibit the upgrade process.
+====> * check_postfix
+        Check if postfix is installed, check whether configuration update is needed.
+====> * check_target_iso
+        Check that the provided target ISO is a valid ISO image and is located on a persistent partition.
+====> * check_cifs
+        Check if CIFS filesystem is in use. If yes, inhibit the upgrade process.
+====> * check_sendmail
+        Check if sendmail is installed, check whether configuration update is needed, inhibit upgrade if TCP wrappers
+====> * check_custom_modifications_actor
+        Checks CustomModifications messages and produces a report about files in leapp directories that have been
+====> * vsftpd_config_check
+        Checks whether the vsftpd configuration is supported in RHEL-8. Namely checks that
+====> * check_se_linux
+        Check SELinux status and produce decision messages for further action.
+====> * multipath_conf_check
+        Checks whether the multipath configuration can be updated to RHEL-8 and
+====> * satellite_upgrade_check
+        Check state of Satellite system before upgrade
+====> * removed_pam_modules_check
+        Check if it is all right to disable PAM modules that are not in RHEL-8.
+====> * check_boot_avail_space
+        Check if at least 100Mib of available space on /boot. If not, inhibit the upgrade process.
+====> * multiple_package_versions
+        Check for problematic 32bit packages installed together with 64bit ones.
+====> * check_insights_auto_register
+        Checks if system can be automatically registered into Red Hat Insights
+====> * open_ssh_protocol
+        Protocol configuration option was removed.
+====> * powertop
+        Check if PowerTOP is installed. If yes, write information about non-compatible changes.
+====> * cups_check
+        Reports changes in configuration between CUPS 1.6.3 and 2.2.6
+====> * check_consumed_assets
+        Check whether Leapp is using correct data assets.
+====> * authselect_check
+        Confirm suggested authselect call from AuthselectScanner.
+====> * openssh_permit_root_login
+        OpenSSH no longer allows root logins with password.
+====> * sssd_check
+        Check SSSD configuration for changes in RHEL8 and report them.
+====> * open_ssh_deprecated_directives_check
+        Check for any deprecated directives in the OpenSSH configuration.
+====> * zipl_check_boot_entries
+        Inhibits the upgrade if a problematic Zipl configuration is detected on the system.
+====> * check_ipa_server
+        Check for ipa-server and inhibit upgrade
+====> * red_hat_signed_rpm_check
+        Check if there are packages not signed by Red Hat in use. If yes, warn user about it.
+====> * check_ntp
+        Check if ntp and/or ntpdate configuration needs to be migrated.
+====> * check_os_release
+        Check if the current RHEL minor version is supported. If not, inhibit the upgrade process.
+====> * checkirssi
+        Check if irssi is installed. If yes, write information about non-compatible changes.
+====> * unsupported_upgrade_check
+        Checks environment variables and produces a warning report if the upgrade is unsupported.
+====> * check_kde_gnome
+        Checks whether KDE is installed
+====> * check_systemd_broken_symlinks
+        Check whether some systemd symlinks are broken
+====> * check_nfs
+        Check if NFS filesystem is in use. If yes, inhibit the upgrade process.
+====> * check_chrony
+        Check for incompatible changes in chrony configuration.
+====> * checktargetrepos
+        Check whether target yum repositories are specified.
+====> * postgresql_check
+        Actor checking for presence of PostgreSQL installation.
+====> * open_ssh_algorithms
+        OpenSSH configuration does not contain any unsupported cryptographic algorithms.
+====> * check_fips
+        Inhibit upgrade if FIPS is detected as enabled.
+====> * check_installed_kernels
+        Inhibit IPU (in-place upgrade) when installed kernels conflict with a safe upgrade.
+====> * enable_device_cio_free_service
+        Enables device_cio_free.service systemd service on s390x
+====> * check_wireshark
+        Report a couple of changes in tshark usage
+====> * checkdosfstools
+        Check if dosfstools is installed. If yes, write information about non-compatible changes.
+====> * check_docker
+        Checks if Docker is installed and warns about its deprecation in RHEL8.
+====> * check_rpm_transaction_events
+        Filter RPM transaction events based on installed RPM packages
+====> * check_skip_phase
+        Skip all the subsequent phases until the report phase.
+==> Processing phase `Reports`
+====> * verify_check_results
+        Check all dialogs and notify that user needs to make some choices.
+====> * verify_check_results
+        Check all generated results messages and notify user about them.
+
+Debug output written to /var/log/leapp/leapp-preupgrade.log
+
+============================================================
+                      REPORT OVERVIEW                       
+============================================================
+
+Upgrade has been inhibited due to the following problems:
+    1. Leapp detected loaded kernel drivers which have been removed in RHEL 8. Upgrade cannot proceed.
+    2. Possible problems with remote login using root account
+    3. Missing required answers in the answer file
+
+HIGH and MEDIUM severity reports:
+    1. Difference in Python versions and support in RHEL 8
+    2. GRUB2 core will be automatically updated during the upgrade
+    3. Detected custom leapp actors or files.
+    4. chrony using default configuration
+
+Reports summary:
+    Errors:                      0
+    Inhibitors:                  3
+    HIGH severity reports:       3
+    MEDIUM severity reports:     1
+    LOW severity reports:        3
+    INFO severity reports:       2
+
+Before continuing, review the full report below for details about discovered problems and possible remediation instructions:
+    A report has been generated at /var/log/leapp/leapp-report.txt
+    A report has been generated at /var/log/leapp/leapp-report.json
+
+============================================================
+                   END OF REPORT OVERVIEW                   
+============================================================
+
+Answerfile has been generated at /var/log/leapp/answerfile
+
+# rc=1

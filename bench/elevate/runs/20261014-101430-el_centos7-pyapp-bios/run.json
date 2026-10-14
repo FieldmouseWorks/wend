@@ -1,0 +1,66 @@
+{
+ "schema": "wend.elevate-vs/0",
+ "box": "el/centos7-pyapp",
+ "from": "centos7",
+ "started": "20261014-101430",
+ "firmware": "bios",
+ "layout": {},
+ "start_checks": {
+  "pkgdb": true,
+  "boot": true,
+  "ssh": true,
+  "current": true,
+  "network": true,
+  "services": true,
+  "live:daemons": true,
+  "live:db": true,
+  "live:app": true,
+  "live:cron": true
+ },
+ "stages": [
+  {
+   "stage": "centos7-update",
+   "ok": true
+  },
+  {
+   "stage": "alma8",
+   "result": "blocked",
+   "inhibitors": [
+    {
+     "title": "Leapp detected loaded kernel drivers which have been removed in RHEL 8. Upgrade cannot proceed.",
+     "summary": "Support for the following RHEL 7 device drivers has been removed in RHEL 8:\n     - floppy\n"
+    }
+   ],
+   "seconds": 173
+  }
+ ],
+ "interventions": [
+  {
+   "stage": "alma8",
+   "tier": "guide",
+   "why": "Possible problems with remote login using root account",
+   "cmd": "echo PermitRootLogin yes >> /etc/ssh/sshd_config",
+   "rc": 0
+  },
+  {
+   "stage": "alma8",
+   "tier": "guide",
+   "why": "Leapp detected loaded kernel drivers which have been removed in RHEL 8. Upgrade cannot proceed.",
+   "cmd": "rmmod pata_acpi",
+   "rc": 0
+  },
+  {
+   "stage": "alma8",
+   "tier": "guide",
+   "why": "Missing required answers in the answer file",
+   "cmd": "leapp answer --section remove_pam_pkcs11_module_check.confirm=True",
+   "rc": 0
+  }
+ ],
+ "seconds": 358,
+ "reached": "centos7",
+ "runner": {
+  "host": "remi",
+  "kernel": "7.0.0-38-generic"
+ }
+}

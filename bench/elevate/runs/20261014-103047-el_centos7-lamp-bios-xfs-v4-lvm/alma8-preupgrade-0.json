@@ -1,0 +1,371 @@
+{
+  "leapp_run_id": "0846dca6-ae61-4b93-a3e9-a8dba907a396", 
+  "entries": [
+    {
+      "title": "Possible problems with remote login using root account", 
+      "timeStamp": "2026-10-14T17:35:50.350178Z", 
+      "hostname": "wend-vm.example.org", 
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package", 
+            "title": "openssh-server"
+          }, 
+          {
+            "scheme": "file", 
+            "title": "/etc/ssh/sshd_config"
+          }
+        ], 
+        "remediations": [
+          {
+            "type": "hint", 
+            "context": "If you depend on remote root logins using passwords, consider setting up a different user for remote administration or adding \"PermitRootLogin yes\" to sshd_config. If this change is ok for you, add explicit \"PermitRootLogin prohibit-password\" to your sshd_config to ignore this inhibitor"
+          }
+        ]
+      }, 
+      "actor": "openssh_permit_root_login", 
+      "summary": "OpenSSH configuration file does not explicitly state the option PermitRootLogin in sshd_config file, which will default in RHEL8 to \"prohibit-password\".", 
+      "audience": "sysadmin", 
+      "flags": [
+        "inhibitor"
+      ], 
+      "key": "3d21e8cc9e1c09dc60429de7716165787e99515f", 
+      "id": "9e270f9c415c807054bd4b7d93114d17805fbfe71cfa60fee84f52f8bf450748", 
+      "tags": [
+        "authentication", 
+        "security", 
+        "network", 
+        "services"
+      ], 
+      "severity": "high"
+    }, 
+    {
+      "title": "Difference in Python versions and support in RHEL 8", 
+      "timeStamp": "2026-10-14T17:35:50.765304Z", 
+      "hostname": "wend-vm.example.org", 
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package", 
+            "title": "python"
+          }, 
+          {
+            "scheme": "package", 
+            "title": "python2"
+          }, 
+          {
+            "scheme": "package", 
+            "title": "python3"
+          }
+        ], 
+        "external": [
+          {
+            "url": "https://red.ht/rhel-8-python", 
+            "title": "Difference in Python versions and support in RHEL 8"
+          }
+        ], 
+        "remediations": [
+          {
+            "type": "hint", 
+            "context": "Please run \"alternatives --set python /usr/bin/python3\" after upgrade"
+          }
+        ]
+      }, 
+      "actor": "python_inform_user", 
+      "summary": "In RHEL 8, there is no 'python' command. Python 3 (backward incompatible) is the primary Python version and Python 2 is available with limited support and limited set of packages. If you no longer require Python 2 packages following the upgrade, please remove them. Read more here: https://red.ht/rhel-8-python", 
+      "audience": "developer", 
+      "flags": [], 
+      "key": "0c98585b1d8d252eb540bf61560094f3495351f5", 
+      "id": "9fd6d44fa785c159d591c3ef6ecdd1c78287b9ce57801a24566d33f8219e9c9c", 
+      "tags": [
+        "python"
+      ], 
+      "severity": "high"
+    }, 
+    {
+      "title": "Current PAM and nsswitch.conf configuration will be kept.", 
+      "timeStamp": "2026-10-14T17:35:50.862289Z", 
+      "hostname": "wend-vm.example.org", 
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package", 
+            "title": "authselect"
+          }, 
+          {
+            "scheme": "package", 
+            "title": "authconfig"
+          }, 
+          {
+            "scheme": "file", 
+            "title": "/etc/nsswitch.conf"
+          }
+        ]
+      }, 
+      "actor": "authselect_check", 
+      "summary": "There is a new tool called authselect in RHEL8 that replaced authconfig. The upgrade process was unable to find an authselect profile that would be equivalent to your current configuration. Therefore your configuration will be left intact.", 
+      "audience": "sysadmin", 
+      "flags": [], 
+      "key": "40c4ab1da4a30dc1ca40e543f6385e1336d8810c", 
+      "id": "d5e6ff91f89da4686bb17d5f39eb6c7217f4774a5c7d96e4a6bf85fb2339c800", 
+      "tags": [
+        "authentication", 
+        "security", 
+        "tools"
+      ], 
+      "severity": "info"
+    }, 
+    {
+      "title": "Postfix has incompatible changes in the next major version", 
+      "timeStamp": "2026-10-14T17:35:50.915414Z", 
+      "hostname": "wend-vm.example.org", 
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package", 
+            "title": "postfix"
+          }
+        ]
+      }, 
+      "actor": "check_postfix", 
+      "summary": "Postfix 3.x has so called \"compatibility safety net\" that runs Postfix programs with backwards-compatible default settings. It will log a warning whenever backwards-compatible default setting may be required for continuity of service. Based on this logging the system administrator can decide if any backwards-compatible settings need to be made permanent in main.cf or master.cf, before turning off the backwards-compatibility safety net.\nThe backward compatibility safety net is by default turned off in Red Hat Enterprise Linux 8.\nIt can be turned on by running:  \"postconf -e compatibility_level=0\nIt can be turned off by running: \"postconf -e compatibility_level=2\n\nIn the Postfix MySQL database client, the default \"option_group\" value has changed to \"client\", i.e. it now reads options from the [client] group from the MySQL configuration file. To disable it, set \"option_group\" to the empty string.\n\nThe postqueue command no longer forces all message arrival times to be reported in UTC. To get the old behavior, set TZ=UTC in main.cf:import_environment.\n\nPostfix 3.2 enables elliptic curve negotiation. This changes the default smtpd_tls_eecdh_grade setting to \"auto\", and introduces a new parameter \"tls_eecdh_auto_curves\" with the names of curves that may be negotiated.\n\nThe \"master.cf\" chroot default value has changed from \"y\" (yes) to \"n\" (no). This applies to master.cf services where chroot field is not explicitly specified.\n\nThe \"append_dot_mydomain\" default value has changed from \"yes\" to \"no\". You may need changing it to \"yes\" if senders cannot use complete domain names in e-mail addresses.\n\nThe \"relay_domains\" default value has changed from \"$mydestination\" to the empty value. This could result in unexpected \"Relay access denied\" errors or ETRN errors, because now will postfix by default relay only for the localhost.\n\nThe \"mynetworks_style\" default value has changed from \"subnet\" to \"host\". This parameter is used to implement the \"permit_mynetworks\" feature. The change could result in unexpected \"access denied\" errors, because postfix will now by default trust only the local machine, not the remote SMTP clients on the same IP subnetwork.\n\nPostfix now supports dynamically loaded database plugins. Plugins are shipped in individual RPM sub-packages. Correct database plugins have to be installed, otherwise the specific database client will not work. For example for PostgreSQL map to work, the postfix-pgsql RPM package has to be installed.\n", 
+      "audience": "sysadmin", 
+      "flags": [], 
+      "key": "5721e0a07a67d82cf7e5ea6f17662cd4f82e0a33", 
+      "id": "694e2522c831f08a9231b9155d621ec1816d26bca04bd8efe7d4e9ea1474a3fc", 
+      "tags": [
+        "services", 
+        "email"
+      ], 
+      "severity": "low"
+    }, 
+    {
+      "title": "Grep has incompatible changes in the next major version", 
+      "timeStamp": "2026-10-14T17:35:51.222401Z", 
+      "hostname": "wend-vm.example.org", 
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package", 
+            "title": "grep"
+          }
+        ], 
+        "remediations": [
+          {
+            "type": "hint", 
+            "context": "Please update your scripts to be compatible with the changes."
+          }
+        ]
+      }, 
+      "actor": "checkgrep", 
+      "summary": "If a file contains data improperly encoded for the current locale, and this is discovered before any of the file's contents are output, grep now treats the file as binary.\nThe 'grep -P' no longer reports an error and exits when given invalid UTF-8 data. Instead, it considers the data to be non-matching.\nIn locales with multibyte character encodings other than UTF-8, grep -P now reports an error and exits instead of misbehaving.\nWhen searching binary data, grep now may treat non-text bytes as line terminators. This can boost performance significantly.\nThe 'grep -z' no longer automatically treats the byte '\\200' as binary data.\nContext no longer excludes selected lines omitted because of -m. For example, 'grep \"^\" -m1 -A1' now outputs the first two input lines, not just the first line.\n", 
+      "audience": "sysadmin", 
+      "flags": [], 
+      "key": "94665a499e2eeee35eca3e7093a7abe183384b16", 
+      "id": "084f8a54b72635c58c362bb2edca3faf07c0a02d107004f0301e9841a31082d2", 
+      "tags": [
+        "tools"
+      ], 
+      "severity": "low"
+    }, 
+    {
+      "title": "GRUB2 core will be automatically updated during the upgrade", 
+      "timeStamp": "2026-10-14T17:35:51.258379Z", 
+      "hostname": "wend-vm.example.org", 
+      "actor": "check_grub_core", 
+      "summary": "On legacy (BIOS) systems, GRUB2 core (located in the gap between the MBR and the first partition) cannot be updated during the rpm transaction and Leapp has to initiate the update running \"grub2-install\" after the transaction. No action is needed before the upgrade. After the upgrade, it is recommended to check the GRUB configuration.", 
+      "audience": "sysadmin", 
+      "flags": [], 
+      "key": "ac7030e05d2ee248d34f08a9fa040b352bc410a3", 
+      "id": "93003d2c0d177ad3af0850209ed61639785ff35446abf3071c97996d5bf27ce7", 
+      "tags": [
+        "boot"
+      ], 
+      "severity": "high"
+    }, 
+    {
+      "title": "Leapp detected loaded kernel drivers which have been removed in RHEL 8. Upgrade cannot proceed.", 
+      "timeStamp": "2026-10-14T17:35:51.760270Z", 
+      "hostname": "wend-vm.example.org", 
+      "detail": {
+        "external": [
+          {
+            "url": "https://access.redhat.com/solutions/6971716", 
+            "title": "Leapp preupgrade getting \"Inhibitor: Detected loaded kernel drivers which have been removed in RHEL 8. Upgrade cannot proceed.\" "
+          }, 
+          {
+            "url": "https://access.redhat.com/solutions/5436131", 
+            "title": "Leapp upgrade fail with error \"Inhibitor: Detected loaded kernel drivers which have been removed in RHEL 8. Upgrade cannot proceed.\""
+          }
+        ]
+      }, 
+      "actor": "check_detected_devices_and_drivers", 
+      "summary": "Support for the following RHEL 7 device drivers has been removed in RHEL 8:\n     - floppy\n     - pata_acpi\n", 
+      "audience": "sysadmin", 
+      "flags": [
+        "inhibitor"
+      ], 
+      "key": "f08a07da902958defa4f5c2699fae9ec2eb67c5b", 
+      "id": "017ecb87116a7a9285054f5b45c703483afccc42e0881fceff227ffd3cb37398", 
+      "tags": [
+        "kernel", 
+        "drivers"
+      ], 
+      "severity": "high"
+    }, 
+    {
+      "title": "SElinux relabeling will be scheduled", 
+      "timeStamp": "2026-10-14T17:35:51.894797Z", 
+      "hostname": "wend-vm.example.org", 
+      "actor": "check_se_linux", 
+      "summary": "SElinux relabeling will be scheduled as the status is permissive/enforcing.", 
+      "audience": "sysadmin", 
+      "flags": [], 
+      "key": "8fb81863f8413bd617c2a55b69b8e10ff03d7c72", 
+      "id": "cf949bd43d8465965e792476904184681e48389c7e7130b3ed035d0304f0d70b", 
+      "tags": [
+        "selinux", 
+        "security"
+      ], 
+      "severity": "info"
+    }, 
+    {
+      "title": "Some enabled RPM repositories are unknown to Leapp", 
+      "timeStamp": "2026-10-14T17:35:52.793464Z", 
+      "hostname": "wend-vm.example.org", 
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package", 
+            "title": "postfix"
+          }, 
+          {
+            "scheme": "repository", 
+            "title": "centosplus"
+          }
+        ], 
+        "remediations": [
+          {
+            "type": "hint", 
+            "context": "You can file a request to add this repository to the scope of in-place upgrades by filing a support ticket"
+          }
+        ]
+      }, 
+      "actor": "check_skipped_repositories", 
+      "summary": "The following repositories with Red Hat-signed packages are unknown to Leapp:\n- centosplus\nAnd the following packages installed from those repositories may not be upgraded:\n- postfix", 
+      "audience": "sysadmin", 
+      "flags": [], 
+      "key": "8e89e20c645cea600b240156071d81c64daab7ad", 
+      "id": "ae70f1b351d1acdc21d21284bb36005a17c21730016bf87b41db90cc4b3d02c6", 
+      "tags": [
+        "repository"
+      ], 
+      "severity": "low"
+    }, 
+    {
+      "title": "Detected custom leapp actors or files.", 
+      "timeStamp": "2026-10-14T17:35:52.941531Z", 
+      "hostname": "wend-vm.example.org", 
+      "detail": {
+        "external": [
+          {
+            "url": "https://red.ht/customize-rhel-upgrade", 
+            "title": "Customizing your Red Hat Enterprise Linux in-place upgrade"
+          }
+        ], 
+        "remediations": [
+          {
+            "type": "hint", 
+            "context": "In case of any issues connected to custom or third party actors, contact vendor of such actors. Also we suggest to ensure the installed custom leapp actors are up to date, compatible with the installed packages."
+          }
+        ]
+      }, 
+      "actor": "check_custom_modifications_actor", 
+      "summary": "We have detected installed custom actors or files on the system. These can be provided e.g. by third party vendors, Red Hat consultants, or can be created by users to customize the upgrade (e.g. to migrate custom applications). This is allowed and appreciated. However Red Hat is not responsible for any issues caused by these custom leapp actors. Note that upgrade tooling is under agile development which could require more frequent update of custom actors.\nThe list of custom leapp actors and files:\n    - /usr/share/leapp-repository/repositories/system_upgrade/common/files/rpm-gpg/8/RPM-GPG-KEY-AlmaLinux-8", 
+      "audience": "sysadmin", 
+      "flags": [], 
+      "key": "2064870018370ce2bde3f977cf753ed8c59848d0", 
+      "id": "16d212d8ddad3768d117a28ebc79334558de28bdef4924d11d122e6aa1c6abc0", 
+      "tags": [
+        "upgrade process"
+      ], 
+      "severity": "high"
+    }, 
+    {
+      "title": "chrony using default configuration", 
+      "timeStamp": "2026-10-14T17:35:53.932157Z", 
+      "hostname": "wend-vm.example.org", 
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package", 
+            "title": "ntpd"
+          }, 
+          {
+            "scheme": "package", 
+            "title": "chrony"
+          }, 
+          {
+            "scheme": "file", 
+            "title": "/etc/chrony.conf"
+          }
+        ]
+      }, 
+      "actor": "check_chrony", 
+      "summary": "default chrony configuration in RHEL8 uses leapsectz directive, which cannot be used with leap smearing NTP servers, and uses a single pool directive instead of four server directives", 
+      "audience": "sysadmin", 
+      "flags": [], 
+      "key": "c4222ebd18730a76f6bc7b3b66df898b106e6554", 
+      "id": "ab7ade8a1e57c9ec50a19cb320d780315a631fca4ee4ed72c1a03ce2b1a74748", 
+      "tags": [
+        "services", 
+        "time management"
+      ], 
+      "severity": "medium"
+    }, 
+    {
+      "title": "Missing required answers in the answer file", 
+      "timeStamp": "2026-10-14T17:35:54.383728Z", 
+      "hostname": "wend-vm.example.org", 
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "dialog", 
+            "title": "remove_pam_pkcs11_module_check.confirm"
+          }
+        ], 
+        "external": [
+          {
+            "url": "https://access.redhat.com/solutions/7035321", 
+            "title": "Leapp upgrade fail with error \"Inhibitor: Missing required answers in the answer file.\""
+          }
+        ], 
+        "remediations": [
+          {
+            "type": "hint", 
+            "context": "Please register user choices with leapp answer cli command or by manually editing the answerfile."
+          }, 
+          {
+            "type": "command", 
+            "context": [
+              "leapp", 
+              "answer", 
+              "--section", 
+              "remove_pam_pkcs11_module_check.confirm=True"
+            ]
+          }
+        ]
+      }, 
+      "actor": "verify_check_results", 
+      "summary": "One or more sections in answerfile are missing user choices: remove_pam_pkcs11_module_check.confirm\nFor more information consult https://red.ht/leapp-dialogs.", 
+      "audience": "sysadmin", 
+      "flags": [
+        "inhibitor"
+      ], 
+      "key": "d35f6c6b1b1fa6924ef442e3670d90fa92f0d54b", 
+      "id": "d07f0564a66afd921fa4efed3f81c7826f2ce5183952a279186f21d8fd8012fa", 
+      "tags": [], 
+      "severity": "high"
+    }
+  ]
+}

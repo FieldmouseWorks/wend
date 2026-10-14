@@ -1,0 +1,13 @@
+10:21:02 installing el/centos7-lamp (centos7) in a VM; this takes 10 to 20 minutes
+127.0.0.1 - - [14/Oct/2026 10:21:10] "GET /ks.cfg HTTP/1.1" 200 -
+10:30:28 installed and updated; checking the box
+[elevate 10:31:29] setup: 'rm -f /etc/yum.repos.d/*.repo && curl -fsSo /etc/yum.repos.d/CentOS-Base.repo https://el7.repo.almal' -> rc=0
+[elevate 10:31:51] setup: 'yum clean all && yum upgrade -y' -> rc=0
+[elevate 10:34:34] alma8: 'yum install -y http://repo.almalinux.org/elevate/elevate-release-latest-el7.noarch.rpm' -> rc=0
+[elevate 10:34:55] alma8: 'yum install -y leapp-upgrade leapp-data-almalinux' -> rc=0
+[elevate 10:35:58] alma8: 'leapp preupgrade' -> rc=1
+[elevate 10:36:10] alma8: 'echo PermitRootLogin yes >> /etc/ssh/sshd_config' -> rc=0
+[elevate 10:36:21] alma8: 'rmmod pata_acpi' -> rc=0
+[elevate 10:36:33] alma8: 'leapp answer --section remove_pam_pkcs11_module_check.confirm=True' -> rc=0
+[elevate 10:37:15] alma8: 'leapp preupgrade' -> rc=1
+[elevate 10:37:23] done: reached centos7; 3 interventions; run in .wend/elevate/20261014-103047-el_centos7-lamp-bios-xfs-v4-lvm
