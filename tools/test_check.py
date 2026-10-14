@@ -436,6 +436,47 @@ for name, roles in (("[roles] as a list", ["x"]), ("[roles] as a string", "x"), 
     errs = check.check_box({**tweb, "roles": roles}, adapters, "boxes/ubuntu/trusty-web/box.toml")
     print(("refused " + name) if errs else f"WRONG   {name} passed")
     bad += not errs
+# the socket proxy starts from a fresh directory: PID 1 may not unlink a socket the shelter's :Z relabelled
+_su = shelter.start_units("billing", _pyplan, "centos7")
+_sock = _su.split("/etc/systemd/system/wend-shelter-billing-sock0.socket <<WEND_UNIT\n", 1)[1].split("WEND_UNIT", 1)[0]
+_want = ["ExecStartPre=/usr/bin/rm -rf /run/wend/shelter/billing/s0",
+         "ExecStartPre=/usr/bin/install -d -m 0700 -o wend-billing -g wend-billing /run/wend/shelter/billing/s0",
+         "ListenStream=/run/wend/shelter/billing/s0/mysql.sock"]
+_lines = _sock.splitlines()
+if all(w in _lines for w in _want) and [_lines.index(w) for w in _want] == sorted(_lines.index(w) for w in _want):
+    print("passed  the socket proxy's unit clears and recreates its directory before it listens")
+else:
+    print(f"WRONG   the socket proxy's unit: {_sock}")
+    bad += 1
+# the proxies run wend's bin_t copy (unconfined under SELinux), the shelter's containers share one level, and the
+# whole start step still parses
+_pp = shelter.start_units("billing", {**_pyplan, "ports": ["127.0.0.1:8080"]}, "centos7")
+_ok = (f"ExecStart={shelter.PROXYD} /var/lib/mysql/mysql.sock" in _pp.splitlines() and
+       f"ExecStart={shelter.PORT_PROXY}-billing 127.0.0.1:8080" in _pp.splitlines() and
+       f"cat > {shelter.PORT_PROXY}-billing <<'WEND_SCRIPT'\n#!/bin/sh\n" in _pp and
+       "(allow container_t unconfined_service_t (unix_stream_socket (connectto)))" in _pp and
+       f"exec {shelter.STOCK_PROXYD} " in _pp and "install -m 0755 /usr/lib/systemd" not in _pp and
+       "/bin/sh /etc/wend" not in _pp and
+       _pp.count("--security-opt label=level:s0:c$K,c1023") == 1 + len(_pyplan.get("cron", [])) and
+       "SELinuxContext=system_u:system_r:unconfined_service_t:s0:c$K,c1023" in _pp.splitlines() and
+       "(or (neq t1 container_t) (or (neq t2 unconfined_service_t) (and (eq l1 l2) (eq h1 h2)))))" in _pp)
+_r = _sp.run(["bash", "-n"], input=_pp, text=True, capture_output=True)
+print(("passed  " if _ok and _r.returncode == 0 else f"WRONG   {_r.stderr[:300]} ") +
+      "the proxies start from /usr/libexec/wend's scripts, one SELinux level per shelter, the start step parses")
+bad += not (_ok and _r.returncode == 0)
+_avc = ['type=AVC msg=audit(1.1:2): avc:  denied  { search } for  pid=9 comm="systemd-socket-" name="1" '
+        'scontext=system_u:system_r:systemd_socket_proxyd_t:s0 tcontext=system_u:system_r:init_t:s0 tclass=dir',
+        'type=AVC msg=audit(1.1:3): avc:  denied  { read } for  pid=9 comm="sshd" name="x" '
+        'scontext=system_u:system_r:sshd_t:s0 tcontext=system_u:object_r:etc_t:s0 tclass=file',
+        'type=AVC msg=audit(1.1:4): avc:  denied  { write } for  pid=9 comm="foo" name="foo.sock" '
+        'scontext=system_u:system_r:foo_t:s0 tcontext=system_u:object_r:foo_var_run_t:s0 tclass=sock_file']
+_d = shelter.vm_denials("billing", "\n".join(_avc))
+print(("passed  " if _d == _avc[:1] else f"WRONG   {_d} ") + "the denial list keeps a proxy's denial, not sshd's or another service's socket's")
+bad += _d != _avc[:1]
+_on = shelter.vm_enforce_on("billing")
+_ok = _on.index("semodule -DB") < _on.index("setenforce 1") and "semodule -B" in _on and "semodule -B" in shelter.VM_ENFORCE_OFF
+print(("passed  " if _ok else "WRONG   ") + "the enforcing window turns dontaudit off and puts it back")
+bad += not _ok
 try:
     check.box_shell_errors({**web, "roles": ["x"], "vm": {"live": ["x"]}})
     print("passed  box_shell_errors leaves non-table roles and [vm].live to check_box")
@@ -610,4 +651,25 @@ for name, fails, reboots, resets, silent, want_back, want_forced, want_notes in 
         all("rc=255" in n and "Connection reset" in n for n in g_.reboot_notes[:min(fails, 5)])
     print(("passed  " if ok else "WRONG   ") + f"vm reboot: {name}  ({back}, {forced}, {g_.reboot_notes[-1:]})")
     bad += not ok
+
+
+# the VM tier's network comparison drops the shelter's own bridge, as podman reports it, and nothing else
+
+
+class _G:
+    def __init__(self, net, inspect):
+        self.net, self.inspect = net, inspect
+
+    def ssh(self, cmd, **kw):
+        return (0, self.inspect) if cmd.startswith("podman network inspect wend-billing ") else (0, self.net)
+
+
+_start = "eth0 10.0.2.20/24\ndefault via 10.0.2.2\nnameserver 10.0.2.3\n"
+_with = "eth0 10.0.2.20/24\npodman1 10.90.0.1/24\ndefault via 10.0.2.2\nnameserver 10.0.2.3\n"
+_stray = "eth0 10.0.2.20/24\npodman1 10.90.0.1/24\npodman2 10.89.0.1/24\ndefault via 10.0.2.2\nnameserver 10.0.2.3\n"
+_ok = (_vm.net_read(_G(_with, "podman1 10.90.0.1 \n"), {"billing": {}}) == _start and
+       _vm.net_read(_G(_stray, "podman1 10.90.0.1 \n"), {"billing": {}}) != _start and
+       _vm.net_read(_G(_with, ""), {"billing": {}}) != _start and _vm.net_read(_G(_with, "podman1 10.90.0.1"), {}) != _start)
+print(("passed  " if _ok else "WRONG   ") + "the network comparison drops the shelter's own bridge and nothing else")
+bad += not _ok
 sys.exit(1 if bad else 0)

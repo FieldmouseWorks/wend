@@ -111,6 +111,27 @@ NET = ("(ip -o -4 addr 2>/dev/null || /sbin/ip -o -4 addr) | "
        "} 2>/dev/null | sort -u")
 
 
+def shelter_bridges(g, plan):
+    """The NET lines of the shelters' own bridges ("<interface> <gateway>/<len>"), as podman reports each app's
+    network wend-<app> (shelter.start creates it on 10.90.<K>.0/24): the hop that brings a shelter up adds that
+    bridge, and it isn't the box's network changing. Only those exact lines; any other new address still counts."""
+    out = set()
+    for app in sorted(plan):
+        rc, o = g.ssh(f"podman network inspect wend-{app} --format "
+                      "'{{.NetworkInterface}} {{range .Subnets}}{{.Gateway}} {{end}}' 2>/dev/null")
+        f = o.split()
+        if rc == 0 and len(f) >= 2 and f[0] and all(x.startswith("10.90.") for x in f[1:]):
+            out |= {f"{f[0]} {gw}/" for gw in f[1:]}
+    return out
+
+
+def net_read(g, plan):
+    """NET, without the run's own shelter bridges (shelter_bridges)."""
+    o = g.ssh(NET)[1]
+    skip = shelter_bridges(g, plan) if plan else set()
+    return "".join(x for x in o.splitlines(keepends=True) if not any(x.startswith(b) for b in skip))
+
+
 def log(msg):
     print(time.strftime("%H:%M:%S"), msg, flush=True)
 
@@ -757,7 +778,7 @@ def shelter_confine(g, box_doc, a, plan, passing):
             r["enforcing"] = {"ok": rc == 0 and {"fact selinux=Enforcing", "fact selinux_end=Enforcing"} <= set(
                 o.splitlines()), "log": o[-6000:]}
         for _ in range(20):  # if enforcing cut ssh off, the guard sets permissive again within 15 minutes
-            rc, o = g.ssh(shelter.VM_ENFORCE_OFF, timeout=120)
+            rc, o = g.ssh(shelter.VM_ENFORCE_OFF, timeout=300)
             if rc not in (124, 255):
                 break
             time.sleep(60)
@@ -851,7 +872,7 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
             g.kill()  # free the forwarded ports; the overlay and console stay for a look
             break
         if start_net is None:
-            start_net = g.ssh(NET)[1]
+            start_net = net_read(g, plan)
             if FIRMWARE == "uefi":  # the boot chain the first hop starts from
                 efi_start = g.ssh(EFI_CHAIN)[1][-3000:]
             if f"default via {GUEST_HOST}" not in start_net or ADDR not in start_net:  # never compare two empty reads
@@ -911,7 +932,7 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
         if ok and g.reboot_notes:
             h["reboot_notes"] = g.reboot_notes
         if back:
-            net = g.ssh(NET)[1]
+            net = net_read(g, plan)
             after_checks = checks(g, box_doc, a)
             lost = sorted(n for n, (good, _) in before.items() if good and not after_checks.get(n, (False,))[0])
             h["net_kept"] = net == start_net
@@ -948,7 +969,7 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
             break
         prev = disk
     if len(hops) == len(todo) and all(h["ok"] for h in hops) and route.get("finish", {}).get("prune_obsolete"):
-        hops += prune(a, w, route["to"], box_doc, out_dir, prev, key, port, hw, start_net)
+        hops += prune(a, w, route["to"], box_doc, out_dir, prev, key, port, hw, start_net, plan)
     complete = len(hops) == len(todo) + bool(route.get("finish", {}).get("prune_obsolete"))
     run = {"schema": "wend.vmrun/0", "route": check.content_id(route), "box": box_id, "from": route["from"],
            "to": route["to"], "started": stamp, "firmware": FIRMWARE,
@@ -1071,7 +1092,7 @@ def relocate(box_id):
     return finish("pass")
 
 
-def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net):
+def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net, plan):
     """The route's finish step, as the chroot walk's prune (tools/walk.py): purge the packages the target release no
     longer ships, then autoremove, splitting the set in halves whenever a step fails or a passing check is lost.
     Every attempt runs on its own overlay of the last good disk and reboots; a kept attempt becomes the next base.
@@ -1109,7 +1130,7 @@ def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net):
         if back:
             after = checks(g, box_doc, a)
             h["lost"] = sorted(k for k, (good, _) in before.items() if good and not after.get(k, (False,))[0])
-            h["net_kept"] = g.ssh(NET)[1] == start_net
+            h["net_kept"] = net_read(g, plan) == start_net  # start_net leaves the shelters' bridges out too
             h["firmware"] = g.ssh(FW_NOW)[1].strip()
             h["ok"] = ok and h["net_kept"] and not h["lost"] and h["firmware"] == FIRMWARE
         else:
