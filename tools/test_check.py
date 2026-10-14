@@ -424,7 +424,8 @@ for name, doc, want in (("an Ubuntu role only bash parses", {**tweb, "roles": {*
                          True),
                         ("an EL role only bash parses", {**web, "roles": {**web["roles"], "x": "[[ -n $x ]] && cat <<< y"}},
                          False),
-                        ("an EL role bash can't parse", {**web, "roles": {**web["roles"], "x": "echo \"${C:-it's}\""}}, True)):
+                        ("an EL role bash can't parse", {**web, "roles": {**web["roles"], "x": "echo \"${C:-it's}\""}}, True),
+                        ("an Ubuntu start_hook only bash parses", {**tweb, "start_hook": "cat <<< y"}, True)):
     errs = check.box_shell_errors(doc)
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
