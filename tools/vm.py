@@ -111,6 +111,27 @@ NET = ("(ip -o -4 addr 2>/dev/null || /sbin/ip -o -4 addr) | "
        "} 2>/dev/null | sort -u")
 
 
+def shelter_bridges(g, plan):
+    """The NET lines of the shelters' own bridges ("<interface> <gateway>/<len>"), as podman reports each app's
+    network wend-<app> (shelter.start creates it on 10.90.<K>.0/24): the hop that brings a shelter up adds that
+    bridge, and it isn't the box's network changing. Only those exact lines; any other new address still counts."""
+    out = set()
+    for app in sorted(plan):
+        rc, o = g.ssh(f"podman network inspect wend-{app} --format "
+                      "'{{.NetworkInterface}} {{range .Subnets}}{{.Gateway}} {{end}}' 2>/dev/null")
+        f = o.split()
+        if rc == 0 and len(f) >= 2 and f[0] and all(x.startswith("10.90.") for x in f[1:]):
+            out |= {f"{f[0]} {gw}/" for gw in f[1:]}
+    return out
+
+
+def net_read(g, plan):
+    """NET, without the run's own shelter bridges (shelter_bridges)."""
+    o = g.ssh(NET)[1]
+    skip = shelter_bridges(g, plan) if plan else set()
+    return "".join(x for x in o.splitlines(keepends=True) if not any(x.startswith(b) for b in skip))
+
+
 def log(msg):
     print(time.strftime("%H:%M:%S"), msg, flush=True)
 
@@ -816,7 +837,7 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
             g.kill()  # free the forwarded ports; the overlay and console stay for a look
             break
         if start_net is None:
-            start_net = g.ssh(NET)[1]
+            start_net = net_read(g, plan)
             if FIRMWARE == "uefi":  # the boot chain the first hop starts from
                 efi_start = g.ssh(EFI_CHAIN)[1][-3000:]
             if f"default via {GUEST_HOST}" not in start_net or ADDR not in start_net:  # never compare two empty reads
@@ -872,7 +893,7 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
         back, forced = g.reboot() if ok else (None, False)  # None: commands failed, no reboot tried
         h["rebooted"], h["reboot_forced"] = back, forced
         if back:
-            net = g.ssh(NET)[1]
+            net = net_read(g, plan)
             after_checks = checks(g, box_doc, a)
             lost = sorted(n for n, (good, _) in before.items() if good and not after_checks.get(n, (False,))[0])
             h["net_kept"] = net == start_net

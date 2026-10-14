@@ -573,4 +573,23 @@ for hop in adapters["ubuntu"]["ladder"][1:]:
     print(("passed  " if ok else "WRONG   ") + f"ubuntu {hop}: old kernels purged after refresh, the hop's own upgrade, only xenial's and jammy's "
           "extras")
     bad += not ok
+# the VM tier's network comparison drops the shelter's own bridge, as podman reports it, and nothing else
+
+
+class _G:
+    def __init__(self, net, inspect):
+        self.net, self.inspect = net, inspect
+
+    def ssh(self, cmd, **kw):
+        return (0, self.inspect) if cmd.startswith("podman network inspect wend-billing ") else (0, self.net)
+
+
+_start = "eth0 10.0.2.20/24\ndefault via 10.0.2.2\nnameserver 10.0.2.3\n"
+_with = "eth0 10.0.2.20/24\npodman1 10.90.0.1/24\ndefault via 10.0.2.2\nnameserver 10.0.2.3\n"
+_stray = "eth0 10.0.2.20/24\npodman1 10.90.0.1/24\npodman2 10.89.0.1/24\ndefault via 10.0.2.2\nnameserver 10.0.2.3\n"
+_ok = (_vm.net_read(_G(_with, "podman1 10.90.0.1 \n"), {"billing": {}}) == _start and
+       _vm.net_read(_G(_stray, "podman1 10.90.0.1 \n"), {"billing": {}}) != _start and
+       _vm.net_read(_G(_with, ""), {"billing": {}}) != _start and _vm.net_read(_G(_with, "podman1 10.90.0.1"), {}) != _start)
+print(("passed  " if _ok else "WRONG   ") + "the network comparison drops the shelter's own bridge and nothing else")
+bad += not _ok
 sys.exit(1 if bad else 0)

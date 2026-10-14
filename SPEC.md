@@ -1468,7 +1468,9 @@ After every hop:
 - the guest has to come back reachable over ssh on the box's port (`[vm].ssh_port`);
 - its addresses, default route and resolvers have to be the ones it booted with at the start. The resolvers are
   `/etc/resolv.conf`'s, with systemd-resolved's local stub (`127.0.0.53`) standing for the upstream servers resolved
-  lists in `/run/systemd/resolve/resolv.conf`, so the stub appearing on a release isn't a change;
+  lists in `/run/systemd/resolve/resolv.conf`, so the stub appearing on a release isn't a change. A shelter's own
+  bridge isn't a change either: the address podman reports for the network `wend-<app>` (its gateway on
+  `10.90.<K>.0/24`, on the interface podman names) is left out of the comparison, and any other new address counts;
 - the box's checks have to keep passing, running on the live box. Roles that start their own daemons are listed in
   `[vm].skip`, and `[vm].live` gives their live forms, which ask the running services instead.
 
