@@ -1,0 +1,3 @@
+$ echo PermitRootLogin yes >> /etc/ssh/sshd_config
+
+# rc=0

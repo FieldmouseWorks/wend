@@ -1,0 +1,25 @@
+[elevate 14:21:47] setup: 'rm -f /etc/yum.repos.d/*.repo && curl -fsSo /etc/yum.repos.d/CentOS-Base.repo https://el7.repo.almal' -> rc=0
+[elevate 14:22:08] setup: 'yum clean all && yum upgrade -y' -> rc=0
+[elevate 14:24:51] alma8: 'yum install -y http://repo.almalinux.org/elevate/elevate-release-latest-el7.noarch.rpm' -> rc=0
+[elevate 14:25:13] alma8: 'yum install -y leapp-upgrade leapp-data-almalinux' -> rc=0
+[elevate 14:25:24] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 14:26:37] alma8: 'leapp preupgrade' -> rc=1
+[elevate 14:26:49] alma8: 'echo PermitRootLogin yes >> /etc/ssh/sshd_config' -> rc=0
+[elevate 14:27:01] alma8: 'rmmod pata_acpi' -> rc=0
+[elevate 14:27:12] alma8: 'leapp answer --section remove_pam_pkcs11_module_check.confirm=True' -> rc=0
+[elevate 14:27:23] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 14:31:21] alma8: 'leapp preupgrade' -> rc=0
+[elevate 14:39:16] alma8: 'leapp upgrade' -> rc=0
+[elevate 14:58:28] alma8: degraded lost=['live:app', 'live:cron', 'services'] net_kept=True kernel_current=True
+[elevate 14:58:39] alma9: "grep -H '^exclude=' /etc/yum.conf /etc/dnf/dnf.conf 2>/dev/null" -> rc=0
+[elevate 14:58:49] alma9: "sed -i '/^exclude=/{/leapp\\|elevate/d}' /etc/yum.conf /etc/dnf/dnf.conf" -> rc=0
+[elevate 14:59:00] alma9: "rpm -qa | grep -E '\\.el7([._]|$)|leapp|elevate' | sort" -> rc=0
+[elevate 14:59:11] alma9: 'dnf -y remove elevate-release-1.0-3.el8.noarch kernel-3.10.0-1160.119.1.el7.x86_64 kernel-3.10.0-116' -> rc=0
+[elevate 14:59:21] alma9: 'rm -fr /root/tmp_leapp_py3; dnf clean all' -> rc=0
+[elevate 14:59:32] alma9: "rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE}\\t%{SUMMARY}\\n'" -> rc=0
+[elevate 14:59:43] alma9: 'rpm -e gpg-pubkey-f4a80eb5-53a7ff4b' -> rc=0
+[elevate 15:00:34] alma9: 'yum install -y http://repo.almalinux.org/elevate/elevate-release-latest-el8.noarch.rpm' -> rc=0
+[elevate 15:00:45] alma9: 'yum install -y leapp-upgrade leapp-data-almalinux' -> rc=0
+[elevate 15:00:55] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 15:02:07] alma9: 'leapp preupgrade' -> rc=1
+[elevate 15:02:11] done: reached alma8; 6 interventions; run in .wend/elevate/20261014-142109-el_centos7-pyapp-bios

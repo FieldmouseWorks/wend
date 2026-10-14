@@ -1,0 +1,201 @@
+{
+ "schema": "wend.elevate-vs/0",
+ "box": "el/centos7-lamp",
+ "from": "centos7",
+ "started": "20261014-150211",
+ "firmware": "bios",
+ "layout": {
+  "root_fs": "xfs-v4",
+  "lvm": true
+ },
+ "start_checks": {
+  "pkgdb": true,
+  "boot": true,
+  "ssh": true,
+  "cron": true,
+  "python": true,
+  "tools": true,
+  "mail": true,
+  "php": true,
+  "firewall": true,
+  "fail2ban": true,
+  "current": true,
+  "network": true,
+  "services": true,
+  "live:boot_entries": true,
+  "live:daemons": true,
+  "live:db": true,
+  "live:site": true
+ },
+ "stages": [
+  {
+   "stage": "centos7-update",
+   "ok": true
+  },
+  {
+   "stage": "alma8",
+   "came_back": true,
+   "score": {
+    "net_kept": true,
+    "net": null,
+    "lost": [
+     "live:site",
+     "services"
+    ],
+    "failed_logs": {
+     "services": "unexpected new service package: timedatex\n",
+     "live:site": "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n<html><head>\n<title>503 Service Unavailable</title>\n</head><body>\n<h1>Service Unavailable</h1>\n<p>The server is temporarily unable to service your\nrequest due to maintenance downtime or capacity\nproblems. Please try again later.</p>\n</body></html>\n"
+    },
+    "kernel": "4.18.0-553.173.1.el8_10.x86_64",
+    "kernel_current": true,
+    "state": [
+     "release: AlmaLinux release 8.10 (Cerulean Leopard)",
+     "kernel: 4.18.0-553.173.1.el8_10.x86_64",
+     "selinux: Permissive",
+     "boot_free_mib: 745",
+     "leftover_older: 5",
+     "failed_units:"
+    ]
+   },
+   "score_after_docs_post": {
+    "net_kept": true,
+    "net": null,
+    "lost": [
+     "live:site",
+     "services"
+    ],
+    "failed_logs": {
+     "services": "unexpected new service package: timedatex\n",
+     "live:site": "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n<html><head>\n<title>503 Service Unavailable</title>\n</head><body>\n<h1>Service Unavailable</h1>\n<p>The server is temporarily unable to service your\nrequest due to maintenance downtime or capacity\nproblems. Please try again later.</p>\n</body></html>\n"
+    },
+    "kernel": "4.18.0-553.173.1.el8_10.x86_64",
+    "kernel_current": true,
+    "state": [
+     "release: AlmaLinux release 8.10 (Cerulean Leopard)",
+     "kernel: 4.18.0-553.173.1.el8_10.x86_64",
+     "selinux: Permissive",
+     "boot_free_mib: 745",
+     "leftover_older: 5",
+     "failed_units:"
+    ]
+   },
+   "result": "degraded",
+   "seconds": 2685
+  },
+  {
+   "stage": "alma9",
+   "result": "blocked",
+   "inhibitors": [
+    {
+     "title": "Network configuration for unsupported device types detected",
+     "summary": "RHEL 9 does not support the legacy network-scripts package that was deprecated in RHEL 8 in favor of NetworkManager. Files for device types that are not supported by NetworkManager are present in the system. Files with the problematic configuration:\n    - /etc/sysconfig/network-scripts/ifcfg-eth0"
+    }
+   ],
+   "seconds": 262
+  }
+ ],
+ "interventions": [
+  {
+   "stage": "alma8",
+   "tier": "guide",
+   "why": "Leapp detected loaded kernel drivers which have been removed in RHEL 8. Upgrade cannot proceed.",
+   "cmd": "rmmod pata_acpi",
+   "rc": 0
+  },
+  {
+   "stage": "alma8",
+   "tier": "guide",
+   "why": "Possible problems with remote login using root account",
+   "cmd": "echo PermitRootLogin yes >> /etc/ssh/sshd_config",
+   "rc": 0
+  },
+  {
+   "stage": "alma8",
+   "tier": "guide",
+   "why": "Missing required answers in the answer file",
+   "cmd": "leapp answer --section remove_pam_pkcs11_module_check.confirm=True",
+   "rc": 0
+  },
+  {
+   "stage": "alma8",
+   "tier": "docs-post",
+   "why": "lost ['live:site'] after the upgrade",
+   "cmd": "systemctl start mariadb; sleep 5; U=$(command -v mariadb-upgrade || command -v mysql_upgrade); $U -uroot --force; rc=$?; systemctl restart mariadb; exit $rc",
+   "rc": 0
+  },
+  {
+   "stage": "alma9",
+   "tier": "guide",
+   "why": "exclude= holds elevate/leapp",
+   "cmd": "sed -i '/^exclude=/{/leapp\\|elevate/d}' /etc/yum.conf /etc/dnf/dnf.conf",
+   "rc": 0
+  },
+  {
+   "stage": "alma9",
+   "tier": "guide",
+   "why": "9 leftover el7/leapp packages",
+   "cmd": "dnf -y remove elevate-release-1.0-3.el8.noarch kernel-3.10.0-1160.119.1.el7.x86_64 kernel-3.10.0-1160.el7.x86_64 leapp-0.18.0-2.el7.noarch leapp-data-almalinux-0.11-10.el8.20251222.noarch leapp-deps-el8-5.0.8-100.202411180921Z.f50e3474.main.el8.noarch leapp-repository-deps-el8-5.0.8-100.202411180921Z.f50e3474.main.el8.noarch leapp-upgrade-el7toel8-0.21.0-5.el7.elevate.5.noarch python2-leapp-0.18.0-2.el7.noarch",
+   "rc": 0
+  },
+  {
+   "stage": "alma9",
+   "tier": "guide",
+   "why": "old release keys",
+   "cmd": "rpm -e gpg-pubkey-f4a80eb5-53a7ff4b",
+   "rc": 0
+  },
+  {
+   "stage": "alma9",
+   "tier": "guide",
+   "why": "Firewalld Configuration AllowZoneDrifting Is Unsupported",
+   "cmd": "sed -i 's/^AllowZoneDrifting=.*/AllowZoneDrifting=no/' /etc/firewalld/firewalld.conf",
+   "rc": 0
+  },
+  {
+   "stage": "alma9",
+   "tier": "guide",
+   "why": "Cannot perform the VDO check of block devices",
+   "cmd": "leapp answer --section check_vdo.confirm=True",
+   "rc": 0
+  },
+  {
+   "stage": "alma9",
+   "tier": "guide",
+   "why": "Missing required answers in the answer file",
+   "cmd": "leapp answer --section check_vdo.confirm=True",
+   "rc": 0
+  }
+ ],
+ "lab_fixes": [
+  {
+   "stage": "alma8",
+   "round": 0,
+   "rc": 0,
+   "out": "floppy not loaded"
+  },
+  {
+   "stage": "alma8",
+   "round": 1,
+   "rc": 0,
+   "out": "floppy not loaded"
+  },
+  {
+   "stage": "alma9",
+   "round": 0,
+   "rc": 0,
+   "out": "floppy not loaded"
+  },
+  {
+   "stage": "alma9",
+   "round": 1,
+   "rc": 0,
+   "out": "floppy not loaded"
+  }
+ ],
+ "seconds": 3134,
+ "reached": "alma8",
+ "runner": {
+  "host": "remi",
+  "kernel": "7.0.0-38-generic"
+ }
+}

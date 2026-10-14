@@ -1,0 +1,31 @@
+[elevate 15:03:04] setup: 'rm -f /etc/yum.repos.d/*.repo && curl -fsSo /etc/yum.repos.d/CentOS-Base.repo https://el7.repo.almal' -> rc=0
+[elevate 15:03:26] setup: 'yum clean all && yum upgrade -y' -> rc=0
+[elevate 15:06:10] alma8: 'yum install -y http://repo.almalinux.org/elevate/elevate-release-latest-el7.noarch.rpm' -> rc=0
+[elevate 15:06:42] alma8: 'yum install -y leapp-upgrade leapp-data-almalinux' -> rc=0
+[elevate 15:06:54] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 15:08:40] alma8: 'leapp preupgrade' -> rc=1
+[elevate 15:08:52] alma8: 'rmmod pata_acpi' -> rc=0
+[elevate 15:09:04] alma8: 'echo PermitRootLogin yes >> /etc/ssh/sshd_config' -> rc=0
+[elevate 15:09:16] alma8: 'leapp answer --section remove_pam_pkcs11_module_check.confirm=True' -> rc=0
+[elevate 15:09:28] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 15:17:57] alma8: 'leapp preupgrade' -> rc=0
+[elevate 15:29:32] alma8: 'leapp upgrade' -> rc=0
+[elevate 15:49:28] alma8: 'systemctl start mariadb; sleep 5; U=$(command -v mariadb-upgrade || command -v mysql_upgrade); $U -u' -> rc=0
+[elevate 15:50:42] alma8: degraded lost=['live:site', 'services'] net_kept=True kernel_current=True
+[elevate 15:50:53] alma9: "grep -H '^exclude=' /etc/yum.conf /etc/dnf/dnf.conf 2>/dev/null" -> rc=0
+[elevate 15:51:04] alma9: "sed -i '/^exclude=/{/leapp\\|elevate/d}' /etc/yum.conf /etc/dnf/dnf.conf" -> rc=0
+[elevate 15:51:14] alma9: "rpm -qa | grep -E '\\.el7([._]|$)|leapp|elevate' | sort" -> rc=0
+[elevate 15:51:25] alma9: 'dnf -y remove elevate-release-1.0-3.el8.noarch kernel-3.10.0-1160.119.1.el7.x86_64 kernel-3.10.0-116' -> rc=0
+[elevate 15:51:36] alma9: 'rm -fr /root/tmp_leapp_py3; dnf clean all' -> rc=0
+[elevate 15:51:47] alma9: "rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE}\\t%{SUMMARY}\\n'" -> rc=0
+[elevate 15:51:57] alma9: 'rpm -e gpg-pubkey-f4a80eb5-53a7ff4b' -> rc=0
+[elevate 15:52:38] alma9: 'yum install -y http://repo.almalinux.org/elevate/elevate-release-latest-el8.noarch.rpm' -> rc=0
+[elevate 15:52:49] alma9: 'yum install -y leapp-upgrade leapp-data-almalinux' -> rc=0
+[elevate 15:53:00] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 15:53:41] alma9: 'leapp preupgrade' -> rc=1
+[elevate 15:53:51] alma9: "sed -i 's/^AllowZoneDrifting=.*/AllowZoneDrifting=no/' /etc/firewalld/firewalld.conf" -> rc=0
+[elevate 15:54:02] alma9: 'leapp answer --section check_vdo.confirm=True' -> rc=0
+[elevate 15:54:13] alma9: 'leapp answer --section check_vdo.confirm=True' -> rc=0
+[elevate 15:54:23] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 15:55:04] alma9: 'leapp preupgrade' -> rc=1
+[elevate 15:55:08] done: reached alma8; 10 interventions; run in .wend/elevate/20261014-150211-el_centos7-lamp-bios-xfs-v4-lvm

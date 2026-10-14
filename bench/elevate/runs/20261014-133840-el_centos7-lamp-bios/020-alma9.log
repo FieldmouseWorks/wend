@@ -1,0 +1,3 @@
+$ rpm -e gpg-pubkey-f4a80eb5-53a7ff4b
+
+# rc=0

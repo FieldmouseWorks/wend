@@ -1,0 +1,3 @@
+$ sed -i 's/^AllowZoneDrifting=.*/AllowZoneDrifting=no/' /etc/firewalld/firewalld.conf
+
+# rc=0

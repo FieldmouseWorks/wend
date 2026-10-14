@@ -1,0 +1,306 @@
+{
+  "entries": [
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "openssh-server"
+          },
+          {
+            "scheme": "file",
+            "title": "/etc/ssh/sshd_config"
+          }
+        ]
+      },
+      "key": "96da6937c25c6492e4f1228ee146795989fd3718",
+      "severity": "info",
+      "summary": "OpenSSH server configuration needs to be modified to contain Include directive for the RHEL9 to work properly and integrate with the other parts of the OS. The following snippet will be added to the /etc/ssh/sshd_config during the ApplicationsPhase: `Include /etc/ssh/sshd_config.d/*.conf`",
+      "title": "The upgrade will prepend the Include directive to OpenSSH sshd_config",
+      "timeStamp": "2026-10-14T21:19:54.586239Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "open_ssh_drop_in_directory_check",
+      "id": "81868a629763460ff1388205afd0fa2c531bbe5105cc0e7ad69ae196ebb4ab58",
+      "flags": [],
+      "tags": [
+        "authentication",
+        "security",
+        "network",
+        "services"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "Migrating to a RHEL 9 version of MariaDB",
+            "url": "https://access.redhat.com/articles/6743671"
+          }
+        ],
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "mariadb-server"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "Back up your data before proceeding with the upgrade and follow steps in the documentation section \"Migrating to a RHEL 9 version of MariaDB\" after the upgrade.",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "a0326f237a13f6a4ada2c6648d6c6387f5520de7",
+      "severity": "medium",
+      "summary": "MariaDB server component will be upgraded. Since RHEL-9 includes MariaDB server 10.5 by default, which is incompatible with 10.3 included in RHEL-8, it is necessary to proceed with additional steps for the complete upgrade of the MariaDB data.",
+      "title": "MariaDB (mariadb-server) has been detected on your system",
+      "timeStamp": "2026-10-14T21:19:54.817381Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "mariadb_check",
+      "id": "e97a03a59c1a7b1ce333e0c81732c5ebc95f70e70bec92560d8f1bf04440954d",
+      "flags": [],
+      "tags": [
+        "services"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "Changes in firewalld related to Zone Drifting",
+            "url": "https://access.redhat.com/articles/4855631"
+          },
+          {
+            "title": "Leapp Preupgrade check fails with error - \"Inhibitor: Firewalld Configuration AllowZoneDrifting Is Unsupported\".",
+            "url": "https://access.redhat.com/solutions/6969130"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "Set AllowZoneDrifting=no in /etc/firewalld/firewalld.conf",
+            "type": "hint"
+          },
+          {
+            "context": [
+              "sed",
+              "-i",
+              "s/^AllowZoneDrifting=.*/AllowZoneDrifting=no/",
+              "/etc/firewalld/firewalld.conf"
+            ],
+            "type": "command"
+          }
+        ]
+      },
+      "flags": [
+        "inhibitor"
+      ],
+      "key": "5b1cf050e1a877b0358b6e8c612277c591d40c13",
+      "severity": "high",
+      "summary": "Firewalld has enabled configuration option \"AllowZoneDrifting\" which has been removed in RHEL-9. New behavior is as if \"AllowZoneDrifting\" was set to \"no\".",
+      "title": "Firewalld Configuration AllowZoneDrifting Is Unsupported",
+      "timeStamp": "2026-10-14T21:19:55.708738Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "firewalld_check_allow_zone_drifting",
+      "id": "7a08134636c25aa57ce635717e2e0ca748132f13a04015c179da3f47cbbee699",
+      "tags": [
+        "sanity",
+        "firewall"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "leapp-data-almalinux"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp-deps"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp-upgrade-el8toel9"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp-upgrade-el8toel9-deps"
+          },
+          {
+            "scheme": "package",
+            "title": "python3-leapp"
+          },
+          {
+            "scheme": "repository",
+            "title": "elevate"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "You can file a request to add this repository to the scope of in-place upgrades by filing a support ticket",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "8e89e20c645cea600b240156071d81c64daab7ad",
+      "severity": "low",
+      "summary": "The following repositories with Red Hat-signed packages are unknown to Leapp:\n- elevate\nAnd the following packages installed from those repositories may not be upgraded:\n- leapp-data-almalinux\n- leapp\n- leapp-deps\n- leapp-upgrade-el8toel9\n- leapp-upgrade-el8toel9-deps\n- python3-leapp",
+      "title": "Some enabled RPM repositories are unknown to Leapp",
+      "timeStamp": "2026-10-14T21:19:57.135771Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_skipped_repositories",
+      "id": "92a4dc11d3176fec715744fe49279af425f33482429a262ba54041713ee875c4",
+      "flags": [],
+      "tags": [
+        "repository"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "openssh-server"
+          },
+          {
+            "scheme": "file",
+            "title": "/etc/ssh/sshd_config"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "If you depend on remote root logins using passwords, consider setting up a different user for remote administration. Otherwise you can ignore this message.",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "e738f78bc8f3a84411a4210e3b609057139d1855",
+      "severity": "high",
+      "summary": "RHEL9 no longer allows remote root logins, but the server configuration explicitly overrides this default. The configuration file will not be updated and root is still going to be allowed to login with password. This is not recommended and considered as a security risk.",
+      "title": "Remote root logins globally allowed using password",
+      "timeStamp": "2026-10-14T21:19:57.332047Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "openssh_permit_root_login",
+      "id": "c48b4422eba76d16e14dd627cfc2d246621ac8b3fd676b666a27a7bb86502598",
+      "flags": [],
+      "tags": [
+        "authentication",
+        "security",
+        "network",
+        "services"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "key": "ac7030e05d2ee248d34f08a9fa040b352bc410a3",
+      "severity": "high",
+      "summary": "On legacy (BIOS) systems, GRUB2 core (located in the gap between the MBR and the first partition) cannot be updated during the rpm transaction and Leapp has to initiate the update running \"grub2-install\" after the transaction. No action is needed before the upgrade. After the upgrade, it is recommended to check the GRUB configuration.",
+      "title": "GRUB2 core will be automatically updated during the upgrade",
+      "timeStamp": "2026-10-14T21:19:58.237424Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_grub_core",
+      "id": "08a20b735c3bd53c5eac0940bed8164bf018910a27f673cdf7773bbef96002e9",
+      "flags": [],
+      "tags": [
+        "boot"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "Handling the migration of your custom and third-party applications",
+            "url": "https://red.ht/customize-rhel-upgrade-actors"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "The most simple solution that does not require additional knowledge about the upgrade process is the uninstallation of such packages before the upgrade and installing these (or their newer versions compatible with the target system) back after the upgrade. Also you can just try to upgrade the system on a testing machine (or after the full system backup) to see the result.\nHowever, it is common use case to migrate or upgrade installed third party packages together with the system during the in-place upgrade process. To examine how to customize the process to deal with such packages, follow the documentation in the attached link for more details.",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "13f0791ae5f19f50e7d0d606fb6501f91b1efb2c",
+      "severity": "high",
+      "summary": "The official solution for in-place upgrades contains instructions for the migration of packages signed by the vendor of the system distribution. Third-party content is not known to the upgrade process and it might need to be handled extra. Third-party packages may be removed automatically during the upgrade if they depend on official distribution content which is not present on the target system - therefore RPM dependencies of such packages cannot be satisfied and hence such packages cannot be installed on the target system.\n\nThe following packages have not been signed by the vendor of the distribution:\n    - kernel-workaround",
+      "title": "Packages not signed by the distribution vendor found on the system",
+      "timeStamp": "2026-10-14T21:19:58.617845Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "distribution_signed_rpm_check",
+      "id": "d35220791fe4d9264307290d9f3ac9d94474d0e89885386bd862444a9e5292dc",
+      "flags": [],
+      "tags": [
+        "sanity"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "key": "8fb81863f8413bd617c2a55b69b8e10ff03d7c72",
+      "severity": "info",
+      "summary": "SElinux relabeling will be scheduled as the status is permissive/enforcing.",
+      "title": "SElinux relabeling will be scheduled",
+      "timeStamp": "2026-10-14T21:19:59.010300Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_se_linux",
+      "id": "359443cd6678a114562cb01132b8f7fc3d91c7a6e82a003a9c1d86962cc8134c",
+      "flags": [],
+      "tags": [
+        "selinux",
+        "security"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "RHEL 8 to RHEL 9: inplace upgrade fails at \"Network configuration for unsupported device types detected\"",
+            "url": "https://access.redhat.com/solutions/7009239"
+          }
+        ],
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "NetworkManager"
+          },
+          {
+            "scheme": "file",
+            "title": "/etc/sysconfig/network-scripts/ifcfg-eth0"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "Consult the nm-settings-ifcfg-rh(5) manual for valid types of ifcfg files. Remove configuration files that can not be supported.",
+            "type": "hint"
+          }
+        ]
+      },
+      "flags": [
+        "inhibitor"
+      ],
+      "key": "bc23b424eb26bb3f9d85cd4a54750f7552c3ef0d",
+      "severity": "high",
+      "summary": "RHEL 9 does not support the legacy network-scripts package that was deprecated in RHEL 8 in favor of NetworkManager. Files for device types that are not supported by NetworkManager are present in the system. Files with the problematic configuration:\n    - /etc/sysconfig/network-scripts/ifcfg-eth0",
+      "title": "Network configuration for unsupported device types detected",
+      "timeStamp": "2026-10-14T21:19:59.085377Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_ifcfg",
+      "id": "ec7c60fbe87423d6f9fd1d00eae80cdb3dbcd5be08bb58303f3af56063668142",
+      "tags": [
+        "network",
+        "services"
+      ]
+    }
+  ],
+  "leapp_run_id": "5ecebbfd-da9f-4576-a943-c49c805f4f89"
+}

@@ -1,0 +1,415 @@
+{
+  "entries": [
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "Changes in firewalld related to Zone Drifting",
+            "url": "https://access.redhat.com/articles/4855631"
+          },
+          {
+            "title": "Leapp Preupgrade check fails with error - \"Inhibitor: Firewalld Configuration AllowZoneDrifting Is Unsupported\".",
+            "url": "https://access.redhat.com/solutions/6969130"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "Set AllowZoneDrifting=no in /etc/firewalld/firewalld.conf",
+            "type": "hint"
+          },
+          {
+            "context": [
+              "sed",
+              "-i",
+              "s/^AllowZoneDrifting=.*/AllowZoneDrifting=no/",
+              "/etc/firewalld/firewalld.conf"
+            ],
+            "type": "command"
+          }
+        ]
+      },
+      "flags": [
+        "inhibitor"
+      ],
+      "key": "5b1cf050e1a877b0358b6e8c612277c591d40c13",
+      "severity": "high",
+      "summary": "Firewalld has enabled configuration option \"AllowZoneDrifting\" which has been removed in RHEL-9. New behavior is as if \"AllowZoneDrifting\" was set to \"no\".",
+      "title": "Firewalld Configuration AllowZoneDrifting Is Unsupported",
+      "timeStamp": "2026-10-14T22:53:35.257814Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "firewalld_check_allow_zone_drifting",
+      "id": "08198f088157c96ecabf9c09fa2ff55ae3e1c0a3dd76216cb6153fa1d597ad0c",
+      "tags": [
+        "sanity",
+        "firewall"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "openssh-server"
+          },
+          {
+            "scheme": "file",
+            "title": "/etc/ssh/sshd_config"
+          }
+        ]
+      },
+      "key": "96da6937c25c6492e4f1228ee146795989fd3718",
+      "severity": "info",
+      "summary": "OpenSSH server configuration needs to be modified to contain Include directive for the RHEL9 to work properly and integrate with the other parts of the OS. The following snippet will be added to the /etc/ssh/sshd_config during the ApplicationsPhase: `Include /etc/ssh/sshd_config.d/*.conf`",
+      "title": "The upgrade will prepend the Include directive to OpenSSH sshd_config",
+      "timeStamp": "2026-10-14T22:53:35.464148Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "open_ssh_drop_in_directory_check",
+      "id": "3047c670495f47a9ec2db056f4c632fc0eff692174f3fc8fb5cb1e56cd4d9dbd",
+      "flags": [],
+      "tags": [
+        "authentication",
+        "security",
+        "network",
+        "services"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "key": "ac7030e05d2ee248d34f08a9fa040b352bc410a3",
+      "severity": "high",
+      "summary": "On legacy (BIOS) systems, GRUB2 core (located in the gap between the MBR and the first partition) cannot be updated during the rpm transaction and Leapp has to initiate the update running \"grub2-install\" after the transaction. No action is needed before the upgrade. After the upgrade, it is recommended to check the GRUB configuration.",
+      "title": "GRUB2 core will be automatically updated during the upgrade",
+      "timeStamp": "2026-10-14T22:53:36.278870Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_grub_core",
+      "id": "fcf094e6c754bd6d38dd6cf536f98ff9320e412b984cb01da0ff489a46316f54",
+      "flags": [],
+      "tags": [
+        "boot"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "leapp-data-almalinux"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp-upgrade-el8toel9-deps"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp-deps"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp-upgrade-el8toel9"
+          },
+          {
+            "scheme": "package",
+            "title": "python3-leapp"
+          },
+          {
+            "scheme": "repository",
+            "title": "elevate"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "You can file a request to add this repository to the scope of in-place upgrades by filing a support ticket",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "8e89e20c645cea600b240156071d81c64daab7ad",
+      "severity": "low",
+      "summary": "The following repositories with Red Hat-signed packages are unknown to Leapp:\n- elevate\nAnd the following packages installed from those repositories may not be upgraded:\n- leapp-data-almalinux\n- leapp\n- leapp-upgrade-el8toel9-deps\n- leapp-deps\n- leapp-upgrade-el8toel9\n- python3-leapp",
+      "title": "Some enabled RPM repositories are unknown to Leapp",
+      "timeStamp": "2026-10-14T22:53:36.327694Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_skipped_repositories",
+      "id": "b5af9da5ec2cc208c5e0bc4a9d35f3d8c09e55f9428a30679ec2229fd394c2bf",
+      "flags": [],
+      "tags": [
+        "repository"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "Migrating to a RHEL 9 version of MariaDB",
+            "url": "https://access.redhat.com/articles/6743671"
+          }
+        ],
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "mariadb-server"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "Back up your data before proceeding with the upgrade and follow steps in the documentation section \"Migrating to a RHEL 9 version of MariaDB\" after the upgrade.",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "a0326f237a13f6a4ada2c6648d6c6387f5520de7",
+      "severity": "medium",
+      "summary": "MariaDB server component will be upgraded. Since RHEL-9 includes MariaDB server 10.5 by default, which is incompatible with 10.3 included in RHEL-8, it is necessary to proceed with additional steps for the complete upgrade of the MariaDB data.",
+      "title": "MariaDB (mariadb-server) has been detected on your system",
+      "timeStamp": "2026-10-14T22:53:36.555141Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "mariadb_check",
+      "id": "906227333ad4c26a99b673f049ee5990e3dcad4c68d4961c52db7b3040b3a758",
+      "flags": [],
+      "tags": [
+        "services"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "Limiting LVM device visibility and usage",
+            "url": "https://red.ht/limiting-lvm-devices-visibility-and-usage"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "While not required, switching to the LVM devices file from the LVM filter is possible using the following command. The command uses the existing LVM filter to create the system.devices file which is then used instead of the LVM filter. Before running the command, make sure that 'use_devicesfile=1' is set in /etc/lvm/lvm.conf.",
+            "type": "hint"
+          },
+          {
+            "context": [
+              "vgimportdevices"
+            ],
+            "type": "command"
+          }
+        ]
+      },
+      "key": "419ad408c11ef7e8e89a0fb83106988453f362d6",
+      "severity": "info",
+      "summary": "Beginning with RHEL 9, LVM devices file is used by default to select devices used by LVM. Since leapp detected the use of LVM filter in the /etc/lvm/lvm.conf configuration file, the configuration won't be modified to use devices file during the upgrade and the LVM filter will remain in use after the upgrade.",
+      "title": "LVM filter definition detected.",
+      "timeStamp": "2026-10-14T22:53:36.854498Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_lvm",
+      "id": "a790426b443ac6856d4bd47cbf69cced966fb300e543a7df1589a25a66ab6606",
+      "flags": [],
+      "tags": []
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "openssh-server"
+          },
+          {
+            "scheme": "file",
+            "title": "/etc/ssh/sshd_config"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "If you depend on remote root logins using passwords, consider setting up a different user for remote administration. Otherwise you can ignore this message.",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "e738f78bc8f3a84411a4210e3b609057139d1855",
+      "severity": "high",
+      "summary": "RHEL9 no longer allows remote root logins, but the server configuration explicitly overrides this default. The configuration file will not be updated and root is still going to be allowed to login with password. This is not recommended and considered as a security risk.",
+      "title": "Remote root logins globally allowed using password",
+      "timeStamp": "2026-10-14T22:53:37.516613Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "openssh_permit_root_login",
+      "id": "428670bca1a96ba25469883c5bfbf400ac7620ff9f6811c393e05e8955a8a513",
+      "flags": [],
+      "tags": [
+        "authentication",
+        "security",
+        "network",
+        "services"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "Handling the migration of your custom and third-party applications",
+            "url": "https://red.ht/customize-rhel-upgrade-actors"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "The most simple solution that does not require additional knowledge about the upgrade process is the uninstallation of such packages before the upgrade and installing these (or their newer versions compatible with the target system) back after the upgrade. Also you can just try to upgrade the system on a testing machine (or after the full system backup) to see the result.\nHowever, it is common use case to migrate or upgrade installed third party packages together with the system during the in-place upgrade process. To examine how to customize the process to deal with such packages, follow the documentation in the attached link for more details.",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "13f0791ae5f19f50e7d0d606fb6501f91b1efb2c",
+      "severity": "high",
+      "summary": "The official solution for in-place upgrades contains instructions for the migration of packages signed by the vendor of the system distribution. Third-party content is not known to the upgrade process and it might need to be handled extra. Third-party packages may be removed automatically during the upgrade if they depend on official distribution content which is not present on the target system - therefore RPM dependencies of such packages cannot be satisfied and hence such packages cannot be installed on the target system.\n\nThe following packages have not been signed by the vendor of the distribution:\n    - kernel-workaround",
+      "title": "Packages not signed by the distribution vendor found on the system",
+      "timeStamp": "2026-10-14T22:53:38.483960Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "distribution_signed_rpm_check",
+      "id": "86d853f00ae2b9b9b88951e5337467ddfc0b485673e441516477a084fc368e11",
+      "flags": [],
+      "tags": [
+        "sanity"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "key": "8fb81863f8413bd617c2a55b69b8e10ff03d7c72",
+      "severity": "info",
+      "summary": "SElinux relabeling will be scheduled as the status is permissive/enforcing.",
+      "title": "SElinux relabeling will be scheduled",
+      "timeStamp": "2026-10-14T22:53:38.591608Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_se_linux",
+      "id": "4acd2f49cfeb5d84703f10075b2d99dec64fda4d9a33b148b7f6298340379a3d",
+      "flags": [],
+      "tags": [
+        "selinux",
+        "security"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "Importing existing VDO volumes to LVM",
+            "url": "https://red.ht/import-existing-vdo-volumes-to-lvm"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "Install the 'vdo' package and re-run upgrade to check for VDO devices requiring conversion or confirm that all VDO devices, if any, are managed by LVM.",
+            "type": "hint"
+          }
+        ]
+      },
+      "flags": [
+        "inhibitor"
+      ],
+      "key": "429a99e13b19a7eebadbb8cb35233d8119bcf255",
+      "severity": "high",
+      "summary": "The check of block devices could not be performed as the 'vdo' package is not installed. All VDO devices must be converted to LVM management prior to the upgrade to prevent the loss of data.",
+      "title": "Cannot perform the VDO check of block devices",
+      "timeStamp": "2026-10-14T22:53:38.734901Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_vdo",
+      "id": "feabe974fc8555e2158a315e7b5eb6686e1dbf2698a34d74ca1c760f7aa52c15",
+      "tags": [
+        "services",
+        "drivers"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "RHEL 8 to RHEL 9: inplace upgrade fails at \"Network configuration for unsupported device types detected\"",
+            "url": "https://access.redhat.com/solutions/7009239"
+          }
+        ],
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "NetworkManager"
+          },
+          {
+            "scheme": "file",
+            "title": "/etc/sysconfig/network-scripts/ifcfg-eth0"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "Consult the nm-settings-ifcfg-rh(5) manual for valid types of ifcfg files. Remove configuration files that can not be supported.",
+            "type": "hint"
+          }
+        ]
+      },
+      "flags": [
+        "inhibitor"
+      ],
+      "key": "bc23b424eb26bb3f9d85cd4a54750f7552c3ef0d",
+      "severity": "high",
+      "summary": "RHEL 9 does not support the legacy network-scripts package that was deprecated in RHEL 8 in favor of NetworkManager. Files for device types that are not supported by NetworkManager are present in the system. Files with the problematic configuration:\n    - /etc/sysconfig/network-scripts/ifcfg-eth0",
+      "title": "Network configuration for unsupported device types detected",
+      "timeStamp": "2026-10-14T22:53:39.537019Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_ifcfg",
+      "id": "2025b0364b6605f1e70cc86802a72dc39fd0b4630c41decb935ca01c07f864c0",
+      "tags": [
+        "network",
+        "services"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "Leapp upgrade fail with error \"Inhibitor: Missing required answers in the answer file.\"",
+            "url": "https://access.redhat.com/solutions/7035321"
+          }
+        ],
+        "related_resources": [
+          {
+            "scheme": "dialog",
+            "title": "check_vdo.confirm"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "Please register user choices with leapp answer cli command or by manually editing the answerfile.",
+            "type": "hint"
+          },
+          {
+            "context": [
+              "leapp",
+              "answer",
+              "--section",
+              "check_vdo.confirm=True"
+            ],
+            "type": "command"
+          }
+        ]
+      },
+      "flags": [
+        "inhibitor"
+      ],
+      "key": "2f9802dc91315806c7cdc3c18d7b74f2a2383285",
+      "severity": "high",
+      "summary": "One or more sections in answerfile are missing user choices: check_vdo.confirm\nFor more information consult https://red.ht/leapp-dialogs.",
+      "title": "Missing required answers in the answer file",
+      "timeStamp": "2026-10-14T22:53:40.114763Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "verify_check_results",
+      "id": "9523044d097fe19d58635803e00743ffb917ff6d3adda46ba640488153bc001e",
+      "tags": []
+    }
+  ],
+  "leapp_run_id": "67140d22-506b-4144-89ee-1c312d753729"
+}

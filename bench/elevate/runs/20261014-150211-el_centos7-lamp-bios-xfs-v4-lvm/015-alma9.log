@@ -1,0 +1,3 @@
+$ sed -i '/^exclude=/{/leapp\|elevate/d}' /etc/yum.conf /etc/dnf/dnf.conf
+
+# rc=0

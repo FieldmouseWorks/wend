@@ -1,0 +1,65 @@
+$ dnf -y remove elevate-release-1.0-3.el8.noarch kernel-3.10.0-1160.119.1.el7.x86_64 kernel-3.10.0-1160.el7.x86_64 leapp-0.18.0-2.el7.noarch leapp-data-almalinux-0.11-10.el8.20251222.noarch leapp-deps-el8-5.0.8-100.202411180921Z.f50e3474.main.el8.noarch leapp-repository-deps-el8-5.0.8-100.202411180921Z.f50e3474.main.el8.noarch leapp-upgrade-el7toel8-0.21.0-5.el7.elevate.5.noarch python2-leapp-0.18.0-2.el7.noarch
+Dependencies resolved.
+=============================================================================================
+ Package                     Arch    Version                                   Repo      Size
+=============================================================================================
+Removing:
+ elevate-release             noarch  1.0-3.el8                                 @System  3.5 k
+ kernel                      x86_64  3.10.0-1160.el7                           @System   64 M
+ kernel                      x86_64  3.10.0-1160.119.1.el7                     @System   66 M
+ leapp                       noarch  0.18.0-2.el7                              @System   63 k
+ leapp-data-almalinux        noarch  0.11-10.el8.20251222                      @System   30 M
+ leapp-deps-el8              noarch  5.0.8-100.202411180921Z.f50e3474.main.el8 @System    0  
+ leapp-repository-deps-el8   noarch  5.0.8-100.202411180921Z.f50e3474.main.el8 @System    0  
+ leapp-upgrade-el7toel8      noarch  1:0.21.0-5.el7.elevate.5                  @System  3.6 M
+ python2-leapp               noarch  0.18.0-2.el7                              @System  728 k
+
+Transaction Summary
+=============================================================================================
+Remove  9 Packages
+
+Freed space: 164 M
+Running transaction check
+Transaction check succeeded.
+Running transaction test
+Transaction test succeeded.
+Running transaction
+  Preparing        :                                                        1/1 
+  Erasing          : leapp-0.18.0-2.el7.noarch                              1/9 
+  Erasing          : leapp-upgrade-el7toel8-1:0.21.0-5.el7.elevate.5.noar   2/9 
+  Erasing          : python2-leapp-0.18.0-2.el7.noarch                      3/9 
+  Erasing          : leapp-deps-el8-5.0.8-100.202411180921Z.f50e3474.main   4/9 
+  Erasing          : leapp-repository-deps-el8-5.0.8-100.202411180921Z.f5   5/9 
+  Erasing          : leapp-data-almalinux-0.11-10.el8.20251222.noarch       6/9 
+  Running scriptlet: kernel-3.10.0-1160.119.1.el7.x86_64                    7/9 
+  Erasing          : kernel-3.10.0-1160.119.1.el7.x86_64                    7/9 
+  Running scriptlet: kernel-3.10.0-1160.119.1.el7.x86_64                    7/9 
+  Running scriptlet: kernel-3.10.0-1160.el7.x86_64                          8/9 
+  Erasing          : kernel-3.10.0-1160.el7.x86_64                          8/9 
+  Running scriptlet: kernel-3.10.0-1160.el7.x86_64                          8/9 
+  Erasing          : elevate-release-1.0-3.el8.noarch                       9/9 
+  Running scriptlet: elevate-release-1.0-3.el8.noarch                       9/9 
+  Verifying        : elevate-release-1.0-3.el8.noarch                       1/9 
+  Verifying        : kernel-3.10.0-1160.el7.x86_64                          2/9 
+  Verifying        : kernel-3.10.0-1160.119.1.el7.x86_64                    3/9 
+  Verifying        : leapp-0.18.0-2.el7.noarch                              4/9 
+  Verifying        : leapp-data-almalinux-0.11-10.el8.20251222.noarch       5/9 
+  Verifying        : leapp-deps-el8-5.0.8-100.202411180921Z.f50e3474.main   6/9 
+  Verifying        : leapp-repository-deps-el8-5.0.8-100.202411180921Z.f5   7/9 
+  Verifying        : leapp-upgrade-el7toel8-1:0.21.0-5.el7.elevate.5.noar   8/9 
+  Verifying        : python2-leapp-0.18.0-2.el7.noarch                      9/9 
+
+Removed:
+  elevate-release-1.0-3.el8.noarch                                              
+  kernel-3.10.0-1160.el7.x86_64                                                 
+  kernel-3.10.0-1160.119.1.el7.x86_64                                           
+  leapp-0.18.0-2.el7.noarch                                                     
+  leapp-data-almalinux-0.11-10.el8.20251222.noarch                              
+  leapp-deps-el8-5.0.8-100.202411180921Z.f50e3474.main.el8.noarch               
+  leapp-repository-deps-el8-5.0.8-100.202411180921Z.f50e3474.main.el8.noarch    
+  leapp-upgrade-el7toel8-1:0.21.0-5.el7.elevate.5.noarch                        
+  python2-leapp-0.18.0-2.el7.noarch                                             
+
+Complete!
+
+# rc=0
