@@ -1,0 +1,17 @@
+# Found replaying the route with the data upgrade actually running (it never had: see el9-mariadb-config).
+schema = "wend.fix/0"
+family = "el"
+hop = "centos6"
+when = { installed = "mysql-server" }
+restores = ["box:db"]
+adds = []
+
+[[post]]
+op = "mysql.upgrade-data"
+
+[meta]
+name = "el6-mysql-upgrade-data"
+author = "claude (wend, hand-written from the chroot replay)"
+source = "chroot replay of el/centos5-web with mariadb-upgrade running on EL9"
+note = "MySQL 5.1 runs on 5.0's data files, so the box keeps working, but its system tables stay in 5.0's format. MariaDB 10.5 can't take that in one step: its mariadb-upgrade hung converting mysql.tables_priv, with mysql.servers, plugin, proxies_priv and the event columns all missing. Upgrading on every hop keeps each step one major version, as MySQL and MariaDB support it."
+fires_on = ["el/centos5-web"]

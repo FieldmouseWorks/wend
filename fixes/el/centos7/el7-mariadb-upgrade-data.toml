@@ -1,0 +1,18 @@
+# Found replaying the route with the data upgrade actually running (it never had: see el9-mariadb-config).
+schema = "wend.fix/0"
+family = "el"
+hop = "centos7"
+# when is read before the hop: on EL6 the server is still mysql-server (EL7's mariadb-server obsoletes it)
+when = { installed = "mysql-server" }
+restores = ["box:db"]
+adds = []
+
+[[post]]
+op = "mysql.upgrade-data"
+
+[meta]
+name = "el7-mariadb-upgrade-data"
+author = "claude (wend, hand-written from the chroot replay)"
+source = "chroot replay of el/centos5-web with mariadb-upgrade running on EL9"
+note = "MariaDB 5.5 runs on 5.1's data files, but its system tables stay in the old format until mysql_upgrade runs. Upgrading on every hop keeps each step one major version, so EL9's MariaDB 10.5 starts from 5.5 tables (el6-mysql-upgrade-data has the details)."
+fires_on = ["el/centos5-web"]

@@ -28,6 +28,10 @@ id = "sha256:0c7ee7437e09c8f1175fd2ec9d74aa7f260575a3daf2107699e59f8e8bca1248"
 name = "httpd22-drop-missing-modules"
 
 [[fixes]]
+id = "sha256:1af03c89988a5ecfbac56d4e3da28c4da034f132a2949a0111bf2376c308f7de"
+name = "el6-mysql-upgrade-data"
+
+[[fixes]]
 id = "sha256:65fa037cf383daaea92a5df836657d378a0563702358e04fb271dc50f0b47377"
 name = "el7-drop-hal-info"
 
@@ -68,6 +72,10 @@ id = "sha256:60d1c0bac8fa3943cc9deffb6566143acc02937f3d711125221fa42755c453aa"
 name = "vsftpd3-standalone-ipv4"
 
 [[fixes]]
+id = "sha256:c960fa5a7c9754ce1cb43976d960123cabf2ffabe28126d94ad951ef45445835"
+name = "el7-mariadb-upgrade-data"
+
+[[fixes]]
 id = "sha256:279d163af02ab241345b5aa6b4678185637716b75c68394472d569ec1179f10d"
 name = "mariadb55-rehash-app-password"
 
@@ -96,7 +104,7 @@ id = "sha256:d99088da93a73b9606892e9b835938c7598c86e33c3918d7df079664690c310a"
 name = "el9-ssh-host-keys"
 
 [[fixes]]
-id = "sha256:a0b514393e6c615a94ac2ea438d595d7a305fb0eb4c24385844c9a798c5f0c00"
+id = "sha256:e5628318d9da0c87e659f4d2316a01e2bb78ab5a2e4037f81e4edf2c49e1dfa5"
 name = "el9-mariadb-config"
 
 [[fixes]]
@@ -132,7 +140,7 @@ id = "sha256:78137ec7ec6f5a60306d6a0e9fc96233b3c27300458e41ff1e13ca6e00ddd207"
 name = "mariadb-slow-shutdown-alma10"
 
 [[fixes]]
-id = "sha256:9cbd21596ceec7b607a0d726df216da9e24f46c22d9b456ff87f7843df6ac4c5"
+id = "sha256:9f480040978dfb8e301d1b399f32217d7ff38e0f8a2cc14c6ac08f0ea1cb613d"
 name = "el10-mariadb-upgrade"
 
 [[fixes]]

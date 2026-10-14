@@ -21,6 +21,12 @@ adds = []
 op = "rpm.adopt-rpmnew"
 paths = ["/etc/my.cnf"]
 
+# mariadb-upgrade lives in mariadb-server-utils, which the server only weakly pulls in. Without it the stale
+# EL7 mysql_upgrade ran instead and the data files were never upgraded.
+[[post]]
+op = "install"
+packages = ["mariadb-server-utils"]
+
 [[post]]
 op = "mysql.upgrade-data"
 
