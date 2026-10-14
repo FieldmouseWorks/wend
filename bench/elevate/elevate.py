@@ -63,6 +63,13 @@ GUIDE_FIXES = {
 DB_POST = ("systemctl start mariadb; sleep 5; U=$(command -v mariadb-upgrade || command -v mysql_upgrade); "
            "$U -uroot --force; rc=$?; systemctl restart mariadb; exit $rc")
 REPORT = "cat /var/log/leapp/leapp-report.json 2>/dev/null"
+# Lab hardware, not ELevate: QEMU's i440fx (`-machine pc`, what vm.py boots) has an ISA floppy controller, so the guest
+# loads `floppy`, which RHEL 8 dropped and Leapp inhibits on; a real server has no such controller. The initramfs can
+# load it early, so the blacklist goes on every kernel's command line too (it then holds through Leapp's own reboots).
+# Applied and verified right before every `leapp preupgrade`; recorded under lab_fixes, never as an intervention.
+LAB = ("rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; "
+       "grubby --update-kernel=ALL --args=modprobe.blacklist=floppy; "
+       "if grep -qw '^floppy' /proc/modules; then echo 'floppy is still loaded'; exit 1; fi; echo 'floppy not loaded'")
 STATE = r"""echo "release: $(cat /etc/redhat-release)"; echo "kernel: $(uname -r)"; echo "selinux: $(getenforce 2>/dev/null)"
 df -m /boot | tail -n1 | awk '{print "boot_free_mib:", $4}'
 M=$(rpm -E %rhel); echo "leftover_older: $(rpm -qa | grep -vE "\.el${M}([._]|$)|gpg-pubkey" | grep -cE '\.el[0-9]+')"
@@ -76,7 +83,7 @@ def log(msg):
 
 class Run:
     def __init__(self, g, out_dir):
-        self.g, self.out, self.n, self.interventions = g, out_dir, 0, []
+        self.g, self.out, self.n, self.interventions, self.lab_fixes = g, out_dir, 0, [], []
 
     def sh(self, stage, cmd, timeout=7200):
         """cmd in the guest, detached (a disconnect can't kill it), full output saved next to the run."""
@@ -154,6 +161,10 @@ def preupgrade(r, stage, major):
     Returns the inhibitors left (empty: go)."""
     tried = set()
     for rnd in range(4):
+        rc, out = r.sh("lab", LAB)
+        r.lab_fixes.append({"stage": stage, "round": rnd, "rc": rc, "out": out.strip()[-300:]})
+        if rc:  # a lab fault would be scored as an ELevate inhibitor: stop instead
+            raise RuntimeError(f"lab fix failed before {stage} preupgrade round {rnd}: {out[-300:]}")
         r.sh(stage, "leapp preupgrade")
         rep = r.g.ssh(REPORT, timeout=120)[1]
         open(os.path.join(r.out, f"{stage}-preupgrade-{rnd}.json"), "w").write(rep)
@@ -264,12 +275,7 @@ def main(args):
            "start_checks": {n: ok for n, (ok, _) in before.items()}, "stages": [], "interventions": r.interventions}
     t0 = time.time()
     try:
-        # Lab hardware, not ELevate: QEMU's i440fx (`-machine pc`, what vm.py boots) has an ISA floppy controller, so
-        # the guest loads `floppy`, which RHEL 8 dropped and Leapp inhibits on. A real server has no such controller;
-        # unload and blacklist it once, recorded under lab_fixes, never counted as an intervention.
-        rc, _ = r.sh("lab", "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf"
-                            " && ! grep -qw '^floppy' /proc/modules")
-        run["lab_fixes"] = [{"what": "unload and blacklist floppy (QEMU i440fx ISA floppy controller)", "rc": rc}]
+        r.lab_fixes = run["lab_fixes"] = []  # see LAB: applied and verified before every leapp preupgrade
         # the box as a real one has it: the harness's shim repo file out, the stock repos the guides start from in
         if rel == "centos7":
             r.sh("setup", "rm -f /etc/yum.repos.d/*.repo && curl -fsSo /etc/yum.repos.d/CentOS-Base.repo "
