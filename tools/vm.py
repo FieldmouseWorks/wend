@@ -174,7 +174,7 @@ class Guest:
         self.disk, self.key, self.ssh_port, self.hw = disk, key, ssh_port, hw
         base = disk[:-len(".qcow2")]
         self.console, self.monitor_path, self.proc = base + ".console.log", None, None
-        self.reboot_notes = []  # why the last reboot() couldn't read the boot it started from, for the run record
+        self.reboot_notes = []  # what went wrong reading boots in the last reboot(), for the run record
 
     def start(self, extra=()):
         # QEMU's monitor socket: a unix socket path has to fit in 108 bytes, which a run directory under a checkout
@@ -281,7 +281,7 @@ class Guest:
             self.reboot_notes.append("rebooting anyway: the new boot is proven by its uptime")
         since = time.time()
         self.ssh("sync; (sleep 2; reboot) >/dev/null 2>&1 &", timeout=30)
-        forced, t, last = False, time.time(), "old"
+        forced, t, last, silent = False, time.time(), "old", []
         while time.time() - t < 120:
             time.sleep(10)
             last = self.which_boot(before, since)
@@ -290,8 +290,10 @@ class Guest:
             if not self.running():
                 return False, False
             if last is None:
-                self.reboot_notes.append(f"no answer {round(time.time() - t)}s after the reboot was sent")
-        if last is None and self.wait_ssh(timeout=300):  # silent all along (EL8's half-stopped old boot): ask again
+                silent.append(f"no answer {round(time.time() - t)}s after the reboot was sent")
+        if last is None:  # noted only now: a poll or two with no answer is every real reboot
+            self.reboot_notes += silent
+        if last is None and self.wait_ssh(timeout=300):  # silent at the end (EL8's half-stopped old boot): ask again
             last = self.which_boot(before, since)
             self.reboot_notes.append(f"answered again after the window: {last or 'no answer'} boot")
         if last == "old":  # the old boot still answers after two minutes: `reboot` did nothing

@@ -595,6 +595,7 @@ for name, fails, reboots, resets, silent, want_back, want_forced, want_notes in 
         ("boot_id unreadable and `reboot` does nothing: the forced path runs", 5, False, True, 0, True, True, 6),
         ("boot_id unreadable and even the forced reset does nothing: not rebooted", 5, False, False, 0, False, True, 6),
         ("boot_id read and `reboot` does nothing: the forced path runs", 0, False, True, 0, True, True, 0),
+        ("a real reboot with a silent poll on the way leaves no notes", 0, True, True, 15, True, False, 0),
         ("`reboot` does nothing and ssh is silent all window, then the old boot answers: forced", 0, False, True, 200,
          True, True, None)):
     _vm.time = _Clock()
