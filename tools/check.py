@@ -14,6 +14,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tomllib
 
@@ -455,6 +457,9 @@ def check_box(doc, adapters, where):
     for k in ("packages", "customize", "roles"):
         if k not in doc:
             errs.append(f"{where}: missing {k}")
+    if "roles" in doc and not (isinstance(doc["roles"], dict) and all(isinstance(v, str) and v.strip()
+                                                                       for v in doc["roles"].values())):
+        errs.append(f"{where}: [roles] is a table of shell strings")
     if not set(doc.get("isolate", [])) <= set(doc.get("roles", {})):
         errs.append(f"{where}: isolate names roles the box does not have")
     vm = doc.get("vm", {})  # tools/vm.py (SPEC "VM tier")
@@ -481,6 +486,35 @@ def check_box(doc, adapters, where):
                     "for every skipped role")
     if "shelter" in doc:
         errs += check_shelter(doc["shelter"], f"{where}: shelter")
+    errs += [f"{where}: {e}" for e in box_shell_errors(doc)]
+    return errs
+
+
+# A box's shell strings fail only once a box is installed if they don't parse, so parse them here. [vm].live runs over
+# ssh in root's login shell, bash. customize, start_hook and the roles run under /bin/sh, which is bash on EL and dash
+# on Debian and Ubuntu, so those get dash too there.
+def _table(x):
+    return x if isinstance(x, dict) else {}  # a malformed one is check_box's error to report, not a crash here
+
+
+def box_shell_errors(doc):
+    vm = doc.get("vm", {}) if isinstance(doc.get("vm", {}), dict) else {}
+    sh = ("bash", "dash") if doc.get("family") in ("debian", "ubuntu") else ("bash",)
+    named = [("customize", doc.get("customize"), sh), ("start_hook", doc.get("start_hook"), sh)] + \
+        [(f"role {k}", v, sh) for k, v in _table(doc.get("roles")).items()] + \
+        [(f"[vm].live {k}", v, ("bash",)) for k, v in _table(vm.get("live")).items()]
+    errs = []
+    for name, s, shells in named:
+        if not isinstance(s, str):
+            continue
+        for x in shells:
+            if not shutil.which(x):
+                if x != "dash":  # dash is no requirement (AGENTS.md 0); CI's runner has it, so the gate still holds there
+                    errs.append(f"{name} can't be parsed: no {x} here (install the {x} package)")
+                continue
+            r = subprocess.run([x, "-n", "-c", s], capture_output=True, text=True)
+            if r.returncode:
+                errs.append(f"{name} doesn't parse under {x}: {r.stderr.strip().splitlines()[0][:200]}")
     return errs
 
 
