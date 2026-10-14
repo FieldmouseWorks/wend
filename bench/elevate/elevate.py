@@ -52,7 +52,11 @@ GUIDE_FIXES = {
         ("openssh", ["grep -q '^PermitRootLogin yes' /etc/ssh/sshd_config || echo PermitRootLogin yes >> /etc/ssh/sshd_config"]),
         ("pam_pkcs11", ["leapp answer --section remove_pam_pkcs11_module_check.confirm=True"])],
     9: [("allowzonedrifting", ["sed -i 's/^AllowZoneDrifting=.*/AllowZoneDrifting=no/' /etc/firewalld/firewalld.conf"]),
-        ("vdo", ["leapp answer --section check_vdo.confirm=True"])],
+        ("vdo", ["leapp answer --section check_vdo.confirm=True"]),
+        # Leapp's own hint and the guide both say "remove the file", which drops the box's static address. A competent
+        # admin converts it instead, with the command Leapp itself prescribes for the same file on 9 -> 10. Tier admin:
+        # not in the guide, counted as an intervention all the same.
+        ("unsupported device types", ["nmcli connection migrate"], "admin")],
     10: [("dhclient", ["nmcli conn migrate",
                        "sed -i'.bak' 's/^dhcp=dhclient//g' /usr/lib/NetworkManager/conf.d/10-dhcp-dhclient.conf",
                        "systemctl restart NetworkManager"]),
@@ -165,6 +169,7 @@ def preupgrade(r, stage, major):
         r.lab_fixes.append({"stage": stage, "round": rnd, "rc": rc, "out": out.strip()[-300:]})
         if rc:  # a lab fault would be scored as an ELevate inhibitor: stop instead
             raise RuntimeError(f"lab fix failed before {stage} preupgrade round {rnd}: {out[-300:]}")
+        r.sh("diag", "for f in /etc/sysconfig/network-scripts/ifcfg-*; do echo \"## $f\"; cat \"$f\"; done; nmcli -t connection show")
         r.sh(stage, "leapp preupgrade")
         rep = r.g.ssh(REPORT, timeout=120)[1]
         open(os.path.join(r.out, f"{stage}-preupgrade-{rnd}.json"), "w").write(rep)
@@ -174,11 +179,11 @@ def preupgrade(r, stage, major):
             return inh
         acted = False
         for e in inh:
-            for key, cmds in GUIDE_FIXES.get(major, []):
+            for key, cmds, *tier in GUIDE_FIXES.get(major, []):
                 if key in text(e) and (key, e.get("title")) not in tried:
                     tried.add((key, e.get("title")))
                     for c in cmds:
-                        r.intervene(stage, "guide", e.get("title", ""), c)
+                        r.intervene(stage, (tier or ["guide"])[0], e.get("title", ""), c)
                     acted = True
                     break
             else:
