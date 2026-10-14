@@ -259,13 +259,20 @@ case("DEFROUTE, IPV4_FAILURE_FATAL, IPV6_DEFROUTE, IPV6_FAILURE_FATAL and IPV6_A
      and arg(kf, "eth0.nmconnection", "ipv4.may-fail") == "no"
      and kf["eth0.nmconnection"][1][-10:] == ["ipv6.method", "auto", "ipv6.never-default", "yes", "ipv6.may-fail", "no",
                                               "ipv6.addr-gen-mode", "stable-privacy", "connection.autoconnect", "yes"])
+msg, kf, left, out = run({"ifcfg-eth0": EL8.replace("DEFROUTE=yes", "DEFROUTE=no")}, net=NET + "GATEWAYDEV=eth0\n")
+case("GATEWAYDEV overrides DEFROUTE=no, as the plugin reads it",
+     msg is None and arg(kf, "eth0.nmconnection", "ipv4.never-default") is None)
+msg, kf, left, out = run({"ifcfg-eth0": EL8.replace("DEFROUTE=yes", "DEFROUTE=no")})
+case("DEFROUTE=no with no GATEWAYDEV is never-default",
+     msg is None and arg(kf, "eth0.nmconnection", "ipv4.never-default") == "yes")
 for name, text, why in (
         ("a proxy", EL8.replace("PROXY_METHOD=none", "PROXY_METHOD=auto"), "PROXY_METHOD=auto isn't converted"),
         ("BROWSER_ONLY=yes", EL8.replace("BROWSER_ONLY=no", "BROWSER_ONLY=yes"), "BROWSER_ONLY=yes isn't converted"),
         ("a DEFROUTE that isn't a boolean", EL8.replace("DEFROUTE=yes", "DEFROUTE=maybe"), "DEFROUTE=maybe isn't yes"),
         ("an IPV6_FAILURE_FATAL that isn't a boolean, IPv6 off",
          EL8.replace("IPV6_FAILURE_FATAL=no", "IPV6_FAILURE_FATAL=2"), "IPV6_FAILURE_FATAL=2 isn't yes"),
-        ("an unknown IPV6_ADDR_GEN_MODE", EL8 + "IPV6_ADDR_GEN_MODE=random\n", "isn't stable-privacy or eui64")):
+        ("an unknown IPV6_ADDR_GEN_MODE", EL8 + "IPV6_ADDR_GEN_MODE=random\n", "isn't stable-privacy or eui64"),
+        ("an IPV6_ADDR_GEN_MODE in the wrong case", EL8 + "IPV6_ADDR_GEN_MODE=EUI64\n", "isn't stable-privacy or eui64")):
     msg, kf, left, out = run({"ifcfg-eth0": text})
     case(f"EL8: {name} is refused before anything changes", refused(msg, why) and not kf and len(left) == 3)
 msg, kf, left, out = run({})

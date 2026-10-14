@@ -157,8 +157,11 @@ def plan(path, net, resolv):
     gw = v.get("GATEWAY") or net.get("GATEWAY")
     if gw and proto not in ("dhcp", "bootp"):
         args += ["ipv4.gateway", str(addr(path, "GATEWAY", gw))]
-    # the plugin: DEFROUTE=no keeps the default route off this profile; otherwise only GATEWAYDEV gets it
-    if not boolean(path, v, "DEFROUTE", "yes") or net.get("GATEWAYDEV", dev) != dev:
+    # the plugin: DEFROUTE=no keeps the default route off this profile, but a GATEWAYDEV overrides it either way
+    never = not boolean(path, v, "DEFROUTE", "yes")
+    if net.get("GATEWAYDEV"):
+        never = net["GATEWAYDEV"] != dev
+    if never:
         args += ["ipv4.never-default", "yes"]
     if boolean(path, v, "IPV4_FAILURE_FATAL", "no"):  # the plugin's ipv4.may-fail is its opposite
         args += ["ipv4.may-fail", "no"]
@@ -188,7 +191,7 @@ def plan(path, net, resolv):
     args += ["ipv6.method", six]
     # read (so a value that isn't one fails) whatever the method; they only mean something when IPv6 is on
     v6 = [not boolean(path, v, "IPV6_DEFROUTE", "yes"), boolean(path, v, "IPV6_FAILURE_FATAL", "no")]
-    gen = v.get("IPV6_ADDR_GEN_MODE", "").lower()
+    gen = v.get("IPV6_ADDR_GEN_MODE", "")  # the plugin matches it case-sensitively
     if gen and gen not in ("stable-privacy", "eui64"):
         fail(f"{path}: IPV6_ADDR_GEN_MODE={gen} isn't stable-privacy or eui64")
     if six != "ignore":
