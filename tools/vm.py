@@ -930,7 +930,7 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
             break
         prev = disk
     if len(hops) == len(todo) and all(h["ok"] for h in hops) and route.get("finish", {}).get("prune_obsolete"):
-        hops += prune(a, w, route["to"], box_doc, out_dir, prev, key, port, hw, start_net)
+        hops += prune(a, w, route["to"], box_doc, out_dir, prev, key, port, hw, start_net, plan)
     complete = len(hops) == len(todo) + bool(route.get("finish", {}).get("prune_obsolete"))
     run = {"schema": "wend.vmrun/0", "route": check.content_id(route), "box": box_id, "from": route["from"],
            "to": route["to"], "started": stamp, "firmware": FIRMWARE,
@@ -1053,7 +1053,7 @@ def relocate(box_id):
     return finish("pass")
 
 
-def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net):
+def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net, plan):
     """The route's finish step, as the chroot walk's prune (tools/walk.py): purge the packages the target release no
     longer ships, then autoremove, splitting the set in halves whenever a step fails or a passing check is lost.
     Every attempt runs on its own overlay of the last good disk and reboots; a kept attempt becomes the next base.
@@ -1089,7 +1089,7 @@ def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net):
         if back:
             after = checks(g, box_doc, a)
             h["lost"] = sorted(k for k, (good, _) in before.items() if good and not after.get(k, (False,))[0])
-            h["net_kept"] = g.ssh(NET)[1] == start_net
+            h["net_kept"] = net_read(g, plan) == start_net  # start_net leaves the shelters' bridges out too
             h["firmware"] = g.ssh(FW_NOW)[1].strip()
             h["ok"] = ok and h["net_kept"] and not h["lost"] and h["firmware"] == FIRMWARE
         else:
