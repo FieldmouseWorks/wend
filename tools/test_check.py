@@ -546,8 +546,8 @@ class _Clock:  # vm.reboot()'s clock: sleeping only moves it on
 
 
 class _RebootGuest(_vm.Guest):  # a guest whose ssh is a script: `fails` boot_id reads fail, then reads work
-    def __init__(self, clock, fails, reboots):
-        self.clock, self.fails, self.reboots, self.reset_sent = clock, fails, reboots, False
+    def __init__(self, clock, fails, reboots, resets=True):
+        self.clock, self.fails, self.reboots, self.resets, self.reset_sent = clock, fails, reboots, resets, False
         self.boot, self.up_since, self.reboot_notes = "old-boot", clock.now - 5000, []
 
     def new_boot(self, after=0):
@@ -565,7 +565,8 @@ class _RebootGuest(_vm.Guest):  # a guest whose ssh is a script: `fails` boot_id
             self.new_boot(after=3)
         if cmd.startswith("setsid nohup sh /root/.wend-reset"):
             self.reset_sent = True
-            self.new_boot()
+            if self.resets:
+                self.new_boot()
         return 0, ""
 
     def running(self):
@@ -576,18 +577,19 @@ class _RebootGuest(_vm.Guest):  # a guest whose ssh is a script: `fails` boot_id
 
 
 _real_time = _vm.time
-for name, fails, reboots, want_forced, want_notes in (
-        ("one failed boot_id read is retried, the reboot proven by boot_id", 2, True, False, 2),
-        ("boot_id unreadable before the reboot: rebooted anyway, proven by uptime", 5, True, False, 6),
-        ("boot_id unreadable and `reboot` does nothing: the forced path runs", 5, False, True, 6),
-        ("boot_id read and `reboot` does nothing: the forced path runs", 0, False, True, 0)):
+for name, fails, reboots, resets, want_back, want_forced, want_notes in (
+        ("one failed boot_id read is retried, the reboot proven by boot_id", 2, True, True, True, False, 2),
+        ("boot_id unreadable before the reboot: rebooted anyway, proven by uptime", 5, True, True, True, False, 6),
+        ("boot_id unreadable and `reboot` does nothing: the forced path runs", 5, False, True, True, True, 6),
+        ("boot_id unreadable and even the forced reset does nothing: not rebooted", 5, False, False, False, True, 6),
+        ("boot_id read and `reboot` does nothing: the forced path runs", 0, False, True, True, True, 0)):
     _vm.time = _Clock()
     try:
-        g_ = _RebootGuest(_vm.time, fails, reboots)
+        g_ = _RebootGuest(_vm.time, fails, reboots, resets)
         back, forced = g_.reboot()
     finally:
         _vm.time = _real_time
-    ok = back is True and forced == want_forced and g_.reset_sent == want_forced and \
+    ok = back is want_back and forced == want_forced and g_.reset_sent == want_forced and \
         len(g_.reboot_notes) == want_notes and all("rc=255" in n and "Connection reset" in n for n in g_.reboot_notes[:5])
     print(("passed  " if ok else "WRONG   ") + f"vm reboot: {name}  ({back}, {forced}, {g_.reboot_notes[-1:]})")
     bad += not ok

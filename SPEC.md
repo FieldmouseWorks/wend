@@ -1533,7 +1533,10 @@ The rules:
 - `replay ROUTE BOX --from RUN HOP` starts from an earlier run's disk after the hop before HOP, to iterate on a late
   hop. It only resumes from a hop that passed on the same box, logs in with the ssh key of the box build that disk
   came from, and is recorded as `partial-pass` at best, never `pass`.
-- A reboot is proven by a new `boot_id`. When `reboot` doesn't change it within two minutes (the first boot onto
+- A reboot is proven by a new `boot_id`. The harness retries reading the boot it starts from five times; if it
+  still can't, it reboots anyway and proves the new boot by an uptime shorter than the time since the reboot was
+  sent, and each failed read (ssh exit code and output) goes in the hop's `reboot_notes` (`mid_reboot_notes` for a
+  hop's middle reboot). When `reboot` doesn't change it within two minutes (the first boot onto
   systemd: PID 1 is still the old init, and the new release's `reboot` can't talk to it), the harness stops every
   process (`kill -TERM -1`, then `-KILL`), syncs, remounts read-only and resets with sysrq, and records
   `reboot_forced`. Stopping the processes first matters: a reset with the daemons up leaves every replaced library
