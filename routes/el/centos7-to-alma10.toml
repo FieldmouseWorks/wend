@@ -60,7 +60,7 @@ id = "sha256:d99088da93a73b9606892e9b835938c7598c86e33c3918d7df079664690c310a"
 name = "el9-ssh-host-keys"
 
 [[fixes]]
-id = "sha256:a0b514393e6c615a94ac2ea438d595d7a305fb0eb4c24385844c9a798c5f0c00"
+id = "sha256:e5628318d9da0c87e659f4d2316a01e2bb78ab5a2e4037f81e4edf2c49e1dfa5"
 name = "el9-mariadb-config"
 
 [[fixes]]
@@ -88,7 +88,7 @@ id = "sha256:78137ec7ec6f5a60306d6a0e9fc96233b3c27300458e41ff1e13ca6e00ddd207"
 name = "mariadb-slow-shutdown-alma10"
 
 [[fixes]]
-id = "sha256:9cbd21596ceec7b607a0d726df216da9e24f46c22d9b456ff87f7843df6ac4c5"
+id = "sha256:9f480040978dfb8e301d1b399f32217d7ff38e0f8a2cc14c6ac08f0ea1cb613d"
 name = "el10-mariadb-upgrade"
 
 [[fixes]]
