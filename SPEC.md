@@ -1287,7 +1287,10 @@ Defaults, which the plan shows and the run records:
   proxy's domain is something only the VM tier shows, and if SELinux denies it, `shelter.start`'s check fails and
   the hop rolls back. The app inside runs as a mapped uid, and that directory has no `:idmap`, so the proxy's
   socket and its directory are owned by that mapped uid (`SocketUser=`, mode 0600; the directory 0700), not by
-  the app's host user. The mapping is fixed (above), so that uid is the same at every start. An app that reaches a host service over
+  the app's host user. The mapping is fixed (above), so that uid is the same at every start. It and the mapped gid
+  get a host system user and group, `wend-<app>`: systemd refuses a `SocketUser=` with no passwd entry (EL9's 252
+  fails the socket with 217/USER, found on the VM tier), and `ps` and `ls` then name the shelter. `shelter.start`
+  refuses when that name exists with other ids, or those ids belong to another name. An app that reaches a host service over
   TCP on `127.0.0.1` can't be served without changing its config, which wend doesn't do: the plan names it, and the
   owner's choices are `network = "host"` (opted in by name, recorded in the run as an exception) or editing the app.
 - **Mounts:** the code tree read-only (`:ro,idmap`, so a tree only its owner can read stays readable). Data directories read-write (`:idmap`): the ones the program has open for

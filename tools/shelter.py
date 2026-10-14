@@ -542,6 +542,16 @@ def start_units(app, plan, release):
         f"[ -n \"$S\" ] || {{ echo 'no free subordinate id range'; exit 1; }}; "
         f"echo \"wend-{app}:$S:{SUBID_SIZE}\" >> /etc/subuid; echo \"wend-{app}:$S:{SUBID_SIZE}\" >> /etc/subgid; fi",
         f"K=$(( ($S - {SUBID_BASE}) / {SUBID_SIZE} )); MU=$(( $S + $U )); MG=$(( $S + $G ))",
+        # the mapped ids get a host user and group, wend-<app>: systemd won't take a SocketUser= with no passwd
+        # entry (252 on EL9: status=217/USER), and ps and ls name the shelter instead of a bare number
+        f"if getent group wend-{app} >/dev/null; then [ \"$(getent group wend-{app} | cut -d: -f3)\" = $MG ] || "
+        f"{{ echo 'group wend-{app} exists with another gid'; exit 1; }}; "
+        f"elif getent group $MG >/dev/null; then echo \"gid $MG is taken by $(getent group $MG | cut -d: -f1)\"; exit 1; "
+        f"else groupadd -r -g $MG wend-{app}; fi",
+        f"if getent passwd wend-{app} >/dev/null; then [ \"$(id -u wend-{app})\" = $MU ] || "
+        f"{{ echo 'user wend-{app} exists with another uid'; exit 1; }}; "
+        f"elif getent passwd $MU >/dev/null; then echo \"uid $MU is taken by $(getent passwd $MU | cut -d: -f1)\"; exit 1; "
+        f"else useradd -r -u $MU -g wend-{app} -M -d / -s /sbin/nologin -c 'wend shelter {app}' wend-{app}; fi",
         f"mkdir -p /etc/wend/shelter /etc/tmpfiles.d /run/wend/shelter/{app}",
         _heredoc(f"/etc/wend/shelter/{app}.nft",
                  hdr + f"# Egress for the shelter's network (10.90.$K.0/24): replies, DNS to its gateway, the plan's egress.\n"
@@ -568,7 +578,7 @@ def start_units(app, plan, release):
         parts += [
             _heredoc(f"/etc/systemd/system/{unit}-sock{i}.socket",
                      hdr + f"[Unit]\nDescription=wend shelter {app}: {s}, for the shelter\nPartOf={unit}.service\n\n"
-                     f"[Socket]\nListenStream=/run/wend/shelter/{app}/s{i}/{os.path.basename(s)}\nSocketUser=$MU\n"
+                     f"[Socket]\nListenStream=/run/wend/shelter/{app}/s{i}/{os.path.basename(s)}\nSocketUser=wend-{app}\n"
                      "SocketMode=0600\n\n[Install]\nWantedBy=sockets.target\n"),
             _heredoc(f"/etc/systemd/system/{unit}-sock{i}.service",
                      hdr + f"[Unit]\nDescription=wend shelter {app}: proxy to {s}\n"
@@ -763,6 +773,8 @@ def vm_probe(app, plan, outside):
         "M=$((S + U)); MG=$((S + G)); if [ \"$IDS\" = \"$M $M $M $M\" ] && [ \"$GIDS\" = \"$MG $MG $MG $MG\" ]; then "
         "ok \"the program runs as host uid $M, gid $MG (the app's ids in the range)\"; else no \"the program's host ids "
         "are '$IDS' / '$GIDS', not $M / $MG\"; fi",
+        f"if [ \"$(id -u wend-{app} 2>/dev/null)\" = \"$M\" ] && [ \"$(getent group wend-{app} | cut -d: -f3)\" = \"$MG\" ]; "
+        f"then ok 'the host names those ids wend-{app}'; else no \"no host user and group wend-{app} at $M:$MG\"; fi",
         "CE=$(awk '/^CapEff:/ {print $2}' /proc/$P/status); CP=$(awk '/^CapPrm:/ {print $2}' /proc/$P/status); "
         "CB=$(awk '/^CapBnd:/ {print $2}' /proc/$P/status); fact caps \"eff=$CE prm=$CP bnd=$CB\"",
         # NET_BIND_SERVICE alone (bit 10) when a port is below 1024; nothing otherwise
