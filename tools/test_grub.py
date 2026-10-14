@@ -57,7 +57,8 @@ for d, root, args in ((1, "(hd0,0)", "ro root=LABEL=/ quiet"), (0, "(hd1,0)", "r
         bad += not ok
 
 # The cleanup before the transaction (hop.kernel_before[1]): an old kernel no package owns goes with its BLS entry, which
-# EL8 wrote per kernel and GRUB would otherwise list, dead; the running kernel's and an owned kernel's entries stay.
+# EL8 wrote per kernel and GRUB would otherwise list, dead. The running kernel (whose record kernel_before[0] has
+# already dropped, so no package owns it here either) and an owned kernel keep theirs.
 RUN, OLD, OWNED = "5.14.0-1.el9.x86_64", "4.18.0-348.7.1.el8_5.x86_64", "5.14.0-0.el9.x86_64"
 step = fill(a["hop"]["kernel_before"][1], backends.of(a).hop_vars(a, "alma10"))
 guard = step[:step.index("}; ") + 3]
@@ -76,7 +77,7 @@ with tempfile.TemporaryDirectory() as t:
     for n, k in entries.items():
         with open(f"{t}/boot/loader/entries/{n}", "w") as out:
             out.write(f"title {n}\nversion x\nlinux {k}\ninitrd /initramfs-x.img\n")
-    for n, text in (("uname", f"echo {RUN}"), ("rpm", f'case "$2" in *{RUN}*|*{OWNED}*) exit 0;; esac; exit 1'),
+    for n, text in (("uname", f"echo {RUN}"), ("rpm", f'case "$2" in *{OWNED}*) exit 0;; esac; exit 1'),
                     ("df", "echo 'Filesystem Size Used Avail Use% Mounted'; echo '/dev/vda1 1G 98M 900M 10% /boot'")):
         with open(f"{t}/bin/{n}", "w") as out:
             out.write(f"#!/bin/sh\n{text}\n")
