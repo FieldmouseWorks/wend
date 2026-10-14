@@ -728,7 +728,6 @@ def vm_probe(app, plan, outside):
             x for x in plan.get("ports", []) if x.startswith("127.0.0.1:"))]
     ports = [p.rsplit(":", 1) for p in plan.get("ports", [])]
     low = any(int(p) < 1024 for _, p in ports)
-    data = plan["data"][0]
     up = ("up() { i=0; while [ $i -lt 60 ]; do systemctl is-active -q " + f"{unit}.service" + " && " +
           " && ".join([f"t {a} {p}" for a, p in ports] or ["true"]) + " && return 0; sleep 2; i=$((i+1)); done; "
           "return 1; }")
@@ -781,10 +780,11 @@ def vm_probe(app, plan, outside):
         "if w /wend-probe; then no 'the root is writable'; else ok 'the root is read-only'; fi",
         f"if w {plan['code']}/wend-probe; then no 'the code tree is writable'; rm -f {plan['code']}/wend-probe; "
         "else ok 'the code tree is read-only'; fi",
+    ] + [
         f"if w {data}/wend-probe; then O=$(stat -c %u:%g {data}/wend-probe); fact data_owner \"$O\"; "
         f"if [ \"$O\" = \"$U:$G\" ]; then ok \"{data} is written as the app's own host ids (idmap)\"; else "
         f"no \"a file written in {data} is owned by $O on the host, not $U:$G\"; fi; rm -f {data}/wend-probe; "
-        f"else no '{data} is not writable'; fi",
+        f"else no '{data} is not writable'; fi" for data in plan["data"]] + [
         "H=$(ip -4 -o addr show scope global | awk '{split($4, a, \"/\"); print a[1]; exit}'); fact address \"$H\"",
     ] + [f"if t {a} {p}; then ok 'published on {a}:{p}'; else no 'nothing answers on {a}:{p}'; fi" +
          (f"; if [ -n \"$H\" ] && t $H {p}; then no \"{p} answers on $H too\"; else ok 'only on {a}:{p}'; fi"

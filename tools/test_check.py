@@ -372,6 +372,7 @@ for name, script in (("vm_probe", shelter.vm_probe("billing", _pyplan, "10.0.2.2
                      ("vm_probe, low port and egress", shelter.vm_probe("billing", {**_pyplan, "ports": ["0.0.0.0:80"],
                                                                                     "egress": ["192.0.2.10:443"]},
                                                                          "10.0.2.2:8085")),
+                     ("vm_probe, no data", shelter.vm_probe("billing", {**_pyplan, "data": []}, "10.0.2.2:8085")),
                      ("vm_enforce_on", shelter.vm_enforce_on("billing")), ("VM_ENFORCE_OFF", shelter.VM_ENFORCE_OFF)):
     r = _sp.run(["bash", "-n"], input=script, text=True, capture_output=True)
     print(("passed  " if r.returncode == 0 else f"WRONG   {r.stderr[:300]} ") + f"{name} parses")
