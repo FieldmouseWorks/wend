@@ -307,7 +307,12 @@ for name, vm, want in (("the web box's own [vm]", web.get("vm", {}), False),
                        ("[vm] root_fs on a release whose installer offers none (CentOS 5)", {**web["vm"], "root_fs": "ext3"},
                         True),
                        ("[vm] a skipped role with no live check", {**web["vm"], "live": {"site": web["vm"]["live"]["site"]}},
-                        True)):
+                        True),
+                       # bash reads the ' inside "${C:-...}" as a quote; dash doesn't (wend#91's cron check on remi)
+                       ("[vm] a live check bash can't parse", {**web["vm"], "live": {
+                           **web["vm"]["live"], "x": "echo \"ran: ${C:-the timer's service}\""}}, True),
+                       ("[vm] a live check only bash parses (it runs in bash)", {**web["vm"], "live": {
+                           **web["vm"]["live"], "x": "f() { echo; }; [[ -n $x ]] && f <<< y"}}, False)):
     errs = check.check_box({**web, "vm": vm}, adapters, "boxes/el/centos5-web/box.toml")
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
@@ -347,6 +352,9 @@ for name, sh, want in (
         ("shelter: a relative socket", {"billing": {**plan, "sockets": ["mysql.sock"]}}, True),
         ("shelter: a port out of range", {"billing": {**plan, "ports": ["127.0.0.1:99999"]}}, True),
         ("shelter: a port with no address", {"billing": {**plan, "ports": [8080]}}, True),
+        ("shelter: a port on every address", {"billing": {**plan, "ports": ["0.0.0.0:80"]}}, False),
+        ("shelter: a port on one of the host's own addresses (absent in the shelter)",
+         {"billing": {**plan, "ports": ["10.0.2.20:8080"]}}, True),
         ("shelter: an egress opt-in", {"billing": {**plan, "egress": ["192.0.2.10:443"]}}, False),
         ("shelter: egress as a host name", {"billing": {**plan, "egress": ["api.example.com:443"]}}, True),
         ("shelter: egress with shell", {"billing": {**plan, "egress": ["192.0.2.10:443; reboot"]}}, True)):
@@ -361,6 +369,32 @@ for line, want in (("30 2 1,15 * 1 /x", ["*-*-01,15 02:30:00", "Mon *-*-* 02:30:
     got = shelter.cron_calendar(line)[0]
     print(("passed  " if got == want else f"WRONG   {got} ") + f"cron {line!r}")
     bad += got != want
+# the VM tier's confinement probe and SELinux window (tools/vm.py) are shell for the guest's bash: they must parse, and
+# a destination the plan opted in to can't stand for one the shelter must not reach
+import subprocess as _sp  # noqa: E402
+_pyplan = check.load_all()[3]["el/centos7-pyapp"]["shelter"]["billing"]
+for name, script in (("vm_probe", shelter.vm_probe("billing", _pyplan, "10.0.2.2:8085")),
+                     ("vm_probe, low port and egress", shelter.vm_probe("billing", {**_pyplan, "ports": ["0.0.0.0:80"],
+                                                                                    "egress": ["192.0.2.10:443"]},
+                                                                         "10.0.2.2:8085")),
+                     ("vm_probe, no data", shelter.vm_probe("billing", {**_pyplan, "data": []}, "10.0.2.2:8085")),
+                     ("vm_enforce_on", shelter.vm_enforce_on("billing")), ("VM_ENFORCE_OFF", shelter.VM_ENFORCE_OFF)):
+    r = _sp.run(["bash", "-n"], input=script, text=True, capture_output=True)
+    print(("passed  " if r.returncode == 0 else f"WRONG   {r.stderr[:300]} ") + f"{name} parses")
+    bad += r.returncode != 0
+try:
+    shelter.vm_probe("billing", {**_pyplan, "egress": ["10.0.2.2:8085"]}, "10.0.2.2:8085")
+    print("WRONG   vm_probe took an opted-in destination as the one to refuse")
+    bad += 1
+except ValueError:
+    print("refused vm_probe with an opted-in destination as the one to refuse")
+_den = shelter.vm_denials("billing", "type=AVC msg=audit(1.2:3): avc:  denied  { connectto } for pid=9 comm=\"python\" "
+                          "scontext=system_u:system_r:container_t:s0:c1,c2 tcontext=system_u:system_r:unconfined_service_t:s0\n"
+                          "type=AVC msg=audit(1.2:4): avc:  denied  { read } for pid=7 comm=\"tuned\" scontext=system_u:"
+                          "system_r:tuned_t:s0 tcontext=system_u:object_r:var_t:s0")
+print(("passed  " if len(_den) == 1 and "connectto" in _den[0] else f"WRONG   {_den} ") +
+      "vm_denials keeps the shelter's denials only")
+bad += not (len(_den) == 1 and "connectto" in _den[0])
 # root_fs is one the box's start release's installer makes (releases.<release>.install.root_fs)
 lamp, trusty = check.load_all()[3]["el/centos7-lamp"], check.load_all()[3]["ubuntu/trusty-web"]
 for name, box, root_fs, want in (("[vm] root_fs xfs-v4 on CentOS 7", lamp, "xfs-v4", False),
@@ -385,6 +419,29 @@ for name, box, want in (("[vm] pockets on a release_pocket_only release", {**twe
     errs = check.check_box(box, adapters, "boxes/ubuntu/trusty-web/box.toml")
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
+# roles run under /bin/sh: dash on Debian and Ubuntu, bash on EL (the dash parse runs only where dash is installed)
+import shutil as _sh  # noqa: E402
+_dash = bool(_sh.which("dash"))
+for name, doc, want in (("an Ubuntu role only bash parses", {**tweb, "roles": {**tweb["roles"], "x": "[[ -n $x ]] && cat <<< y"}},
+                         _dash),
+                        ("an EL role only bash parses", {**web, "roles": {**web["roles"], "x": "[[ -n $x ]] && cat <<< y"}},
+                         False),
+                        ("an EL role bash can't parse", {**web, "roles": {**web["roles"], "x": "echo \"${C:-it's}\""}}, True),
+                        ("an Ubuntu start_hook only bash parses", {**tweb, "start_hook": "cat <<< y"}, _dash)):
+    errs = check.box_shell_errors(doc)
+    print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
+    bad += bool(errs) != want
+for name, roles in (("[roles] as a list", ["x"]), ("[roles] as a string", "x"), ("a role that isn't a string", {"x": 1}),
+                    ("an empty role", {"x": " "})):
+    errs = check.check_box({**tweb, "roles": roles}, adapters, "boxes/ubuntu/trusty-web/box.toml")
+    print(("refused " + name) if errs else f"WRONG   {name} passed")
+    bad += not errs
+try:
+    check.box_shell_errors({**web, "roles": ["x"], "vm": {"live": ["x"]}})
+    print("passed  box_shell_errors leaves non-table roles and [vm].live to check_box")
+except Exception as e:
+    print(f"WRONG   box_shell_errors crashed on non-table roles or [vm].live: {e!r}")
+    bad += 1
 # the VM installer's pocket proxy: the release pocket always, -updates/-security/-backports only when the box asks ([vm].pockets)
 import http.server as _hs  # noqa: E402
 import threading as _th  # noqa: E402

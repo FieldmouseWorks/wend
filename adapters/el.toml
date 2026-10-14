@@ -92,6 +92,9 @@ upgrade = ["yum -y distro-sync"]
 major = 8
 pm = "dnf"
 repos = { baseos = "vault.centos.org/8.5.2111/BaseOS/x86_64/os", appstream = "vault.centos.org/8.5.2111/AppStream/x86_64/os" }
+# anaconda's EL8 kickstart: as EL7's (%end, eth0 by MAC on the installer's boot line, 1 GiB /boot), but %packages
+# without --nobase, which EL8's installer refuses, and AppStream as a second repo (httpd, php and mariadb live there)
+install = { tree = "vault.centos.org/8.5.2111/BaseOS/x86_64/os", pxeboot = "images/pxeboot", repos = { AppStream = "vault.centos.org/8.5.2111/AppStream/x86_64/os" }, nobase = false, ks_end = true, append = "net.ifnames=0 biosdevname=0", ifname = true, boot_part_mib = 1024, uefi = true, root_fs = ["ext3", "xfs"] }
 
 [releases.alma8]
 major = 8
@@ -157,7 +160,7 @@ upgrade = ["rm -f /etc/dnf/modules.d/*.module",
 [addons.epel]
 marker = "epel-release"
 vendor = "Fedora Project"
-repos = { centos7 = "archives.fedoraproject.org/pub/archive/epel/7/x86_64", centos8 = "dl.fedoraproject.org/pub/epel/8/Everything/x86_64", alma8 = "dl.fedoraproject.org/pub/epel/8/Everything/x86_64", alma9 = "dl.fedoraproject.org/pub/epel/9/Everything/x86_64", alma10 = "dl.fedoraproject.org/pub/epel/10/Everything/x86_64" }
+repos = { centos7 = "archives.fedoraproject.org/pub/archive/epel/7/x86_64", centos8 = "archives.fedoraproject.org/pub/archive/epel/8.5/Everything/x86_64", alma8 = "dl.fedoraproject.org/pub/epel/8/Everything/x86_64", alma9 = "dl.fedoraproject.org/pub/epel/9/Everything/x86_64", alma10 = "dl.fedoraproject.org/pub/epel/10/Everything/x86_64" }
 
 [hop]
 # What the harness runs for every hop, around the fixes' pre and post steps. {placeholders} come from the release
