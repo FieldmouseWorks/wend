@@ -775,9 +775,9 @@ digits). Effect, for each:
 - `/etc/systemd/network/10-wend-<DEVICE>.link` pins the interface name to the profile's `HWADDR`. Once the ifcfg
   file is gone, nothing else keeps an `eth0` from becoming `ens3`, and the keyfile is bound to the old name and the
   MAC. (Renaming several NICs to kernel names like `eth1` can race the kernel; only single-NIC boxes are proven.)
-  When an earlier `.link` in `/etc/systemd/network` already pins exactly that MAC to that name and nothing else
-  (`[Match] MACAddress=` and `[Link] Name=` only: EL8's installer writes `10-anaconda-ifname-<DEVICE>.link` when booted
-  with `ifname=`), that pin stands and no second one is written.
+  The pin is written even when an earlier `.link` already pins exactly that MAC to that name (EL8's installer writes
+  `10-anaconda-ifname-<DEVICE>.link` when booted with `ifname=`): that one wins and does the same, and ours takes
+  over if it goes.
 - the ifcfg file moves to `SAVED`.
 
 The files are read as `KEY=VALUE` lines and never executed; a value that isn't one word, or holds `$`, a backquote or
@@ -806,12 +806,14 @@ In `/etc/sysconfig/network`, `GATEWAY`, `GATEWAYDEV` and `IPV6INIT` are read as 
 `NETWORKING_IPV6`, `HOSTNAME`, `NOZEROCONF` and `NISDOMAIN` are left as they are: none of them is part of a profile.
 
 Any other setting in either file (bridges, VLANs, bonds, aliases, IPv6 addresses, `RES_OPTIONS`), a keyfile of the
-same name or a `10-wend-<DEVICE>.link` already there, any `.link` in `/etc/systemd/network`, `/run/systemd/network`,
-`/usr/local/lib/systemd/network`, `/usr/lib/systemd/network` or `/lib/systemd/network` whose name sorts before the
-pin's (systemd applies only the first `.link` that matches, so it could name the NIC something else) and isn't that
-same pin in `/etc/systemd/network` or a pin of another MAC to another name, two profiles
-that pin one name to different MACs or one MAC to different names, a `route-`, `route6-`, `rule-`, `rule6-` or `keys-`
-file beside a profile, or a value that isn't an address, MAC, boolean or plain name fails the step. Every profile is
+same name or a `10-wend-<DEVICE>.link` already there, two profiles that pin one name to different MACs or one MAC to
+different names, a `route-`, `route6-`, `rule-`, `rule6-` or `keys-` file beside a profile, or a value that isn't an
+address, MAC, boolean or plain name fails the step. So does any `.link` in `/etc/systemd/network`,
+`/run/systemd/network`, `/usr/local/lib/systemd/network`, `/usr/lib/systemd/network` or `/lib/systemd/network` whose
+name sorts before the pin's (systemd applies only the first `.link` that matches, so it could name the NIC something
+else), unless it only pins one MAC to one name (`[Match] MACAddress=` and `[Link] Name=`, nothing else, and no
+`<name>.link.d` drop-ins in any of those directories) and that is either this profile's MAC and name or another MAC
+and another name. Every profile is
 checked and serialized by `nmcli` before the first file is written, so a failure, including `nmcli` missing or
 refusing a profile, changes nothing. Reference: `python3 -` with the source in `tools/net_ifcfg_to_keyfile.py`, sent
 as a here-document; `tools/test_net_ifcfg.py` runs it on fixture roots.
