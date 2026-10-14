@@ -117,6 +117,7 @@ pub const RPM: Caps = Caps {
     ops: &[
         "rpm.swap-release",
         "rpm.drop-arch",
+        "rpm.drop-unneeded",
         "rpm.bootstrap",
         "rpm.transit",
         "rpm.adopt-rpmnew",
@@ -295,6 +296,23 @@ const STOP_DB: &str = concat!(
     "while pgrep -x 'mariadbd|mysqld' >/dev/null && [ $i -lt 300 ]; do sleep 1; i=$((i+1)); done; ",
     "! pgrep -x 'mariadbd|mysqld' >/dev/null"
 );
+/// mysql.upgrade-data: run the server's own upgrade tool and check the data now carries the server's version stamp
+/// (SPEC.md, mysql.upgrade-data)
+fn upgrade_db() -> String {
+    format!(
+        concat!(
+            "U=$(command -v mariadb-upgrade || command -v mysql_upgrade); ",
+            "[ -n \"$U\" ] || {{ echo 'no mariadb-upgrade or mysql_upgrade installed'; {stop}; exit 1; }}; ",
+            "V=$($D --version | sed -n 's/.* Ver \\([^ -]*\\).*/\\1/p'); ",
+            "timeout 1200 $U -uroot --force >/tmp/wend-upgrade.log 2>&1; u=$?; tail -n 3 /tmp/wend-upgrade.log; ",
+            "S=$(cat /var/lib/mysql/mariadb_upgrade_info /var/lib/mysql/mysql_upgrade_info 2>/dev/null | head -n 1); ",
+            "if [ -z \"$V\" ] || [ \"${{S%%-*}}\" != \"$V\" ]; then ",
+            "echo \"$U (exit $u) left the data stamped ${{S:-nothing}}, the server is ${{V:-unknown}}\"; ",
+            "tail -n 30 /tmp/wend-upgrade.log; {stop}; exit 1; fi"
+        ),
+        stop = STOP_DB
+    )
+}
 /// what adopt-rpmnew replaced and set-aside-unowned moved, kept for the admin
 const SAVED: &str = "/var/lib/wend/saved";
 /// service.record: the SysV services the box started at boot, one per line
@@ -455,6 +473,12 @@ fn rpm_step(s: &Value, adapter: &Doc, release: &str) -> Result<String, String> {
         "write-file" => printf(str_of(s, "content")?, str_of(s, "path")?),
         "rpm.swap-release" => swap_release(s, &v, release_of(adapter, release)?)?,
         "rpm.drop-arch" => drop_arch(s)?,
+        "rpm.drop-unneeded" => format!(
+            "P=; for p in {}; do ! rpm -q $p >/dev/null 2>&1 || P=\"$P $p\"; done; \
+             [ -n \"$P\" ] || exit 0; if E=$(rpm -e --test $P 2>&1); then rpm -e $P; else \
+             echo \"kept$P: still needed\"; echo \"$E\" | grep 'is needed by' | head -n 5; fi",
+            list_of(s, "packages")?.join(" ")
+        ),
         "rpm.bootstrap" => bootstrap(s, adapter, &v)?,
         "rpm.transit" => transit(s, adapter, &v)?,
         "rpm.adopt-rpmnew" => {
@@ -519,16 +543,11 @@ fn rpm_step(s: &Value, adapter: &Doc, release: &str) -> Result<String, String> {
             &format!("{WAIT_SOCK}; sleep 2; {STOP_DB}; rc=$?; tail -n 3 /tmp/wend-db.log; exit $rc"),
         ]
         .concat(),
-        "mysql.upgrade-data" => [
-            &format!(
-                "{STOP_DB}; {DB_DAEMON}; {DB_DIRS}; ($D --user=mysql --skip-networking >/tmp/wend-db.log 2>&1 &); "
-            ),
-            &format!("{WAIT_SOCK}; "),
-            "U=$(command -v mariadb-upgrade || command -v mysql_upgrade); ",
-            "if [ -n \"$U\" ]; then $U -uroot --force 2>&1 | tail -n 3; fi; ",
-            &format!("{STOP_DB}; rc=$?; [ $rc = 0 ] || tail -n 15 /tmp/wend-db.log; exit $rc"),
-        ]
-        .concat(),
+        "mysql.upgrade-data" => format!(
+            "{STOP_DB}; {DB_DAEMON}; {DB_DIRS}; ($D --user=mysql --skip-networking --skip-grant-tables >/tmp/wend-db.log 2>&1 &); \
+             {WAIT_SOCK}; {}; {STOP_DB}; rc=$?; [ $rc = 0 ] || tail -n 15 /tmp/wend-db.log; exit $rc",
+            upgrade_db()
+        ),
         "ssh.generate-host-keys" => "ssh-keygen -A".into(),
         "httpd.drop-missing-modules" => HTTPD_DROP_MISSING_MODULES.into(),
         "php.mysqli-report-off" => php_mysqli_report_off(),

@@ -71,6 +71,7 @@ STEPS = [
     {"op": "write-file", "path": "/etc/my.cnf", "content": "[mysqld]\ndatadir=/var/lib/mysql\\n\n"},
     {"op": "rpm.swap-release", "remove": "centos-release", "install": "almalinux-release"},
     {"op": "rpm.drop-arch", "arches": ["i686", "i386"]},
+    {"op": "rpm.drop-unneeded", "packages": ["polkit-pkla-compat", "polkit"]},
     {"op": "rpm.adopt-rpmnew", "paths": ["/etc/my.cnf", "/etc/httpd/conf.d/*.conf"]},
     {"op": "rpm.set-aside-unowned", "paths": ["/etc/php.d/*.ini"]},
     {"op": "fs.layout", "layout": "usrmove"},
@@ -200,6 +201,8 @@ def type_corpus():
     fix("kv.unset keys string", P({"op": "kv.unset", "path": "/etc/my.cnf", "keys": "old_passwords"}))
     fix("enum int", P({"op": "fs.layout", "layout": 1}))
     fix("list min", P({"op": "rpm.drop-arch", "arches": []}))
+    fix("drop-unneeded empty", P({"op": "rpm.drop-unneeded", "packages": []}))
+    fix("drop-unneeded shell", P({"op": "rpm.drop-unneeded", "packages": ["a;b"]}))
     fix("transit reinstall str", lambda d: d.update(hop="alma9", post=[
         {"op": "rpm.transit", "release": "alma8", "remove": "centos-release", "reinstall": "x"}]))
     fix("install no gate", lambda d: d.update(when={"not": {"installed": "x"}}, post=[
@@ -266,6 +269,8 @@ def type_corpus():
     adapter("hardware old_kernels unknown", lambda a: a["hardware"].update(old_kernels="all"))
     adapter("hardware old_kernels a list", lambda a: a["hardware"].update(old_kernels=["running"]))
     adapter("hardware boot_mib absent", lambda a: a["hardware"]["alma9"].pop("boot_mib"))
+    adapter("transit boot_mib absent", lambda a: a["releases"]["alma8"]["transit"].pop("boot_mib"))
+    adapter("transit boot_mib zero", lambda a: a["releases"]["alma8"]["transit"].update(boot_mib=0))
     adapter("hardware boot_mib a float", lambda a: a["hardware"]["alma9"].update(boot_mib=70.5))
     adapter("hardware autoremove_from off the ladder", lambda a: a["hardware"].update(
         old_kernels="autoremove", autoremove_from="jessie"))

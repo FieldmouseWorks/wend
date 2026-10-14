@@ -394,6 +394,16 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
             }
         }
     }
+    // SPEC "Hardware preflight": the kernel a transit leaves in /boot
+    for (r, rel) in get(a, "releases").and_then(Value::as_object).into_iter().flatten() {
+        if let Some(t) = get(rel, "transit") {
+            if !get(t, "boot_mib").and_then(Value::as_u64).is_some_and(|m| m > 0) {
+                errs.push(format!(
+                    "{wh}: releases.{r}.transit.boot_mib must be the MiB its kernel takes in /boot"
+                ));
+            }
+        }
+    }
     errs.extend(check_hardware(a, wh));
     errs.extend(check_runtimes(a, wh));
     errs

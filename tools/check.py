@@ -113,6 +113,9 @@ def check_adapter(a, where):
     for r, rel in a.get("releases", {}).items():  # SPEC "Kernels and the bootloader"
         if isinstance(rel, dict) and rel.get("reboot", "before-post") != "before-post":
             errs.append(f"{where}: releases.{r}.reboot can only be \"before-post\"")
+        t = rel.get("transit") if isinstance(rel, dict) else None  # SPEC "Hardware preflight": its kernel in /boot
+        if t is not None and not (isinstance(t, dict) and type(t.get("boot_mib")) is int and t["boot_mib"] > 0):
+            errs.append(f"{where}: releases.{r}.transit.boot_mib must be the MiB its kernel takes in /boot")
     errs += check_hardware(a, where)
     errs += check_runtimes(a, where)
     if not isinstance(a.get("addons", {}), dict):

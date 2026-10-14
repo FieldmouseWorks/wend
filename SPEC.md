@@ -148,7 +148,7 @@ Adapter ops are named `<tool>.<verb>`. The adapter declares which ones its famil
   `net.ifupdown-dns-to-resolved` and `apt.drop-esm-pins` (`release`).
 - EL: `rpm.bootstrap` (unpack EL6's rpm/yum stack over / with 7-Zip, because rpm 4.4 can't read xz payloads),
   `rpm.transit` (pass through EL8: EL8's rpm run from a staging dir, then a real distro-sync), `rpm.swap-release`
-  (release packages by hand: epochs and vendor switches), `rpm.drop-arch` (multilib leftovers), `rpm.adopt-rpmnew`,
+  (release packages by hand: epochs and vendor switches), `rpm.drop-arch` (multilib leftovers), `rpm.drop-unneeded`, `rpm.adopt-rpmnew`,
   `rpm.set-aside-unowned`, `fs.layout` (`usrmove`, `run`), `kv.set` / `kv.unset` (key=value lines),
   `mysql.set-password`, `mysql.clean-shutdown`, `mysql.upgrade-data`, `ssh.generate-host-keys`,
   `httpd.drop-missing-modules`, `php.mysqli-report-off`, `service.record`, `service.enable`, `net.ifcfg-to-keyfile`.
@@ -601,6 +601,13 @@ Fails if any such package is still installed afterwards. Reference: `rpm -e --no
 `NAME-VERSION-RELEASE.ARCH` that `rpm -qa` lists with one of the arches, then check `rpm -qa --qf '%{ARCH}\n'` has
 none of them.
 
+**`rpm.drop-unneeded`** `packages` (list of package names, at least one). Removes the listed packages that are
+installed, in one `rpm -e`, if `rpm -e --test` accepts them: nothing outside the list requires anything they provide
+(a `Requires(pre)` alone doesn't count, as with `rpm -e`). Otherwise removes none of them, says which packages need
+them, and succeeds. For leftovers a release no longer pulls in that some boxes still use: on EL9 nothing requires
+polkit, but tuned and pcsc-lite do. `remove` would fail the hop on those boxes instead. Being evaluated when the step
+runs, it sees the new release's dependencies; a `when` is evaluated before the hop.
+
 **`rpm.bootstrap`** `release` (the adapter's `releases.<release>.bootstrap` table must exist; EL defines it for
 `centos6` only). Installs the next release's package manager when the old one can't: rpm 4.4 can't read EL6's xz
 payloads, and yum 3.2.22 can't check EL6's sha256 repodata. Effect: the files of every package in
@@ -707,10 +714,13 @@ the owner has provided one.
 **`mysql.clean-shutdown`** (no arguments). Start with `--innodb-fast-shutdown=0`, stop. The next major version then
 finds a clean redo log (MariaDB 10.11 refuses 10.5's otherwise). Fails if the start or the stop fails.
 
-**`mysql.upgrade-data`** (no arguments). Start the installed server on the existing data, run `mariadb-upgrade` (or
-`mysql_upgrade`) `-uroot --force` if there is one, stop. Fails if the start or the stop fails. The tool's own exit
-code is not: the server starting and stopping cleanly on the data is the point, and the tool complains about
-things it then fixes.
+**`mysql.upgrade-data`** (no arguments). Start the installed server on the existing data (socket only, without its
+grant tables, so a root password the box set doesn't lock the tool out), run `mariadb-upgrade` (or `mysql_upgrade`)
+`-uroot --force` (at most 20 minutes), stop. Fails if the start or the stop fails, if there is no upgrade tool, or if
+afterwards the data's version stamp (`mariadb_upgrade_info`, else `mysql_upgrade_info`, in /var/lib/mysql) does not
+name the running server's version (`--version`, up to the first `-`). The stamp is the check, not the tool's exit
+code: the tool complains about things it then fixes, and a stale tool from an older release can exit 0 without
+upgrading anything.
 
 **`ssh.generate-host-keys`** (no arguments). Creates every host key type this sshd expects that the box lacks
 (`ssh-keygen -A`; `sshd-keygen` does it at boot, which a chroot never has).
@@ -1032,7 +1042,9 @@ with `"running"`, the rescue image isn't one either, since `hop.kernel_before` d
 boot it) and the kernels the hop keeps (`old_kernels`). Those are the machine's running kernel on the first hop with
 `"running"` (with any kernel another package owns, on every hop), and every kernel it has with `"autoremove"`; then the
 previous release's kernel with `"running"`, and with `"autoremove"` the two before it (the machine's running kernel and
-the first release's, on the second hop), or every kernel so far up to `autoremove_from`. A hop also fails
+the first release's, on the second hop), or every kernel so far up to `autoremove_from`. A hop whose fixes pass
+through a release with `rpm.transit` also keeps that release's kernel beside them, at its adapter's
+`releases.<release>.transit.boot_mib` (EL's alma9 hop: EL8's 4.18 stays until the alma10 hop). A hop also fails
 when a mounted filesystem's type has no `fs` line in the release's table, or it is an XFS in v4 format (or one whose
 superblock couldn't be read) and the table has no `fs xfs-v4`: from the real configs, EL10's kernel doesn't mount
 XFS v4, EL9's has no btrfs (EL10's has it back), EL6 on has no reiserfs or JFS, lenny's

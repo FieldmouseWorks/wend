@@ -136,6 +136,15 @@ WAIT_SOCK = ("[ -n \"$D\" ] || { echo 'no database server installed'; exit 1; };
 STOP_DB = ("pkill -TERM -x mariadbd; pkill -TERM -x mysqld; i=0; "
            "while pgrep -x 'mariadbd|mysqld' >/dev/null && [ $i -lt 300 ]; do sleep 1; i=$((i+1)); done; "
            "! pgrep -x 'mariadbd|mysqld' >/dev/null")
+# mysql.upgrade-data: run the server's own upgrade tool and check the data now carries the server's version stamp.
+UPGRADE_DB = ("U=$(command -v mariadb-upgrade || command -v mysql_upgrade); "
+              f"[ -n \"$U\" ] || {{ echo 'no mariadb-upgrade or mysql_upgrade installed'; {STOP_DB}; exit 1; }}; "
+              "V=$($D --version | sed -n 's/.* Ver \\([^ -]*\\).*/\\1/p'); "
+              "timeout 1200 $U -uroot --force >/tmp/wend-upgrade.log 2>&1; u=$?; tail -n 3 /tmp/wend-upgrade.log; "
+              "S=$(cat /var/lib/mysql/mariadb_upgrade_info /var/lib/mysql/mysql_upgrade_info 2>/dev/null | head -n 1); "
+              "if [ -z \"$V\" ] || [ \"${S%%-*}\" != \"$V\" ]; then "
+              "echo \"$U (exit $u) left the data stamped ${S:-nothing}, the server is ${V:-unknown}\"; "
+              f"tail -n 30 /tmp/wend-upgrade.log; {STOP_DB}; exit 1; fi")
 SAVED = "/var/lib/wend/saved"  # what adopt-rpmnew replaced and set-aside-unowned moved, kept for the admin
 SYSV_RECORD = "/var/lib/wend/sysv-enabled"  # service.record: the SysV services the box started at boot, one per line
 # package file names (name-version-release.arch.rpm) to package names, one per line
@@ -200,7 +209,7 @@ def bootstrap_pins(adapter, release):
 
 class Rpm:
     name = "rpm"
-    OPS = {"rpm.swap-release", "rpm.drop-arch", "rpm.bootstrap", "rpm.transit", "rpm.adopt-rpmnew",
+    OPS = {"rpm.swap-release", "rpm.drop-arch", "rpm.drop-unneeded", "rpm.bootstrap", "rpm.transit", "rpm.adopt-rpmnew",
            "rpm.set-aside-unowned", "fs.layout", "kv.set", "kv.unset", "mysql.set-password", "mysql.clean-shutdown",
            "mysql.upgrade-data", "ssh.generate-host-keys", "httpd.drop-missing-modules", "php.mysqli-report-off",
            "service.record", "service.enable", "net.ifcfg-to-keyfile"}
@@ -305,6 +314,14 @@ class Rpm:
                 f"test -n \"$f\"; curl -sf -o /tmp/$f {base}/Packages/$f; "
                 f"rpm -e --nodeps --noscripts {s['remove']}; rpm -ivh --nodeps --noscripts /tmp/$f; "
                 f"rm -f /tmp/$f /tmp/wend-pkglist; {CLEAN_REPOS}")
+
+    def op_rpm_drop_unneeded(self, s, adapter, release, v, rel):
+        """Remove these packages, together, only if nothing else installed still requires them; otherwise keep them
+        all and say what needs them. For leftovers a release stops pulling in that some boxes still use (polkit:
+        nothing on EL9 requires it, but tuned and pcsc-lite do)."""
+        return (f"P=; for p in {' '.join(s['packages'])}; do ! rpm -q $p >/dev/null 2>&1 || P=\"$P $p\"; done; "
+                "[ -n \"$P\" ] || exit 0; if E=$(rpm -e --test $P 2>&1); then rpm -e $P; else "
+                "echo \"kept$P: still needed\"; echo \"$E\" | grep 'is needed by' | head -n 5; fi")
 
     def op_rpm_drop_arch(self, s, adapter, release, v, rel):
         """Remove every package of the given architectures from the rpm database and disk (no dependency checks, no
@@ -512,12 +529,13 @@ class Rpm:
                 f"{WAIT_SOCK}; sleep 2; {STOP_DB}; rc=$?; tail -n 3 /tmp/wend-db.log; exit $rc")
 
     def op_mysql_upgrade_data(self, s, adapter, release, v, rel):
-        """Start the new server on the old data directory once, run its upgrade tool, stop it cleanly."""
-        return (f"{STOP_DB}; {DB_DAEMON}; {DB_DIRS}; ($D --user=mysql --skip-networking >/tmp/wend-db.log 2>&1 &); "
-                f"{WAIT_SOCK}; "
-                "U=$(command -v mariadb-upgrade || command -v mysql_upgrade); "
-                "if [ -n \"$U\" ]; then $U -uroot --force 2>&1 | tail -n 3; fi; "
-                f"{STOP_DB}; rc=$?; [ $rc = 0 ] || tail -n 15 /tmp/wend-db.log; exit $rc")
+        """Start the new server on the old data directory once, run its upgrade tool, stop it cleanly. The data must
+        come out stamped with the running server's version: that is what proves the upgrade ran, not the tool's exit
+        code (it complains about things it then fixes)."""
+        # no grant tables: a root password the box set can't lock the upgrade out (the socket is the only way in)
+        return (f"{STOP_DB}; {DB_DAEMON}; {DB_DIRS}; "
+                "($D --user=mysql --skip-networking --skip-grant-tables >/tmp/wend-db.log 2>&1 &); "
+                f"{WAIT_SOCK}; {UPGRADE_DB}; {STOP_DB}; rc=$?; [ $rc = 0 ] || tail -n 15 /tmp/wend-db.log; exit $rc")
 
     # ----- one-off service and app plumbing -----
 

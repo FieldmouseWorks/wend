@@ -981,6 +981,47 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
         ))?),
     };
     let mut route_kernels: Vec<(String, u64)> = vec![];
+    // a release a hop passes through with rpm.transit (EL8 on the way to EL9) leaves its kernel in /boot beside the
+    // running one and the hop's own until the next hop's kernel_before removes it
+    let fixes_by_id = atlas.fixes_by_id();
+    let route_fixes: Vec<&Doc> = get(route, "fixes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|r| {
+            get(r, "id")
+                .and_then(Value::as_str)
+                .and_then(|id| fixes_by_id.get(id).copied())
+        })
+        .collect();
+    let transit_kernels = |h: &str| -> Result<Vec<(String, u64)>, String> {
+        let mut out = vec![];
+        for f in route_fixes
+            .iter()
+            .filter(|f| get(f, "hop").and_then(Value::as_str) == Some(h))
+        {
+            for s in ["pre", "post"]
+                .iter()
+                .filter_map(|k| get(f, k).and_then(Value::as_array))
+                .flatten()
+                .filter(|s| get(s, "op").and_then(Value::as_str) == Some("rpm.transit"))
+            {
+                let r = get(s, "release").and_then(Value::as_str).unwrap_or("");
+                let mib = match get(a, "releases")
+                    .and_then(|x| get(x, r))
+                    .and_then(|x| get(x, "transit"))
+                    .and_then(|x| get(x, "boot_mib"))
+                {
+                    None => return Err(format!("adapters/{fam}.toml has no releases.{r}.transit.boot_mib")),
+                    Some(v) => v.as_u64().ok_or(format!(
+                        "adapters/{fam}.toml: releases.{r}.transit.boot_mib must be a whole number of MiB"
+                    ))?,
+                };
+                out.push((format!("{r}'s transit kernel"), mib));
+            }
+        }
+        Ok(out)
+    };
     let blacklist: Vec<String> = crate::atlas::strings(&facts["blacklisted"]).unwrap_or_default();
     let mut first = true;
     // SPEC "Runtime preflight": the machine's own Python 2 programs, and the last release that still ships Python 2
@@ -1048,7 +1089,7 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
             .ok_or(format!("adapters/{fam}.toml has no hardware.{h}.boot_mib"))?;
         let k = route_kernels.len();
         let keeps_all = keep == "autoremove" && keep_all_to.is_some_and(|to| pos(h).is_some_and(|i| i <= to));
-        let kept: Vec<(String, u64)> = match (keep, k) {
+        let mut kept: Vec<(String, u64)> = match (keep, k) {
             _ if keeps_all => [box_all.clone(), route_kernels.clone()].concat(),
             // the running kernel is kept on the first hop anyway: count it once
             ("running", 0) if running_found => [box_running.clone(), idle_owned.clone()].concat(),
@@ -1059,6 +1100,7 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
             ("autoremove", _) => route_kernels[k - 2..].to_vec(),
             _ => return Err(format!("adapters/{fam}.toml: unknown hardware.old_kernels {keep:?}")),
         };
+        kept.extend(transit_kernels(h)?);
         let kept_mib: u64 = kept.iter().map(|k| k.1).sum();
         let room = total.saturating_sub(other + kept_mib);
         if separate && room < need_boot {
@@ -1856,6 +1898,19 @@ mod tests {
         assert!(p.contains("centos7's kernel (32 MiB)"), "{p}");
     }
 
+    /// The alma9 hop's rpm.transit leaves EL8's kernel in /boot beside the running EL7 one and EL9's
+    #[test]
+    fn el_counts_the_transit_kernel() {
+        let full: Vec<&str> = LEVEL_FEATURES.concat();
+        let c7 = [("3.10.0-1160.el7.x86_64", 30)];
+        // 4 other + 30 running + 38 transit + 70 alma9
+        let v = verdict("centos7-to-alma10", &with_boot(machine(&full, true, vec![]), 142, &c7));
+        assert_eq!(v["hops"][0]["ok"], true, "{v:#}");
+        let v = verdict("centos7-to-alma10", &with_boot(machine(&full, true, vec![]), 141, &c7));
+        let p = v["hops"][0]["problems"][0].as_str().unwrap();
+        assert!(p.contains("alma8's transit kernel (38 MiB)"), "{p}");
+    }
+
     /// EL's kernel_before drops the machine's rescue image and no hop builds another: a CentOS 7 machine's 63 MiB
     /// rescue image doesn't count against alma10's kernel beside alma9's.
     #[test]
@@ -1868,15 +1923,15 @@ mod tests {
             m["boot_dir"]["rescue_mib"] = json!(63);
             m
         };
-        // alma10: 4 other + alma9's kernel 70 + its own 75
-        let v = verdict("centos7-to-alma10", &rescued(149));
+        // alma9: 4 other + the running kernel 45 + EL8's transit kernel 38 + its own 70 (alma10 needs less: 149)
+        let v = verdict("centos7-to-alma10", &rescued(157));
         assert_eq!(v["ok"], true, "{v:#}");
-        let v = verdict("centos7-to-alma10", &rescued(148));
-        assert_eq!(v["lands_on"], "alma9", "{v:#}");
-        let p = v["hops"][1]["problems"][0].as_str().unwrap();
+        let v = verdict("centos7-to-alma10", &rescued(156));
+        assert_eq!(v["lands_on"], "centos7", "{v:#}");
+        let p = v["hops"][0]["problems"][0].as_str().unwrap();
         assert!(p.contains("with 4 MiB of other files"), "{p}");
         // GRUB legacy boots the rescue image by default: kernel_before keeps it
-        let mut kept = rescued(149);
+        let mut kept = rescued(157);
         kept["boot_dir"]["rescue_default"] = json!(true);
         assert_eq!(verdict("centos7-to-alma10", &kept)["lands_on"], "centos7");
         let conf =
