@@ -15,4 +15,4 @@ author = "claude-opus-5-5 medium (dep-lab guided run A)"
 curated_by = "claude (wend port to typed ops)"
 source = "dep-lab centos/fixes-v3.json: a10-httpd-php-config"
 note = "Changes PHP's default for every script on the box back to the pre-8.1 one. Right for old mysqli code that checks return values; code written for 8.1+ that expects exceptions should not have this."
-fires_on = ["el/centos5-web", "el/centos7-lamp"]
+fires_on = ["el/centos5-web", "el/centos7-lamp", "el/centos8-lamp"]

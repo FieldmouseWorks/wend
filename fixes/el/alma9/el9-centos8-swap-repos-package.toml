@@ -1,0 +1,23 @@
+# Discovered by Claude on el/centos8-lamp.
+schema = "wend.fix/0"
+family = "el"
+hop = "alma9"
+when = { installed = "centos-linux-repos" }
+restores = ["pkgdb"]
+adds = []
+
+[[post]]
+op = "remove"
+packages = ["centos-linux-repos", "centos-gpg-keys"]
+purge = true
+
+[[post]]
+op = "install"
+packages = ["almalinux-repos"]
+
+[meta]
+name = "el9-centos8-swap-repos-package"
+author = "claude-code / opus 5.5 (agent)"
+found_on = "el/centos8-lamp"
+fires_on = ["el/centos8-lamp"]
+reason = "rpm.swap-release installs almalinux-release with --nodeps, so its almalinux-repos dependency is missing, and CentOS 8's centos-linux-repos (which needs release 8) stays behind. Replace CentOS's repos package (and the gpg keys only it needs) with AlmaLinux's."

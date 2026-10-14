@@ -1,0 +1,93 @@
+# Every fix is pinned by content id. ./wend check --repin after editing fixes.
+schema = "wend.route/0"
+family = "el"
+arch = "x86_64"
+from = "centos8"
+to = "alma10"
+hops = ["alma9", "alma10"]
+finish = { prune_obsolete = false }
+
+[[fixes]]
+id = "sha256:04c1cfe5d78197da808910f9afb218f53286cee79c9dba4192d772bd7ba35b40"
+name = "el9-centos8-swap-release"
+
+[[fixes]]
+id = "sha256:73acc8324fd1db83504a175c1fd293e5010f183c2c48b9200dfd7903accdbcde"
+name = "mariadb-slow-shutdown-alma9"
+
+[[fixes]]
+id = "sha256:f8cd106d8585a364704f76301312db8bde4ebc9cc84713e2dbd3b31190b93e3c"
+name = "el9-php-fpm-stack"
+
+[[fixes]]
+id = "sha256:539a3a37c796947becb310ede7def08657e2681c30ca31d69e8a03ae3710364e"
+name = "el9-mod-ssl"
+
+[[fixes]]
+id = "sha256:a6ba72c3702a5918b725303fb0871a3a50804fb01992f1069cb5164cf37febfb"
+name = "el9-php-gd"
+
+[[fixes]]
+id = "sha256:01021746715819d50c528760afd6689e3185deabbec320bffde13791cc11e56f"
+name = "el9-php-mbstring"
+
+[[fixes]]
+id = "sha256:5ba8445d57679f7eef5794e4dda7f855a95a7ee8a6dd196e0b4720724abda483"
+name = "el9-php-xml"
+
+[[fixes]]
+id = "sha256:f4341598b841b3e004c75aca526d92da77a6997f6164bc1b44423eb82f55c36a"
+name = "el9-mariadb-server"
+
+[[fixes]]
+id = "sha256:d99088da93a73b9606892e9b835938c7598c86e33c3918d7df079664690c310a"
+name = "el9-ssh-host-keys"
+
+[[fixes]]
+id = "sha256:e5628318d9da0c87e659f4d2316a01e2bb78ab5a2e4037f81e4edf2c49e1dfa5"
+name = "el9-mariadb-config"
+
+[[fixes]]
+id = "sha256:c5de001649525a86c2727b966232869401546ceb6cd0e982e39ec46ceb3fecf9"
+name = "el9-httpd-config"
+
+[[fixes]]
+id = "sha256:645af92e570ed65e10a8d48297fcc9012a6a2e7723cceb4eac2084a73a27522d"
+name = "el9-carry-boot-services"
+
+[[fixes]]
+id = "sha256:556ad7e8b1bfbbabb4c90f12396901dee97680bbb101e0854b1a31e628c1783d"
+name = "el9-enable-php-fpm"
+
+[[fixes]]
+id = "sha256:c1fb16715be095a9c4da5f4d1d32632118e80929ab1ef9d5e6bf9b1ccc85b768"
+name = "el10-network-keyfiles"
+
+[[fixes]]
+id = "sha256:78137ec7ec6f5a60306d6a0e9fc96233b3c27300458e41ff1e13ca6e00ddd207"
+name = "mariadb-slow-shutdown-alma10"
+
+[[fixes]]
+id = "sha256:9f480040978dfb8e301d1b399f32217d7ff38e0f8a2cc14c6ac08f0ea1cb613d"
+name = "el10-mariadb-upgrade"
+
+[[fixes]]
+id = "sha256:e149cac8858a9a4c42573ba0795f980b0154f1ab8587a9077a8011b0c04d5ee8"
+name = "el10-httpd-php-config"
+
+[[fixes]]
+id = "sha256:29a9351abc67c221a62927b21833dc85aaab6a5ac8b9d5ebdf52adf4248b1b62"
+name = "php81-mysqli-report-off"
+
+[[fixes]]
+id = "sha256:748edb35d2c7568583fec3585e3b0526eac7e9a8921924976f63829b297496c1"
+name = "el10-drop-el8-iptables-ebtables"
+
+[[fixes]]
+id = "sha256:9875e810ba3549eeb6009d103ca01a2f302cd0a3e4d9ad7e6f59bbb7ea534e29"
+name = "el9-centos8-swap-repos-package"
+
+[meta]
+name = "centos8-to-alma10"
+summary = "CentOS 8.5 to AlmaLinux 10, straight to EL9 with EL8's own dnf, proven on a LAMP box that carries EPEL"
+note = "Starts from boxes installed natively on CentOS 8.5 and carries EPEL along. CentOS 8 is never a landing release: the first hop goes straight to EL9 with EL8's own dnf distro-sync, after el9-centos8-swap-release trades the release package by hand and el9-centos8-swap-repos-package replaces CentOS's repos package. From EL9 on it reuses the CentOS 7 route's rungs. The owner's php.ini and httpd.conf changes are not carried (wend#54). Container tier only so far: no real-VM proof yet."
