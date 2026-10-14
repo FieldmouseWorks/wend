@@ -431,6 +431,12 @@ for name, doc, want in (("an Ubuntu role only bash parses", {**tweb, "roles": {*
     errs = check.box_shell_errors(doc)
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
+try:
+    check.box_shell_errors({**web, "roles": ["x"], "vm": {"live": ["x"]}})
+    print("passed  box_shell_errors leaves non-table roles and [vm].live to check_box")
+except Exception as e:
+    print(f"WRONG   box_shell_errors crashed on non-table roles or [vm].live: {e!r}")
+    bad += 1
 # the VM installer's pocket proxy: the release pocket always, -updates/-security/-backports only when the box asks ([vm].pockets)
 import http.server as _hs  # noqa: E402
 import threading as _th  # noqa: E402

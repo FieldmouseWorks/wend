@@ -490,12 +490,16 @@ def check_box(doc, adapters, where):
 # A box's shell strings fail only once a box is installed if they don't parse, so parse them here. [vm].live runs over
 # ssh in root's login shell, bash. customize, start_hook and the roles run under /bin/sh, which is bash on EL and dash
 # on Debian and Ubuntu, so those get dash too there.
+def _table(x):
+    return x if isinstance(x, dict) else {}  # a malformed one is check_box's error to report, not a crash here
+
+
 def box_shell_errors(doc):
     vm = doc.get("vm", {}) if isinstance(doc.get("vm", {}), dict) else {}
     sh = ("bash", "dash") if doc.get("family") in ("debian", "ubuntu") else ("bash",)
     named = [("customize", doc.get("customize"), sh), ("start_hook", doc.get("start_hook"), sh)] + \
-        [(f"role {k}", v, sh) for k, v in (doc.get("roles") or {}).items()] + \
-        [(f"[vm].live {k}", v, ("bash",)) for k, v in (vm.get("live") or {}).items()]
+        [(f"role {k}", v, sh) for k, v in _table(doc.get("roles")).items()] + \
+        [(f"[vm].live {k}", v, ("bash",)) for k, v in _table(vm.get("live")).items()]
     errs = []
     for name, s, shells in named:
         if not isinstance(s, str):
