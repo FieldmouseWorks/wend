@@ -543,7 +543,9 @@ def start_units(app, plan, release):
         f"echo \"wend-{app}:$S:{SUBID_SIZE}\" >> /etc/subuid; echo \"wend-{app}:$S:{SUBID_SIZE}\" >> /etc/subgid; fi",
         f"K=$(( ($S - {SUBID_BASE}) / {SUBID_SIZE} )); MU=$(( $S + $U )); MG=$(( $S + $G ))",
         # the mapped ids get a host user and group, wend-<app>: systemd won't take a SocketUser= with no passwd
-        # entry (252 on EL9: status=217/USER), and ps and ls name the shelter instead of a bare number
+        # entry (252 on EL9: status=217/USER), and ps and ls name the shelter instead of a bare number. -l: no
+        # lastlog/faillog record, which at a uid past 2^30 makes /var/log/lastlog a ~300 GB sparse file that any
+        # copy without --sparse (wend's own snapshots among them) fills the disk with
         f"if getent group wend-{app} >/dev/null; then [ \"$(getent group wend-{app} | cut -d: -f3)\" = $MG ] || "
         f"{{ echo 'group wend-{app} exists with another gid'; exit 1; }}; "
         f"elif getent group $MG >/dev/null; then echo \"gid $MG is taken by $(getent group $MG | cut -d: -f1)\"; exit 1; "
@@ -551,7 +553,7 @@ def start_units(app, plan, release):
         f"if getent passwd wend-{app} >/dev/null; then [ \"$(id -u wend-{app})\" = $MU ] || "
         f"{{ echo 'user wend-{app} exists with another uid'; exit 1; }}; "
         f"elif getent passwd $MU >/dev/null; then echo \"uid $MU is taken by $(getent passwd $MU | cut -d: -f1)\"; exit 1; "
-        f"else useradd -r -u $MU -g wend-{app} -M -d / -s /sbin/nologin -c 'wend shelter {app}' wend-{app}; fi",
+        f"else useradd -r -l -u $MU -g wend-{app} -M -d / -s /sbin/nologin -c 'wend shelter {app}' wend-{app}; fi",
         f"mkdir -p /etc/wend/shelter /etc/tmpfiles.d /run/wend/shelter/{app}",
         _heredoc(f"/etc/wend/shelter/{app}.nft",
                  hdr + f"# Egress for the shelter's network (10.90.$K.0/24): replies, DNS to its gateway, the plan's egress.\n"
