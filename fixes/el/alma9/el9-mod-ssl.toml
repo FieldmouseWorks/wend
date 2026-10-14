@@ -14,4 +14,4 @@ packages = ["mod_ssl"]
 name = "el9-mod-ssl"
 author = "claude-code / opus 5.5 (agent, hand-written)"
 note = "On EL8 mod_ssl is a module stream package (httpd:2.4 or php:7.2), and the EL8 pass-through of rpm.transit enables no streams, so its distro-sync erases it. Nothing brings it back on EL9; this installs EL9's own."
-fires_on = ["el/centos7-lamp"]
+fires_on = ["el/centos7-lamp", "el/centos8-lamp"]
