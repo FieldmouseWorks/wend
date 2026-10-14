@@ -431,6 +431,11 @@ for name, doc, want in (("an Ubuntu role only bash parses", {**tweb, "roles": {*
     errs = check.box_shell_errors(doc)
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
+for name, roles in (("[roles] as a list", ["x"]), ("[roles] as a string", "x"), ("a role that isn't a string", {"x": 1}),
+                    ("an empty role", {"x": " "})):
+    errs = check.check_box({**tweb, "roles": roles}, adapters, "boxes/ubuntu/trusty-web/box.toml")
+    print(("refused " + name) if errs else f"WRONG   {name} passed")
+    bad += not errs
 try:
     check.box_shell_errors({**web, "roles": ["x"], "vm": {"live": ["x"]}})
     print("passed  box_shell_errors leaves non-table roles and [vm].live to check_box")

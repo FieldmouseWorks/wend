@@ -457,6 +457,9 @@ def check_box(doc, adapters, where):
     for k in ("packages", "customize", "roles"):
         if k not in doc:
             errs.append(f"{where}: missing {k}")
+    if "roles" in doc and not (isinstance(doc["roles"], dict) and all(isinstance(v, str) and v.strip()
+                                                                       for v in doc["roles"].values())):
+        errs.append(f"{where}: [roles] is a table of shell strings")
     if not set(doc.get("isolate", [])) <= set(doc.get("roles", {})):
         errs.append(f"{where}: isolate names roles the box does not have")
     vm = doc.get("vm", {})  # tools/vm.py (SPEC "VM tier")
