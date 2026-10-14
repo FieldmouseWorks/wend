@@ -46,4 +46,4 @@ name = "el9-carry-boot-services"
 author = "claude (wend#6)"
 source = "wend#6"
 note = "Enables each unit again whose service started on the original box (the record from el7-carry-boot-services) or is enabled now: the reinstalls on this hop (el9-php-fpm-stack, el9-mariadb-server) drop their enablement links. php-fpm is el9-enable-php-fpm."
-fires_on = ["el/centos5-dns", "el/centos5-web", "el/centos7-lamp", "el/centos7-pyapp"]
+fires_on = ["el/centos5-dns", "el/centos5-web", "el/centos7-lamp", "el/centos7-pyapp", "el/centos8-lamp"]

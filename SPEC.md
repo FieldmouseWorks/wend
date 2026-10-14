@@ -775,6 +775,9 @@ digits). Effect, for each:
 - `/etc/systemd/network/10-wend-<DEVICE>.link` pins the interface name to the profile's `HWADDR`. Once the ifcfg
   file is gone, nothing else keeps an `eth0` from becoming `ens3`, and the keyfile is bound to the old name and the
   MAC. (Renaming several NICs to kernel names like `eth1` can race the kernel; only single-NIC boxes are proven.)
+  The pin is written even when an earlier `.link` already pins exactly that MAC to that name (EL8's installer writes
+  `10-anaconda-ifname-<DEVICE>.link` when booted with `ifname=`): that one wins and does the same, and ours takes
+  over if it goes.
 - the ifcfg file moves to `SAVED`.
 
 The files are read as `KEY=VALUE` lines and never executed; a value that isn't one word, or holds `$`, a backquote or
@@ -792,17 +795,25 @@ The files are read as `KEY=VALUE` lines and never executed; a value that isn't o
 - `ONBOOT`, `IPV6INIT` (else `/etc/sysconfig/network`'s), `IPV6_AUTOCONF` (`no` is `link-local`), as NetworkManager's
   booleans (`yes`, `true`, `t`, `y`, `1` and their opposites);
 - `NM_CONTROLLED` (`no` fails: EL9's NetworkManager left that device unmanaged, which a keyfile can't say);
-- `DHCPCLASS` and `USERCTL` are inert (the plugin doesn't read them); wend still requires `USERCTL` to be a boolean.
+- `DHCPCLASS` and `USERCTL` are inert (the plugin doesn't read them); wend still requires `USERCTL` to be a boolean;
+- what EL8's installer adds, writing through the plugin: `DEFROUTE=no` as `ipv4.never-default` (a set `GATEWAYDEV`
+  overrides it either way), `IPV4_FAILURE_FATAL=yes` as `ipv4.may-fail no`, and, with IPv6 on, `IPV6_DEFROUTE=no` as
+  `ipv6.never-default`, `IPV6_FAILURE_FATAL=yes` as `ipv6.may-fail no` and `IPV6_ADDR_GEN_MODE` (`stable-privacy`
+  or `eui64`, in that case; absent, `default-or-eui64`, as the plugin reads it) as `ipv6.addr-gen-mode`; all of them are booleans (or that mode) even with IPv6 off. `PROXY_METHOD`
+  must be `none` and `BROWSER_ONLY` `no`, the defaults: a proxy fails.
 
 In `/etc/sysconfig/network`, `GATEWAY`, `GATEWAYDEV` and `IPV6INIT` are read as above, and `NETWORKING`,
 `NETWORKING_IPV6`, `HOSTNAME`, `NOZEROCONF` and `NISDOMAIN` are left as they are: none of them is part of a profile.
 
 Any other setting in either file (bridges, VLANs, bonds, aliases, IPv6 addresses, `RES_OPTIONS`), a keyfile of the
-same name or a `10-wend-<DEVICE>.link` already there, any `.link` in `/etc/systemd/network`, `/run/systemd/network`,
-`/usr/local/lib/systemd/network`, `/usr/lib/systemd/network` or `/lib/systemd/network` whose name sorts before the
-pin's (systemd applies only the first `.link` that matches, so it could name the NIC something else), two profiles
-that pin one name to different MACs or one MAC to different names, a `route-`, `route6-`, `rule-`, `rule6-` or `keys-`
-file beside a profile, or a value that isn't an address, MAC, boolean or plain name fails the step. Every profile is
+same name or a `10-wend-<DEVICE>.link` already there, two profiles that pin one name to different MACs or one MAC to
+different names, a `route-`, `route6-`, `rule-`, `rule6-` or `keys-` file beside a profile, or a value that isn't an
+address, MAC, boolean or plain name fails the step. So does any `.link` in `/etc/systemd/network`,
+`/run/systemd/network`, `/usr/local/lib/systemd/network`, `/usr/lib/systemd/network` or `/lib/systemd/network` whose
+name sorts before the pin's (systemd applies only the first `.link` that matches, so it could name the NIC something
+else), unless it only pins one MAC to one name (`[Match] MACAddress=` and `[Link] Name=`, nothing else, and no
+`<name>.link.d` drop-ins in any of those directories) and that is either this profile's MAC and name or another MAC
+and another name. Every profile is
 checked and serialized by `nmcli` before the first file is written, so a failure, including `nmcli` missing or
 refusing a profile, changes nothing. Reference: `python3 -` with the source in `tools/net_ifcfg_to_keyfile.py`, sent
 as a here-document; `tools/test_net_ifcfg.py` runs it on fixture roots.
