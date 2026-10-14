@@ -361,6 +361,31 @@ for line, want in (("30 2 1,15 * 1 /x", ["*-*-01,15 02:30:00", "Mon *-*-* 02:30:
     got = shelter.cron_calendar(line)[0]
     print(("passed  " if got == want else f"WRONG   {got} ") + f"cron {line!r}")
     bad += got != want
+# the VM tier's confinement probe and SELinux window (tools/vm.py) are shell for the guest's bash: they must parse, and
+# a destination the plan opted in to can't stand for one the shelter must not reach
+import subprocess as _sp  # noqa: E402
+_pyplan = check.load_all()[3]["el/centos7-pyapp"]["shelter"]["billing"]
+for name, script in (("vm_probe", shelter.vm_probe("billing", _pyplan, "10.0.2.2:8085")),
+                     ("vm_probe, low port and egress", shelter.vm_probe("billing", {**_pyplan, "ports": ["0.0.0.0:80"],
+                                                                                    "egress": ["192.0.2.10:443"]},
+                                                                         "10.0.2.2:8085")),
+                     ("vm_enforce_on", shelter.vm_enforce_on("billing")), ("VM_ENFORCE_OFF", shelter.VM_ENFORCE_OFF)):
+    r = _sp.run(["bash", "-n"], input=script, text=True, capture_output=True)
+    print(("passed  " if r.returncode == 0 else f"WRONG   {r.stderr[:300]} ") + f"{name} parses")
+    bad += r.returncode != 0
+try:
+    shelter.vm_probe("billing", {**_pyplan, "egress": ["10.0.2.2:8085"]}, "10.0.2.2:8085")
+    print("WRONG   vm_probe took an opted-in destination as the one to refuse")
+    bad += 1
+except ValueError:
+    print("refused vm_probe with an opted-in destination as the one to refuse")
+_den = shelter.vm_denials("billing", "type=AVC msg=audit(1.2:3): avc:  denied  { connectto } for pid=9 comm=\"python\" "
+                          "scontext=system_u:system_r:container_t:s0:c1,c2 tcontext=system_u:system_r:unconfined_service_t:s0\n"
+                          "type=AVC msg=audit(1.2:4): avc:  denied  { read } for pid=7 comm=\"tuned\" scontext=system_u:"
+                          "system_r:tuned_t:s0 tcontext=system_u:object_r:var_t:s0")
+print(("passed  " if len(_den) == 1 and "connectto" in _den[0] else f"WRONG   {_den} ") +
+      "vm_denials keeps the shelter's denials only")
+bad += not (len(_den) == 1 and "connectto" in _den[0])
 # root_fs is one the box's start release's installer makes (releases.<release>.install.root_fs)
 lamp, trusty = check.load_all()[3]["el/centos7-lamp"], check.load_all()[3]["ubuntu/trusty-web"]
 for name, box, root_fs, want in (("[vm] root_fs xfs-v4 on CentOS 7", lamp, "xfs-v4", False),

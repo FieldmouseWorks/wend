@@ -1261,7 +1261,9 @@ Defaults, which the plan shows and the run records:
   an `ExecReload=` that loads the table again), and the shelter's unit has `BindsTo=`, `PartOf=` and `After=` on it (`BindsTo=` stops the shelter when the table goes; `PartOf=` starts it again when the table unit restarts). After a
   reboot the shelter doesn't start unless the table loaded. Restarting `nftables.service` restarts the table unit
   and, through `PartOf=`, the shelter with it, after the table is back. Reloading it (which runs `flush ruleset` on Debian and EL alike)
-  reloads the table unit right after, which puts the table back; between nftables' flush and that reload the
+  reloads the table unit right after, which puts the table back, and that reloads the shelter's unit
+  (`ReloadPropagatedFrom=`), whose `ExecReload=` is `podman network reload`, since the flush took netavark's port
+  forwarding too; between nftables' flush and that reload the
   shelter's egress is open for a moment, and the spec doesn't pretend it isn't. A hand-typed `nft flush ruleset` still drops the table under a running
   shelter, which systemd can't see; the spec doesn't claim otherwise. Runtime preflight records the TCP connections and
   listening sockets each sheltered program actually has (`/proc/<pid>/net/tcp*` matched to its socket inodes,
@@ -1365,7 +1367,24 @@ route itself causes.
   It proves nothing about confinement, and the run says so (`tier = "chroot"`, `confinement_proved = false`).
 - **VM tier (remi):** the real thing, and the only proof of confinement. centos7-pyapp to alma10 under podman, with
   SELinux enforcing, real reboots, and checks green after each hop. The same goes for a Debian bullseye-to-trixie
-  box (AppArmor) later.
+  box (AppArmor) later. `tools/vm.py replay` (as root, since the build takes a chroot) runs `shelter.build` and
+  `shelter.prove` exactly as the chroot walk does, on a chroot copy of the box at the route's start (the VM tier
+  shelters only from the start release so far), and copies the built shelter into the guest before the drop hop,
+  after checking that the guest's passwd and group lines for the app's user and every carried file are the ones the
+  lock was built from. The drop hop then runs `stop-native` and `start` in the guest like any other step, and after
+  that hop's reboot and every later one, besides the box's checks, the guest has to pass the confinement probe
+  (`shelter.vm_probe`): the table unit, the shelter and its timers enabled and active and the native unit and cron
+  line off; one `wend-<app>` range in `/etc/subuid` and `/etc/subgid`; the container running the image tagged with the
+  lock's digest; the program's host uids and gids the app's own plus the range's start; no capabilities beyond the
+  plan's, `no_new_privs`, and the `container_t` domain; the root and the code tree read-only, and a file it writes in a
+  data directory owned on the host by the app's own user (idmap); each port answering on its address and, for a
+  loopback one, not on the guest's own; a TCP listener the guest reaches (the mirror shim) refused from inside; and the
+  table and the published ports back after `systemctl reload nftables` and after a restart. The VM boxes install with
+  SELinux permissive, so then comes an enforcing window: `setenforce 1` (a guard sets permissive again after 15
+  minutes whatever happens), the shelter restarted, the box's checks again (none that passed may fail), the probe
+  again, then permissive, and no AVC denial in the window may touch the shelter (its domain, its files, its units).
+  The run's `shelters` say `tier = "vm"` and `confinement_proved` only when every hop from the drop hop on passed all
+  of that.
 
 ### What preflight says
 

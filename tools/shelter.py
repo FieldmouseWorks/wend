@@ -576,10 +576,13 @@ def start_units(app, plan, release):
         f"/etc/systemd/system/{unit}.service",
         hdr + f"[Unit]\nDescription=wend shelter {app} ({release} userland, unpatched)\n"
         f"Wants=network-online.target\nAfter=network-online.target {after}\n"
-        f"BindsTo={net}.service\nPartOf={net}.service\n" + "".join(f"Requires={s}\n" for s in sock_units) +
+        f"BindsTo={net}.service\nPartOf={net}.service\nReloadPropagatedFrom={net}.service\n" +
+        "".join(f"Requires={s}\n" for s in sock_units) +
         f"\n[Service]\nExecStartPre=-/usr/bin/podman network create --subnet 10.90.$K.0/24 wend-{app}\n" +
         import_pre(app) +
         f"ExecStart={podman_run(app, plan, f'wend-{app}', True, '$X')}\n"
+        # nftables' reload flushes the whole ruleset, netavark's port forwarding with it: put it back
+        f"ExecReload=/usr/bin/podman network reload wend-{app}\n"
         f"ExecStop=/usr/bin/podman stop -t 10 wend-{app}\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n"))
     timers = []
     for i, c in enumerate(plan.get("cron", [])):
@@ -664,3 +667,134 @@ def prove(box, app, plan, release, checks, isolate, release_file, passing, scrat
         raise Refused(f"the app's checks fail sheltered: {', '.join(failed)}\n" +
                       "\n".join(tail(h["checks"][c]["log"], 800) for c in failed))
     return h
+
+
+# ---------- the VM tier (tools/vm.py): confinement, on a real machine ----------
+
+def _native_interp(plan):
+    """Shell that sets PY to the interpreter of the app's own unit (left on disk, disabled, by stop-native)."""
+    return (f"X=$(for d in /etc/systemd/system /usr/lib/systemd/system; do [ -f $d/{plan['unit']} ] && "
+            f"sed -n 's/^ExecStart=//p' $d/{plan['unit']} && break; done | head -n1); PY=${{X%% *}}")
+
+
+def vm_probe(app, plan, outside):
+    """The VM tier's confinement probe (SPEC "Sheltering an app", Proof) for a started shelter, run in the guest after
+    every reboot from the drop hop on: the units, the native app off, the id range, the image by the lock's digest,
+    the program's host ids, capabilities, no_new_privs and SELinux domain, the read-only root and code tree, the data
+    directory written as the app's own host uid (idmap), ports on their address only, egress refused, and the egress
+    table and the published ports through an nftables reload and restart. `outside` is "address:port": a TCP
+    listener the guest itself reaches and the plan has no egress opt-in for. Prints `ok`/`FAIL` lines and `fact`
+    lines; exits 1 on any FAIL."""
+    oh, op = outside.rsplit(":", 1)
+    if outside in plan.get("egress", []) or not re.fullmatch(r"[0-9.]+", oh) or not op.isdigit():
+        raise ValueError(f"{outside!r} can't stand for a destination the shelter must not reach")
+    c, unit, net, user = f"wend-{app}", f"wend-shelter-{app}", f"wend-shelter-net-{app}", plan["user"]
+    timers = [f"{unit}-cron{i}.timer" for i in range(len(plan.get("cron", [])))]
+    ports = [p.rsplit(":", 1) for p in plan.get("ports", [])]
+    low = any(int(p) < 1024 for _, p in ports)
+    data = plan["data"][0]
+    up = ("up() { i=0; while [ $i -lt 60 ]; do systemctl is-active -q " + f"{unit}.service" + " && " +
+          " && ".join([f"t {a} {p}" for a, p in ports] or ["true"]) + " && return 0; sleep 2; i=$((i+1)); done; "
+          "return 1; }")
+    lines = [
+        "f=0; ok() { echo \"ok   $*\"; }; no() { echo \"FAIL $*\"; f=1; }; fact() { echo \"fact $1=$2\"; }",
+        "t() { timeout 5 bash -c \"exec 3<>/dev/tcp/$1/$2\" >/dev/null 2>&1; }",
+        up,
+        "SE=$(getenforce 2>/dev/null || echo none); fact selinux \"$SE\"",
+        f"i=0; while [ $i -lt 90 ] && ! systemctl is-active -q {unit}.service; do sleep 2; i=$((i+1)); done",
+        f"for u in {net}.service {unit}.service {' '.join(timers)}; do "
+        "if systemctl is-active -q $u && [ \"$(systemctl is-enabled $u 2>/dev/null)\" = enabled ]; then ok \"$u is enabled "
+        "and active\"; else no \"$u is $(systemctl is-enabled $u 2>&1), $(systemctl is-active $u 2>&1)\"; fi; done",
+        f"if [ \"$(systemctl is-enabled {plan['unit']} 2>/dev/null)\" != enabled ] && ! systemctl is-active -q "
+        f"{plan['unit']}; then ok 'the native {plan['unit']} is off'; else no 'the native {plan['unit']} still runs'; fi",
+    ] + [f"if crontab -l -u {cr['user']} 2>/dev/null | grep -Fqx '{cr['line']}'; then no 'the native cron line "
+         f"{i} is still live'; else ok 'the native cron line {i} is commented out'; fi"
+         for i, cr in enumerate(plan.get("cron", []))] + [
+        f"R=$(awk -F: '$1 == \"wend-{app}\" {{print $2 \":\" $3}}' /etc/subuid); "
+        f"RG=$(awk -F: '$1 == \"wend-{app}\" {{print $2 \":\" $3}}' /etc/subgid); fact subuid \"$R\"",
+        f"if [ -n \"$R\" ] && [ \"$R\" = \"$RG\" ] && [ \"${{R#*:}}\" = {SUBID_SIZE} ] && "
+        f"[ \"$(grep -c '^wend-{app}:' /etc/subuid)\" = 1 ]; then ok \"one id range, $R, the same for groups\"; "
+        "else no \"the id range: subuid '$R', subgid '$RG'\"; fi",
+        f"S=${{R%%:*}}; S=${{S:-0}}; U=$(id -u {user}); G=$(id -g {user})",
+        f"I=$(sed -n 's/^image = \"sha256:\\([0-9a-f]\\{{64\\}}\\)\"$/\\1/p' {SHELTER}/{app}/shelter.lock)",
+        f"fact lock \"$(sha256sum {SHELTER}/{app}/shelter.lock | cut -d' ' -f1)\"; fact image \"sha256:$I\"",
+        f"if [ -n \"$I\" ] && podman image exists localhost/wend-shelter-{app}:$I && [ \"$(podman inspect -f "
+        f"'{{{{.ImageName}}}}' {c} 2>/dev/null)\" = \"localhost/wend-shelter-{app}:$I\" ]; then ok \"{c} runs the image "
+        "tagged with the lock's digest\"; else no \"{c} isn't running localhost/wend-shelter-" + app + ":$I\"; fi",
+        f"P=$(podman inspect -f '{{{{.State.Pid}}}}' {c} 2>/dev/null); fact pid \"$P\"",
+        "if [ -z \"$P\" ] || [ \"$P\" = 0 ] || [ ! -r /proc/$P/status ]; then no 'no running process to inspect'; P=1; fi",
+        "IDS=$(awk '/^Uid:/ {print $2, $3, $4, $5}' /proc/$P/status); GIDS=$(awk '/^Gid:/ {print $2, $3, $4, $5}' "
+        "/proc/$P/status); fact uids \"$IDS\"; fact gids \"$GIDS\"",
+        "M=$((S + U)); MG=$((S + G)); if [ \"$IDS\" = \"$M $M $M $M\" ] && [ \"$GIDS\" = \"$MG $MG $MG $MG\" ]; then "
+        "ok \"the program runs as host uid $M, gid $MG (the app's ids in the range)\"; else no \"the program's host ids "
+        "are '$IDS' / '$GIDS', not $M / $MG\"; fi",
+        "CE=$(awk '/^CapEff:/ {print $2}' /proc/$P/status); CP=$(awk '/^CapPrm:/ {print $2}' /proc/$P/status); "
+        "CB=$(awk '/^CapBnd:/ {print $2}' /proc/$P/status); fact caps \"eff=$CE prm=$CP bnd=$CB\"",
+        # NET_BIND_SERVICE alone (bit 10) when a port is below 1024; nothing otherwise
+        f"W={'0000000000000400' if low else '0000000000000000'}",
+        "if { [ \"$CE\" = 0000000000000000 ] || [ \"$CE\" = $W ]; } && { [ \"$CP\" = 0000000000000000 ] || "
+        "[ \"$CP\" = $W ]; } && { [ \"$CB\" = 0000000000000000 ] || [ \"$CB\" = $W ]; }; then ok 'no capabilities "
+        "beyond the plan'; else no \"capabilities: eff $CE, prm $CP, bnd $CB\"; fi",
+        "if grep -q '^NoNewPrivs:[[:space:]]*1$' /proc/$P/status; then ok no_new_privs; else no 'no_new_privs is off'; fi",
+        "LAB=$(tr -d '\\0' < /proc/$P/attr/current 2>/dev/null); fact label \"$LAB\"",
+        "case \"$SE\" in Enforcing|Permissive) case \"$LAB\" in *:container_t:*) ok \"SELinux domain $LAB\";; "
+        "*) no \"the program's SELinux domain is '$LAB', not container_t\";; esac;; "
+        "*) no \"SELinux is $SE: nothing to confine with\";; esac",
+        _native_interp(plan),
+        f"w() {{ podman exec {c} $PY -c \"open('$1', 'w').close()\" >/dev/null 2>&1; }}",
+        "if w /wend-probe; then no 'the root is writable'; else ok 'the root is read-only'; fi",
+        f"if w {plan['code']}/wend-probe; then no 'the code tree is writable'; rm -f {plan['code']}/wend-probe; "
+        "else ok 'the code tree is read-only'; fi",
+        f"if w {data}/wend-probe; then O=$(stat -c %u:%g {data}/wend-probe); fact data_owner \"$O\"; "
+        f"if [ \"$O\" = \"$U:$G\" ]; then ok \"{data} is written as the app's own host ids (idmap)\"; else "
+        f"no \"a file written in {data} is owned by $O on the host, not $U:$G\"; fi; rm -f {data}/wend-probe; "
+        f"else no '{data} is not writable'; fi",
+        "H=$(ip -4 -o addr show scope global | awk '{split($4, a, \"/\"); print a[1]; exit}'); fact address \"$H\"",
+    ] + [f"if t {a} {p}; then ok 'published on {a}:{p}'; else no 'nothing answers on {a}:{p}'; fi" +
+         (f"; if [ -n \"$H\" ] && t $H {p}; then no \"{p} answers on $H too\"; else ok 'only on {a}:{p}'; fi"
+          if a.startswith("127.") else "") for a, p in ports] + [
+        f"if t {oh} {op}; then ok 'the guest reaches {outside} (the control)'; else no \"the guest can't reach {outside}, "
+        "so refusing it proves nothing\"; fi",
+        f"eg() {{ podman exec {c} $PY -c \"import socket; socket.create_connection(('{oh}', {op}), 5)\" >/dev/null 2>&1; }}",
+        f"if eg; then no 'the shelter reaches {outside}, which the plan never opted in to'; else ok 'egress to "
+        f"{outside} refused'; fi",
+        f"if nft list table inet wend_shelter_{app} >/dev/null 2>&1; then ok 'the egress table is loaded'; else "
+        "no 'no egress table'; fi",
+        "systemctl start nftables.service >/dev/null 2>&1; if systemctl reload nftables.service; then sleep 3; "
+        f"if nft list table inet wend_shelter_{app} >/dev/null 2>&1; then ok 'the egress table is back after an "
+        "nftables reload'; else no 'an nftables reload dropped the egress table'; fi; "
+        "if up; then ok 'the shelter answers after the reload'; else no 'the shelter stopped answering after an nftables "
+        "reload'; fi; if eg; then no 'egress opened after the reload'; else ok 'egress still refused after the reload'; "
+        "fi; else no 'nftables.service would not reload'; fi",
+        f"if systemctl restart nftables.service; then sleep 3; if nft list table inet wend_shelter_{app} >/dev/null 2>&1 "
+        "&& up; then ok 'the table and the shelter are back after an nftables restart'; else no 'after an nftables "
+        "restart: table or shelter missing'; fi; else no 'nftables.service would not restart'; fi",
+        "exit $f"]
+    return "\n".join(lines) + "\n"
+
+
+def vm_enforce_on(app):
+    """SELinux enforcing for the length of a confinement window (the VM boxes install permissive, and the route itself
+    isn't what's being proved): a guard puts permissive back after 15 minutes whatever happens, then the shelter is
+    restarted under enforcing (restarting the table unit restarts it, PartOf=)."""
+    return ("case \"$(getenforce 2>/dev/null)\" in Enforcing|Permissive) ;; *) echo 'SELinux is disabled'; exit 1;; esac\n"
+            "setsid sh -c 'sleep 900; setenforce 0' </dev/null >/dev/null 2>&1 & echo $! > /run/wend-enforce-guard\n"
+            "date +%s > /run/wend-enforce-since\n"
+            "if [ -f /var/log/audit/audit.log ]; then wc -c < /var/log/audit/audit.log; else echo 0; fi > /run/wend-avc-from\n"
+            "setenforce 1 && [ \"$(getenforce)\" = Enforcing ] || { echo 'setenforce 1 failed'; exit 1; }\n"
+            f"systemctl restart wend-shelter-net-{app}.service || exit 1\n"
+            f"i=0; while [ $i -lt 90 ] && ! systemctl is-active -q wend-shelter-{app}.service; do sleep 2; i=$((i+1)); done\n"
+            f"systemctl is-active wend-shelter-{app}.service\n")
+
+
+VM_ENFORCE_OFF = (
+    "setenforce 0; kill $(cat /run/wend-enforce-guard 2>/dev/null) 2>/dev/null; echo \"selinux now $(getenforce)\"\n"
+    "if [ -f /var/log/audit/audit.log ]; then tail -c +$(( $(cat /run/wend-avc-from) + 1 )) /var/log/audit/audit.log; "
+    "else journalctl -k --since @$(cat /run/wend-enforce-since) 2>/dev/null; fi | grep 'avc: .*denied' | tail -n 60\n"
+    "rm -f /run/wend-enforce-guard /run/wend-enforce-since /run/wend-avc-from; true\n")
+
+
+def vm_denials(app, out):
+    """The AVC denials of an enforcing window that touch the shelter: its domain, its files, its units."""
+    return [x for x in out.splitlines() if "avc:" in x and
+            re.search(rf"container_t|container_file_t|wend-shelter-{app}|wend-{app}|/run/wend/", x)]

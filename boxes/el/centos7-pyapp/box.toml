@@ -30,7 +30,10 @@ mysql -uroot -e "create database app; create table app.t (msg varchar(64)); inse
 mysqladmin -uroot shutdown
 sleep 3
 # the owner's app: its own user, code under /opt, data under /var/lib, a unit of its own, a job in its crontab
-useradd -r -d /var/lib/billing -s /sbin/nologin billing
+# fixed ids, below the range useradd hands out (999 down): the VM tier builds the shelter in a chroot copy of this box,
+# and its passwd and group lines have to be the installed box's too
+groupadd -r -g 600 billing
+useradd -r -u 600 -g billing -d /var/lib/billing -s /sbin/nologin billing
 mkdir -p /opt/billing /var/lib/billing
 cat > /opt/billing/app.py <<'EOF'
 #!/usr/bin/python
@@ -140,3 +143,16 @@ cron = "test -x /usr/sbin/crond || { echo 'no crond'; exit 1; }; mkdir -p /var/r
 current = "M=$(grep -o '[0-9][0-9]*' /etc/redhat-release | head -n1); for f in /usr/sbin/sshd /usr/sbin/crond $(ls /usr/libexec/mariadbd /usr/libexec/mysqld /usr/sbin/mariadbd 2>/dev/null | head -n1); do p=$(rpm -qf --qf '%{NAME}-%{VERSION}-%{RELEASE}' \"$(readlink -f $f)\" 2>/dev/null); echo \"$p\" | grep -qE \"[._]el${M}([._]|$)\" || { echo \"$f comes from '$p', not a release-$M package\"; exit 1; }; done"
 network = "M=$(grep -o '[0-9][0-9]*' /etc/redhat-release | head -n1); if [ $M -ge 10 ]; then K=$(grep -lx 'interface-name=eth0' /etc/NetworkManager/system-connections/*.nmconnection 2>/dev/null | head -n1); [ -n \"$K\" ] && [ \"$(stat -c %a \"$K\")\" = 600 ] && awk '/^\\[/ {s = $0} s == \"[ipv4]\" && $0 == \"method=manual\" {m = 1} END {exit !m}' \"$K\" && grep -iqx 'mac-address=52:54:00:12:34:56' \"$K\" && ! grep -qx 'autoconnect=false' \"$K\" && grep -iqx 'MACAddress=52:54:00:12:34:56' /etc/systemd/network/10-wend-eth0.link && grep -qx 'Name=eth0' /etc/systemd/network/10-wend-eth0.link && grep -Eqx 'address1=10\\.0\\.2\\.20/24(,10\\.0\\.2\\.2)?' \"$K\" && grep -Eqx '(address1=10\\.0\\.2\\.20/24,10\\.0\\.2\\.2|gateway=10\\.0\\.2\\.2)' \"$K\" || { echo 'eth0 has no 0600 autoconnecting keyfile for its MAC with the static 10.0.2.20/24 via 10.0.2.2, or no .link pinning eth0 to that MAC'; exit 1; }; else grep -qx 'IPADDR=10.0.2.20' /etc/sysconfig/network-scripts/ifcfg-eth0 || { echo 'ifcfg-eth0 lost the static 10.0.2.20'; exit 1; }; fi"
 services = "for p in $(ls /etc/rc.d/init.d/* /usr/lib/systemd/system/*.service 2>/dev/null | xargs rpm -qf --qf '%{NAME}\\n' 2>/dev/null | grep -v 'not owned' | sort -u); do case $p in dbus-daemon|dbus-broker|hostname|readonly-root|netconsole-service|systemd|systemd-udev|systemd-container) continue;; esac; f=$(echo $p | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 's/^mariadb$/mysql/' -e 's/^cronie$/vixie/' -e 's/^openssh$/openssh/'); grep -qxs \"$f\" /var/lib/wend-expected-families /var/lib/wend/added-families && continue; for c in $p $(rpm -q --provides $p | awk '{print $1}'); do rpm -q --whatrequires \"$c\" >/dev/null 2>&1 && continue 2; done; echo \"unexpected new service package: $p\"; exit 1; done"
+
+# The VM tier (tools/vm.py): the db, app and cron roles start their own daemons, so on a running box they're the live
+# checks below, against what systemd started. app and cron reach billing whichever way the box runs it: its own unit
+# and crontab line, or the shelter's unit and timer (whose confinement the VM tier probes on its own).
+[vm]
+ssh_port = 2222
+skip = ["db", "app", "cron"]
+
+[vm.live]
+daemons = '''for i in $(seq 1 30); do ok=1; for p in master crond sshd; do pgrep -x $p >/dev/null || ok=0; done; pgrep -x 'mysqld|mariadbd' >/dev/null || ok=0; [ $ok = 1 ] && exit 0; sleep 2; done; for p in master crond sshd; do pgrep -x $p >/dev/null || echo "$p is not running"; done; pgrep -x 'mysqld|mariadbd' >/dev/null || echo 'no mysqld or mariadbd is running'; exit 1'''
+db = '''for i in $(seq 1 30); do (mysql -uapp -papppw -N -e 'select msg from app.t' 2>/dev/null || mariadb -uapp -papppw -N -e 'select msg from app.t' 2>/dev/null) | grep -q 'row from 2017' && exit 0; sleep 2; done; exit 1'''
+app = '''T=probe$$; for i in $(seq 1 60); do curl -s "http://127.0.0.1:8080/row?t=$T" > /tmp/app.out 2>/dev/null && grep -q '"msg": "row from 2017"' /tmp/app.out && break; sleep 2; done; grep '"msg": "row from 2017"' /tmp/app.out && grep -q "/row?t=$T 200" /var/lib/billing/hits.log || { echo 'no row over HTTP from 127.0.0.1:8080, or the request is not in the app log'; head -c 400 /tmp/app.out; systemctl status billing wend-shelter-billing 2>&1 | tail -n 20; exit 1; }'''
+cron = '''C=$(crontab -l -u billing 2>/dev/null | grep -v '^[[:space:]]*#' | awk 'NF >= 6 {for (i = 6; i <= NF; i++) printf "%s%s", $i, (i < NF ? " " : "\n"); exit}'); rm -f /var/lib/billing/nightly.out; if [ -n "$C" ]; then runuser -u billing -- sh -c "$C" >/tmp/cron.log 2>&1; else T=$(ls /etc/systemd/system/timers.target.wants/wend-shelter-billing-*.timer 2>/dev/null | head -n1); [ -n "$T" ] || { echo 'nothing runs the nightly job: no crontab line and no timer'; exit 1; }; T=$(basename $T); systemctl is-active -q $T || { echo "$T is not active"; exit 1; }; systemctl start ${T%.timer}.service >/tmp/cron.log 2>&1; fi; grep 'rows=1 last=row from 2017' /var/lib/billing/nightly.out || { echo "ran: ${C:-the timer's service}"; tail -n 8 /tmp/cron.log; exit 1; }'''
