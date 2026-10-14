@@ -419,13 +419,15 @@ for name, box, want in (("[vm] pockets on a release_pocket_only release", {**twe
     errs = check.check_box(box, adapters, "boxes/ubuntu/trusty-web/box.toml")
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
-# roles run under /bin/sh: dash on Debian and Ubuntu, bash on EL
+# roles run under /bin/sh: dash on Debian and Ubuntu, bash on EL (the dash parse runs only where dash is installed)
+import shutil as _sh  # noqa: E402
+_dash = bool(_sh.which("dash"))
 for name, doc, want in (("an Ubuntu role only bash parses", {**tweb, "roles": {**tweb["roles"], "x": "[[ -n $x ]] && cat <<< y"}},
-                         True),
+                         _dash),
                         ("an EL role only bash parses", {**web, "roles": {**web["roles"], "x": "[[ -n $x ]] && cat <<< y"}},
                          False),
                         ("an EL role bash can't parse", {**web, "roles": {**web["roles"], "x": "echo \"${C:-it's}\""}}, True),
-                        ("an Ubuntu start_hook only bash parses", {**tweb, "start_hook": "cat <<< y"}, True)):
+                        ("an Ubuntu start_hook only bash parses", {**tweb, "start_hook": "cat <<< y"}, _dash)):
     errs = check.box_shell_errors(doc)
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
