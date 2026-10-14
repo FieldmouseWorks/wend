@@ -1271,8 +1271,8 @@ Defaults, which the plan shows and the run records:
   working app. A connection that only happens at 3 a.m. won't be seen, and the plan says so. Ports the program
   listens on are served on the same host address: `0.0.0.0` is published (`-p`). On `127.0.0.1` the program
   listens on the shelter's own loopback, which podman's forwarding never reaches, so a wend socket unit
-  (`wend-shelter-port-<app>-<n>.socket`) listens on the host's `127.0.0.1` and its `systemd-socket-proxyd` joins
-  the running shelter's network namespace only (`nsenter --net`, as `nobody`) and connects to the shelter's
+  (`wend-shelter-port-<app>-<n>.socket`) listens on the host's `127.0.0.1` and its `systemd-socket-proxyd` waits for the
+  shelter's process, then joins its network namespace only (`nsenter --net`, as `nobody`) and connects to the shelter's
   loopback. A program bound to one of the host's other addresses can't start in the shelter, where that address
   doesn't exist, and the plan refuses it.
 - **Host services.** Inside the shelter, `127.0.0.1` is the shelter's own, not the host's. A unix-socket client

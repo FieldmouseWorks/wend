@@ -715,7 +715,8 @@ def shelter_confine(g, box_doc, a, plan, passing):
             r["enforcing_lost"], r["enforcing_failed_logs"] = lost, {n: ch.get(n, (False, ""))[1][-1500:] for n in lost}
             rc, o = g.ssh(shelter.vm_probe(app, p, outside), timeout=1200)
             # the guard sets permissive after 15 minutes: a probe that ran after it proves nothing about enforcing
-            r["enforcing"] = {"ok": rc == 0 and "fact selinux=Enforcing" in o.splitlines(), "log": o[-6000:]}
+            r["enforcing"] = {"ok": rc == 0 and {"fact selinux=Enforcing", "fact selinux_end=Enforcing"} <= set(
+                o.splitlines()), "log": o[-6000:]}
         for _ in range(20):  # if enforcing cut ssh off, the guard sets permissive again within 15 minutes
             rc, o = g.ssh(shelter.VM_ENFORCE_OFF, timeout=120)
             if rc not in (124, 255):

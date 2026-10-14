@@ -584,15 +584,27 @@ def start_units(app, plan, release):
             _heredoc(f"/etc/systemd/system/{name}.socket",
                      hdr + f"[Unit]\nDescription=wend shelter {app}: {p}, into the shelter's own loopback\n"
                      f"PartOf={unit}.service\n\n[Socket]\nListenStream={p}\n\n[Install]\nWantedBy=sockets.target\n"),
-            # the proxy joins the running shelter's network namespace only (as nobody), and connects to its loopback;
-            # \$\$ is $$ in the unit, which systemd hands sh as $
+            # no start limit: a connection that comes while the container is still being created waits in the
+            # script (below) instead of failing the service until the socket gives up
             _heredoc(f"/etc/systemd/system/{name}.service",
                      hdr + f"[Unit]\nDescription=wend shelter {app}: proxy to {p} in the shelter\n"
                      f"Requires={name}.socket {unit}.service\nAfter={name}.socket {unit}.service\n"
-                     f"BindsTo={unit}.service\n\n[Service]\n"
-                     f"ExecStart=/bin/sh -c 'exec /usr/bin/nsenter --net=/proc/\\$\\$(/usr/bin/podman inspect -f "
-                     f"\"{{{{.State.Pid}}}}\" wend-{app})/ns/net -S 65534 -G 65534 /usr/lib/systemd/systemd-socket-proxyd "
-                     f"{p}'\n")]
+                     f"BindsTo={unit}.service\nStartLimitIntervalSec=0\n\n[Service]\n"
+                     f"ExecStart=/bin/sh /etc/wend/shelter/{app}.port-proxy {p}\n")]
+    if port_units:
+        # the proxy waits for the shelter's process, then joins its network namespace only (as nobody) and connects
+        # to the shelter's own loopback; exec keeps the pid systemd handed the socket to (a quoted heredoc: nothing
+        # in it expands when it's written)
+        parts.append(f"cat > /etc/wend/shelter/{app}.port-proxy <<'WEND_SCRIPT'\n" + hdr +
+                     "i=0\n"
+                     "while :; do\n"
+                     f"  P=$(/usr/bin/podman inspect -f '{{{{.State.Pid}}}}' wend-{app} 2>/dev/null)\n"
+                     "  [ -n \"$P\" ] && [ \"$P\" -gt 0 ] 2>/dev/null && break\n"
+                     f"  i=$((i + 1)); [ $i -lt 120 ] || {{ echo 'wend-{app} has no running process'; exit 1; }}\n"
+                     "  sleep 1\n"
+                     "done\n"
+                     "exec /usr/bin/nsenter --net=/proc/$P/ns/net -S 65534 -G 65534 /usr/lib/systemd/systemd-socket-proxyd \"$1\"\n"
+                     "WEND_SCRIPT")
     parts.append(_heredoc(
         f"/etc/systemd/system/{unit}.service",
         hdr + f"[Unit]\nDescription=wend shelter {app} ({release} userland, unpatched)\n"
@@ -711,7 +723,9 @@ def vm_probe(app, plan, outside):
     if outside in plan.get("egress", []) or not re.fullmatch(r"[0-9.]+", oh) or not op.isdigit():
         raise ValueError(f"{outside!r} can't stand for a destination the shelter must not reach")
     c, unit, net, user = f"wend-{app}", f"wend-shelter-{app}", f"wend-shelter-net-{app}", plan["user"]
-    timers = [f"{unit}-cron{i}.timer" for i in range(len(plan.get("cron", [])))]
+    timers = [f"{unit}-cron{i}.timer" for i in range(len(plan.get("cron", [])))] + \
+        [f"wend-shelter-port-{app}-{i}.socket" for i, x in enumerate(
+            x for x in plan.get("ports", []) if x.startswith("127.0.0.1:"))]
     ports = [p.rsplit(":", 1) for p in plan.get("ports", [])]
     low = any(int(p) < 1024 for _, p in ports)
     data = plan["data"][0]
@@ -791,6 +805,7 @@ def vm_probe(app, plan, outside):
         f"if systemctl restart nftables.service; then sleep 3; if nft list table inet wend_shelter_{app} >/dev/null 2>&1 "
         "&& up; then ok 'the table and the shelter are back after an nftables restart'; else no 'after an nftables "
         "restart: table or shelter missing'; fi; else no 'nftables.service would not restart'; fi",
+        "fact selinux_end \"$(getenforce 2>/dev/null || echo none)\"",
         "exit $f"]
     return "\n".join(lines) + "\n"
 
