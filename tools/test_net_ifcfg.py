@@ -238,6 +238,36 @@ msg, kf, left, out = run({"ifcfg-eth0": KS}, resolv="nameserver fe80::1\n")
 case("an IPv6 resolver in resolv.conf is refused, not a traceback", refused(msg, "isn't an IPv4 address") and not kf)
 msg, kf, left, out = run({"ifcfg-eth0": KS, "route-eth0": "10.9.0.0/16 via 10.0.2.1\n"})
 case("static routes beside a profile are refused", refused(msg, "route-eth0 beside it") and not kf)
+# what EL8's installer writes (through NetworkManager's ifcfg-rh plugin): its defaults spelled out, values unquoted
+EL8 = ("TYPE=Ethernet\nPROXY_METHOD=none\nBROWSER_ONLY=no\nBOOTPROTO=none\nDEFROUTE=yes\nIPV4_FAILURE_FATAL=no\n"
+       "IPV6INIT=no\nIPV6_DEFROUTE=yes\nIPV6_FAILURE_FATAL=no\nNAME=eth0\nUUID=5fb06bd0-0bb0-7ffb-45f1-d6edd65f3e03\n"
+       "DEVICE=eth0\nONBOOT=yes\nIPADDR=10.0.2.20\nPREFIX=24\nGATEWAY=10.0.2.2\nDNS1=10.0.2.3\n"
+       "HWADDR=52:54:00:12:34:56\n")
+msg, kf, left, out = run({"ifcfg-eth0": EL8})
+case("EL8's installer profile, its defaults spelled out, becomes the plain keyfile",
+     msg is None and kf["eth0.nmconnection"][1] == [
+         "type", "ethernet", "con-name", "eth0", "ifname", "eth0", "ethernet.mac-address", "52:54:00:12:34:56",
+         "connection.uuid", "5fb06bd0-0bb0-7ffb-45f1-d6edd65f3e03", "ipv4.method", "manual", "ipv4.addresses",
+         "10.0.2.20/24", "ipv4.gateway", "10.0.2.2", "ipv4.dns", "10.0.2.3", "ipv6.method", "ignore",
+         "connection.autoconnect", "yes"])
+msg, kf, left, out = run({"ifcfg-eth0": EL8.replace("DEFROUTE=yes", "DEFROUTE=no").replace(
+    "IPV4_FAILURE_FATAL=no", "IPV4_FAILURE_FATAL=yes").replace("IPV6INIT=no", "IPV6INIT=yes").replace(
+    "IPV6_DEFROUTE=yes", "IPV6_DEFROUTE=no").replace("IPV6_FAILURE_FATAL=no", "IPV6_FAILURE_FATAL=yes")
+    + "IPV6_ADDR_GEN_MODE=stable-privacy\n"})
+case("DEFROUTE, IPV4_FAILURE_FATAL, IPV6_DEFROUTE, IPV6_FAILURE_FATAL and IPV6_ADDR_GEN_MODE keep their meaning",
+     msg is None and arg(kf, "eth0.nmconnection", "ipv4.never-default") == "yes"
+     and arg(kf, "eth0.nmconnection", "ipv4.may-fail") == "no"
+     and kf["eth0.nmconnection"][1][-10:] == ["ipv6.method", "auto", "ipv6.never-default", "yes", "ipv6.may-fail", "no",
+                                              "ipv6.addr-gen-mode", "stable-privacy", "connection.autoconnect", "yes"])
+for name, text, why in (
+        ("a proxy", EL8.replace("PROXY_METHOD=none", "PROXY_METHOD=auto"), "PROXY_METHOD=auto isn't converted"),
+        ("BROWSER_ONLY=yes", EL8.replace("BROWSER_ONLY=no", "BROWSER_ONLY=yes"), "BROWSER_ONLY=yes isn't converted"),
+        ("a DEFROUTE that isn't a boolean", EL8.replace("DEFROUTE=yes", "DEFROUTE=maybe"), "DEFROUTE=maybe isn't yes"),
+        ("an IPV6_FAILURE_FATAL that isn't a boolean, IPv6 off",
+         EL8.replace("IPV6_FAILURE_FATAL=no", "IPV6_FAILURE_FATAL=2"), "IPV6_FAILURE_FATAL=2 isn't yes"),
+        ("an unknown IPV6_ADDR_GEN_MODE", EL8 + "IPV6_ADDR_GEN_MODE=random\n", "isn't stable-privacy or eui64")):
+    msg, kf, left, out = run({"ifcfg-eth0": text})
+    case(f"EL8: {name} is refused before anything changes", refused(msg, why) and not kf and len(left) == 3)
 msg, kf, left, out = run({})
 case("no profiles: nothing to convert", msg is None and not kf and out.startswith("no ifcfg profiles"))
 sys.exit(0 if all(cases) else 1)

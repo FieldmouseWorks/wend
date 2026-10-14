@@ -32,7 +32,10 @@ NETWORK = "/etc/sysconfig/network"
 RESOLV = "/etc/resolv.conf"
 KEYS = {"DEVICE", "HWADDR", "BOOTPROTO", "IPADDR", "NETMASK", "PREFIX", "BROADCAST", "NETWORK", "GATEWAY", "DNS1",
         "DNS2", "DOMAIN", "PEERDNS", "ONBOOT", "IPV6INIT", "IPV6_AUTOCONF", "TYPE", "NAME", "UUID", "NM_CONTROLLED",
-        "DHCPCLASS", "USERCTL"}
+        "DHCPCLASS", "USERCTL",
+        # what EL8's installer adds, writing the profile through NetworkManager's ifcfg-rh plugin
+        "DEFROUTE", "IPV4_FAILURE_FATAL", "IPV6_DEFROUTE", "IPV6_FAILURE_FATAL", "IPV6_ADDR_GEN_MODE",
+        "PROXY_METHOD", "BROWSER_ONLY"}
 # /etc/sysconfig/network: what the plugin reads there and this op converts (GATEWAY, GATEWAYDEV, IPV6INIT), and what
 # NetworkManager doesn't read at all; anything else it reads there (RES_OPTIONS, IPV6_DEFAULTGW...) fails the step
 NET_KEYS = {"GATEWAY", "GATEWAYDEV", "IPV6INIT", "NETWORKING", "NETWORKING_IPV6", "HOSTNAME", "NOZEROCONF", "NISDOMAIN"}
@@ -154,8 +157,15 @@ def plan(path, net, resolv):
     gw = v.get("GATEWAY") or net.get("GATEWAY")
     if gw and proto not in ("dhcp", "bootp"):
         args += ["ipv4.gateway", str(addr(path, "GATEWAY", gw))]
-    if net.get("GATEWAYDEV", dev) != dev:  # the plugin: only GATEWAYDEV gets the default route
+    # the plugin: DEFROUTE=no keeps the default route off this profile; otherwise only GATEWAYDEV gets it
+    if not boolean(path, v, "DEFROUTE", "yes") or net.get("GATEWAYDEV", dev) != dev:
         args += ["ipv4.never-default", "yes"]
+    if boolean(path, v, "IPV4_FAILURE_FATAL", "no"):  # the plugin's ipv4.may-fail is its opposite
+        args += ["ipv4.may-fail", "no"]
+    if v.get("PROXY_METHOD", "none").lower() != "none":  # the plugin's proxy.method; none is the default
+        fail(f"{path}: PROXY_METHOD={v['PROXY_METHOD']} isn't converted")
+    if boolean(path, v, "BROWSER_ONLY", "no"):
+        fail(f"{path}: BROWSER_ONLY=yes isn't converted")
     if "DNS2" in v and "DNS1" not in v:  # the plugin stops at the first missing DNSn
         fail(f"{path}: DNS2 with no DNS1")
     dns = [v[k] for k in ("DNS1", "DNS2") if k in v]
@@ -175,7 +185,17 @@ def plan(path, net, resolv):
         six = "ignore"
     else:
         six = "auto" if boolean(path, v, "IPV6_AUTOCONF", "yes") else "link-local"
-    args += ["ipv6.method", six, "connection.autoconnect", "yes" if boolean(path, v, "ONBOOT", "yes") else "no"]
+    args += ["ipv6.method", six]
+    # read (so a value that isn't one fails) whatever the method; they only mean something when IPv6 is on
+    v6 = [not boolean(path, v, "IPV6_DEFROUTE", "yes"), boolean(path, v, "IPV6_FAILURE_FATAL", "no")]
+    gen = v.get("IPV6_ADDR_GEN_MODE", "").lower()
+    if gen and gen not in ("stable-privacy", "eui64"):
+        fail(f"{path}: IPV6_ADDR_GEN_MODE={gen} isn't stable-privacy or eui64")
+    if six != "ignore":
+        args += ["ipv6.never-default", "yes"] if v6[0] else []
+        args += ["ipv6.may-fail", "no"] if v6[1] else []
+        args += ["ipv6.addr-gen-mode", gen] if gen else []
+    args += ["connection.autoconnect", "yes" if boolean(path, v, "ONBOOT", "yes") else "no"]
     return c, dev, hw, args
 
 

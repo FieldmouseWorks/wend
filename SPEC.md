@@ -792,7 +792,12 @@ The files are read as `KEY=VALUE` lines and never executed; a value that isn't o
 - `ONBOOT`, `IPV6INIT` (else `/etc/sysconfig/network`'s), `IPV6_AUTOCONF` (`no` is `link-local`), as NetworkManager's
   booleans (`yes`, `true`, `t`, `y`, `1` and their opposites);
 - `NM_CONTROLLED` (`no` fails: EL9's NetworkManager left that device unmanaged, which a keyfile can't say);
-- `DHCPCLASS` and `USERCTL` are inert (the plugin doesn't read them); wend still requires `USERCTL` to be a boolean.
+- `DHCPCLASS` and `USERCTL` are inert (the plugin doesn't read them); wend still requires `USERCTL` to be a boolean;
+- what EL8's installer adds, writing through the plugin: `DEFROUTE=no` as `ipv4.never-default` (else only
+  `GATEWAYDEV` decides), `IPV4_FAILURE_FATAL=yes` as `ipv4.may-fail no`, and, with IPv6 on, `IPV6_DEFROUTE=no` as
+  `ipv6.never-default`, `IPV6_FAILURE_FATAL=yes` as `ipv6.may-fail no` and `IPV6_ADDR_GEN_MODE` (`stable-privacy`
+  or `eui64`) as `ipv6.addr-gen-mode`; all of them are booleans (or that mode) even with IPv6 off. `PROXY_METHOD`
+  must be `none` and `BROWSER_ONLY` `no`, the defaults: a proxy fails.
 
 In `/etc/sysconfig/network`, `GATEWAY`, `GATEWAYDEV` and `IPV6INIT` are read as above, and `NETWORKING`,
 `NETWORKING_IPV6`, `HOSTNAME`, `NOZEROCONF` and `NISDOMAIN` are left as they are: none of them is part of a profile.
