@@ -488,12 +488,12 @@ def check_box(doc, adapters, where):
 
 
 # A box's shell strings fail only once a box is installed if they don't parse, so parse them here. [vm].live runs over
-# ssh in root's login shell, bash. customize and the roles run under /bin/sh, which is bash on EL and dash on Debian
-# and Ubuntu, so those get dash too there.
+# ssh in root's login shell, bash. customize, start_hook and the roles run under /bin/sh, which is bash on EL and dash
+# on Debian and Ubuntu, so those get dash too there.
 def box_shell_errors(doc):
     vm = doc.get("vm", {}) if isinstance(doc.get("vm", {}), dict) else {}
     sh = ("bash", "dash") if doc.get("family") in ("debian", "ubuntu") else ("bash",)
-    named = [("customize", doc.get("customize"), sh)] + \
+    named = [("customize", doc.get("customize"), sh), ("start_hook", doc.get("start_hook"), sh)] + \
         [(f"role {k}", v, sh) for k, v in (doc.get("roles") or {}).items()] + \
         [(f"[vm].live {k}", v, ("bash",)) for k, v in (vm.get("live") or {}).items()]
     errs = []
@@ -502,7 +502,7 @@ def box_shell_errors(doc):
             continue
         for x in shells:
             if not shutil.which(x):
-                errs.append(f"{name} can't be parsed: no {x} here")
+                errs.append(f"{name} can't be parsed: no {x} here (install the {x} package)")
                 continue
             r = subprocess.run([x, "-n", "-c", s], capture_output=True, text=True)
             if r.returncode:
