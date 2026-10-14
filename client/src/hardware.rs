@@ -1012,7 +1012,7 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
                     .and_then(|x| get(x, "transit"))
                     .and_then(|x| get(x, "boot_mib"))
                 {
-                    None => 0,
+                    None => return Err(format!("adapters/{fam}.toml has no releases.{r}.transit.boot_mib")),
                     Some(v) => v.as_u64().ok_or(format!(
                         "adapters/{fam}.toml: releases.{r}.transit.boot_mib must be a whole number of MiB"
                     ))?,

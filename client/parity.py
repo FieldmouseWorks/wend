@@ -269,6 +269,8 @@ def type_corpus():
     adapter("hardware old_kernels unknown", lambda a: a["hardware"].update(old_kernels="all"))
     adapter("hardware old_kernels a list", lambda a: a["hardware"].update(old_kernels=["running"]))
     adapter("hardware boot_mib absent", lambda a: a["hardware"]["alma9"].pop("boot_mib"))
+    adapter("transit boot_mib absent", lambda a: a["releases"]["alma8"]["transit"].pop("boot_mib"))
+    adapter("transit boot_mib zero", lambda a: a["releases"]["alma8"]["transit"].update(boot_mib=0))
     adapter("hardware boot_mib a float", lambda a: a["hardware"]["alma9"].update(boot_mib=70.5))
     adapter("hardware autoremove_from off the ladder", lambda a: a["hardware"].update(
         old_kernels="autoremove", autoremove_from="jessie"))
