@@ -55,4 +55,40 @@ for d, root, args in ((1, "(hd0,0)", "ro root=LABEL=/ quiet"), (0, "(hd1,0)", "r
         print(("passed  " if ok else f"WRONG   rc={p.returncode} {p.stdout}{p.stderr} {lines[:6]} ") +
               f"GRUB legacy, default={d}: the new entry takes the default entry's root {root} and arguments")
         bad += not ok
+
+# The cleanup before the transaction (hop.kernel_before[1]): an old kernel no package owns goes with its BLS entry, which
+# EL8 wrote per kernel and GRUB would otherwise list, dead; the running kernel's and an owned kernel's entries stay.
+RUN, OLD, OWNED = "5.14.0-1.el9.x86_64", "4.18.0-348.7.1.el8_5.x86_64", "5.14.0-0.el9.x86_64"
+step = fill(a["hop"]["kernel_before"][1], backends.of(a).hop_vars(a, "alma10"))
+guard = step[:step.index("}; ") + 3]
+if not guard.startswith("[ / -ef /proc/1/root ] ||"):
+    print("WRONG   the kernel cleanup doesn't start with the live-root guard")
+    bad += 1
+with tempfile.TemporaryDirectory() as t:
+    for d in ("boot/loader/entries", "bin", "etc", f"lib/modules/{OLD}"):
+        os.makedirs(f"{t}/{d}")
+    for v in (RUN, OLD, OWNED):
+        open(f"{t}/boot/vmlinuz-{v}", "w").close()
+        open(f"{t}/boot/initramfs-{v}.img", "w").close()
+    entries = {f"abc-{RUN}.conf": f"/vmlinuz-{RUN}", f"abc-{OLD}.conf": f"/vmlinuz-{OLD}",
+               f"def-{OLD}.conf": f"/boot/vmlinuz-{OLD}", f"abc-{OWNED}.conf": f"/vmlinuz-{OWNED}",
+               "abc-memtest.conf": "/memtest86+.bin"}
+    for n, k in entries.items():
+        with open(f"{t}/boot/loader/entries/{n}", "w") as out:
+            out.write(f"title {n}\nversion x\nlinux {k}\ninitrd /initramfs-x.img\n")
+    for n, text in (("uname", f"echo {RUN}"), ("rpm", f'case "$2" in *{RUN}*|*{OWNED}*) exit 0;; esac; exit 1'),
+                    ("df", "echo 'Filesystem Size Used Avail Use% Mounted'; echo '/dev/vda1 1G 98M 900M 10% /boot'")):
+        with open(f"{t}/bin/{n}", "w") as out:
+            out.write(f"#!/bin/sh\n{text}\n")
+        os.chmod(f"{t}/bin/{n}", 0o755)
+    body = step[len(guard):].replace("/boot/", f"{t}/boot/").replace("/etc/", f"{t}/etc/").replace(
+        "/lib/modules/", f"{t}/lib/modules/")
+    p = subprocess.run(["sh", "-c", body], capture_output=True, text=True,
+                       env={**os.environ, "PATH": f"{t}/bin:{os.environ['PATH']}"})
+    left = sorted(os.listdir(f"{t}/boot/loader/entries"))
+    ok = (p.returncode == 0 and left == sorted([f"abc-{RUN}.conf", f"abc-{OWNED}.conf", "abc-memtest.conf"])
+          and not os.path.exists(f"{t}/boot/vmlinuz-{OLD}") and os.path.exists(f"{t}/boot/vmlinuz-{OWNED}"))
+    print(("passed  " if ok else f"WRONG   rc={p.returncode} {p.stdout}{p.stderr} {left} ") +
+          "EL kernel cleanup: an old kernel no package owns goes with its BLS entries; the others' stay")
+    bad += not ok
 sys.exit(1 if bad else 0)

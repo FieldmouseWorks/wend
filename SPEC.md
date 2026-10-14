@@ -905,7 +905,8 @@ harness, not to fixes, because the release's own tools can't carry them up the l
   kernel and its boot entry stay as the fallback. This is the one place, besides `rpm.transit`'s last step, where wend
   drops records and keeps files. Fixes can't, because a fix doing it could fake `pkgdb`. It then removes the files of
   kernels that no package owns and that aren't running or GRUB's default, so the release's kernel fits in `/boot` (the
-  VM tier's CentOS 5 /boot is 200 MiB), its kdump image with it. This is how the previous hop's kernel, once a reboot
+  VM tier's CentOS 5 /boot is 200 MiB), its kdump image and any BLS entry that boots its `vmlinuz` with it (EL8 wrote
+  one per kernel; left behind, GRUB lists a dead entry). This is how the previous hop's kernel, once a reboot
   has moved off it, finally goes. The rescue image (`vmlinuz-0-rescue-<machine id>`, its initramfs and BLS entry) goes
   too, unless it is or may be GRUB's default (GRUB legacy's `default=saved`; GRUB 2's default, `saved_entry` or
   `GRUB_DEFAULT` resolved against grub.cfg's menu or a BLS entry, not a kernel's entry): it is the old release's kernel
