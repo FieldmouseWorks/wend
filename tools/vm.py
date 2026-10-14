@@ -24,6 +24,10 @@ not runs/ (runs/ holds what CI proved).
                                            filling the disk, beside /boot, as a default EL7 install does;
                                            --extra-disk adds an empty disk of GB (repeatable). Its own box and runs
 
+A box with a [shelter] plan (SPEC "Sheltering an app", Proof) needs root: its shelter is built and proved in a chroot copy
+of the box first, copied into the guest before the hop that drops Python 2, and probed for confinement after every
+reboot from that hop on, as installed (SELinux permissive) and in an enforcing window.
+
 Networking is QEMU user mode: nothing on the host changes. The guest reaches the mirror shim at 10.0.2.2. The guest's
 ssh and http are forwarded to fixed ports on 127.0.0.1 (10022, 10080), so one host runs one VM replay at a time; a
 second one fails at once ("qemu exited at once"). Disks go under $WEND_WORK/vm (default /var/tmp/wend/vm, which the
@@ -36,6 +40,7 @@ import http.server
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -56,6 +61,7 @@ sys.path.insert(0, TOOLS)
 import backends  # noqa: E402
 import check  # noqa: E402
 import sandbox  # noqa: E402
+import shelter  # noqa: E402
 import walk  # noqa: E402
 
 WORK = os.path.join(sandbox.WORK, "vm")
@@ -190,18 +196,39 @@ class Guest:
             raise RuntimeError(f"qemu exited at once: {open(self.console + '.qemu').read()[-800:]}")
 
     def ssh(self, cmd, timeout=600, stdin=None):
-        argv = ["ssh", "-q", "-i", self.key, "-p", str(SSH_FWD), "-o", "StrictHostKeyChecking=no",
+        try:
+            p = subprocess.run(self.ssh_argv(cmd), input=stdin, capture_output=True, text=True, timeout=timeout,
+                               errors="replace")
+            return p.returncode, p.stdout + p.stderr
+        except subprocess.TimeoutExpired:
+            return 124, "TIMEOUT"
+
+    def push_tree(self, root, path, timeout=1800):
+        """Copy the tree at `path` under the host directory `root` into the guest at the same path, numeric owners and
+        modes kept, replacing what was there."""
+        with tempfile.TemporaryFile() as err:  # a file, not a pipe: tar's warnings can't fill a buffer and stall it
+            tar = subprocess.Popen(["tar", "-C", root, "--numeric-owner", "-cf", "-", path.lstrip("/")],
+                                   stdout=subprocess.PIPE, stderr=err)
+            try:
+                p = subprocess.run(self.ssh_argv(f"rm -rf {path} && tar -C / --numeric-owner -xpf -"),
+                                   stdin=tar.stdout, capture_output=True, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                tar.kill()
+                return 124, "TIMEOUT"
+            finally:
+                tar.stdout.close()
+                tar.wait()
+            err.seek(0)
+            return p.returncode or tar.returncode, (p.stdout + p.stderr + err.read()).decode(errors="replace")
+
+    def ssh_argv(self, cmd):
+        return ["ssh", "-q", "-i", self.key, "-p", str(SSH_FWD), "-o", "StrictHostKeyChecking=no",
                 "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
                 "-o", "ServerAliveInterval=15", "-o", "LogLevel=ERROR",
                 # CentOS 5's OpenSSH 4.3 offers only these; later releases negotiate the modern ones
                 "-o", "KexAlgorithms=+diffie-hellman-group1-sha1,diffie-hellman-group14-sha1",
                 "-o", "HostKeyAlgorithms=+ssh-rsa", "-o", "PubkeyAcceptedAlgorithms=+ssh-rsa",
                 "root@127.0.0.1", ENV + cmd]
-        try:
-            p = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=timeout, errors="replace")
-            return p.returncode, p.stdout + p.stderr
-        except subprocess.TimeoutExpired:
-            return 124, "TIMEOUT"
 
     def running(self):
         return self.proc is not None and self.proc.poll() is None
@@ -617,6 +644,92 @@ def run_hop(g, cmds, after):
     return g.ssh("cat /root/wend-hop/DONE")[1].strip() == "0", o
 
 
+def shelter_build(box_id, route, drop):
+    """SPEC "Sheltering an app" on the VM tier: shelter.build and shelter.prove, the chroot harness's own (tools/walk.py),
+    on a chroot copy of the box at the route's start, then the built shelters are copied into the guest before the drop
+    hop. The guest was installed from the same box file on the same release, and shelter_copy_check holds the copy to
+    the guest's own user and group lines and carried files. Returns (the walk, its stop-native and start steps for the
+    drop hop, written for the guest's adapter), or (the walk, None) when the build or proof refused."""
+    fam = route["family"]
+    repo = type("Repo", (), {})()
+    repo.adapters = check.load_adapters()
+    repo.boxes = {box_id: load(f"boxes/{box_id}/box.toml")}
+    repo.raw = {k: open(os.path.join(ROOT, k), "rb").read() for k in (f"boxes/{box_id}/box.toml", f"adapters/{fam}.toml")}
+    old, rw = os.umask(0o022), None  # as `wend replay` builds its walks (SPEC "How a hop runs")
+    try:
+        rw = walk.Walk(repo, route, box_id, log=log)
+        if not rw.shelter_before(drop):
+            return rw, None
+    except BaseException:
+        if rw:  # a chroot copy is a few GB: never leave one behind
+            rw.close()
+        raise
+    finally:
+        os.umask(old)
+    a, keeps = guest_adapter(fam), shelter.keeps_runtimes_on(rw.adapter, route)
+    plan = rw.shelter_plan
+    pre = [c for app in sorted(plan) for c in shelter.stop_native(app, plan[app])]
+    post = [c for app in sorted(plan) for c in shelter.start(app, plan[app], a, drop, keeps)]
+    return rw, (pre, post)
+
+
+def shelter_copy_check(rw, app, plan):
+    """Shell for the guest: its own passwd and group lines for the app's user, and each carried file, are the ones the
+    shelter's lock was built from (the chroot copy), by sha256."""
+    lock = tomllib.load(open(f"{os.path.realpath(rw.box.root)}{shelter.SHELTER}/{app}/shelter.lock", "rb"))
+    sha = lambda t: hashlib.sha256((t + "\n").encode()).hexdigest()  # noqa: E731
+    gname = lock["group"].split(":", 1)[0]
+    # SPEC "How it runs on the host": idmapped mounts need ext4, XFS or btrfs (the kernel mounts ext3 as ext3 type,
+    # which can't be idmapped)
+    out = [f"for d in {' '.join([plan['code']] + plan['data'])}; do case \"$(findmnt -no FSTYPE -T $d)\" in "
+           "ext4|xfs|btrfs) ;; *) echo \"$d is on $(findmnt -no FSTYPE -T $d), which can't be idmapped\"; exit 1;; "
+           "esac; done",
+           f"[ \"$(grep '^{plan['user']}:' /etc/passwd | sha256sum | cut -d' ' -f1)\" = {sha(lock['user'])} ] || "
+           f"{{ echo 'the guest has another passwd line for {plan['user']} than the shelter was built with'; exit 1; }}",
+           f"[ \"$(grep \"^$(id -gn {plan['user']}):\" /etc/group | sha256sum | cut -d' ' -f1)\" = {sha(lock['group'])} ] || "
+           f"{{ echo 'the guest has another group line than the shelter was built with ({gname})'; exit 1; }}"]
+    for c in lock.get("carried", []):
+        q = shlex.quote(c["path"])
+        out.append(f"[ \"sha256:$(sha256sum {q} | cut -d' ' -f1)\" = {c['sha256']} ] || "
+                   f"{{ echo carried file {q} differs in the guest; exit 1; }}")
+    return "\n".join(out) + "\necho the copy matches the guest\n"
+
+
+def shelter_confine(g, box_doc, a, plan, passing):
+    """The VM tier's confinement proof after a reboot (SPEC "Sheltering an app", Proof): shelter.vm_probe as the box
+    booted (SELinux permissive, as installed), then an enforcing window: the shelter restarted under enforcing, the
+    box's checks again (none that passed may fail), the probe again, and the window's AVC denials (none may touch
+    the shelter). Returns {app: record}."""
+    outside = f"{GUEST_HOST}:{a['mirror']['shim'].rsplit(':', 1)[1]}"  # the mirror shim: the guest reaches it
+    out = {}
+    for app, p in sorted(plan.items()):
+        rc, o = g.ssh(shelter.vm_probe(app, p, outside), timeout=1200)
+        r = {"permissive": {"ok": rc == 0, "log": o[-6000:]},
+             "facts": dict(x[5:].split("=", 1) for x in o.splitlines() if x.startswith("fact ") and "=" in x)}
+        rc, o = g.ssh(shelter.vm_enforce_on(app), timeout=600)
+        r["enforce_on"] = {"ok": rc == 0, "log": o[-2000:]}
+        lost = []
+        if rc == 0:
+            ch = checks(g, box_doc, a)
+            lost = sorted(n for n in passing if not ch.get(n, (False,))[0])
+            r["enforcing_lost"], r["enforcing_failed_logs"] = lost, {n: ch.get(n, (False, ""))[1][-1500:] for n in lost}
+            rc, o = g.ssh(shelter.vm_probe(app, p, outside), timeout=1200)
+            # the guard sets permissive after 15 minutes: a probe that ran after it proves nothing about enforcing
+            r["enforcing"] = {"ok": rc == 0 and {"fact selinux=Enforcing", "fact selinux_end=Enforcing"} <= set(
+                o.splitlines()), "log": o[-6000:]}
+        for _ in range(20):  # if enforcing cut ssh off, the guard sets permissive again within 15 minutes
+            rc, o = g.ssh(shelter.VM_ENFORCE_OFF, timeout=120)
+            if rc not in (124, 255):
+                break
+            time.sleep(60)
+        r["avc"], r["denials"] = o[-4000:], shelter.vm_denials(app, o)
+        r["ok"] = (r["permissive"]["ok"] and r["enforce_on"]["ok"] and not lost and
+                   r.get("enforcing", {}).get("ok", False) and not r["denials"] and "selinux now Permissive" in o)
+        log(f"shelter {app}: confinement {'proved' if r['ok'] else 'NOT proved'}")
+        out[app] = r
+    return out
+
+
 def replay(route_path, box_id, resume=None):
     """resume = (an earlier run's directory, HOP): start from that run's disk after the hop before HOP, to iterate on
     a late hop without replaying the early ones. Such a run is recorded as partial and never counts as a pass."""
@@ -663,7 +776,31 @@ def replay(route_path, box_id, resume=None):
     os.makedirs(out_dir)
     port = box_doc.get("vm", {}).get("ssh_port", 22)
     hw = hardware(a, route["from"])
-    g = Guest(prev, key, port, hw)
+    # SPEC "Sheltering an app": a box with a plan gets its shelters built (in a chroot copy, so as root) before the hop
+    # that drops Python 2, and every hop from that one on proves confinement after its reboot
+    plan = box_doc.get("shelter", {})
+    drop = shelter.drop_hop(a, route) if plan else None
+    sheltered = set(route["hops"][route["hops"].index(drop):]) if drop else set()
+    rw = sh_steps = None
+    if drop in todo:
+        if shelter.keeps_runtimes_on(a, route) != route["from"]:
+            raise SystemExit("the VM tier builds a shelter only on the route's start release so far")
+        if os.geteuid() != 0:
+            raise SystemExit(f"{box_id} has a shelter plan: building it takes a chroot copy of the box, so run this as "
+                             "root (sudo -E)")
+        rw, sh_steps = shelter_build(box_id, route, drop)
+        w.shelter_steps = {drop: sh_steps} if sh_steps else {}
+    try:
+        return walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_dir, stamp, key, prev,
+                       port, hw, plan, drop, sheltered, rw, sh_steps)
+    finally:
+        if rw:
+            rw.close()
+
+
+def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_dir, stamp, key, prev, port, hw,
+            plan, drop, sheltered, rw, sh_steps):
+    """replay's hops, once the shelters (if any) are built."""
     hops, start_net, efi_start = [], None, None
     for hop in todo:
         disk = os.path.join(out_dir, f"{hop}.qcow2")
@@ -681,6 +818,25 @@ def replay(route_path, box_id, resume=None):
             if f"default via {GUEST_HOST}" not in start_net or ADDR not in start_net:  # never compare two empty reads
                 raise RuntimeError(f"the box's network can't be read at the start (no `ip`?): {start_net!r}")
         before = checks(g, box_doc, a)
+        if hop == drop and not sh_steps:  # the build or the proof refused: the box stays on keeps_runtimes_on
+            hops.append({"to": hop, "ok": False, "stage": "shelter refused: " +
+                         next((x["stage"] for x in reversed(rw.steps) if not x["ok"]), "")})
+            g.stop()
+            break
+        if hop == drop:
+            for app in sorted(plan):
+                rc, o = g.push_tree(os.path.realpath(rw.box.root), f"{shelter.SHELTER}/{app}")
+                if not rc:
+                    rc, o = g.ssh(shelter_copy_check(rw, app, plan[app]))
+                log(f"shelter {app}: copied into the guest: {o.strip()[-300:]}")
+                if rc:
+                    hops.append({"to": hop, "ok": False, "stage": f"copying shelter {app} into the guest: {o[-1500:]}"})
+                    break
+            else:
+                rc = 0
+            if rc:
+                g.stop()
+                break
         matched = []
         for f in (f for f in pinned if f["hop"] == hop):
             rc = g.ssh(f"{backends.pred_sh(f['when'], a)} >/dev/null 2>&1")[0]
@@ -733,6 +889,10 @@ def replay(route_path, box_id, resume=None):
             h["ok"] = ok and h["net_kept"] and not lost and h["kernel_current"] and h["firmware"] == FIRMWARE
             if not h["net_kept"]:
                 h["net"] = {"start": start_net, "now": net}
+            if hop in sheltered:
+                h["shelter"] = shelter_confine(g, box_doc, a, plan,
+                                               sorted(n for n, (good, _) in after_checks.items() if good))
+                h["ok"] = h["ok"] and all(r["ok"] for r in h["shelter"].values())
         else:
             h["ok"] = False
             h["console_tail"] = open(g.console, errors="replace").read()[-4000:]
@@ -754,6 +914,18 @@ def replay(route_path, box_id, resume=None):
            "result": "pass" if complete and all(h["ok"] for h in hops) and not resume else
            "partial-pass" if complete and all(h["ok"] for h in hops) else "fail",
            "runner": {"kind": "vm", "host": os.uname().nodename, "kernel": os.uname().release}}
+    if plan:  # SPEC "What a run records", from the guest's own lock and id range after the last hop it reached
+        last = next((h["shelter"] for h in reversed(hops) if "shelter" in h), {})
+        built = {r["app"]: r for r in (rw.shelters if rw else [])}
+        run["shelters"] = [{"app": app, "release": built.get(app, {}).get("release"),
+                            "lock_sha256": "sha256:" + last[app]["facts"]["lock"] if last.get(app, {}).get(
+                                "facts", {}).get("lock") else built.get(app, {}).get("lock_sha256"),
+                            "image": built.get(app, {}).get("image"), "tier": "vm",
+                            "built": "chroot copy of the box on the route's start release, copied into the guest",
+                            "confinement_proved": bool(last) and complete and any(  # from the drop hop, in this run
+                                h["to"] == drop and "shelter" in h for h in hops) and all(
+                                h.get("ok") for h in hops) and all(r["ok"] for r in last.values()),
+                            "subuid": last.get(app, {}).get("facts", {}).get("subuid")} for app in sorted(plan)]
     if resume:
         run["resumed"] = {"from_run": os.path.abspath(resume[0]), "at_hop": resume[1]}
     json.dump(run, open(os.path.join(out_dir, "run.json"), "w"), indent=1)

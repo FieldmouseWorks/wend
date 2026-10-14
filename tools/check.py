@@ -555,6 +555,9 @@ def check_shelter(sh, where):
         m = [re.fullmatch(PUBLISH, x) if isinstance(x, str) else None for x in ports] if isinstance(ports, list) else [None]
         if not all(x and all(int(o) < 256 for o in x.groups()[:4]) and 0 < int(x.group(5)) < 65536 for x in m):
             errs.append(f"{w}.ports must list address:port strings (127.0.0.1:8080)")
+        elif not all(x.split(":")[0] in ("127.0.0.1", "0.0.0.0") for x in ports):
+            # inside the shelter the host's other addresses don't exist, so a program bound to one can't start there
+            errs.append(f"{w}.ports: only 127.0.0.1 (served into the shelter's own loopback) or 0.0.0.0 (published)")
         egress = p.get("egress", [])  # the TCP destinations the owner opted in to (SPEC: private by default)
         m = [re.fullmatch(PUBLISH, x) if isinstance(x, str) else None for x in egress] if isinstance(egress, list) else [None]
         if not all(x and all(int(o) < 256 for o in x.groups()[:4]) and 0 < int(x.group(5)) < 65536 for x in m):
