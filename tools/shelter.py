@@ -490,7 +490,9 @@ def podman_run(app, plan, name, publish, command, env=()):
     """The podman command line a shelter unit runs ($S, $U, $G and $I are the start step's shell variables)."""
     vols = [f"-v {plan['code']}:{plan['code']}:ro,idmap"] + [f"-v {x}:{x}:Z,idmap" for x in plan["data"]] + \
         [f"-v /run/wend/shelter/{app}/s{i}:{os.path.dirname(x)}:Z" for i, x in enumerate(plan.get("sockets", []))]
-    ports = [f"-p {p}:{p.rsplit(':', 1)[1]}" for p in plan.get("ports", [])] if publish else []
+    # 0.0.0.0 is published; a program listening on 127.0.0.1 listens on the shelter's own loopback, which podman's
+    # forwarding never reaches, so start_units serves that one with a proxy into the shelter's namespace instead
+    ports = [f"-p {p}:{p.rsplit(':', 1)[1]}" for p in plan.get("ports", []) if p.startswith("0.0.0.0:")] if publish else []
     low = publish and any(int(p.rsplit(":", 1)[1]) < 1024 for p in plan.get("ports", []))
     return " ".join(["/usr/bin/podman run --rm", f"--name {name}", "--read-only --tmpfs /tmp --tmpfs /run",
                      f"--uidmap 0:$S:{SUBID_SIZE} --gidmap 0:$S:{SUBID_SIZE}", "--user $U:$G", "--cap-drop=all"] +
@@ -572,13 +574,33 @@ def start_units(app, plan, release):
                      hdr + f"[Unit]\nDescription=wend shelter {app}: proxy to {s}\n"
                      f"Requires={unit}-sock{i}.socket\nAfter={unit}-sock{i}.socket\n\n"
                      f"[Service]\nUser={plan['user']}\nExecStart=/usr/lib/systemd/systemd-socket-proxyd {s}\n")]
+    port_units = []
+    for i, p in enumerate(x for x in plan.get("ports", []) if x.startswith("127.0.0.1:")):
+        # outside the wend-shelter-<app>-* names, which the chroot tier's checks start themselves; there the program
+        # runs in the host's own namespace and needs no proxy
+        name = f"wend-shelter-port-{app}-{i}"
+        port_units.append(f"{name}.socket")
+        parts += [
+            _heredoc(f"/etc/systemd/system/{name}.socket",
+                     hdr + f"[Unit]\nDescription=wend shelter {app}: {p}, into the shelter's own loopback\n"
+                     f"PartOf={unit}.service\n\n[Socket]\nListenStream={p}\n\n[Install]\nWantedBy=sockets.target\n"),
+            # the proxy joins the running shelter's network namespace only (as nobody), and connects to its loopback;
+            # \$\$ is $$ in the unit, which systemd hands sh as $
+            _heredoc(f"/etc/systemd/system/{name}.service",
+                     hdr + f"[Unit]\nDescription=wend shelter {app}: proxy to {p} in the shelter\n"
+                     f"Requires={name}.socket {unit}.service\nAfter={name}.socket {unit}.service\n"
+                     f"BindsTo={unit}.service\n\n[Service]\n"
+                     f"ExecStart=/bin/sh -c 'exec /usr/bin/nsenter --net=/proc/\\$\\$(/usr/bin/podman inspect -f "
+                     f"\"{{{{.State.Pid}}}}\" wend-{app})/ns/net -S 65534 -G 65534 /usr/lib/systemd/systemd-socket-proxyd "
+                     f"{p}'\n")]
     parts.append(_heredoc(
         f"/etc/systemd/system/{unit}.service",
         hdr + f"[Unit]\nDescription=wend shelter {app} ({release} userland, unpatched)\n"
         f"Wants=network-online.target\nAfter=network-online.target {after}\n"
         f"BindsTo={net}.service\nPartOf={net}.service\nReloadPropagatedFrom={net}.service\n" +
         "".join(f"Requires={s}\n" for s in sock_units) +
-        f"\n[Service]\nExecStartPre=-/usr/bin/podman network create --subnet 10.90.$K.0/24 wend-{app}\n" +
+        # the first start imports the image: more than systemd's default 90 seconds on a slow disk
+        f"\n[Service]\nTimeoutStartSec=15min\nExecStartPre=-/usr/bin/podman network create --subnet 10.90.$K.0/24 wend-{app}\n" +
         import_pre(app) +
         f"ExecStart={podman_run(app, plan, f'wend-{app}', True, '$X')}\n"
         # nftables' reload flushes the whole ruleset, netavark's port forwarding with it: put it back
@@ -597,9 +619,9 @@ def start_units(app, plan, release):
             _heredoc(f"/etc/systemd/system/{name}.service",
                      hdr + f"[Unit]\nDescription=wend shelter {app}: cron line {i}\nAfter={after}\n"
                      f"BindsTo={net}.service\n" + "".join(f"Requires={s}\n" for s in sock_units) +
-                     f"\n[Service]\nType=oneshot\n" + import_pre(app) +
+                     "\n[Service]\nType=oneshot\nTimeoutStartSec=15min\n" + import_pre(app) +
                      f"ExecStart={podman_run(app, plan, f'wend-{app}-cron{i}', False, cmd, ['PATH=/usr/bin:/bin'])}\n")]
-    parts.append(f"systemctl enable {net}.service {unit}.service {' '.join(sock_units + timers)}")
+    parts.append(f"systemctl enable {net}.service {unit}.service {' '.join(sock_units + port_units + timers)}")
     parts.append(f"mkdir -p /var/lib/wend && printf '{''.join(x + chr(92) + 'n' for x in ADDS)}' >> {ADDED}")
     return "\n".join(parts)
 
@@ -720,7 +742,7 @@ def vm_probe(app, plan, outside):
         f"fact lock \"$(sha256sum {SHELTER}/{app}/shelter.lock | cut -d' ' -f1)\"; fact image \"sha256:$I\"",
         f"if [ -n \"$I\" ] && podman image exists localhost/wend-shelter-{app}:$I && [ \"$(podman inspect -f "
         f"'{{{{.ImageName}}}}' {c} 2>/dev/null)\" = \"localhost/wend-shelter-{app}:$I\" ]; then ok \"{c} runs the image "
-        "tagged with the lock's digest\"; else no \"{c} isn't running localhost/wend-shelter-" + app + ":$I\"; fi",
+        "tagged with the lock's digest\"; else no \"" + c + " isn't running localhost/wend-shelter-" + app + ":$I\"; fi",
         f"P=$(podman inspect -f '{{{{.State.Pid}}}}' {c} 2>/dev/null); fact pid \"$P\"",
         "if [ -z \"$P\" ] || [ \"$P\" = 0 ] || [ ! -r /proc/$P/status ]; then no 'no running process to inspect'; P=1; fi",
         "IDS=$(awk '/^Uid:/ {print $2, $3, $4, $5}' /proc/$P/status); GIDS=$(awk '/^Gid:/ {print $2, $3, $4, $5}' "

@@ -347,6 +347,9 @@ for name, sh, want in (
         ("shelter: a relative socket", {"billing": {**plan, "sockets": ["mysql.sock"]}}, True),
         ("shelter: a port out of range", {"billing": {**plan, "ports": ["127.0.0.1:99999"]}}, True),
         ("shelter: a port with no address", {"billing": {**plan, "ports": [8080]}}, True),
+        ("shelter: a port on every address", {"billing": {**plan, "ports": ["0.0.0.0:80"]}}, False),
+        ("shelter: a port on one of the host's own addresses (absent in the shelter)",
+         {"billing": {**plan, "ports": ["10.0.2.20:8080"]}}, True),
         ("shelter: an egress opt-in", {"billing": {**plan, "egress": ["192.0.2.10:443"]}}, False),
         ("shelter: egress as a host name", {"billing": {**plan, "egress": ["api.example.com:443"]}}, True),
         ("shelter: egress with shell", {"billing": {**plan, "egress": ["192.0.2.10:443; reboot"]}}, True)):

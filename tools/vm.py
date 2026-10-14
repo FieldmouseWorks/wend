@@ -206,19 +206,20 @@ class Guest:
     def push_tree(self, root, path, timeout=1800):
         """Copy the tree at `path` under the host directory `root` into the guest at the same path, numeric owners and
         modes kept, replacing what was there."""
-        tar = subprocess.Popen(["tar", "-C", root, "--numeric-owner", "-cf", "-", path.lstrip("/")],
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        try:
-            p = subprocess.run(self.ssh_argv(f"rm -rf {path} && tar -C / --numeric-owner -xpf -"), stdin=tar.stdout,
-                               capture_output=True, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            tar.kill()
-            return 124, "TIMEOUT"
-        finally:
-            tar.stdout.close()
-        err = tar.stderr.read().decode(errors="replace")
-        tar.wait()
-        return p.returncode or tar.returncode, (p.stdout + p.stderr).decode(errors="replace") + err
+        with tempfile.TemporaryFile() as err:  # a file, not a pipe: tar's warnings can't fill a buffer and stall it
+            tar = subprocess.Popen(["tar", "-C", root, "--numeric-owner", "-cf", "-", path.lstrip("/")],
+                                   stdout=subprocess.PIPE, stderr=err)
+            try:
+                p = subprocess.run(self.ssh_argv(f"rm -rf {path} && tar -C / --numeric-owner -xpf -"),
+                                   stdin=tar.stdout, capture_output=True, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                tar.kill()
+                return 124, "TIMEOUT"
+            finally:
+                tar.stdout.close()
+                tar.wait()
+            err.seek(0)
+            return p.returncode or tar.returncode, (p.stdout + p.stderr + err.read()).decode(errors="replace")
 
     def ssh_argv(self, cmd):
         return ["ssh", "-q", "-i", self.key, "-p", str(SSH_FWD), "-o", "StrictHostKeyChecking=no",
@@ -654,11 +655,15 @@ def shelter_build(box_id, route, drop):
     repo.adapters = check.load_adapters()
     repo.boxes = {box_id: load(f"boxes/{box_id}/box.toml")}
     repo.raw = {k: open(os.path.join(ROOT, k), "rb").read() for k in (f"boxes/{box_id}/box.toml", f"adapters/{fam}.toml")}
-    old = os.umask(0o022)  # as `wend replay` builds its walks (SPEC "How a hop runs")
+    old, rw = os.umask(0o022), None  # as `wend replay` builds its walks (SPEC "How a hop runs")
     try:
         rw = walk.Walk(repo, route, box_id, log=log)
         if not rw.shelter_before(drop):
             return rw, None
+    except BaseException:
+        if rw:  # a chroot copy is a few GB: never leave one behind
+            rw.close()
+        raise
     finally:
         os.umask(old)
     a, keeps = guest_adapter(fam), shelter.keeps_runtimes_on(rw.adapter, route)
@@ -674,7 +679,12 @@ def shelter_copy_check(rw, app, plan):
     lock = tomllib.load(open(f"{os.path.realpath(rw.box.root)}{shelter.SHELTER}/{app}/shelter.lock", "rb"))
     sha = lambda t: hashlib.sha256((t + "\n").encode()).hexdigest()  # noqa: E731
     gname = lock["group"].split(":", 1)[0]
-    out = [f"[ \"$(grep '^{plan['user']}:' /etc/passwd | sha256sum | cut -d' ' -f1)\" = {sha(lock['user'])} ] || "
+    # SPEC "How it runs on the host": idmapped mounts need ext4, XFS or btrfs (the kernel mounts ext3 as ext3 type,
+    # which can't be idmapped)
+    out = [f"for d in {' '.join([plan['code']] + plan['data'])}; do case \"$(findmnt -no FSTYPE -T $d)\" in "
+           "ext4|xfs|btrfs) ;; *) echo \"$d is on $(findmnt -no FSTYPE -T $d), which can't be idmapped\"; exit 1;; "
+           "esac; done",
+           f"[ \"$(grep '^{plan['user']}:' /etc/passwd | sha256sum | cut -d' ' -f1)\" = {sha(lock['user'])} ] || "
            f"{{ echo 'the guest has another passwd line for {plan['user']} than the shelter was built with'; exit 1; }}",
            f"[ \"$(grep \"^$(id -gn {plan['user']}):\" /etc/group | sha256sum | cut -d' ' -f1)\" = {sha(lock['group'])} ] || "
            f"{{ echo 'the guest has another group line than the shelter was built with ({gname})'; exit 1; }}"]
@@ -704,7 +714,8 @@ def shelter_confine(g, box_doc, a, plan, passing):
             lost = sorted(n for n in passing if not ch.get(n, (False,))[0])
             r["enforcing_lost"], r["enforcing_failed_logs"] = lost, {n: ch.get(n, (False, ""))[1][-1500:] for n in lost}
             rc, o = g.ssh(shelter.vm_probe(app, p, outside), timeout=1200)
-            r["enforcing"] = {"ok": rc == 0, "log": o[-6000:]}
+            # the guard sets permissive after 15 minutes: a probe that ran after it proves nothing about enforcing
+            r["enforcing"] = {"ok": rc == 0 and "fact selinux=Enforcing" in o.splitlines(), "log": o[-6000:]}
         for _ in range(20):  # if enforcing cut ssh off, the guard sets permissive again within 15 minutes
             rc, o = g.ssh(shelter.VM_ENFORCE_OFF, timeout=120)
             if rc not in (124, 255):
@@ -910,7 +921,8 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
                                 "facts", {}).get("lock") else built.get(app, {}).get("lock_sha256"),
                             "image": built.get(app, {}).get("image"), "tier": "vm",
                             "built": "chroot copy of the box on the route's start release, copied into the guest",
-                            "confinement_proved": bool(last) and complete and all(
+                            "confinement_proved": bool(last) and complete and any(  # from the drop hop, in this run
+                                h["to"] == drop and "shelter" in h for h in hops) and all(
                                 h.get("ok") for h in hops) and all(r["ok"] for r in last.values()),
                             "subuid": last.get(app, {}).get("facts", {}).get("subuid")} for app in sorted(plan)]
     if resume:

@@ -149,6 +149,7 @@ services = "for p in $(ls /etc/rc.d/init.d/* /usr/lib/systemd/system/*.service 2
 # and crontab line, or the shelter's unit and timer (whose confinement the VM tier probes on its own).
 [vm]
 ssh_port = 2222
+root_fs = "xfs"  # the shelter's mounts are idmapped, which the ext3 the VM tier installs by default can't be
 skip = ["db", "app", "cron"]
 
 [vm.live]
