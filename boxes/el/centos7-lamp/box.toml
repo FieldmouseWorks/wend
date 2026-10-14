@@ -5,11 +5,11 @@ schema = "wend.box/0"
 family = "el"
 release = "centos7"
 arch = "x86_64"
-summary = "CentOS 7.9 LAMP: httpd 2.4 + mod_php 5.4 (mysqli) + mod_ssl, MariaDB 5.5 with a real row, EPEL (fail2ban guarding ssh on 2222, htop, ncdu, jq), firewalld with custom ports, NetworkManager with a static ifcfg, Python 2 libraries, postfix, chrony, cron"
+summary = "CentOS 7.9 LAMP: httpd 2.4 + mod_php 5.4 (mysqli) + mod_ssl, MariaDB 5.5 with a real row, EPEL (fail2ban guarding ssh on 2222, htop, ncdu, jq), firewalld with custom ports, NetworkManager with a static ifcfg, tuned (from @core), Python 2 libraries, postfix, chrony, cron"
 packages = ["httpd", "mod_ssl", "php", "php-mysql", "php-gd", "php-mbstring", "php-xml", "mariadb-server", "mariadb",
             "openssh-server", "openssh-clients", "postfix", "cronie", "crontabs", "sudo", "perl", "curl", "rsync",
             "python", "MySQL-python", "python-requests", "logrotate", "chrony", "which", "firewalld", "NetworkManager",
-            "initscripts"]
+            "initscripts", "tuned"]
 customize = '''
 set -e
 grep -q localhost /etc/hosts 2>/dev/null || printf '127.0.0.1 localhost localhost.localdomain\n' >> /etc/hosts
@@ -74,8 +74,9 @@ postconf -e myhostname=oldbox.example.org
 useradd -m -s /bin/bash alice
 mkdir -p /home/alice/backup
 echo '0 3 * * * /usr/bin/rsync -a /var/www/ /home/alice/backup/ # nightly-backup' | crontab -u alice -
+# tuned: every @core install has it, and it requires polkit (which el9-drop-orphaned-polkit then has to keep)
 # what an EL7 admin enables (the presets leave httpd, mariadb and fail2ban off)
-systemctl enable httpd mariadb fail2ban firewalld sshd postfix crond chronyd NetworkManager
+systemctl enable httpd mariadb fail2ban firewalld sshd postfix crond chronyd NetworkManager tuned
 yum clean all >/dev/null
 mkdir -p /etc/wend/secrets && printf 'apppw' > /etc/wend/secrets/app-db && chmod 600 /etc/wend/secrets/app-db
 # a static address pinned to the NIC's MAC (QEMU's default), as EL7's installer writes it when the boot line names
@@ -89,7 +90,7 @@ start_hook = "rpm -qa --qf '%{NAME}\\n' | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 
 isolate = ["db", "site"]
 
 [roles]
-boot = "for u in httpd mariadb sshd postfix crond fail2ban firewalld $(test -f /usr/lib/systemd/system/php-fpm.service && echo php-fpm); do [ \"$(systemctl is-enabled $u 2>/dev/null)\" = enabled ] || { echo \"$u does not start at boot\"; exit 1; }; done"
+boot = "for u in httpd mariadb sshd postfix crond fail2ban firewalld tuned $(test -f /usr/lib/systemd/system/php-fpm.service && echo php-fpm); do [ \"$(systemctl is-enabled $u 2>/dev/null)\" = enabled ] || { echo \"$u does not start at boot\"; exit 1; }; done"
 ssh = "mkdir -p /var/run/sshd /run/sshd; /usr/sbin/sshd -t && grep -q '^Port 2222' /etc/ssh/sshd_config"
 cron = "test -x /usr/sbin/crond && crontab -l -u alice | grep nightly-backup"
 python = "python3 -c 'print(6*7)' | grep 42 || python -c 'print 6*7' | grep 42"
@@ -110,4 +111,4 @@ services = "for p in $(ls /etc/rc.d/init.d/* /usr/lib/systemd/system/*.service 2
 [vm]
 ssh_port = 2222
 skip = ["db", "site"]
-live = { daemons = "for i in $(seq 1 30); do ok=1; for p in httpd master crond sshd firewalld; do pgrep -x $p >/dev/null || ok=0; done; pgrep -x 'mysqld|mariadbd' >/dev/null || ok=0; pgrep -f fail2ban-server >/dev/null || ok=0; [ $ok = 1 ] && exit 0; sleep 2; done; for p in httpd master crond sshd firewalld; do pgrep -x $p >/dev/null || echo \"$p is not running\"; done; pgrep -x 'mysqld|mariadbd' >/dev/null || echo 'no mysqld or mariadbd is running'; pgrep -f fail2ban-server >/dev/null || echo 'fail2ban-server is not running'; exit 1", db = "for i in $(seq 1 30); do (mysql -uapp -papppw -N -e 'select msg from app.t' 2>/dev/null || mariadb -uapp -papppw -N -e 'select msg from app.t' 2>/dev/null) | grep -q 'row from 2017' && exit 0; sleep 2; done; exit 1", site = "for i in $(seq 1 30); do curl -s -H 'Host: mysite.local' http://127.0.0.1/ | grep -q 'hello from oldbox OK row from 2017' && exit 0; sleep 2; done; curl -s -H 'Host: mysite.local' http://127.0.0.1/ | head -c 300; exit 1" }
+live = { daemons = "for i in $(seq 1 30); do ok=1; for p in httpd master crond sshd firewalld tuned; do pgrep -x $p >/dev/null || ok=0; done; pgrep -x 'mysqld|mariadbd' >/dev/null || ok=0; pgrep -f fail2ban-server >/dev/null || ok=0; [ $ok = 1 ] && exit 0; sleep 2; done; for p in httpd master crond sshd firewalld tuned; do pgrep -x $p >/dev/null || echo \"$p is not running\"; done; pgrep -x 'mysqld|mariadbd' >/dev/null || echo 'no mysqld or mariadbd is running'; pgrep -f fail2ban-server >/dev/null || echo 'fail2ban-server is not running'; exit 1", db = "for i in $(seq 1 30); do (mysql -uapp -papppw -N -e 'select msg from app.t' 2>/dev/null || mariadb -uapp -papppw -N -e 'select msg from app.t' 2>/dev/null) | grep -q 'row from 2017' && exit 0; sleep 2; done; exit 1", site = "for i in $(seq 1 30); do curl -s -H 'Host: mysite.local' http://127.0.0.1/ | grep -q 'hello from oldbox OK row from 2017' && exit 0; sleep 2; done; curl -s -H 'Host: mysite.local' http://127.0.0.1/ | head -c 300; exit 1" }
