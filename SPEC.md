@@ -1483,7 +1483,9 @@ The rules:
   the run; a guest that doesn't come up from the last good disk, or a box it can't read, does. It records what was obsolete before and after.
 - Adapter: `releases.<id>.install` names a start release's installer. EL: its `tree` through the shim and the
   `pxeboot` dir in it (the shim answers single byte ranges, which anaconda uses to read package headers), `packages`
-  (what the install needs besides the box's: the bootloader), `ks_end` (sections end with `%end`), `append`
+  (what the install needs besides the box's: the bootloader), `ks_end` (sections end with `%end`), `nobase`
+  (default on: `%packages --nobase`, which EL8's installer refuses), `repos` (trees besides `tree`, each a kickstart
+  `repo`: EL8's AppStream), `append`
   (kernel arguments for the installer and the installed system) and `ifname` (the installer's boot line names the NIC
   by MAC, `ifname=eth0:<mac>`, so EL7's installer pins the ifcfg to it with `HWADDR`, as a box booted that way has)
   and `boot_part_mib`, the size of the `/boot` partition in MiB (CentOS 7: 1024, 7.9's installer default; 200 when

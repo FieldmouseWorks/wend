@@ -14,7 +14,8 @@ customize = '''
 set -e
 grep -q localhost /etc/hosts 2>/dev/null || printf '127.0.0.1 localhost localhost.localdomain\n' >> /etc/hosts
 # EPEL the way most boxes got it (dnf install epel-release, from CentOS extras): the package ships the repo file and
-# the key. The build reaches EPEL 8 through the harness's mirror shim; the hops replace every repo file.
+# the key. The build reaches EPEL 8 through the harness's mirror shim, from the archived 8.5 snapshot a box built in
+# 2021 got: live EPEL 8 has moved on (its fail2ban needs an EL 8.7 SELinux policy). The hops replace every repo file.
 cat > /etc/yum.repos.d/box-build.repo <<'EOF'
 [box-extras]
 name=box-extras
@@ -22,7 +23,7 @@ baseurl=http://127.0.0.1:8085/vault.centos.org/8.5.2111/extras/x86_64/os/
 gpgcheck=0
 [box-epel]
 name=box-epel
-baseurl=http://127.0.0.1:8085/dl.fedoraproject.org/pub/epel/8/Everything/x86_64/
+baseurl=http://127.0.0.1:8085/archives.fedoraproject.org/pub/archive/epel/8.5/Everything/x86_64/
 gpgcheck=0
 EOF
 Y="dnf -y --disablerepo=* --enablerepo=centos8-*,box-*"
@@ -104,3 +105,10 @@ site = "mkdir -p /var/run/mysqld /run/mariadb /var/run/mariadb 2>/dev/null; chow
 current = "M=$(grep -o '[0-9][0-9]*' /etc/redhat-release | head -n1); for f in $(command -v php) /usr/sbin/httpd $(command -v fail2ban-server) $(ls /usr/sbin/php-fpm /usr/libexec/mariadbd /usr/libexec/mysqld /usr/sbin/mariadbd 2>/dev/null | head -n2) $(cd /etc/httpd && grep -h '^ *LoadModule php' conf.d/*.conf conf.modules.d/*.conf 2>/dev/null | awk '{print \"/etc/httpd/\" $3}'); do p=$(rpm -qf --qf '%{NAME}-%{VERSION}-%{RELEASE}' \"$(readlink -f $f)\" 2>/dev/null); echo \"$p\" | grep -qE \"[._]el${M}([._]|$)\" || { echo \"$f comes from '$p', not a release-$M package\"; exit 1; }; done"
 network = "M=$(grep -o '[0-9][0-9]*' /etc/redhat-release | head -n1); if [ $M -ge 10 ]; then K=$(grep -lx 'interface-name=eth0' /etc/NetworkManager/system-connections/*.nmconnection 2>/dev/null | head -n1); [ -n \"$K\" ] && [ \"$(stat -c %a \"$K\")\" = 600 ] && awk '/^\\[/ {s = $0} s == \"[ipv4]\" && $0 == \"method=manual\" {m = 1} END {exit !m}' \"$K\" && grep -iqx 'mac-address=52:54:00:12:34:56' \"$K\" && ! grep -qx 'autoconnect=false' \"$K\" && grep -iqx 'MACAddress=52:54:00:12:34:56' /etc/systemd/network/10-wend-eth0.link && grep -qx 'Name=eth0' /etc/systemd/network/10-wend-eth0.link && grep -Eqx 'address1=10\\.0\\.2\\.20/24(,10\\.0\\.2\\.2)?' \"$K\" && grep -Eqx '(address1=10\\.0\\.2\\.20/24,10\\.0\\.2\\.2|gateway=10\\.0\\.2\\.2)' \"$K\" || { echo 'eth0 has no 0600 autoconnecting keyfile for its MAC with the static 10.0.2.20/24 via 10.0.2.2, or no .link pinning eth0 to that MAC'; exit 1; }; else grep -qx 'IPADDR=10.0.2.20' /etc/sysconfig/network-scripts/ifcfg-eth0 || { echo 'ifcfg-eth0 lost the static 10.0.2.20'; exit 1; }; fi"
 services = "for p in $(ls /etc/rc.d/init.d/* /usr/lib/systemd/system/*.service 2>/dev/null | xargs rpm -qf --qf '%{NAME}\\n' 2>/dev/null | grep -v 'not owned' | sort -u); do case $p in dbus-daemon|dbus-broker|hostname|readonly-root|netconsole-service|systemd|systemd-udev|systemd-container) continue;; esac; f=$(echo $p | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 's/^mariadb$/mysql/' -e 's/^chrony$/ntp/' -e 's/^cronie$/vixie/' -e 's/^openssh$/openssh/'); grep -qxs \"$f\" /var/lib/wend-expected-families /var/lib/wend/added-families && continue; for c in $p $(rpm -q --provides $p | awk '{print $1}'); do rpm -q --whatrequires \"$c\" >/dev/null 2>&1 && continue 2; done; echo \"unexpected new service package: $p\"; exit 1; done"
+
+# tools/vm.py: the box on a real install. sshd listens on 2222; db and site start their own daemons, so the VM runs
+# live checks instead, against the services the box starts at boot.
+[vm]
+ssh_port = 2222
+skip = ["db", "site"]
+live = { daemons = "for i in $(seq 1 30); do ok=1; for p in httpd php-fpm master crond sshd firewalld; do pgrep -x $p >/dev/null || ok=0; done; pgrep -x 'mysqld|mariadbd' >/dev/null || ok=0; pgrep -f '[f]ail2ban-server' >/dev/null || ok=0; [ $ok = 1 ] && exit 0; sleep 2; done; for p in httpd php-fpm master crond sshd firewalld; do pgrep -x $p >/dev/null || echo \"$p is not running\"; done; pgrep -x 'mysqld|mariadbd' >/dev/null || echo 'no mysqld or mariadbd is running'; pgrep -f '[f]ail2ban-server' >/dev/null || echo 'fail2ban is not running'; exit 1", db = "for i in $(seq 1 30); do (mysql -uapp -papppw -N -e 'select msg from app.t' 2>/dev/null || mariadb -uapp -papppw -N -e 'select msg from app.t' 2>/dev/null) | grep -q 'row from 2021' && exit 0; sleep 2; done; exit 1", site = "for i in $(seq 1 30); do curl -s -H 'Host: mysite.local' http://127.0.0.1/ | grep -q 'hello from oldbox OK row from 2021' && exit 0; sleep 2; done; curl -s -H 'Host: mysite.local' http://127.0.0.1/ | head -c 300; exit 1" }
