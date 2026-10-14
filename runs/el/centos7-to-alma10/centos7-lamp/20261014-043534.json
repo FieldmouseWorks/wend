@@ -1,0 +1,131 @@
+{
+ "schema": "wend.run/0",
+ "route": "sha256:dc15a5e0c6043d15b7886b3ba5fb10ec863de2850da8837dda6c909c1f919c9a",
+ "box": "el/centos7-lamp",
+ "from": "centos7",
+ "to": "alma10",
+ "result": "pass",
+ "started": "20261014-043534",
+ "wall_seconds": 389,
+ "start_fingerprint": "sha256:4528b7c8787ab91250bcc48ce8d8de76ad9a818e4bc896a0cf9405296698b334",
+ "runner": {
+  "kind": "local",
+  "host": "vm",
+  "kernel": "6.18.44-fc-v114"
+ },
+ "hops": [
+  {
+   "to": "alma9",
+   "fired": [
+    "sha256:279d163af02ab241345b5aa6b4678185637716b75c68394472d569ec1179f10d",
+    "sha256:73acc8324fd1db83504a175c1fd293e5010f183c2c48b9200dfd7903accdbcde",
+    "sha256:ff383fd999c7033ab0d6ac8be0eaef10ad2e6edd1cd9553bc22ed104bb4deb82",
+    "sha256:dc8ab830df9ba3d27b0b18113e5769c26c323621769c4422b81fdf160c8ac3c2",
+    "sha256:6649eef1d09962533b758d4bed8517c06be571a0223f016edd9f412b5253c76d",
+    "sha256:f8cd106d8585a364704f76301312db8bde4ebc9cc84713e2dbd3b31190b93e3c",
+    "sha256:539a3a37c796947becb310ede7def08657e2681c30ca31d69e8a03ae3710364e",
+    "sha256:a6ba72c3702a5918b725303fb0871a3a50804fb01992f1069cb5164cf37febfb",
+    "sha256:01021746715819d50c528760afd6689e3185deabbec320bffde13791cc11e56f",
+    "sha256:5ba8445d57679f7eef5794e4dda7f855a95a7ee8a6dd196e0b4720724abda483",
+    "sha256:608d59864a7bbcc47c69815e74183389e4865933edae0fb17dcc9e3b9e6770b7",
+    "sha256:f4341598b841b3e004c75aca526d92da77a6997f6164bc1b44423eb82f55c36a",
+    "sha256:d99088da93a73b9606892e9b835938c7598c86e33c3918d7df079664690c310a",
+    "sha256:e5628318d9da0c87e659f4d2316a01e2bb78ab5a2e4037f81e4edf2c49e1dfa5",
+    "sha256:c5de001649525a86c2727b966232869401546ceb6cd0e982e39ec46ceb3fecf9",
+    "sha256:7aa2ee229b394192cc90f13098dea996af758664709e416eb8add860aabeeb9c",
+    "sha256:645af92e570ed65e10a8d48297fcc9012a6a2e7723cceb4eac2084a73a27522d",
+    "sha256:556ad7e8b1bfbbabb4c90f12396901dee97680bbb101e0854b1a31e628c1783d"
+   ],
+   "fired_names": [
+    "mariadb55-rehash-app-password",
+    "mariadb-slow-shutdown-alma9",
+    "el9-record-boot-services",
+    "el9-fail2ban-through-el8",
+    "el8-transit-epel",
+    "el9-php-fpm-stack",
+    "el9-mod-ssl",
+    "el9-php-gd",
+    "el9-php-mbstring",
+    "el9-php-xml",
+    "el9-php-mysqlnd",
+    "el9-mariadb-server",
+    "el9-ssh-host-keys",
+    "el9-mariadb-config",
+    "el9-httpd-config",
+    "el9-drop-orphaned-polkit",
+    "el9-carry-boot-services",
+    "el9-enable-php-fpm"
+   ],
+   "ok": true,
+   "seconds": 241.8,
+   "sources": {
+    "https://dl.fedoraproject.org/pub/epel/8/Everything/x86_64/repodata/repomd.xml": "sha256:dfe9b2a1e8db1c7ce73057a30e39cd48acc21a9f9f08b7e6a19dda9b18c585c7",
+    "https://dl.fedoraproject.org/pub/epel/9/Everything/x86_64/repodata/repomd.xml": "sha256:37105cee44409ad892cfa95d26cb6a7d0a926cc11033ef0a5329028f554ff7cd",
+    "https://repo.almalinux.org/almalinux/8/AppStream/x86_64/os/repodata/repomd.xml": "sha256:4421ed5f4e73a339f4a3d913dad71572cc48b42137ae1c880a079762865d7711",
+    "https://repo.almalinux.org/almalinux/8/BaseOS/x86_64/os/repodata/repomd.xml": "sha256:e875ef3189d0edac3588ae25b6f50cd19cf6d59a0616fa5d2f386eddf3528b8f",
+    "https://repo.almalinux.org/almalinux/9/AppStream/x86_64/os/repodata/repomd.xml": "sha256:1783db5db28f78f4ff4dbb75789b17c5e7d58f08901bf560406f09a287c4dfdc",
+    "https://repo.almalinux.org/almalinux/9/BaseOS/x86_64/os/repodata/repomd.xml": "sha256:6825d86f66c22c9757a4f2c12845ed7c18bd80873415b06516cc6e9ea883bd9f",
+    "https://vault.centos.org/7.9.2009/extras/x86_64/repodata/repomd.xml": "sha256:ded127650d783f91b8a207e9c8829f8bab6100ab252fb4bf167920f6745c6563",
+    "https://vault.centos.org/7.9.2009/os/x86_64/repodata/repomd.xml": "sha256:8b45b07b03813d3248c4fe4f407c4d9e4ebe91ca63591cc9e13243ec719c69e8",
+    "https://vault.centos.org/7.9.2009/updates/x86_64/repodata/repomd.xml": "sha256:d165598c04def2f2e8771309282c7a586b6cc981847676f811ee931f41d46392"
+   }
+  },
+  {
+   "to": "alma10",
+   "fired": [
+    "sha256:c1fb16715be095a9c4da5f4d1d32632118e80929ab1ef9d5e6bf9b1ccc85b768",
+    "sha256:78137ec7ec6f5a60306d6a0e9fc96233b3c27300458e41ff1e13ca6e00ddd207",
+    "sha256:9f480040978dfb8e301d1b399f32217d7ff38e0f8a2cc14c6ac08f0ea1cb613d",
+    "sha256:e149cac8858a9a4c42573ba0795f980b0154f1ab8587a9077a8011b0c04d5ee8",
+    "sha256:29a9351abc67c221a62927b21833dc85aaab6a5ac8b9d5ebdf52adf4248b1b62",
+    "sha256:748edb35d2c7568583fec3585e3b0526eac7e9a8921924976f63829b297496c1"
+   ],
+   "fired_names": [
+    "el10-network-keyfiles",
+    "mariadb-slow-shutdown-alma10",
+    "el10-mariadb-upgrade",
+    "el10-httpd-php-config",
+    "php81-mysqli-report-off",
+    "el10-drop-el8-iptables-ebtables"
+   ],
+   "ok": true,
+   "seconds": 108.0,
+   "sources": {
+    "https://dl.fedoraproject.org/pub/epel/10/Everything/x86_64/repodata/repomd.xml": "sha256:a5db16b3160d31da51ff04bdf6b276830ff499ef601dae21ecc1807271eedad5",
+    "https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/repodata/repomd.xml": "sha256:95a6e13a6dda27ef0332557852b6097d3b4b00ef82993216bc81a23c269053b8",
+    "https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/repodata/repomd.xml": "sha256:1b808d878552003301127b4410f797d87d79e7db2fc8564b44c30f9646f14001"
+   }
+  }
+ ],
+ "start_services": [
+  "README",
+  "functions",
+  "netconsole",
+  "network"
+ ],
+ "failed_stage": "",
+ "final": {
+  "release": "AlmaLinux release 10.2 (Lavender Lion)",
+  "passed": [
+   "boot",
+   "cron",
+   "current",
+   "db",
+   "fail2ban",
+   "firewall",
+   "mail",
+   "network",
+   "php",
+   "pkgdb",
+   "python",
+   "services",
+   "site",
+   "ssh",
+   "tools"
+  ],
+  "failed": [],
+  "failed_logs": {}
+ },
+ "model_calls": 0,
+ "log_sha256": "sha256:cb8236f9c86cd393658a1ab4e79507694fa2cbe3f7f287ca15dc5a5162ec1626"
+}
