@@ -1283,9 +1283,7 @@ Defaults, which the plan shows and the run records:
   (`User=`, recorded in the run), never as root: MariaDB 10.4 and later give `root@localhost` `unix_socket` auth,
   so a root proxy would hand anything in the shelter database root with no password, and an app that logs in by
   `unix_socket` as its own user keeps working. On EL the proxy's directory is app-only, so it gets
-  `container_file_t` (`:Z`) like the app's other directories; whether `container_t` may also `connectto` the
-  proxy's domain is something only the VM tier shows, and if SELinux denies it, `shelter.start`'s check fails and
-  the hop rolls back. The app inside runs as a mapped uid, and that directory has no `:idmap`, so the proxy's
+  `container_file_t` (`:Z`) like the app's other directories. The app inside runs as a mapped uid, and that directory has no `:idmap`, so the proxy's
   socket and its directory are owned by that mapped uid (`SocketUser=`, mode 0600; the directory 0700), not by
   the app's host user. The mapping is fixed (above), so that uid is the same at every start. It and the mapped gid
   get a host system user and group, `wend-<app>`: systemd refuses a `SocketUser=` with no passwd entry (EL9's 252
@@ -1295,7 +1293,29 @@ Defaults, which the plan shows and the run records:
   unit would fail with "Address already in use" under enforcing (found on the VM tier). The socket unit therefore
   removes and recreates its directory first (`ExecStartPre=`, run unconfined), and the shelter, which `Requires=`
   it, restarts with it and mounts the new one. The VM tier's enforcing window restarts each socket unit to prove
-  it. An app that reaches a host service over
+  it.
+- **The proxies under SELinux.** Every proxy above, socket and port alike, starts from a script of wend's in
+  `/usr/libexec/wend/` that execs the stock `systemd-socket-proxyd` (the port proxy's being its
+  wait-then-`nsenter` script). The script is `bin_t`, so systemd starts it unconfined (`unconfined_service_t`), and
+  an unconfined domain execs the proxy without a transition; a copy of the binary would do the same but keep the
+  old `libsystemd-shared` past the next hop's upgrade. Started directly, the stock binary runs as the
+  confined `systemd_socket_proxyd_t`, which on EL9 may not accept a socket another unit hands it, read `/proc/<pid>`
+  to join the shelter's namespace, connect to an arbitrary port, or reach MariaDB's socket (all found on the VM
+  tier under enforcing). Writing policy for each app's ports and services would be a module per shelter; the trade
+  is that the host side of the bridge is unconfined, like any other root-installed service started from
+  `/usr/libexec`. It runs as the app's host user (socket proxies) or `nobody` in the shelter's network namespace
+  only (port proxies), and the app itself is still the confined `container_t` process; nothing in the shelter can
+  reach the proxy except through the one socket or port it serves. `container_t` may `connectto` an unconfined
+  service only by one rule, which `shelter.start` loads as a CIL module (`wend_shelter`, written to
+  `/etc/wend/shelter/wend_shelter.cil`, loaded with `semodule -i`, no policy compiler needed) where SELinux is on:
+  `(allow container_t unconfined_service_t (unix_stream_socket (connectto)))`. It lets a container connect to an
+  unconfined service's socket that it can already reach on its filesystem, which in a shelter is only the proxy's.
+  A box with SELinux disabled gets no module; turning SELinux on later means running `shelter.start` again.
+- **One SELinux level per shelter.** `:Z` relabels a volume with the level of the container that mounts it, and
+  podman picks a random level per container, so a cron container's start relabels the data directory away from the
+  running shelter (the likely cause of the data-directory write denials on the VM tier). All of a shelter's containers run at `s0:c<K>,c1023`, `K` being its id-range
+  slot (above, 0 to 255), so they share their volumes and no two shelters share a level.
+- **TCP host services.** An app that reaches a host service over
   TCP on `127.0.0.1` can't be served without changing its config, which wend doesn't do: the plan names it, and the
   owner's choices are `network = "host"` (opted in by name, recorded in the run as an exception) or editing the app.
 - **Mounts:** the code tree read-only (`:ro,idmap`, so a tree only its owner can read stays readable). Data directories read-write (`:idmap`): the ones the program has open for

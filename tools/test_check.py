@@ -448,6 +448,31 @@ if all(w in _lines for w in _want) and [_lines.index(w) for w in _want] == sorte
 else:
     print(f"WRONG   the socket proxy's unit: {_sock}")
     bad += 1
+# the proxies run wend's bin_t copy (unconfined under SELinux), the shelter's containers share one level, and the
+# whole start step still parses
+_pp = shelter.start_units("billing", {**_pyplan, "ports": ["127.0.0.1:8080"]}, "centos7")
+_ok = (f"ExecStart={shelter.PROXYD} /var/lib/mysql/mysql.sock" in _pp.splitlines() and
+       f"ExecStart={shelter.PORT_PROXY}-billing 127.0.0.1:8080" in _pp.splitlines() and
+       f"cat > {shelter.PORT_PROXY}-billing <<'WEND_SCRIPT'\n#!/bin/sh\n" in _pp and
+       "(allow container_t unconfined_service_t (unix_stream_socket (connectto)))" in _pp and
+       f"exec {shelter.STOCK_PROXYD} " in _pp and "install -m 0755 /usr/lib/systemd" not in _pp and
+       "/bin/sh /etc/wend" not in _pp and
+       _pp.count("--security-opt label=level:s0:c$K,c1023") == 1 + len(_pyplan.get("cron", [])))
+_r = _sp.run(["bash", "-n"], input=_pp, text=True, capture_output=True)
+print(("passed  " if _ok and _r.returncode == 0 else f"WRONG   {_r.stderr[:300]} ") +
+      "the proxies run /usr/libexec/wend's copy, one SELinux level per shelter, the start step parses")
+bad += not (_ok and _r.returncode == 0)
+_avc = ['type=AVC msg=audit(1.1:2): avc:  denied  { search } for  pid=9 comm="systemd-socket-" name="1" '
+        'scontext=system_u:system_r:systemd_socket_proxyd_t:s0 tcontext=system_u:system_r:init_t:s0 tclass=dir',
+        'type=AVC msg=audit(1.1:3): avc:  denied  { read } for  pid=9 comm="sshd" name="x" '
+        'scontext=system_u:system_r:sshd_t:s0 tcontext=system_u:object_r:etc_t:s0 tclass=file']
+_d = shelter.vm_denials("billing", "\n".join(_avc))
+print(("passed  " if _d == _avc[:1] else f"WRONG   {_d} ") + "the denial list keeps a proxy's denial, not sshd's")
+bad += _d != _avc[:1]
+_on = shelter.vm_enforce_on("billing")
+_ok = _on.index("semodule -DB") < _on.index("setenforce 1") and "semodule -B" in _on and "semodule -B" in shelter.VM_ENFORCE_OFF
+print(("passed  " if _ok else "WRONG   ") + "the enforcing window turns dontaudit off and puts it back")
+bad += not _ok
 try:
     check.box_shell_errors({**web, "roles": ["x"], "vm": {"live": ["x"]}})
     print("passed  box_shell_errors leaves non-table roles and [vm].live to check_box")

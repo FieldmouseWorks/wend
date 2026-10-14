@@ -38,6 +38,9 @@ STANDIN_REAL = "/usr/bin/.wend-podman-real"  # where the real podman waits while
 KEYS = {"centos7": "/etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7"}
 PODMAN = ["podman", "nftables"]  # installed from the landing release by shelter.start
 ADDS = ["podman", "nftables"]    # their families, for the services check (SPEC "restores and adds")
+PROXYD, PORT_PROXY = "/usr/libexec/wend/socket-proxy", "/usr/libexec/wend/shelter-port-proxy"
+STOCK_PROXYD = "/usr/lib/systemd/systemd-socket-proxyd"
+CIL = "wend_shelter"  # the SELinux module that lets a shelter reach its socket proxies
 SUBID_BASE, SUBID_SIZE = 1 << 30, 65536  # above useradd's SUB_UID_MAX (600100000): nothing else allocates there
 RUNNER = r'''
 import atexit, os, sys, threading
@@ -487,7 +490,10 @@ HEADER = ("# Written by wend (shelter.start) for the shelter \"{app}\": the owne
 
 
 def podman_run(app, plan, name, publish, command, env=()):
-    """The podman command line a shelter unit runs ($S, $U, $G and $I are the start step's shell variables)."""
+    """The podman command line a shelter unit runs ($S, $U, $G, $I and $K are the start step's shell variables).
+    One SELinux level per shelter, s0:c<K>,c1023, for all its containers: :Z relabels a volume for the container
+    that mounts it, and with podman's random level per container a cron container's start relabels the data
+    directory away from the running shelter (SPEC "How it runs on the host")."""
     vols = [f"-v {plan['code']}:{plan['code']}:ro,idmap"] + [f"-v {x}:{x}:Z,idmap" for x in plan["data"]] + \
         [f"-v /run/wend/shelter/{app}/s{i}:{os.path.dirname(x)}:Z" for i, x in enumerate(plan.get("sockets", []))]
     # 0.0.0.0 is published; a program listening on 127.0.0.1 listens on the shelter's own loopback, which podman's
@@ -497,7 +503,8 @@ def podman_run(app, plan, name, publish, command, env=()):
     return " ".join(["/usr/bin/podman run --rm", f"--name {name}", "--read-only --tmpfs /tmp --tmpfs /run",
                      f"--uidmap 0:$S:{SUBID_SIZE} --gidmap 0:$S:{SUBID_SIZE}", "--user $U:$G", "--cap-drop=all"] +
                     (["--cap-add=NET_BIND_SERVICE"] if low else []) +
-                    ["--security-opt no-new-privileges", f"--network wend-{app}"] + ports + vols +
+                    ["--security-opt no-new-privileges", "--security-opt label=level:s0:c$K,c1023",
+                     f"--network wend-{app}"] + ports + vols +
                     [f"--env {e}" for e in env] + [image_ref(app), command])
 
 
@@ -555,6 +562,30 @@ def start_units(app, plan, release):
         f"elif getent passwd $MU >/dev/null; then echo \"uid $MU is taken by $(getent passwd $MU | cut -d: -f1)\"; exit 1; "
         f"else useradd -r -l -u $MU -g wend-{app} -M -d / -s /sbin/nologin -c 'wend shelter {app}' wend-{app}; fi",
         f"mkdir -p /etc/wend/shelter /etc/tmpfiles.d /run/wend/shelter/{app}",
+    ]
+    if socks or any(x.startswith("127.0.0.1:") for x in plan.get("ports", [])):
+        # the proxies start from a script of wend's that execs the stock systemd-socket-proxyd. Started directly,
+        # systemd runs that as systemd_socket_proxyd_t, a domain that may not accept a socket systemd made for
+        # another domain, read /proc/<pid> to join the shelter's namespace, or connect to the app's database. The
+        # script is bin_t, which systemd starts unconfined (unconfined_service_t), and an unconfined domain execs
+        # the proxy without a transition: the host side of the bridge, run by root's own systemd. The app's
+        # confinement is the container's process, which this doesn't change (SPEC "How it runs on the host"). A
+        # script, not a copy of the binary: a copy would keep the old libsystemd-shared past the next hop's upgrade
+        parts += ["mkdir -p /usr/libexec/wend",
+                  f"printf '#!/bin/sh\\n# Written by wend (shelter.start). SPEC \"How it runs on the host\".\\n"
+                  f"exec {STOCK_PROXYD} \"$@\"\\n' > {PROXYD}",
+                  f"chmod 0755 {PROXYD}",
+                  "if command -v selinuxenabled >/dev/null && selinuxenabled; then restorecon -R /usr/libexec/wend; fi"]
+    if socks:
+        # container_t may connect to an unconfined service's socket only by this rule; the socket systemd made for
+        # the proxy carries the proxy's domain. Loaded where SELinux is on (the chroot tier has none)
+        parts += [_heredoc(f"/etc/wend/shelter/{CIL}.cil",
+                           ";; Written by wend (shelter.start): a shelter reaches a host socket through wend's proxy,\n"
+                           ";; which runs unconfined. SPEC \"How it runs on the host\".\n"
+                           "(allow container_t unconfined_service_t (unix_stream_socket (connectto)))\n"),
+                  "if command -v selinuxenabled >/dev/null && selinuxenabled; then "
+                  f"semodule -i /etc/wend/shelter/{CIL}.cil; fi"]
+    parts += [
         _heredoc(f"/etc/wend/shelter/{app}.nft",
                  hdr + f"# Egress for the shelter's network (10.90.$K.0/24): replies, DNS to its gateway, the plan's egress.\n"
                  f"table inet wend_shelter_{app}\ndelete table inet wend_shelter_{app}\n"
@@ -592,7 +623,7 @@ def start_units(app, plan, release):
             _heredoc(f"/etc/systemd/system/{unit}-sock{i}.service",
                      hdr + f"[Unit]\nDescription=wend shelter {app}: proxy to {s}\n"
                      f"Requires={unit}-sock{i}.socket\nAfter={unit}-sock{i}.socket\n\n"
-                     f"[Service]\nUser={plan['user']}\nExecStart=/usr/lib/systemd/systemd-socket-proxyd {s}\n")]
+                     f"[Service]\nUser={plan['user']}\nExecStart={PROXYD} {s}\n")]
     port_units = []
     for i, p in enumerate(x for x in plan.get("ports", []) if x.startswith("127.0.0.1:")):
         # outside the wend-shelter-<app>-* names, which the chroot tier's checks start themselves; there the program
@@ -609,12 +640,15 @@ def start_units(app, plan, release):
                      hdr + f"[Unit]\nDescription=wend shelter {app}: proxy to {p} in the shelter\n"
                      f"Requires={name}.socket {unit}.service\nAfter={name}.socket {unit}.service\n"
                      f"BindsTo={unit}.service\nStartLimitIntervalSec=0\n\n[Service]\n"
-                     f"ExecStart=/bin/sh /etc/wend/shelter/{app}.port-proxy {p}\n")]
+                     f"ExecStart={PORT_PROXY}-{app} {p}\n")]
     if port_units:
         # the proxy waits for the shelter's process, then joins its network namespace only (as nobody) and connects
         # to the shelter's own loopback; exec keeps the pid systemd handed the socket to (a quoted heredoc: nothing
         # in it expands when it's written)
-        parts.append(f"cat > /etc/wend/shelter/{app}.port-proxy <<'WEND_SCRIPT'\n" + hdr +
+        # an executable in /usr/libexec (bin_t), not `sh <script>`: systemd runs it, and the proxy it execs,
+        # unconfined, like the socket proxies above
+        parts.append(f"rm -f /etc/wend/shelter/{app}.port-proxy; cat > {PORT_PROXY}-{app} <<'WEND_SCRIPT'\n#!/bin/sh\n" +
+                     hdr +
                      "i=0\n"
                      "while :; do\n"
                      f"  P=$(/usr/bin/podman inspect -f '{{{{.State.Pid}}}}' wend-{app} 2>/dev/null)\n"
@@ -622,8 +656,9 @@ def start_units(app, plan, release):
                      f"  i=$((i + 1)); [ $i -lt 120 ] || {{ echo 'wend-{app} has no running process'; exit 1; }}\n"
                      "  sleep 1\n"
                      "done\n"
-                     "exec /usr/bin/nsenter --net=/proc/$P/ns/net -S 65534 -G 65534 /usr/lib/systemd/systemd-socket-proxyd \"$1\"\n"
-                     "WEND_SCRIPT")
+                     f"exec /usr/bin/nsenter --net=/proc/$P/ns/net -S 65534 -G 65534 {STOCK_PROXYD} \"$1\"\n"
+                     f"WEND_SCRIPT\nchmod 0755 {PORT_PROXY}-{app}\n"
+                     "if command -v selinuxenabled >/dev/null && selinuxenabled; then restorecon /usr/libexec/wend/*; fi")
     parts.append(_heredoc(
         f"/etc/systemd/system/{unit}.service",
         hdr + f"[Unit]\nDescription=wend shelter {app} ({release} userland, unpatched)\n"
@@ -835,11 +870,15 @@ def vm_enforce_on(app):
     """SELinux enforcing for the length of a confinement window (the VM boxes install permissive, and the route itself
     isn't what's being proved): a guard puts permissive back after 15 minutes whatever happens, then the shelter is
     restarted under enforcing (restarting the table unit restarts it, PartOf=), then each socket proxy, which restarts
-    it again (Requires=); on a failure, the units' status."""
+    it again (Requires=); on a failure, the units' status. The policy is rebuilt without its dontaudit rules for the
+    window (semodule -DB), so the denial list has every denial, not only those the policy chose to log; the guard and
+    VM_ENFORCE_OFF rebuild it with them."""
     return ("case \"$(getenforce 2>/dev/null)\" in Enforcing|Permissive) ;; *) echo 'SELinux is disabled'; exit 1;; esac\n"
-            "setsid sh -c 'sleep 900; setenforce 0' </dev/null >/dev/null 2>&1 & echo $! > /run/wend-enforce-guard\n"
+            "setsid sh -c 'sleep 900; setenforce 0; semodule -B' </dev/null >/dev/null 2>&1 & "
+            "echo $! > /run/wend-enforce-guard\n"
             "date +%s > /run/wend-enforce-since\n"
             "if [ -f /var/log/audit/audit.log ]; then wc -c < /var/log/audit/audit.log; else echo 0; fi > /run/wend-avc-from\n"
+            "semodule -DB || { echo 'semodule -DB failed'; exit 1; }\n"
             "setenforce 1 && [ \"$(getenforce)\" = Enforcing ] || { echo 'setenforce 1 failed'; exit 1; }\n"
             f"up() {{ i=0; while [ $i -lt 90 ] && ! systemctl is-active -q wend-shelter-{app}.service; do sleep 2; i=$((i+1)); "
             f"done; systemctl is-active -q wend-shelter-{app}.service && return 0; echo \"the shelter isn't up after $1\"; "
@@ -853,12 +892,16 @@ def vm_enforce_on(app):
 
 VM_ENFORCE_OFF = (
     "setenforce 0; kill $(cat /run/wend-enforce-guard 2>/dev/null) 2>/dev/null; echo \"selinux now $(getenforce)\"\n"
+    "semodule -B || echo 'semodule -B failed: dontaudit rules still off'\n"
     "if [ -f /var/log/audit/audit.log ]; then tail -c +$(( $(cat /run/wend-avc-from) + 1 )) /var/log/audit/audit.log; "
-    "else journalctl -k --since @$(cat /run/wend-enforce-since) 2>/dev/null; fi | grep 'avc: .*denied' | tail -n 60\n"
+    "else journalctl -k --since @$(cat /run/wend-enforce-since) 2>/dev/null; fi | grep 'avc: .*denied' | tail -n 400\n"
     "rm -f /run/wend-enforce-guard /run/wend-enforce-since /run/wend-avc-from; true\n")
 
 
 def vm_denials(app, out):
-    """The AVC denials of an enforcing window that touch the shelter: its domain, its files, its units."""
+    """The AVC denials of an enforcing window that touch the shelter: its domain, its files, its units, its proxies
+    (wend's copy of systemd-socket-proxyd, nsenter, the stock proxy's domain), the sockets they bridge."""
     return [x for x in out.splitlines() if "avc:" in x and
-            re.search(rf"container_t|container_file_t|wend-shelter-{app}|wend-{app}|/run/wend/", x)]
+            re.search(rf"container_t|container_file_t|wend-shelter-{app}|wend-{app}|/run/wend/|/usr/libexec/wend/|"
+                      r"systemd_socket_proxyd|comm=\"systemd-socket-|comm=\"shelter-port-pr|comm=\"nsenter\"|"
+                      r"unconfined_service_t.*tclass=unix_stream_socket|\.sock\b", x)]

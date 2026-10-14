@@ -722,7 +722,7 @@ def shelter_confine(g, box_doc, a, plan, passing):
             r["enforcing"] = {"ok": rc == 0 and {"fact selinux=Enforcing", "fact selinux_end=Enforcing"} <= set(
                 o.splitlines()), "log": o[-6000:]}
         for _ in range(20):  # if enforcing cut ssh off, the guard sets permissive again within 15 minutes
-            rc, o = g.ssh(shelter.VM_ENFORCE_OFF, timeout=120)
+            rc, o = g.ssh(shelter.VM_ENFORCE_OFF, timeout=300)
             if rc not in (124, 255):
                 break
             time.sleep(60)
