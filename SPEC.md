@@ -775,6 +775,9 @@ digits). Effect, for each:
 - `/etc/systemd/network/10-wend-<DEVICE>.link` pins the interface name to the profile's `HWADDR`. Once the ifcfg
   file is gone, nothing else keeps an `eth0` from becoming `ens3`, and the keyfile is bound to the old name and the
   MAC. (Renaming several NICs to kernel names like `eth1` can race the kernel; only single-NIC boxes are proven.)
+  When an earlier `.link` in `/etc/systemd/network` already pins exactly that MAC to that name and nothing else
+  (`[Match] MACAddress=` and `[Link] Name=` only: EL8's installer writes `10-anaconda-ifname-<DEVICE>.link` when booted
+  with `ifname=`), that pin stands and no second one is written.
 - the ifcfg file moves to `SAVED`.
 
 The files are read as `KEY=VALUE` lines and never executed; a value that isn't one word, or holds `$`, a backquote or
@@ -805,7 +808,8 @@ In `/etc/sysconfig/network`, `GATEWAY`, `GATEWAYDEV` and `IPV6INIT` are read as 
 Any other setting in either file (bridges, VLANs, bonds, aliases, IPv6 addresses, `RES_OPTIONS`), a keyfile of the
 same name or a `10-wend-<DEVICE>.link` already there, any `.link` in `/etc/systemd/network`, `/run/systemd/network`,
 `/usr/local/lib/systemd/network`, `/usr/lib/systemd/network` or `/lib/systemd/network` whose name sorts before the
-pin's (systemd applies only the first `.link` that matches, so it could name the NIC something else), two profiles
+pin's (systemd applies only the first `.link` that matches, so it could name the NIC something else) and isn't that
+same pin in `/etc/systemd/network` or a pin of another MAC to another name, two profiles
 that pin one name to different MACs or one MAC to different names, a `route-`, `route6-`, `rule-`, `rule6-` or `keys-`
 file beside a profile, or a value that isn't an address, MAC, boolean or plain name fails the step. Every profile is
 checked and serialized by `nmcli` before the first file is written, so a failure, including `nmcli` missing or

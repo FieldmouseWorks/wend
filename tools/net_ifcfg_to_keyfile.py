@@ -117,10 +117,16 @@ def plan(path, net, resolv):
     pin = f"10-wend-{dev}.link"
     if os.path.lexists(os.path.join(L, pin)):  # someone's pin for this name: never replaced
         fail(f"{path}: {L}/{pin} exists already")
+    pinned = None
     for d in LINK_DIRS:  # systemd applies only the first .link (by file name, over all its directories) that matches
         for n in sorted(os.listdir(d)) if os.path.isdir(d) else []:
             if n.endswith(".link") and n < pin:
-                fail(f"{path}: {d}/{n} comes before {pin}, and systemd uses the first .link that matches")
+                other = mac_pin(os.path.join(d, n))
+                if other == (hw, dev) and d == L:  # EL8's installer, booted with ifname=eth0:<mac>, writes this pin
+                    pinned = pinned or f"{d}/{n}"  # (/run forgets its pins at boot, a vendor's go with its package)
+                # anything but a pin of another MAC to another name may match this NIC, or rename another to dev
+                elif other is None or other[0] == hw or other[1] == dev:
+                    fail(f"{path}: {d}/{n} comes before {pin}, and systemd uses the first .link that matches")
     args = ["type", "ethernet", "con-name", name, "ifname", dev, "ethernet.mac-address", hw]
     if "UUID" in v:  # the plugin's connection.uuid
         if not re.fullmatch(r"[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}", v["UUID"]):
@@ -201,7 +207,34 @@ def plan(path, net, resolv):
         # would get "default" (stable-privacy), moving the box's SLAAC address
         args += ["ipv6.addr-gen-mode", gen or "default-or-eui64"]
     args += ["connection.autoconnect", "yes" if boolean(path, v, "ONBOOT", "yes") else "no"]
-    return c, dev, hw, args
+    return c, dev, hw, pinned, args
+
+
+def mac_pin(path):
+    """(mac, name) when the .link only pins one MAC to one name ([Match] MACAddress=, [Link] Name=), else None"""
+    sections, at = {}, None
+    try:
+        lines = open(path).read().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+    for line in lines:
+        line = line.strip()
+        if not line or line[0] in "#;":
+            continue
+        if re.fullmatch(r"\[[A-Za-z]+\]", line):
+            at = sections.setdefault(line[1:-1], {})
+            continue
+        m = re.fullmatch(r"([A-Za-z]+)\s*=\s*(\S*)", line)
+        if at is None or not m or m.group(1) in at:
+            return None
+        at[m.group(1)] = m.group(2)
+    if sections.keys() != {"Match", "Link"} or sections["Match"].keys() != {"MACAddress"} or \
+            sections["Link"].keys() != {"Name"}:
+        return None
+    mac, name = sections["Match"]["MACAddress"].lower(), sections["Link"]["Name"]
+    if not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", mac) or not re.fullmatch(NAME, name):
+        return None
+    return mac, name
 
 
 def ignored(n):
@@ -225,12 +258,12 @@ def main():
                 resolv["search"] = [d for d in (w[1:2] if w[0] == "domain" else w[1:]) if d != "."]  # no domain
     plans = [plan(f, net, resolv) for f in files]
     pins = {}
-    for (c, dev, hw, args), f in zip(plans, files):  # one pin per name and per MAC (two profiles of one NIC agree)
+    for (c, dev, hw, pinned, args), f in zip(plans, files):  # one pin per name and per MAC (two profiles of one NIC agree)
         for key, other in ((("dev", dev), hw), (("hw", hw), dev)):
             if pins.setdefault(key, (other, f))[0] != other:
                 fail(f"{f} and {pins[key][1]} pin {key[1]} differently")
     keyfiles = []
-    for (c, dev, hw, args), f in zip(plans, files):  # every keyfile serialized before anything is written
+    for (c, dev, hw, pinned, args), f in zip(plans, files):  # every keyfile serialized before anything is written
         try:
             p = subprocess.run(["nmcli", "--offline", "connection", "add"] + args, capture_output=True, text=True)
         except OSError as e:
@@ -241,15 +274,16 @@ def main():
     os.makedirs(K, exist_ok=True)
     os.makedirs(L, exist_ok=True)
     os.makedirs(SAVED + D, exist_ok=True)
-    for (c, dev, hw, args), f, text in zip(plans, files, keyfiles):
+    for (c, dev, hw, pinned, args), f, text in zip(plans, files, keyfiles):
         kf = os.path.join(K, f"{c}.nmconnection")
         write(kf, text, 0o600)
-        write(os.path.join(L, f"10-wend-{dev}.link"), f"[Match]\nMACAddress={hw}\n\n[Link]\nName={dev}\n", 0o644)
+        if not pinned:
+            write(os.path.join(L, f"10-wend-{dev}.link"), f"[Match]\nMACAddress={hw}\n\n[Link]\nName={dev}\n", 0o644)
         if os.path.exists(SAVED + f):  # SAVED keeps the owner's original, whatever later hops do (SPEC)
             os.remove(f)
         else:
             os.replace(f, SAVED + f)
-        print(f"{f} -> {kf}, {dev} pinned to {hw}")
+        print(f"{f} -> {kf}, {dev} pinned to {hw}" + (f" (already, by {pinned})" if pinned else ""))
 
 
 def write(path, text, mode):
