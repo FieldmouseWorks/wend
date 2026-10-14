@@ -17,7 +17,7 @@ const LEVEL_FEATURES: [&[&str]; 2] = [
 
 // ---------- gathering facts ----------
 
-/// What preflight knows about this machine (schema `wend.hardware/2`). Read from the hardware and /proc and /sys,
+/// What preflight knows about this machine (schema `wend.hardware/3`). Read from the hardware and /proc and /sys,
 /// never from the distro's tools, so it reads the same on CentOS 5 as on trixie. The one exception is who owns a
 /// Python 2 program (SPEC "Runtime preflight"): on rpm machines only `rpm` can read its database.
 pub fn gather() -> Result<Value, String> {
@@ -60,11 +60,11 @@ pub fn gather() -> Result<Value, String> {
         })
         .map_or(Value::Null, |kb| json!(kb / 1024));
     Ok(json!({
-        "schema": "wend.hardware/2",
+        "schema": "wend.hardware/3",
         "arch": arch,
         "userland_bits": userland,
         "cpu": {"model": model, "features": features, "hypervisor": hypervisor},
-        "boot": if Path::new("/sys/firmware/efi").exists() { "uefi" } else { "bios" },
+        "boot": firmware(Path::new("/sys")),
         "ram_mib": ram_mib,
         "free_mib": free_mib("/").map_or(Value::Null, |m| json!(m)),
         "boot_dir": boot_dir(Path::new("/boot"), &release),
@@ -77,6 +77,43 @@ pub fn gather() -> Result<Value, String> {
 
 /// The filesystems driver tables say whether a kernel mounts (`fs` lines); a mount of any other type isn't checked.
 const FILESYSTEMS: &[&str] = &["ext2", "ext3", "ext4", "xfs", "btrfs", "reiserfs", "jfs"];
+
+/// The firmware the machine booted by: `bios`, `uefi`, or `uefi-secureboot` when Secure Boot is on or its state
+/// can't be read. A Secure Boot chain is a separate claim (shim, signed GRUB and kernels across every hop, the
+/// firmware's revocation list), so an unknown state fails closed. A missing variable is read as the kernel's
+/// efi_get_secureboot_mode reads it: a firmware without Secure Boot has no `SecureBoot` variable (OVMF's non-secboot
+/// builds, older UEFI), which means off; a variable that can't be read, or no readable store, is unknown. (The kernel
+/// also counts SetupMode and MokSBState as off; wend doesn't, so it can only err toward refusing.) efivarfs holds 4 attribute
+/// bytes, then the value; the older sysfs interface (trusty's 3.13 without efivarfs mounted) the value alone in `data`.
+fn firmware(sys: &Path) -> &'static str {
+    let efi = sys.join("firmware/efi");
+    if !efi.exists() {
+        return "bios";
+    }
+    const SB: &str = "SecureBoot-8be4df61-93ca-11d0-aa0d-00e098032b8c";
+    // the first variable interface the kernel offers that lists any variable
+    let listed = |d: &Path| std::fs::read_dir(d).is_ok_and(|mut r| r.next().is_some());
+    let value = if listed(&efi.join("efivars")) {
+        match std::fs::read(efi.join("efivars").join(SB)) {
+            Ok(b) => b.get(4).copied(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(0),
+            Err(_) => None,
+        }
+    } else if listed(&efi.join("vars")) {
+        match std::fs::read(efi.join("vars").join(SB).join("data")) {
+            Ok(b) => b.first().copied(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(0),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    if value == Some(0) {
+        "uefi"
+    } else {
+        "uefi-secureboot"
+    }
+}
 
 /// Every mounted disk filesystem preflight checks (one entry per filesystem; bind mounts of it are left out): where it
 /// is mounted, its device, its type, and from its superblock whether an XFS is the old v4 format and an ext2/3/4's
@@ -695,8 +732,8 @@ const CLASS_ONLY_MAYBE: &[&str] = &["ata_generic", "ide_pci_generic", "pata_acpi
 
 /// Facts from a file are held to the shape `gather` writes: a check whose input is missing never passes by default.
 pub fn check_facts(f: &Value) -> Result<(), String> {
-    let bad = |what: &str| Err(format!("not a wend.hardware/2 facts file: {what}"));
-    if f["schema"] != "wend.hardware/2" {
+    let bad = |what: &str| Err(format!("not a wend.hardware/3 facts file: {what}"));
+    if f["schema"] != "wend.hardware/3" {
         return bad("schema (gather the facts again with this client: wend facts)");
     }
     if !crate::runtime::check(&f["runtimes"]) {
@@ -739,6 +776,9 @@ pub fn check_facts(f: &Value) -> Result<(), String> {
     }
     if f["userland_bits"] != json!(32) && f["userland_bits"] != json!(64) {
         return bad("userland_bits");
+    }
+    if !matches!(f["boot"].as_str(), Some("bios" | "uefi" | "uefi-secureboot")) {
+        return bad("boot");
     }
     if !f["cpu"]["features"]
         .as_array()
@@ -795,6 +835,14 @@ fn vm_hint(level: usize) -> String {
     )
 }
 
+/// How a refusal names a firmware mode.
+fn firmware_name(boot: &str) -> String {
+    match boot {
+        "uefi-secureboot" => "UEFI with Secure Boot on (or its state unreadable)".into(),
+        b => b.to_uppercase(),
+    }
+}
+
 /// The verdict for one route on one machine's facts: every hop's problems (things that would leave the machine
 /// unbootable or unreachable), its notes, and the furthest release it can land on.
 pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, String> {
@@ -831,10 +879,10 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
         machine.push(format!(
             "this machine boots by {}; the {fam} routes are proven on {} machines only, and wend doesn't walk a \
              machine through boot steps it hasn't proven",
-            boot.to_uppercase(),
+            firmware_name(boot),
             proven
                 .iter()
-                .map(|b| b.to_uppercase())
+                .map(|b| firmware_name(b))
                 .collect::<Vec<_>>()
                 .join(" and ")
         ));
@@ -1339,7 +1387,7 @@ mod tests {
     }
 
     fn machine(features: &[&str], vm: bool, pci: Vec<Value>) -> Value {
-        json!({"schema": "wend.hardware/2", "arch": "x86_64", "userland_bits": 64,
+        json!({"schema": "wend.hardware/3", "arch": "x86_64", "userland_bits": 64,
                "cpu": {"model": "test", "features": features, "hypervisor": vm}, "boot": "bios",
                "ram_mib": 4096, "free_mib": 20000,
                "boot_dir": {"separate": false, "total_mib": 20000, "free_mib": 20000, "kernels": []},
@@ -1366,6 +1414,61 @@ mod tests {
             .collect();
         m["boot_dir"] = json!({"separate": true, "total_mib": total, "free_mib": total - used, "kernels": ks});
         m
+    }
+
+    #[test]
+    fn firmware_reads_secure_boot_from_either_interface_and_fails_closed() {
+        let t = std::env::temp_dir().join(format!("wend-fw-{}", std::process::id()));
+        let sb = "SecureBoot-8be4df61-93ca-11d0-aa0d-00e098032b8c";
+        let _ = std::fs::remove_dir_all(&t);
+        std::fs::create_dir_all(&t).unwrap();
+        assert_eq!(firmware(&t), "bios");
+        std::fs::create_dir_all(t.join("firmware/efi/efivars")).unwrap();
+        assert_eq!(
+            firmware(&t),
+            "uefi-secureboot",
+            "no variable store to read fails closed"
+        );
+        // the store as OVMF without Secure Boot leaves it (a real trusty-web-updated guest): variables, none of them
+        // SecureBoot, which the kernel's EFI stub reads as off ("secureboot: Secure boot disabled")
+        std::fs::write(
+            t.join("firmware/efi/efivars/BootOrder-8be4df61-93ca-11d0-aa0d-00e098032b8c"),
+            [7u8, 0, 0, 0, 2, 0],
+        )
+        .unwrap();
+        assert_eq!(
+            firmware(&t),
+            "uefi",
+            "no SecureBoot variable is a firmware without Secure Boot"
+        );
+        std::fs::remove_dir_all(t.join("firmware/efi/efivars")).unwrap();
+        std::fs::create_dir_all(t.join("firmware/efi/vars").join(sb)).unwrap();
+        std::fs::write(t.join("firmware/efi/vars").join(sb).join("data"), [0u8]).unwrap();
+        assert_eq!(firmware(&t), "uefi");
+        std::fs::write(t.join("firmware/efi/vars").join(sb).join("data"), [1u8]).unwrap();
+        assert_eq!(firmware(&t), "uefi-secureboot", "the sysfs interface saying on");
+        // a SecureBoot that is there but can't be read is unknown, never off
+        std::fs::create_dir_all(t.join("firmware/efi/efivars").join(sb)).unwrap();
+        assert_eq!(
+            firmware(&t),
+            "uefi-secureboot",
+            "an unreadable efivarfs SecureBoot fails closed"
+        );
+        std::fs::remove_dir_all(t.join("firmware/efi/efivars")).unwrap();
+        std::fs::remove_file(t.join("firmware/efi/vars").join(sb).join("data")).unwrap();
+        std::fs::create_dir_all(t.join("firmware/efi/vars").join(sb).join("data")).unwrap();
+        assert_eq!(
+            firmware(&t),
+            "uefi-secureboot",
+            "an unreadable sysfs SecureBoot fails closed"
+        );
+        std::fs::remove_dir_all(t.join("firmware/efi/vars").join(sb)).unwrap();
+        std::fs::create_dir_all(t.join("firmware/efi/efivars")).unwrap();
+        std::fs::write(t.join("firmware/efi/efivars").join(sb), [6u8, 0, 0, 0, 1]).unwrap();
+        assert_eq!(firmware(&t), "uefi-secureboot", "efivarfs wins, and says on");
+        std::fs::write(t.join("firmware/efi/efivars").join(sb), [6u8, 0, 0, 0, 0]).unwrap();
+        assert_eq!(firmware(&t), "uefi");
+        std::fs::remove_dir_all(&t).unwrap();
     }
 
     fn verdict(route: &str, facts: &Value) -> Value {
@@ -1561,9 +1664,16 @@ mod tests {
         let full: Vec<&str> = LEVEL_FEATURES.concat();
         let mut uefi = machine(&full, false, vec![]);
         uefi["boot"] = json!("uefi");
-        let v = verdict("trusty-to-resolute", &uefi);
+        // Debian's boot is BIOS only (etch predates x86-64 UEFI); Ubuntu's UEFI replay passed, so its route takes it
+        let v = verdict("etch-to-trixie", &uefi);
         assert_eq!(v["lands_on"], Value::Null);
         assert!(v["machine"][0].as_str().unwrap().contains("UEFI"));
+        assert_eq!(verdict("trusty-to-resolute", &uefi)["lands_on"], "resolute");
+        // Secure Boot isn't proven anywhere: refused on the Ubuntu route too, and named as such
+        uefi["boot"] = json!("uefi-secureboot");
+        let v = verdict("trusty-to-resolute", &uefi);
+        assert_eq!(v["lands_on"], Value::Null);
+        assert!(v["machine"][0].as_str().unwrap().contains("Secure Boot"), "{v:#}");
         let mut i686 = machine(&full, false, vec![]);
         i686["arch"] = json!("i686");
         assert_eq!(verdict("etch-to-trixie", &i686)["lands_on"], Value::Null);

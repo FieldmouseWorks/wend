@@ -75,6 +75,10 @@ FW_NOW = "{ [ -d /sys/firmware/efi ] && echo uefi || echo bios; } 2>/dev/null"
 # The chroot box is the same either way (a chroot has no disks), so these are install choices, not other boxes: CentOS 7
 # from 7.0 to 7.2 media is XFS v4 on LVM, and rebuild-and-carry (docs/rebuild-and-carry.md) needs room on a second disk.
 LAYOUT = {"root_fs": None, "lvm": False, "extra_disks": []}
+# on UEFI, the boot chain a hop leaves: the firmware's boot entries and every EFI binary on the system partition, by
+# hash, so a replay shows whether each release refreshed shim and GRUB or booted on what an older one left
+EFI_CHAIN = ("{ efibootmgr -v || echo 'no efibootmgr'; } 2>/dev/null | grep -E '^(BootCurrent|BootOrder|no efibootmgr)|HD\\('; "
+             "cd /boot/efi 2>/dev/null && find EFI -type f -iname '*.efi' | sort | xargs -r sha256sum")
 # the chroot harness's environment for box commands (tools/sandbox.py ENV), so a hop runs the same in both tiers
 ENV = ("export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C HOME=/root TERM=dumb "
        "DEBIAN_FRONTEND=noninteractive; umask 022; ")
@@ -660,7 +664,7 @@ def replay(route_path, box_id, resume=None):
     port = box_doc.get("vm", {}).get("ssh_port", 22)
     hw = hardware(a, route["from"])
     g = Guest(prev, key, port, hw)
-    hops, start_net = [], None
+    hops, start_net, efi_start = [], None, None
     for hop in todo:
         disk = os.path.join(out_dir, f"{hop}.qcow2")
         overlay(prev, disk)
@@ -672,6 +676,8 @@ def replay(route_path, box_id, resume=None):
             break
         if start_net is None:
             start_net = g.ssh(NET)[1]
+            if FIRMWARE == "uefi":  # the boot chain the first hop starts from
+                efi_start = g.ssh(EFI_CHAIN)[1][-3000:]
             if f"default via {GUEST_HOST}" not in start_net or ADDR not in start_net:  # never compare two empty reads
                 raise RuntimeError(f"the box's network can't be read at the start (no `ip`?): {start_net!r}")
         before = checks(g, box_doc, a)
@@ -722,6 +728,8 @@ def replay(route_path, box_id, resume=None):
             h["lost"] = lost
             h["failed_logs"] = {n: after_checks[n][1][-1500:] for n in lost}
             h["firmware"] = g.ssh(FW_NOW)[1].strip()
+            if FIRMWARE == "uefi":
+                h["efi_chain"] = g.ssh(EFI_CHAIN)[1][-3000:]
             h["ok"] = ok and h["net_kept"] and not lost and h["kernel_current"] and h["firmware"] == FIRMWARE
             if not h["net_kept"]:
                 h["net"] = {"start": start_net, "now": net}
@@ -741,6 +749,7 @@ def replay(route_path, box_id, resume=None):
     complete = len(hops) == len(todo) + bool(route.get("finish", {}).get("prune_obsolete"))
     run = {"schema": "wend.vmrun/0", "route": check.content_id(route), "box": box_id, "from": route["from"],
            "to": route["to"], "started": stamp, "firmware": FIRMWARE,
+           **({"efi_start": efi_start} if FIRMWARE == "uefi" else {}),
            "layout": {k: v for k, v in LAYOUT.items() if v}, "hops": hops,
            "result": "pass" if complete and all(h["ok"] for h in hops) and not resume else
            "partial-pass" if complete and all(h["ok"] for h in hops) else "fail",

@@ -116,8 +116,8 @@ services = "no explicitly installed, non-required package that ships an init scr
 
 [hardware]
 # SPEC "Hardware preflight": what a machine needs before a route boots it into each release, checked before the first
-# hop touches anything. `boot` is the firmware wend's kernel steps are proven to carry a real machine through (the VM
-# tier boots its guests by BIOS); a UEFI machine is refused until a UEFI replay proves it. Per release: `cpu`, the
+# hop touches anything. `boot` is the firmware wend's kernel steps are proven to carry a real machine through (a VM
+# replay of every box on the routes, by BIOS or with tools/vm.py --uefi); any other mode is refused. Per release: `cpu`, the
 # release's x86-64 level (its glibc refuses anything lower: "Fatal glibc error: CPU does not support x86-64-v2");
 # `ram_mib`, the installation guide's minimum without a desktop ("Meeting Minimum Hardware Requirements"); `disk_mib`, an estimate of the free space on / the hop needs (its downloads and the release's
 # growth; walking a copy of the machine first measures the real need); `drivers`, the sha256 of
