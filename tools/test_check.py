@@ -546,14 +546,18 @@ class _Clock:  # vm.reboot()'s clock: sleeping only moves it on
 
 
 class _RebootGuest(_vm.Guest):  # a guest whose ssh is a script: `fails` boot_id reads fail, then reads work
-    def __init__(self, clock, fails, reboots, resets=True):
+    def __init__(self, clock, fails, reboots, resets=True, silent=0):
         self.clock, self.fails, self.reboots, self.resets, self.reset_sent = clock, fails, reboots, resets, False
+        self.silent, self.silent_until = silent, None  # after the reboot is sent, ssh says nothing for `silent` s
         self.boot, self.up_since, self.reboot_notes = "old-boot", clock.now - 5000, []
 
     def new_boot(self, after=0):
         self.boot, self.up_since = "new-boot", self.clock.now + after
 
     def ssh(self, cmd, timeout=600, stdin=None):
+        if self.silent_until is not None and self.clock.now < self.silent_until:
+            self.clock.now += timeout  # an ssh that never connects costs its whole timeout
+            return 255, "TIMEOUT"
         if cmd == "cat /proc/sys/kernel/random/boot_id":
             if self.fails:
                 self.fails -= 1
@@ -561,8 +565,11 @@ class _RebootGuest(_vm.Guest):  # a guest whose ssh is a script: `fails` boot_id
             return 0, self.boot + "\n"
         if cmd == "cat /proc/uptime":
             return 0, f"{self.clock.now - self.up_since:.2f} 1.00\n"
-        if cmd.startswith("sync; (sleep 2; reboot)") and self.reboots:
-            self.new_boot(after=3)
+        if cmd.startswith("sync; (sleep 2; reboot)"):
+            if self.silent:
+                self.silent_until = self.clock.now + self.silent
+            if self.reboots:
+                self.new_boot(after=3)
         if cmd.startswith("setsid nohup sh /root/.wend-reset"):
             self.reset_sent = True
             if self.resets:
@@ -573,24 +580,33 @@ class _RebootGuest(_vm.Guest):  # a guest whose ssh is a script: `fails` boot_id
         return True
 
     def wait_ssh(self, timeout=900):
-        return True
+        t = self.clock.now
+        while self.clock.now - t < timeout:
+            if self.ssh("true", timeout=30)[0] == 0:
+                return True
+            self.clock.sleep(5)
+        return False
 
 
 _real_time = _vm.time
-for name, fails, reboots, resets, want_back, want_forced, want_notes in (
-        ("one failed boot_id read is retried, the reboot proven by boot_id", 2, True, True, True, False, 2),
-        ("boot_id unreadable before the reboot: rebooted anyway, proven by uptime", 5, True, True, True, False, 6),
-        ("boot_id unreadable and `reboot` does nothing: the forced path runs", 5, False, True, True, True, 6),
-        ("boot_id unreadable and even the forced reset does nothing: not rebooted", 5, False, False, False, True, 6),
-        ("boot_id read and `reboot` does nothing: the forced path runs", 0, False, True, True, True, 0)):
+for name, fails, reboots, resets, silent, want_back, want_forced, want_notes in (
+        ("one failed boot_id read is retried, the reboot proven by boot_id", 2, True, True, 0, True, False, 2),
+        ("boot_id unreadable before the reboot: rebooted anyway, proven by uptime", 5, True, True, 0, True, False, 6),
+        ("boot_id unreadable and `reboot` does nothing: the forced path runs", 5, False, True, 0, True, True, 6),
+        ("boot_id unreadable and even the forced reset does nothing: not rebooted", 5, False, False, 0, False, True, 6),
+        ("boot_id read and `reboot` does nothing: the forced path runs", 0, False, True, 0, True, True, 0),
+        ("`reboot` does nothing and ssh is silent all window, then the old boot answers: forced", 0, False, True, 200,
+         True, True, None)):
     _vm.time = _Clock()
     try:
-        g_ = _RebootGuest(_vm.time, fails, reboots, resets)
+        g_ = _RebootGuest(_vm.time, fails, reboots, resets, silent)
         back, forced = g_.reboot()
     finally:
         _vm.time = _real_time
     ok = back is want_back and forced == want_forced and g_.reset_sent == want_forced and \
-        len(g_.reboot_notes) == want_notes and all("rc=255" in n and "Connection reset" in n for n in g_.reboot_notes[:5])
+        (len(g_.reboot_notes) == want_notes if want_notes is not None else
+         any(n.startswith("no answer") for n in g_.reboot_notes) and "old boot" in g_.reboot_notes[-1]) and \
+        all("rc=255" in n and "Connection reset" in n for n in g_.reboot_notes[:min(fails, 5)])
     print(("passed  " if ok else "WRONG   ") + f"vm reboot: {name}  ({back}, {forced}, {g_.reboot_notes[-1:]})")
     bad += not ok
 sys.exit(1 if bad else 0)

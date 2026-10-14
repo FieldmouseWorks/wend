@@ -289,6 +289,11 @@ class Guest:
                 break
             if not self.running():
                 return False, False
+            if last is None:
+                self.reboot_notes.append(f"no answer {round(time.time() - t)}s after the reboot was sent")
+        if last is None and self.wait_ssh(timeout=300):  # silent all along (EL8's half-stopped old boot): ask again
+            last = self.which_boot(before, since)
+            self.reboot_notes.append(f"answered again after the window: {last or 'no answer'} boot")
         if last == "old":  # the old boot still answers after two minutes: `reboot` did nothing
             forced = True
             # Stop every process first, while the old kernel still runs: a reset with the daemons up leaves every

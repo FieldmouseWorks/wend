@@ -1536,8 +1536,9 @@ The rules:
 - A reboot is proven by a new `boot_id`. The harness retries reading the boot it starts from five times; if it
   still can't, it reboots anyway and proves the new boot by an uptime shorter than the time since the reboot was
   sent, and each failed read (ssh exit code and output) goes in the hop's `reboot_notes` (`mid_reboot_notes` for a
-  hop's middle reboot). When `reboot` doesn't change it within two minutes (the first boot onto
-  systemd: PID 1 is still the old init, and the new release's `reboot` can't talk to it), the harness stops every
+  hop's middle reboot). A guest that answers no poll in the two minutes after the reboot gets up to five more
+  minutes to answer, and each silent poll is noted. When the old boot is still the one answering (the first boot
+  onto systemd: PID 1 is still the old init, and the new release's `reboot` can't talk to it), the harness stops every
   process (`kill -TERM -1`, then `-KILL`), syncs, remounts read-only and resets with sysrq, and records
   `reboot_forced`. Stopping the processes first matters: a reset with the daemons up leaves every replaced library
   and socket as an orphan inode, and EL7's kernel, cleaning those up at its first mount of the ext3 root, leaves
