@@ -264,6 +264,12 @@ def main(args):
            "start_checks": {n: ok for n, (ok, _) in before.items()}, "stages": [], "interventions": r.interventions}
     t0 = time.time()
     try:
+        # Lab hardware, not ELevate: QEMU's i440fx (`-machine pc`, what vm.py boots) has an ISA floppy controller, so
+        # the guest loads `floppy`, which RHEL 8 dropped and Leapp inhibits on. A real server has no such controller;
+        # unload and blacklist it once, recorded under lab_fixes, never counted as an intervention.
+        rc, _ = r.sh("lab", "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf"
+                            " && ! grep -qw '^floppy' /proc/modules")
+        run["lab_fixes"] = [{"what": "unload and blacklist floppy (QEMU i440fx ISA floppy controller)", "rc": rc}]
         # the box as a real one has it: the harness's shim repo file out, the stock repos the guides start from in
         if rel == "centos7":
             r.sh("setup", "rm -f /etc/yum.repos.d/*.repo && curl -fsSo /etc/yum.repos.d/CentOS-Base.repo "
