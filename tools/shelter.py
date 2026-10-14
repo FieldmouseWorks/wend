@@ -578,9 +578,16 @@ def start_units(app, plan, release):
     ]
     for i, s in enumerate(socks):
         parts += [
+            # the shelter's :Z relabels this directory and the socket in it container_file_t, which PID 1 (init_t)
+            # may not unlink when the socket restarts ("Address already in use", found under enforcing on the VM
+            # tier). So it starts from a fresh directory: the old one is removed by a command (a bin_t program, which
+            # systemd runs unconfined, not as init_t), and systemd binds in a new one with /run's own label. The
+            # shelter Requires= this socket, so it restarts with it and mounts the new directory.
             _heredoc(f"/etc/systemd/system/{unit}-sock{i}.socket",
                      hdr + f"[Unit]\nDescription=wend shelter {app}: {s}, for the shelter\nPartOf={unit}.service\n\n"
-                     f"[Socket]\nListenStream=/run/wend/shelter/{app}/s{i}/{os.path.basename(s)}\nSocketUser=wend-{app}\n"
+                     f"[Socket]\nExecStartPre=/usr/bin/rm -rf /run/wend/shelter/{app}/s{i}\n"
+                     f"ExecStartPre=/usr/bin/install -d -m 0700 -o wend-{app} -g wend-{app} /run/wend/shelter/{app}/s{i}\n"
+                     f"ListenStream=/run/wend/shelter/{app}/s{i}/{os.path.basename(s)}\nSocketUser=wend-{app}\n"
                      "SocketMode=0600\n\n[Install]\nWantedBy=sockets.target\n"),
             _heredoc(f"/etc/systemd/system/{unit}-sock{i}.service",
                      hdr + f"[Unit]\nDescription=wend shelter {app}: proxy to {s}\n"
@@ -827,15 +834,21 @@ def vm_probe(app, plan, outside):
 def vm_enforce_on(app):
     """SELinux enforcing for the length of a confinement window (the VM boxes install permissive, and the route itself
     isn't what's being proved): a guard puts permissive back after 15 minutes whatever happens, then the shelter is
-    restarted under enforcing (restarting the table unit restarts it, PartOf=)."""
+    restarted under enforcing (restarting the table unit restarts it, PartOf=), then each socket proxy, which restarts
+    it again (Requires=); on a failure, the units' status."""
     return ("case \"$(getenforce 2>/dev/null)\" in Enforcing|Permissive) ;; *) echo 'SELinux is disabled'; exit 1;; esac\n"
             "setsid sh -c 'sleep 900; setenforce 0' </dev/null >/dev/null 2>&1 & echo $! > /run/wend-enforce-guard\n"
             "date +%s > /run/wend-enforce-since\n"
             "if [ -f /var/log/audit/audit.log ]; then wc -c < /var/log/audit/audit.log; else echo 0; fi > /run/wend-avc-from\n"
             "setenforce 1 && [ \"$(getenforce)\" = Enforcing ] || { echo 'setenforce 1 failed'; exit 1; }\n"
-            f"systemctl restart wend-shelter-net-{app}.service || exit 1\n"
-            f"i=0; while [ $i -lt 90 ] && ! systemctl is-active -q wend-shelter-{app}.service; do sleep 2; i=$((i+1)); done\n"
-            f"systemctl is-active wend-shelter-{app}.service\n")
+            f"up() {{ i=0; while [ $i -lt 90 ] && ! systemctl is-active -q wend-shelter-{app}.service; do sleep 2; i=$((i+1)); "
+            f"done; systemctl is-active -q wend-shelter-{app}.service && return 0; echo \"the shelter isn't up after $1\"; "
+            f"systemctl --no-pager -l status 'wend-shelter-{app}*' 'wend-shelter-net-{app}*' 2>&1 | tail -n 40; return 1; }}\n"
+            f"systemctl restart wend-shelter-net-{app}.service; up 'restarting its table unit' || exit 1\n"
+            # the socket proxies again, now that the shelter has run and relabelled their directories
+            f"for u in $(systemctl list-units --plain --no-legend 'wend-shelter-{app}-sock*.socket' | awk '{{print $1}}'); do "
+            "systemctl restart $u; up \"restarting $u\" || exit 1; done\n"
+            f"echo active\n")
 
 
 VM_ENFORCE_OFF = (

@@ -1290,7 +1290,12 @@ Defaults, which the plan shows and the run records:
   the app's host user. The mapping is fixed (above), so that uid is the same at every start. It and the mapped gid
   get a host system user and group, `wend-<app>`: systemd refuses a `SocketUser=` with no passwd entry (EL9's 252
   fails the socket with 217/USER, found on the VM tier), and `ps` and `ls` then name the shelter. `shelter.start`
-  refuses when that name exists with other ids, or those ids belong to another name. An app that reaches a host service over
+  refuses when that name exists with other ids, or those ids belong to another name. The shelter's `:Z` relabels
+  the directory and the socket `container_file_t`, which PID 1 (`init_t`) may not unlink, so a restart of the socket
+  unit would fail with "Address already in use" under enforcing (found on the VM tier). The socket unit therefore
+  removes and recreates its directory first (`ExecStartPre=`, run unconfined), and the shelter, which `Requires=`
+  it, restarts with it and mounts the new one. The VM tier's enforcing window restarts each socket unit to prove
+  it. An app that reaches a host service over
   TCP on `127.0.0.1` can't be served without changing its config, which wend doesn't do: the plan names it, and the
   owner's choices are `network = "host"` (opted in by name, recorded in the run as an exception) or editing the app.
 - **Mounts:** the code tree read-only (`:ro,idmap`, so a tree only its owner can read stays readable). Data directories read-write (`:idmap`): the ones the program has open for

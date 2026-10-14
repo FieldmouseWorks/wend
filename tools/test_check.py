@@ -436,6 +436,18 @@ for name, roles in (("[roles] as a list", ["x"]), ("[roles] as a string", "x"), 
     errs = check.check_box({**tweb, "roles": roles}, adapters, "boxes/ubuntu/trusty-web/box.toml")
     print(("refused " + name) if errs else f"WRONG   {name} passed")
     bad += not errs
+# the socket proxy starts from a fresh directory: PID 1 may not unlink a socket the shelter's :Z relabelled
+_su = shelter.start_units("billing", _pyplan, "centos7")
+_sock = _su.split("/etc/systemd/system/wend-shelter-billing-sock0.socket <<WEND_UNIT\n", 1)[1].split("WEND_UNIT", 1)[0]
+_want = ["ExecStartPre=/usr/bin/rm -rf /run/wend/shelter/billing/s0",
+         "ExecStartPre=/usr/bin/install -d -m 0700 -o wend-billing -g wend-billing /run/wend/shelter/billing/s0",
+         "ListenStream=/run/wend/shelter/billing/s0/mysql.sock"]
+_lines = _sock.splitlines()
+if all(w in _lines for w in _want) and [_lines.index(w) for w in _want] == sorted(_lines.index(w) for w in _want):
+    print("passed  the socket proxy's unit clears and recreates its directory before it listens")
+else:
+    print(f"WRONG   the socket proxy's unit: {_sock}")
+    bad += 1
 try:
     check.box_shell_errors({**web, "roles": ["x"], "vm": {"live": ["x"]}})
     print("passed  box_shell_errors leaves non-table roles and [vm].live to check_box")
