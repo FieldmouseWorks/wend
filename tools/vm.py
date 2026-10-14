@@ -174,6 +174,7 @@ class Guest:
         self.disk, self.key, self.ssh_port, self.hw = disk, key, ssh_port, hw
         base = disk[:-len(".qcow2")]
         self.console, self.monitor_path, self.proc = base + ".console.log", None, None
+        self.reboot_notes = []  # why the last reboot() couldn't read the boot it started from, for the run record
 
     def start(self, extra=()):
         # QEMU's monitor socket: a unix socket path has to fit in 108 bytes, which a run directory under a checkout
@@ -243,25 +244,52 @@ class Guest:
 
     def boot_id(self):
         rc, out = self.ssh("cat /proc/sys/kernel/random/boot_id", timeout=30)
-        return out.strip() if rc == 0 else None
+        return out.strip() if rc == 0 and out.strip() else None
+
+    def which_boot(self, before, since):
+        """Which boot answers: "new" (after `since`, host time), "old" (before it), or None (no answer). New is a
+        boot_id that isn't `before` or, when the boot we started from couldn't be read, an uptime shorter than the
+        time since."""
+        now = self.boot_id()
+        if now is None:
+            return None
+        if before is not None:
+            return "new" if now != before else "old"
+        rc, out = self.ssh("cat /proc/uptime", timeout=30)
+        try:
+            up = float(out.split()[0]) if rc == 0 else None
+        except (ValueError, IndexError):
+            up = None
+        return None if up is None else "new" if up < time.time() - since else "old"
 
     def reboot(self):
         """A real reboot, proven by a new boot_id. Returns (came back, forced). If the release's own `reboot` does
         nothing (the first boot onto systemd: PID 1 is still the old init, the new tools can't talk to it), sync,
-        remount read-only and reset with sysrq (SPEC "VM tier")."""
-        before = self.boot_id()
-        if before is None:  # can't prove a reboot without the boot we started from
-            return False, False
+        remount read-only and reset with sysrq (SPEC "VM tier"). If the boot it starts from can't be read even after
+        retries, the reboot goes ahead and is proven by the guest's uptime instead; why the read failed stays in
+        reboot_notes."""
+        self.reboot_notes, before = [], None
+        for i in range(5):  # one ssh that fails right after a hop's last step mustn't cost the reboot
+            rc, out = self.ssh("cat /proc/sys/kernel/random/boot_id", timeout=30)
+            if rc == 0 and out.strip():
+                before = out.strip()
+                break
+            self.reboot_notes.append(f"reading boot_id before the reboot, try {i + 1}: rc={rc} {out.strip()[-300:]}")
+            if i < 4:
+                time.sleep(5 * (i + 1))
+        if before is None:
+            self.reboot_notes.append("rebooting anyway: the new boot is proven by its uptime")
+        since = time.time()
         self.ssh("sync; (sleep 2; reboot) >/dev/null 2>&1 &", timeout=30)
-        forced, t, last = False, time.time(), before
+        forced, t, last = False, time.time(), "old"
         while time.time() - t < 120:
             time.sleep(10)
-            last = self.boot_id()
-            if last not in (None, before):
+            last = self.which_boot(before, since)
+            if last == "new":
                 break
             if not self.running():
                 return False, False
-        if last == before:  # the old boot still answers after two minutes: `reboot` did nothing
+        if last == "old":  # the old boot still answers after two minutes: `reboot` did nothing
             forced = True
             # Stop every process first, while the old kernel still runs: a reset with the daemons up leaves every
             # replaced library and socket as an orphan inode, and EL7's kernel, cleaning those up at its first mount
@@ -270,7 +298,7 @@ class Guest:
             self.ssh("cat > /root/.wend-reset", stdin=FORCED_RESET)
             self.ssh("setsid nohup sh /root/.wend-reset >/dev/null 2>&1 </dev/null &", timeout=30)
             time.sleep(40)
-        return self.wait_ssh() and self.boot_id() not in (None, before), forced
+        return self.wait_ssh() and self.which_boot(before, since) == "new", forced
 
     def reset(self):
         """A hard reset from outside, as a power cut would be (QEMU's monitor): no sync, no shutdown. Returns whether
@@ -861,6 +889,8 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
             if ok:
                 back, forced = g.reboot()
                 h["mid_reboot"], h["mid_reboot_forced"] = back, forced
+                if g.reboot_notes:
+                    h["mid_reboot_notes"] = g.reboot_notes
                 ok = back
                 if back:
                     ok, rest = run_hop(g, second, after)
@@ -871,6 +901,8 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
         h["commands_ok"], h["seconds"] = ok, round(time.time() - t0)
         back, forced = g.reboot() if ok else (None, False)  # None: commands failed, no reboot tried
         h["rebooted"], h["reboot_forced"] = back, forced
+        if ok and g.reboot_notes:
+            h["reboot_notes"] = g.reboot_notes
         if back:
             net = g.ssh(NET)[1]
             after_checks = checks(g, box_doc, a)
@@ -1065,6 +1097,8 @@ def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net):
         open(os.path.join(out_dir, f"prune-{n[0]:02d}.steps.log"), "w").write(out)
         back, forced = g.reboot() if ok else (None, False)
         h.update(commands_ok=ok, rebooted=back, reboot_forced=forced)
+        if ok and g.reboot_notes:
+            h["reboot_notes"] = g.reboot_notes
         if back:
             after = checks(g, box_doc, a)
             h["lost"] = sorted(k for k, (good, _) in before.items() if good and not after.get(k, (False,))[0])
