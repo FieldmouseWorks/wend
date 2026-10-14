@@ -714,8 +714,9 @@ the owner has provided one.
 **`mysql.clean-shutdown`** (no arguments). Start with `--innodb-fast-shutdown=0`, stop. The next major version then
 finds a clean redo log (MariaDB 10.11 refuses 10.5's otherwise). Fails if the start or the stop fails.
 
-**`mysql.upgrade-data`** (no arguments). Start the installed server on the existing data, run `mariadb-upgrade` (or
-`mysql_upgrade`) `-uroot --force` (at most 20 minutes), stop. Fails if the start or the stop fails, if there is no upgrade tool, or if
+**`mysql.upgrade-data`** (no arguments). Start the installed server on the existing data (socket only, without its
+grant tables, so a root password the box set doesn't lock the tool out), run `mariadb-upgrade` (or `mysql_upgrade`)
+`-uroot --force` (at most 20 minutes), stop. Fails if the start or the stop fails, if there is no upgrade tool, or if
 afterwards the data's version stamp (`mariadb_upgrade_info`, else `mysql_upgrade_info`, in /var/lib/mysql) does not
 name the running server's version (`--version`, up to the first `-`). The stamp is the check, not the tool's exit
 code: the tool complains about things it then fixes, and a stale tool from an older release can exit 0 without

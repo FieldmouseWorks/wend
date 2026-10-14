@@ -544,7 +544,7 @@ fn rpm_step(s: &Value, adapter: &Doc, release: &str) -> Result<String, String> {
         ]
         .concat(),
         "mysql.upgrade-data" => format!(
-            "{STOP_DB}; {DB_DAEMON}; {DB_DIRS}; ($D --user=mysql --skip-networking >/tmp/wend-db.log 2>&1 &); \
+            "{STOP_DB}; {DB_DAEMON}; {DB_DIRS}; ($D --user=mysql --skip-networking --skip-grant-tables >/tmp/wend-db.log 2>&1 &); \
              {WAIT_SOCK}; {}; {STOP_DB}; rc=$?; [ $rc = 0 ] || tail -n 15 /tmp/wend-db.log; exit $rc",
             upgrade_db()
         ),

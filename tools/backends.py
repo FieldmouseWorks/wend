@@ -532,7 +532,9 @@ class Rpm:
         """Start the new server on the old data directory once, run its upgrade tool, stop it cleanly. The data must
         come out stamped with the running server's version: that is what proves the upgrade ran, not the tool's exit
         code (it complains about things it then fixes)."""
-        return (f"{STOP_DB}; {DB_DAEMON}; {DB_DIRS}; ($D --user=mysql --skip-networking >/tmp/wend-db.log 2>&1 &); "
+        # no grant tables: a root password the box set can't lock the upgrade out (the socket is the only way in)
+        return (f"{STOP_DB}; {DB_DAEMON}; {DB_DIRS}; "
+                "($D --user=mysql --skip-networking --skip-grant-tables >/tmp/wend-db.log 2>&1 &); "
                 f"{WAIT_SOCK}; {UPGRADE_DB}; {STOP_DB}; rc=$?; [ $rc = 0 ] || tail -n 15 /tmp/wend-db.log; exit $rc")
 
     # ----- one-off service and app plumbing -----
