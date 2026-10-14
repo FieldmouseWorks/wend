@@ -307,7 +307,12 @@ for name, vm, want in (("the web box's own [vm]", web.get("vm", {}), False),
                        ("[vm] root_fs on a release whose installer offers none (CentOS 5)", {**web["vm"], "root_fs": "ext3"},
                         True),
                        ("[vm] a skipped role with no live check", {**web["vm"], "live": {"site": web["vm"]["live"]["site"]}},
-                        True)):
+                        True),
+                       # bash reads the ' inside "${C:-...}" as a quote; dash doesn't (wend#91's cron check on remi)
+                       ("[vm] a live check bash can't parse", {**web["vm"], "live": {
+                           **web["vm"]["live"], "x": "echo \"ran: ${C:-the timer's service}\""}}, True),
+                       ("[vm] a live check only bash parses (it runs in bash)", {**web["vm"], "live": {
+                           **web["vm"]["live"], "x": "f() { echo; }; [[ -n $x ]] && f <<< y"}}, False)):
     errs = check.check_box({**web, "vm": vm}, adapters, "boxes/el/centos5-web/box.toml")
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
@@ -412,6 +417,15 @@ for name, box, want in (("[vm] pockets on a release_pocket_only release", {**twe
                         ("[vm] pockets on a release whose install isn't release_pocket_only",
                          {**web, "vm": {**web["vm"], "pockets": ["updates"]}}, True)):
     errs = check.check_box(box, adapters, "boxes/ubuntu/trusty-web/box.toml")
+    print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
+    bad += bool(errs) != want
+# roles run under /bin/sh: dash on Debian and Ubuntu, bash on EL
+for name, doc, want in (("an Ubuntu role only bash parses", {**tweb, "roles": {**tweb["roles"], "x": "[[ -n $x ]] && cat <<< y"}},
+                         True),
+                        ("an EL role only bash parses", {**web, "roles": {**web["roles"], "x": "[[ -n $x ]] && cat <<< y"}},
+                         False),
+                        ("an EL role bash can't parse", {**web, "roles": {**web["roles"], "x": "echo \"${C:-it's}\""}}, True)):
+    errs = check.box_shell_errors(doc)
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
 # the VM installer's pocket proxy: the release pocket always, -updates/-security/-backports only when the box asks ([vm].pockets)

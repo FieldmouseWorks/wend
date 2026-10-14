@@ -14,6 +14,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tomllib
 
@@ -481,6 +483,30 @@ def check_box(doc, adapters, where):
                     "for every skipped role")
     if "shelter" in doc:
         errs += check_shelter(doc["shelter"], f"{where}: shelter")
+    errs += [f"{where}: {e}" for e in box_shell_errors(doc)]
+    return errs
+
+
+# A box's shell strings fail only once a box is installed if they don't parse, so parse them here. [vm].live runs over
+# ssh in root's login shell, bash. customize and the roles run under /bin/sh, which is bash on EL and dash on Debian
+# and Ubuntu, so those get dash too there.
+def box_shell_errors(doc):
+    vm = doc.get("vm", {}) if isinstance(doc.get("vm", {}), dict) else {}
+    sh = ("bash", "dash") if doc.get("family") in ("debian", "ubuntu") else ("bash",)
+    named = [("customize", doc.get("customize"), sh)] + \
+        [(f"role {k}", v, sh) for k, v in (doc.get("roles") or {}).items()] + \
+        [(f"[vm].live {k}", v, ("bash",)) for k, v in (vm.get("live") or {}).items()]
+    errs = []
+    for name, s, shells in named:
+        if not isinstance(s, str):
+            continue
+        for x in shells:
+            if not shutil.which(x):
+                errs.append(f"{name} can't be parsed: no {x} here")
+                continue
+            r = subprocess.run([x, "-n", "-c", s], capture_output=True, text=True)
+            if r.returncode:
+                errs.append(f"{name} doesn't parse under {x}: {r.stderr.strip().splitlines()[0][:200]}")
     return errs
 
 
