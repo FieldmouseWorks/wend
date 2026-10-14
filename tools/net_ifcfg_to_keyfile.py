@@ -197,7 +197,9 @@ def plan(path, net, resolv):
     if six != "ignore":
         args += ["ipv6.never-default", "yes"] if v6[0] else []
         args += ["ipv6.may-fail", "no"] if v6[1] else []
-        args += ["ipv6.addr-gen-mode", gen] if gen else []
+        # absent, the plugin reads default-or-eui64 (eui64 unless NetworkManager.conf says otherwise); a new keyfile
+        # would get "default" (stable-privacy), moving the box's SLAAC address
+        args += ["ipv6.addr-gen-mode", gen or "default-or-eui64"]
     args += ["connection.autoconnect", "yes" if boolean(path, v, "ONBOOT", "yes") else "no"]
     return c, dev, hw, args
 

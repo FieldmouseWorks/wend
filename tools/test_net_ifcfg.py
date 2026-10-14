@@ -111,11 +111,12 @@ case("a kickstart static profile becomes the exact keyfile, pinned by MAC, the i
      and "etc/sysconfig/network-scripts/ifcfg-eth0" not in left and "etc/sysconfig/network-scripts/ifcfg-lo" in left)
 msg, kf, left, out = run({"ifcfg-eth0": GUI})
 case("the GUI installer's profile (BROADCAST, NETWORK, IPV6_AUTOCONF) converts",
-     msg is None and kf["eth0.nmconnection"][1] == STATIC + ["ipv6.method", "auto", "connection.autoconnect", "yes"])
+     msg is None and kf["eth0.nmconnection"][1] == STATIC + ["ipv6.method", "auto", "ipv6.addr-gen-mode",
+                                                            "default-or-eui64", "connection.autoconnect", "yes"])
 msg, kf, left, out = run({"ifcfg-eth0": GUI.replace("BROADCAST=10.0.2.255", "BROADCAST=10.0.9.255")})
 case("a BROADCAST that doesn't match the address is refused", refused(msg, "BROADCAST=10.0.9.255") and not kf)
 msg, kf, left, out = run({"ifcfg-eth0": KS + "IPV6INIT=yes\nIPV6_AUTOCONF=no\n"})
-case("IPV6_AUTOCONF=no is link-local", msg is None and kf["eth0.nmconnection"][1][-4:-2] == ["ipv6.method",
+case("IPV6_AUTOCONF=no is link-local", msg is None and kf["eth0.nmconnection"][1][-6:-4] == ["ipv6.method",
                                                                                              "link-local"])
 LEFTOVERS = ("ifcfg-eth0.bak", "ifcfg-eth0.BAK", "ifcfg-eth0~", "ifcfg-eth0.orig", "ifcfg-eth0.Rej", "ifcfg-eth0.rpmnew",
              "ifcfg-eth0.augnew", "ifcfg-eth0.augtmp", "ifcfg-eth0;5f3a9b2c")
@@ -164,7 +165,8 @@ case("nmcli refusing the second profile changes nothing, not even the first",
      and not any(x.startswith(("var/lib/wend", "etc/systemd")) for x in left))
 msg, kf, left, out = run({"ifcfg-eth0": KS.replace("ONBOOT=yes", "ONBOOT=false") + "IPV6INIT=true\n"})
 case("booleans as NetworkManager reads them (false, true)",
-     msg is None and kf["eth0.nmconnection"][1][-4:] == ["ipv6.method", "auto", "connection.autoconnect", "no"])
+     msg is None and kf["eth0.nmconnection"][1][-6:] == ["ipv6.method", "auto", "ipv6.addr-gen-mode",
+                                                         "default-or-eui64", "connection.autoconnect", "no"])
 for name, text, why in (
         ("a shell expansion", KS.replace("ONBOOT=yes", "ONBOOT=$(reboot)"), "isn't one plain value"),
         ("a backquote", KS.replace("ONBOOT=yes", "ONBOOT=`reboot`"), "isn't one plain value"),
