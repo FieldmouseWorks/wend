@@ -15,6 +15,20 @@ permissions:
   contents: read
 
 jobs:
+  # the oldest Rust Cargo.toml's rust-version promises, so the promise can't drift while everything else builds on
+  # rust-toolchain.toml's pin
+  msrv:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: |
+          v=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
+          test -n "$v"
+          rustup toolchain install "$v" --profile minimal
+          cargo "+$v" build --locked --all-targets
   client:
     runs-on: ubuntu-24.04
     defaults:
@@ -73,6 +87,12 @@ jobs:
       - name: the archive's store, by behaviour on a made-up repo (runs the PR's own tools, so not in the gate)
         working-directory: .
         run: python3 -B tools/test_archive.py
+      - name: the archive's push to R2, by behaviour against a stand-in S3 endpoint (runs the PR's own tools, so not in the gate)
+        working-directory: .
+        run: python3 -B tools/test_r2push.py
+      - name: primary metadata however it's compressed (gz, EPEL 9's xz, EPEL 10's zst), by behaviour (runs the PR's own tools, so not in the gate)
+        working-directory: .
+        run: WEND_ALL_DECODERS=1 python3 -B tools/test_primary.py
       - name: VM replays side by side (per-guest ports, the install lock, the box cache key), by behaviour with a stand-in QEMU (runs the PR's own vm.py, so not in the gate)
         working-directory: .
         run: python3 -B tools/test_vm_parallel.py

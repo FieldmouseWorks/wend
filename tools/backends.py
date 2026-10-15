@@ -223,6 +223,35 @@ def addon_repo_ids(adapter):
             for n, a in adapter.get("addons", {}).items() for rel, u in a["repos"].items()}
 
 
+def primary_href(repomd):
+    """The href of a repomd.xml's primary metadata, however it's compressed (EPEL 9 lists it only as .xz, EPEL 10 only
+    as .zst)."""
+    m = re.search(r'<data type="primary">.*?<location href="([^"]+)"', repomd, re.S)
+    if not m:
+        raise ValueError("repomd.xml lists no primary metadata")
+    return m.group(1)
+
+
+def unpack(name, data):
+    """A file's bytes as its name says it's compressed: gzip, xz or zstd, or as it is."""
+    import gzip
+    import lzma
+    import subprocess
+    if name.endswith(".gz"):
+        return gzip.decompress(data)
+    if name.endswith(".xz"):
+        return lzma.decompress(data)
+    if name.endswith(".zst"):
+        try:
+            from compression import zstd  # Python 3.14
+            return zstd.decompress(data)
+        except ImportError:
+            return subprocess.run(["zstd", "-dc"], input=data, capture_output=True, check=True).stdout
+    if name.endswith((".bz2", ".lzma")):
+        raise ValueError(f"no decoder here for {name}")
+    return data
+
+
 def primary_list(base, out):
     """The file names of every package in a repo, from its primary metadata (works with CentOS 5's own tools)."""
     return (f"R=$(curl -sf {base}/repodata/repomd.xml | grep -o 'href=\"[^\"]*primary.xml.gz\"' | head -n1 | "
@@ -232,10 +261,12 @@ def primary_list(base, out):
 
 
 def package_names(base, out):
-    """Append the name of every package in a repo to out, from its primary metadata (gzip or xz, as EPEL 8 has it)."""
+    """Append the name of every package in a repo to out, from its primary metadata (gzip, xz as EPEL 8 and 9 have it,
+    or zstd as EPEL 10 has it)."""
     return (f"R=$(curl -sf {base}/repodata/repomd.xml | grep -o 'href=\"[^\"]*primary.xml[.a-z]*\"' | head -n1 | "
             f"sed 's/href=\"//;s/\"//') && test -n \"$R\" && curl -sf -o {out}.z {base}/$R && "
-            f"case $R in *.xz) xz -dc < {out}.z > {out}.x;; *.gz) gzip -dc < {out}.z > {out}.x;; *) false;; esac && "
+            f"case $R in *.xz) xz -dc < {out}.z > {out}.x;; *.zst) zstd -dc < {out}.z > {out}.x;; "
+            f"*.gz) gzip -dc < {out}.z > {out}.x;; *) false;; esac && "
             f"grep -o '<name>[^<]*</name>' {out}.x | sed 's/<[^>]*>//g' > {out}.one && test -s {out}.one && "
             f"cat {out}.one >> {out} && rm -f {out}.z {out}.x {out}.one || "
             f"{{ echo 'no package list from {base}'; exit 1; }}")

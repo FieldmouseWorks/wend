@@ -7,7 +7,6 @@ a hostname of the box's own (never the host's), daemons never start, and nothing
 it is gone.
 """
 import fcntl
-import gzip
 import hashlib
 import os
 import subprocess
@@ -192,8 +191,8 @@ def resolve(base_url, seeds):
     """Close a seed set over Requires using the repo's primary metadata: a tiny depsolver, just for the bootstrap."""
     ns = {"c": "http://linux.duke.edu/metadata/common", "r": "http://linux.duke.edu/metadata/rpm"}
     repomd = urllib.request.urlopen(base_url + "repodata/repomd.xml", timeout=300).read().decode()
-    href = next(x.split('"')[1] for x in repomd.split("<location ")[1:] if "primary.xml.gz" in x.split('"')[1])
-    root = ET.fromstring(gzip.decompress(urllib.request.urlopen(base_url + href, timeout=300).read()))
+    href = backends.primary_href(repomd)
+    root = ET.fromstring(backends.unpack(href, urllib.request.urlopen(base_url + href, timeout=300).read()))
     pk, prov = {}, {}
     for p in root.findall("c:package", ns):
         if p.find("c:arch", ns).text not in ("x86_64", "noarch"):

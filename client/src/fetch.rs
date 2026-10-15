@@ -2,8 +2,9 @@
 //! point here, and it serves only bytes that hash right. A run pins each hop's top metadata file (`Release`,
 //! `repomd.xml`) by sha256. Every file those list (indexes) is trusted at the hash they list, and every package an
 //! index lists at the hash the index gives. Anything else is refused. Bytes come from the cache, then each
-//! `--source` in order, then the origin (unless offline): the first bytes that hash right win, and stay in the cache
-//! under their hash, so a second walk needs no network at all.
+//! `--source` in order, then each `--archive` (wend's archive, docs/archive.md: by digest, not by host/path), then the
+//! origin (unless offline): the first bytes that hash right win, and stay in the cache under their hash, so a second
+//! walk needs no network at all.
 //!
 //! Fetching shells out to curl (proxies, CA bundles and TLS are the host's). Indexes are parsed in memory.
 
@@ -63,6 +64,8 @@ struct State {
     pins: Mutex<HashMap<String, Pin>>,
     cache: PathBuf,
     sources: Vec<String>,
+    /// wend archives (docs/archive.md): a URL or directory holding blob/sha256/<2>/<hex> and alias/<alg>/<hex>
+    archives: Vec<String>,
     offline: bool,
     refused: Mutex<Vec<String>>,
     /// the run's own pins, for learning every index once when a package turns up unknown
@@ -81,7 +84,13 @@ fn key_of(url: &str) -> Option<&str> {
 
 impl Proxy {
     /// Pins from every hop's `sources` in a run file; listens on a free port on 127.0.0.1.
-    pub fn start(run: &Value, cache: &Path, sources: Vec<String>, offline: bool) -> Result<Proxy, String> {
+    pub fn start(
+        run: &Value,
+        cache: &Path,
+        sources: Vec<String>,
+        archives: Vec<String>,
+        offline: bool,
+    ) -> Result<Proxy, String> {
         let mut pins = HashMap::new();
         for h in run.get("hops").and_then(Value::as_array).into_iter().flatten() {
             for (url, d) in h.get("sources").and_then(Value::as_object).into_iter().flatten() {
@@ -120,6 +129,7 @@ impl Proxy {
             pins: Mutex::new(pins),
             cache: cache.to_path_buf(),
             sources,
+            archives,
             offline,
             refused: Mutex::new(vec![]),
         });
@@ -373,18 +383,57 @@ fn cached(s: &State, d: &Digest) -> PathBuf {
     s.cache.join(d.alg).join(&d.hex)
 }
 
-/// Every place to try for a "host/path", in order: each --source (a directory or URL laid out host/path), then the
-/// origin.
-fn candidates(s: &State, key: &str, origin: &str) -> Vec<String> {
-    let mut v: Vec<String> = s
+/// A place to try: a URL or file laid out host/path (a --source, or the origin), or a wend archive, asked by digest.
+enum Src {
+    At(String),
+    Archive(String),
+}
+
+/// Every place to try for a "host/path", in order: each --source (a directory or URL laid out host/path), each
+/// --archive, then the origin.
+fn candidates(s: &State, key: &str, origin: &str) -> Vec<Src> {
+    let mut v: Vec<Src> = s
         .sources
         .iter()
-        .map(|b| format!("{}/{key}", b.trim_end_matches('/')))
+        .map(|b| Src::At(format!("{}/{key}", b.trim_end_matches('/'))))
         .collect();
+    v.extend(
+        s.archives
+            .iter()
+            .map(|a| Src::Archive(a.trim_end_matches('/').to_string())),
+    );
     if !s.offline {
-        v.push(origin.to_string());
+        v.push(Src::At(origin.to_string()));
     }
     v
+}
+
+/// The bytes at a place to try, for a digest: a host/path source by its name, an archive by the digest (through its
+/// alias when the digest isn't a sha256). Nothing here is trusted: the caller checks the bytes against the digest.
+fn get_from(src: &Src, d: &Digest) -> Result<Vec<u8>, String> {
+    let base = match src {
+        Src::At(url) => return download(url),
+        Src::Archive(base) => base,
+    };
+    let hex = if d.alg == "sha256" {
+        d.hex.clone()
+    } else {
+        let alias = download(&format!("{base}/alias/{}/{}", d.alg, d.hex))?;
+        let alias = String::from_utf8_lossy(&alias);
+        alias
+            .trim()
+            .strip_prefix("sha256:")
+            .and_then(|h| Digest::parse("sha256", h))
+            .ok_or(format!("{base}/alias/{}/{}: not an alias", d.alg, d.hex))?
+            .hex
+    };
+    download(&format!("{base}/blob/sha256/{}/{hex}", &hex[..2]))
+}
+
+fn name(src: &Src) -> &str {
+    match src {
+        Src::At(s) | Src::Archive(s) => s,
+    }
 }
 
 fn download(src: &str) -> Result<Vec<u8>, String> {
@@ -470,9 +519,9 @@ fn fetch(s: &State, key: &str, p: &Pin) -> Result<PathBuf, (u16, String)> {
     }
     let mut tried = vec![];
     for src in candidates(s, key, &p.origin) {
-        match download(&src) {
+        match get_from(&src, &p.digest) {
             Ok(b) if Digest::of(p.digest.alg, &b) == p.digest => return keep(s, &p.digest, &b),
-            Ok(_) => tried.push(format!("{src}: wrong bytes")),
+            Ok(_) => tried.push(format!("{}: wrong bytes", name(&src))),
             Err(e) => tried.push(e),
         }
     }
@@ -504,13 +553,18 @@ fn fetch_plain(s: &State, key: &str, p: &Pin, gz: bool) -> Result<PathBuf, (u16,
             break;
         }
         for src in candidates(s, &k, &origin) {
-            match download(&src) {
-                Ok(b) => match if zipped { gunzip(&b) } else { Some(b) } {
+            // an archive keeps the pinned bytes themselves, whatever form upstream served: asked once, as they are
+            let archive = matches!(src, Src::Archive(_));
+            if archive && !zipped {
+                continue;
+            }
+            match get_from(&src, &p.digest) {
+                Ok(b) => match if zipped && !archive { gunzip(&b) } else { Some(b) } {
                     Some(x) if ok(&x) => {
                         plain = Some(x);
                         break 'found;
                     }
-                    _ => tried.push(format!("{src}: wrong bytes")),
+                    _ => tried.push(format!("{}: wrong bytes", name(&src))),
                 },
                 Err(e) => tried.push(e),
             }
@@ -553,6 +607,8 @@ fn passthrough(s: &State, origin: &str) -> Result<PathBuf, (u16, String)> {
     let key = key_of(origin).unwrap_or(origin);
     let mut tried = vec![];
     for src in candidates(s, key, origin) {
+        // an archive holds only what something pinned, and this vouches for nothing
+        let Src::At(src) = src else { continue };
         match download(&src) {
             Ok(b) => return keep_named(s, key, &b),
             Err(e) => tried.push(e),
@@ -568,7 +624,7 @@ fn passthrough(s: &State, origin: &str) -> Result<PathBuf, (u16, String)> {
 /// What every source said, or why there were none to ask.
 fn why(tried: &[String]) -> String {
     if tried.is_empty() {
-        "offline, no --source, and no cached copy hashes right".into()
+        "offline, no --source or --archive, and no cached copy hashes right".into()
     } else {
         tried.join("; ")
     }
@@ -578,6 +634,31 @@ fn gunzip(b: &[u8]) -> Option<Vec<u8>> {
     let mut out = vec![];
     // every member, as zlib's gzread (apt) and zcat read it
     MultiGzDecoder::new(b).read_to_end(&mut out).ok()?;
+    Some(out)
+}
+
+/// An index as its name says it's compressed: gzip, xz (EPEL 9's primary.xml) or zstd (EPEL 10's), or as it is. None
+/// for a compression there's no decoder here for, or bytes that don't decode.
+fn decompress(key: &str, b: &[u8]) -> Option<Vec<u8>> {
+    let mut out = vec![];
+    if key.ends_with(".gz") {
+        return gunzip(b);
+    } else if key.ends_with(".xz") {
+        lzma_rs::xz_decompress(&mut &b[..], &mut out).ok()?;
+    } else if key.ends_with(".zst") {
+        // every frame, as zstd -dc reads them
+        let mut rest = b;
+        while !rest.is_empty() {
+            ruzstd::decoding::StreamingDecoder::new(&mut rest)
+                .ok()?
+                .read_to_end(&mut out)
+                .ok()?;
+        }
+    } else if [".bz2", ".lzma"].iter().any(|z| key.ends_with(z)) {
+        return None;
+    } else {
+        out = b.to_vec();
+    }
     Some(out)
 }
 
@@ -607,8 +688,14 @@ fn learn(s: &State, key: &str, p: &Pin, file: &Path) {
         for (href, d) in &entries {
             pin_more(s, format!("{base}{href}"), d.clone(), &scheme);
         }
-        // yum and dnf may read primary.sqlite instead, which this can't parse: learn the packages from the XML
-        for (href, _) in entries.iter().filter(|(h, _)| h.ends_with("primary.xml.gz")) {
+        // yum and dnf may read primary.sqlite instead, which this can't parse: learn the packages from the XML, however
+        // it's compressed (EPEL 9 lists it only as .xz, EPEL 10 only as .zst)
+        let primary = |h: &str| {
+            [".gz", ".xz", ".zst"]
+                .iter()
+                .any(|z| h.ends_with(&format!("primary.xml{z}")))
+        };
+        for (href, _) in entries.iter().filter(|(h, _)| primary(h)) {
             let k = format!("{base}{href}");
             let pin = lock(&s.pins).get(&k).cloned();
             if let Some(pp) = pin {
@@ -617,7 +704,7 @@ fn learn(s: &State, key: &str, p: &Pin, file: &Path) {
                 }
             }
         }
-    } else if let Some(stem) = [".xz", ".bz2", ".lzma"].iter().find_map(|z| key.strip_suffix(z)) {
+    } else if let Some(stem) = [".bz2", ".lzma"].iter().find_map(|z| key.strip_suffix(z)) {
         // no decoder here for these: learn the packages from the gzip (or plain) form the same Release lists
         for k in [format!("{stem}.gz"), stem.to_string()] {
             let sib = lock(&s.pins).get(&k).cloned();
@@ -628,15 +715,8 @@ fn learn(s: &State, key: &str, p: &Pin, file: &Path) {
                 }
             }
         }
-    } else {
-        let plain = if key.ends_with(".gz") {
-            gunzip(&bytes)
-        } else {
-            Some(bytes)
-        };
-        if let Some(x) = plain {
-            learn_index(s, key, &x);
-        }
+    } else if let Some(x) = decompress(key, &bytes) {
+        learn_index(s, key, &x);
     }
 }
 
@@ -816,6 +896,7 @@ mod tests {
             &run,
             &dir.join("cache"),
             vec![dir.join("src").display().to_string()],
+            vec![],
             true,
         )
         .unwrap();
@@ -829,6 +910,105 @@ mod tests {
         assert_eq!(get(px.port, "HEAD", "/h.test/el/repodata/repomd.xml").0, 200);
         assert_eq!(px.take_refused().len(), 3);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two packages cut from EPEL's own primary.xml (2026-10-15), compressed by xz and zstd themselves: EPEL 9 lists its
+    /// primary only as .xz, EPEL 10 only as .zst.
+    type Fixture = (&'static str, &'static [u8], [(&'static str, &'static str); 2]);
+    const EPEL: [Fixture; 2] = [
+        (
+            "primary.xml.xz",
+            include_bytes!("../testdata/epel9-primary.xml.xz"),
+            [
+                (
+                    "Packages/3/3cpio-0.14.0-1.el9.x86_64.rpm",
+                    "0022bf15d74e01ea04f94c853445e2bfa839633447905c1329bb8442251f9333",
+                ),
+                (
+                    "Packages/3/3proxy-1.0.0-1.el9.x86_64.rpm",
+                    "3905164ef1b309ddb097bb731de946ec3a62413455f55b9a61e607bab5d4d3e7",
+                ),
+            ],
+        ),
+        (
+            "primary.xml.zst",
+            include_bytes!("../testdata/epel10-primary.xml.zst"),
+            [
+                (
+                    "Packages/3/3cpio-0.14.0-1.el10_2.x86_64.rpm",
+                    "f910ffeb1d39dedb050dbb2449d544912bbd410f46292f24cf1e1b25b407577e",
+                ),
+                (
+                    "Packages/3/3proxy-1.0.0-1.el10_3.x86_64.rpm",
+                    "17b64343997888c9c35e49cac6e13f3aae7c23a4dbb1c43036bb7b00cae21b83",
+                ),
+            ],
+        ),
+    ];
+
+    #[test]
+    fn decompresses_epel_primary_xz_and_zst() {
+        for (name, z, want) in EPEL {
+            let xml = decompress(name, z).unwrap();
+            let got = primary_entries(&String::from_utf8(xml).unwrap());
+            let want: Vec<_> = want
+                .iter()
+                .map(|(h, d)| (h.to_string(), Digest::parse("sha256", d).unwrap()))
+                .collect();
+            assert_eq!(got, want, "{name}");
+        }
+        // zstd -dc reads every frame of a file, and so does this
+        let (_, z, _) = EPEL[1];
+        let two = decompress("x.zst", &[z, z].concat()).unwrap();
+        let one = decompress("x.zst", z).unwrap();
+        assert_eq!(two, [one.clone(), one].concat());
+        assert_eq!(decompress("Packages.bz2", b"BZh9"), None);
+        assert_eq!(decompress("Packages", b"as is").unwrap(), b"as is");
+    }
+
+    #[test]
+    fn learns_packages_from_a_primary_listed_only_as_xz_or_zst() {
+        for (i, (name, z, want)) in EPEL.into_iter().enumerate() {
+            let dir = std::env::temp_dir().join(format!("wend-epel-test-{}-{i}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let src = dir.join("src/h.test/epel");
+            std::fs::create_dir_all(src.join("repodata")).unwrap();
+            std::fs::create_dir_all(src.join("Packages/3")).unwrap();
+            for (href, _) in want {
+                std::fs::write(src.join(href), b"not the rpm the index names").unwrap();
+            }
+            let href = format!("repodata/{}-{name}", sha256_hex(z));
+            std::fs::write(src.join(&href), z).unwrap();
+            let repomd = format!(
+                r#"<repomd><data type="primary"><checksum type="sha256">{}</checksum><location href="{href}"/></data></repomd>"#,
+                sha256_hex(z)
+            );
+            std::fs::write(src.join("repodata/repomd.xml"), &repomd).unwrap();
+            let run = serde_json::json!({"hops": [{"sources": {
+                "https://h.test/epel/repodata/repomd.xml": format!("sha256:{}", sha256_hex(repomd.as_bytes()))}}]});
+            let px = Proxy::start(
+                &run,
+                &dir.join("cache"),
+                vec![dir.join("src").display().to_string()],
+                vec![],
+                true,
+            )
+            .unwrap();
+            // listed: pinned at the index's hash, so wrong bytes are a bad source (502), not an unknown package (403)
+            for (href, _) in want {
+                assert_eq!(
+                    get(px.port, "GET", &format!("/h.test/epel/{href}")).0,
+                    502,
+                    "{name}: {href}"
+                );
+            }
+            assert_eq!(
+                get(px.port, "GET", "/h.test/epel/Packages/3/unlisted.rpm").0,
+                403,
+                "{name}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]
@@ -860,6 +1040,7 @@ mod tests {
             &run,
             &dir.join("cache"),
             vec![dir.join("src").display().to_string()],
+            vec![],
             true,
         )
         .unwrap();
@@ -877,6 +1058,85 @@ mod tests {
     }
 
     #[test]
+    fn archive_serves_by_digest_through_aliases() {
+        let dir = std::env::temp_dir().join(format!("wend-archive-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let arch = dir.join("archive");
+        let blob = |b: &[u8]| {
+            let h = sha256_hex(b);
+            let d = arch.join("blob/sha256").join(&h[..2]);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join(&h), b).unwrap();
+        };
+        let alias = |b: &[u8], to: &str| {
+            let d = arch.join("alias/sha1");
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join(Digest::of("sha1", b).hex), format!("sha256:{to}\n")).unwrap();
+        };
+        // EL5: repomd lists primary by SHA-1 and primary lists packages by SHA-1, so both go through an alias
+        let (a, b) = (b"rpm a".to_vec(), b"rpm b".to_vec());
+        let primary = format!(
+            r#"<package type="rpm"><checksum type="sha" pkgid="YES">{}</checksum><location href="a.rpm"/></package>
+<package type="rpm"><checksum type="sha" pkgid="YES">{}</checksum><location href="b.rpm"/></package>"#,
+            Digest::of("sha1", &a).hex,
+            Digest::of("sha1", &b).hex
+        );
+        let mut z = flate2::write::GzEncoder::new(vec![], flate2::Compression::default());
+        z.write_all(primary.as_bytes()).unwrap();
+        let pz = z.finish().unwrap();
+        let repomd = format!(
+            r#"<repomd><data type="primary"><checksum type="sha">{}</checksum><location href="repodata/primary.xml.gz"/></data></repomd>"#,
+            Digest::of("sha1", &pz).hex
+        );
+        for x in [repomd.as_bytes(), &pz, &a, b"not rpm b"] {
+            blob(x);
+        }
+        alias(&pz, &sha256_hex(&pz));
+        alias(&a, &sha256_hex(&a));
+        // a wrong alias: names a blob that isn't b
+        alias(&b, &sha256_hex(b"not rpm b"));
+        let run = serde_json::json!({"hops": [{"sources": {
+            "http://h.test/el5/repodata/repomd.xml": format!("sha256:{}", sha256_hex(repomd.as_bytes()))}}]});
+        let px = Proxy::start(&run, &dir.join("cache"), vec![], vec![arch.display().to_string()], true).unwrap();
+        px.ensure_pinned().unwrap();
+        assert_eq!(get(px.port, "GET", "/h.test/el5/a.rpm"), (200, a));
+        // the alias is only a pointer: the blob it names still has to hash to the digest the index gave
+        assert_eq!(get(px.port, "GET", "/h.test/el5/b.rpm").0, 502);
+        assert_eq!(get(px.port, "GET", "/h.test/el5/c.rpm").0, 403);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn archive_serves_an_index_pinned_uncompressed() {
+        let dir = std::env::temp_dir().join(format!("wend-archive-plain-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let pinned = b"Package: a\nFilename: pool/a.deb\nSHA256: 00\n\n".to_vec();
+        let h = sha256_hex(&pinned);
+        let d = dir.join("archive/blob/sha256").join(&h[..2]);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join(&h), &pinned).unwrap();
+        let run = serde_json::json!({"hops": [{"sources": {
+            "http://h.test/debian/dists/wheezy/main/binary-amd64/Packages": format!("sha256:{h}")}}]});
+        let px = Proxy::start(
+            &run,
+            &dir.join("cache"),
+            vec![],
+            vec![dir.join("archive").display().to_string()],
+            true,
+        )
+        .unwrap();
+        // the archive keeps the plain bytes; apt asks for the .gz and gets a gzip of exactly them
+        let (code, body) = get(
+            px.port,
+            "GET",
+            "/h.test/debian/dists/wheezy/main/binary-amd64/Packages.gz",
+        );
+        assert_eq!(code, 200);
+        assert_eq!(gunzip(&body).unwrap(), pinned);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_vanished_snapshot_refuses_before_the_walk() {
         let dir = std::env::temp_dir().join(format!("wend-pinned-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -889,6 +1149,7 @@ mod tests {
             &run,
             &dir.join("cache"),
             vec![dir.join("src").display().to_string()],
+            vec![],
             true,
         )
         .unwrap();
