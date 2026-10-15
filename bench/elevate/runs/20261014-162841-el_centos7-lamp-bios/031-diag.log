@@ -1,0 +1,14 @@
+$ for f in /etc/sysconfig/network-scripts/ifcfg-*; do echo "## $f"; cat "$f"; done; nmcli -t connection show
+## /etc/sysconfig/network-scripts/ifcfg-lo
+DEVICE=lo
+IPADDR=127.0.0.1
+NETMASK=255.0.0.0
+NETWORK=127.0.0.0
+# If you're having problems with gated making 127.0.0.0/8 a martian,
+# you can change this to something else (255.255.255.255, for example)
+BROADCAST=127.255.255.255
+ONBOOT=yes
+NAME=loopback
+System eth0:907cee6a-d098-4939-82e4-6de0631adac3:802-3-ethernet:eth0
+
+# rc=0

@@ -1,0 +1,54 @@
+[elevate 18:47:38] setup: 'rm -f /etc/yum.repos.d/*.repo && curl -fsSo /etc/yum.repos.d/CentOS-Base.repo https://el7.repo.almal' -> rc=0
+[elevate 18:48:12] setup: 'yum clean all && yum upgrade -y' -> rc=0
+[elevate 18:50:57] alma8: 'yum install -y http://repo.almalinux.org/elevate/elevate-release-latest-el7.noarch.rpm' -> rc=0
+[elevate 18:51:41] alma8: 'yum install -y leapp-upgrade leapp-data-almalinux' -> rc=0
+[elevate 18:51:54] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 18:52:06] diag: 'for f in /etc/sysconfig/network-scripts/ifcfg-*; do echo "## $f"; cat "$f"; done; nmcli -t connectio' -> rc=0
+[elevate 18:54:37] alma8: 'leapp preupgrade' -> rc=1
+[elevate 18:54:51] alma8: 'echo PermitRootLogin yes >> /etc/ssh/sshd_config' -> rc=0
+[elevate 18:55:04] alma8: 'rmmod pata_acpi' -> rc=0
+[elevate 18:55:17] alma8: 'leapp answer --section remove_pam_pkcs11_module_check.confirm=True' -> rc=0
+[elevate 18:55:29] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 18:55:42] diag: 'for f in /etc/sysconfig/network-scripts/ifcfg-*; do echo "## $f"; cat "$f"; done; nmcli -t connectio' -> rc=0
+[elevate 19:02:38] alma8: 'leapp preupgrade' -> rc=0
+[elevate 19:12:44] alma8: 'leapp upgrade' -> rc=0
+[elevate 19:35:45] alma8: degraded lost=['live:app', 'live:cron', 'services'] net_kept=True kernel_current=True
+[elevate 19:35:56] alma9: "grep -H '^exclude=' /etc/yum.conf /etc/dnf/dnf.conf 2>/dev/null" -> rc=0
+[elevate 19:36:07] alma9: "sed -i '/^exclude=/{/leapp\\|elevate/d}' /etc/yum.conf /etc/dnf/dnf.conf" -> rc=0
+[elevate 19:36:18] alma9: "rpm -qa | grep -E '\\.el7([._]|$)|leapp|elevate' | sort" -> rc=0
+[elevate 19:36:40] alma9: 'dnf -y remove elevate-release-1.0-3.el8.noarch kernel-3.10.0-1160.119.1.el7.x86_64 kernel-3.10.0-116' -> rc=0
+[elevate 19:36:51] alma9: 'rm -fr /root/tmp_leapp_py3; dnf clean all' -> rc=0
+[elevate 19:37:02] alma9: "rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE}\\t%{SUMMARY}\\n'" -> rc=0
+[elevate 19:37:13] alma9: 'rpm -e gpg-pubkey-f4a80eb5-53a7ff4b' -> rc=0
+[elevate 19:38:04] alma9: 'yum install -y http://repo.almalinux.org/elevate/elevate-release-latest-el8.noarch.rpm' -> rc=0
+[elevate 19:38:15] alma9: 'yum install -y leapp-upgrade leapp-data-almalinux' -> rc=0
+[elevate 19:38:25] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 19:38:36] diag: 'for f in /etc/sysconfig/network-scripts/ifcfg-*; do echo "## $f"; cat "$f"; done; nmcli -t connectio' -> rc=0
+[elevate 19:40:09] alma9: 'leapp preupgrade' -> rc=1
+[elevate 19:40:20] alma9: 'nmcli connection migrate' -> rc=0
+[elevate 19:40:31] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 19:40:42] diag: 'for f in /etc/sysconfig/network-scripts/ifcfg-*; do echo "## $f"; cat "$f"; done; nmcli -t connectio' -> rc=0
+[elevate 19:45:39] alma9: 'leapp preupgrade' -> rc=0
+[elevate 20:00:12] alma9: 'leapp upgrade' -> rc=0
+[elevate 20:22:06] alma9: degraded lost=['live:app', 'live:cron', 'network'] net_kept=True kernel_current=True
+[elevate 20:22:17] alma10: "grep -H '^exclude=' /etc/yum.conf /etc/dnf/dnf.conf 2>/dev/null" -> rc=0
+[elevate 20:22:28] alma10: "sed -i '/^exclude=/{/leapp\\|elevate/d}' /etc/yum.conf /etc/dnf/dnf.conf" -> rc=0
+[elevate 20:22:39] alma10: "rpm -qa | grep -E '\\.el8([._]|$)|leapp|elevate' | sort" -> rc=0
+[elevate 20:23:00] alma10: 'dnf -y remove elevate-release-1.0-3.el8.noarch kernel-4.18.0-553.173.1.el8_10.x86_64 kernel-core-4.1' -> rc=0
+[elevate 20:23:10] alma10: 'rm -fr /root/tmp_leapp_py3; dnf clean all' -> rc=0
+[elevate 20:23:21] alma10: "rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE}\\t%{SUMMARY}\\n'" -> rc=0
+[elevate 20:23:32] alma10: 'rpm -e gpg-pubkey-2f86d6a1-5cf7cefb' -> rc=0
+[elevate 20:24:03] alma10: 'yum install -y http://repo.almalinux.org/elevate/elevate-release-latest-el9.noarch.rpm' -> rc=0
+[elevate 20:24:13] alma10: 'yum install -y leapp-upgrade leapp-data-almalinux' -> rc=0
+[elevate 20:24:24] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 20:24:35] diag: 'for f in /etc/sysconfig/network-scripts/ifcfg-*; do echo "## $f"; cat "$f"; done; nmcli -t connectio' -> rc=0
+[elevate 20:25:26] alma10: 'leapp preupgrade' -> rc=1
+[elevate 20:25:37] alma10: 'nmcli conn migrate' -> rc=0
+[elevate 20:25:48] alma10: "sed -i'.bak' 's/^dhcp=dhclient//g' /usr/lib/NetworkManager/conf.d/10-dhcp-dhclient.conf" -> rc=0
+[elevate 20:25:59] alma10: 'systemctl restart NetworkManager' -> rc=0
+[elevate 20:26:09] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 20:26:20] diag: 'for f in /etc/sysconfig/network-scripts/ifcfg-*; do echo "## $f"; cat "$f"; done; nmcli -t connectio' -> rc=0
+[elevate 20:29:55] alma10: 'leapp preupgrade' -> rc=0
+[elevate 20:39:58] alma10: 'leapp upgrade' -> rc=0
+[elevate 20:51:52] alma10: degraded lost=['live:app', 'live:cron', 'network'] net_kept=True kernel_current=True
+[elevate 20:51:54] done: reached alma10; 13 interventions; run in .wend/elevate/20261014-184640-el_centos7-pyapp-bios

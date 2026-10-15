@@ -1,0 +1,2072 @@
+$ leapp preupgrade
+==> Processing phase `configuration_phase`
+====> * ipu_workflow_config
+        IPU workflow config actor
+==> Processing phase `FactsCollection`
+====> * system_facts
+        Provides data about many facts from system.
+====> * vendor_repositories_mapping
+        Scan the vendor repository mapping files and provide the data to other actors.
+====> * check_enabled_vendor_repos
+        Create a list of vendors whose repositories are present on the system and enabled.
+====> * vendor_repo_signature_scanner
+        Produce VendorSignatures messages for the vendor signature files inside the
+====> * scan_dnf_pluginpath
+        Scans DNF configuration for custom pluginpath option.
+====> * scan_custom_modifications_actor
+        Collects information about files in leapp directories that have been modified or newly added.
+====> * network_manager_read_config
+        Provides data about NetworkManager configuration.
+====> * firewalld_collect_global_config
+        This actor reads firewalld's configuration and produces Model
+====> * load_device_driver_deprecation_data
+        Loads deprecation data for drivers and devices (PCI & CPU)
+====> * persistentnetnames
+        Get network interface information for physical ethernet interfaces of the original system.
+====> * scan_subscription_manager_info
+        Scans the current system for subscription manager information
+====> * scanzfcp
+        In case of s390x architecture, check whether ZFCP is used.
+====> * sssd_facts_8to9
+        Check SSSD configuration for changes in RHEL9 and report them in model.
+====> * scan_target_os_image
+        Scans the provided target OS ISO image to use as a content source for the IPU, if any.
+====> * roce_scanner
+        Detect active RoCE NICs on IBM Z machines.
+====> * open_ssl_config_scanner
+        Read an OpenSSL configuration file for further analysis.
+====> * get_enabled_modules
+        Provides data about which module streams are enabled on the source system.
+====> * persistentnetnamesdisable
+        Disable systemd-udevd persistent network naming on machine with single eth0 NIC
+====> * scan_source_boot_entry
+        Scan the default boot entry of the source system.
+====> * repository_mapping
+        Produces message containing repository mapping based on provided file.
+====> * scan_kernel_cmdline
+        Scan the kernel command line of the booted system.
+====> * storage_scanner
+        Provides data about storage settings.
+====> * scancpu
+        Scan CPUs of the machine.
+====> * copy_dnf_conf_into_target_userspace
+        Copy dnf.conf into target userspace
+====> * read_openssh_config
+        Collect information about the OpenSSH configuration.
+====> * scan_sap_hana
+        Gathers information related to SAP HANA instances on the system.
+====> * transaction_workarounds
+        Provides additional RPM transaction tasks based on bundled RPM packages.
+====> * scan_source_files
+        Scan files (explicitly specified) of the source system.
+====> * scan_vendor_repofiles
+        Load and produce custom repository data from vendor-provided files.
+====> * rpm_scanner
+        Provides data about installed RPM Packages.
+====> * network_manager_connection_scanner
+        Scan NetworkManager connection keyfiles
+====> * register_ruby_irb_adjustment
+        Register a workaround to allow rubygem-irb's directory -> symlink conversion.
+====> * scan_custom_repofile
+        Scan the custom /etc/leapp/files/leapp_upgrade_repositories.repo repo file.
+====> * luks_scanner
+        Provides data about active LUKS devices.
+====> * udevadm_info
+        Produces data exported by the "udevadm info" command.
+====> * scan_pkg_manager
+        Provides data about package manager (yum/dnf)
+====> * nis_scanner
+        Collect information about the NIS packages configuration.
+====> * biosdevname
+        Enable biosdevname on the target RHEL system if all interfaces on the source RHEL
+====> * root_scanner
+        Scan the system root directory and produce a message containing
+====> * xorgdrvfacts8to9
+        Check the journal logs for deprecated Xorg drivers.
+====> * scan_grub_device_name
+        Find the name of the block devices where GRUB is located
+====> * scan_systemd_source
+        Provides info about systemd on the source system
+====> * scanmemory
+        Scan Memory of the machine.
+====> * firewalld_collect_used_object_names
+        This actor reads firewalld's configuration and produces Model
+====> * scan_fips
+        Determine whether the source system has FIPS enabled.
+====> * scanclienablerepo
+        Produce CustomTargetRepository based on the LEAPP_ENABLE_REPOS in config.
+====> * detect_kernel_drivers
+        Matches all currently loaded kernel drivers against known deprecated and removed drivers.
+====> * scan_files_for_target_userspace
+        Scan the source system and identify files that will be copied into the target userspace when it is created.
+====> * repositories_blacklist
+        Exclude target repositories provided by Red Hat without support.
+====> * scandasd
+        In case of s390x architecture, check whether DASD is used.
+====> * scan_grub_config
+        Scan grub configuration files for errors.
+====> * scan_nvme
+        Detect existing NVMe devices.
+====> * selinuxcontentscanner
+        Scan the system for any SELinux customizations
+====> * ifcfg_scanner
+        Scan ifcfg files with legacy network configuration
+====> * pci_devices_scanner
+        Provides data about existing PCI Devices.
+====> * trusted_gpg_keys_scanner
+        Scan for trusted GPG keys.
+====> * scanblacklistca
+        Scan the file system for distrusted CA's in the blacklist directory.
+====> * distribution_signed_rpm_scanner
+        Provide data about distribution signed & third-party plus vendors RPM packages.
+====> * check_custom_network_scripts
+        Check the existence of custom network-scripts and warn user about possible
+====> * scancryptopolicies
+        Scan information about system wide set crypto policies including:
+====> * scan_hybrid_image_azure
+        Check if the system is using Azure hybrid image.
+====> * xfs_info_scanner
+        This actor scans all mounted mountpoints for XFS information.
+====> * scan_third_party_target_python_modules
+        Detect third-party target Python modules and RPMs on the source system.
+====> * scan_default_initramfs
+        Scan details of the default boot entry's initramfs image.
+====> * get_installed_desktops
+        Actor checks if kde or gnome desktop environments
+====> * vdo_conversion_scanner
+        Provides conversion info about VDO devices.
+====> * rpm_transaction_config_tasks_collector
+        Provides additional RPM transaction tasks from /etc/leapp/transaction.
+====> * ipa_scanner
+        Scan system for ipa-client and ipa-server status
+====> * scan_source_kernel
+        Scan the source system kernel.
+====> * checkrhui
+        Check if system is using RHUI infrastructure (on public cloud) and send messages to
+====> * remove_obsolete_gpg_keys
+        Remove obsoleted RPM GPG keys.
+====> * multipath_conf_read
+        Read multipath configuration files and extract the necessary information
+====> * scan_lvm_config
+        Scan LVM configuration.
+====> * enable_lvm_autoactivation
+        Enable LVM autoactivation in upgrade initramfs.
+====> * used_repository_scanner
+        Scan used enabled repositories
+====> * scan_dynamic_linker_configuration
+        Scan the dynamic linker configuration and find modifications.
+====> * satellite_upgrade_facts
+        Report which Satellite packages require updates and how to handle PostgreSQL data
+====> * pes_events_scanner
+        Provides data about package events from Package Evolution Service.
+====> * satellite_upgrade_services
+        Reconfigure Satellite services
+====> * setuptargetrepos
+        Produces list of repositories that should be available to be used during IPU process.
+==> Processing phase `Checks`
+====> * check_persistent_mounts
+        Check if mounts required to be persistent are mounted in persistent fashion.
+====> * open_ssh_drop_in_directory_check
+        Trigger a notice that the main sshd_config will be updated to contain
+====> * xorgdrvcheck8to9
+        Warn if Xorg deprecated drivers are in use.
+====> * mariadb_check
+        Actor checking for presence of MariaDB installation.
+====> * check_rhsmsku
+        Ensure the system is subscribed to the subscription manager
+====> * nis_check
+        Checks if any of NIS components is installed and configured
+====> * check_system_arch
+        Check if system is running at a supported architecture. If no, inhibit the upgrade process.
+====> * check_os_release
+        Check if the current RHEL minor version is supported. If not, inhibit the upgrade process.
+====> * dotnet_unsupported_versions_check
+        Check for installed .NET versions that are no longer supported.
+====> * firewalld_check_allow_zone_drifting
+        This actor will check if AllowZoneDrifting=yes in firewalld.conf. This
+====> * check_dnf_pluginpath
+        Inhibits the upgrade if a custom DNF plugin path is configured.
+====> * efi_check_boot
+        Adjust EFI boot entry for first reboot
+====> * check_deprecated_rpm_signature
+        Check whether any packages signed by RSA/SHA1 are installed
+====> * check_target_version
+        Check that the target system version is supported by the upgrade process.
+====> * check_nvidia_proprietary_driver
+        Check if NVIDIA proprietary driver is in use. If yes, inhibit the upgrade process.
+====> * check_root_symlinks
+        Check if the symlinks /bin and /lib are relative, not absolute.
+====> * secure_boot_inhibit
+        Inhibit the conversion if SecureBoot is enabled.
+====> * postgresql_check
+        Actor checking for presence of PostgreSQL installation.
+====> * check_consumed_assets
+        Check whether Leapp is using correct data assets.
+====> * firewalld_check_service_tftp_client
+        This actor will inhibit if firewalld's configuration is using service
+====> * checkblacklistca
+        No documentation has been provided for the checkblacklistca actor.
+====> * emit_net_naming_scheme
+        Emit necessary modifications of the upgrade environment and target command line to use net.naming-scheme.
+====> * check_bls_grub_onppc64
+        Check whether GRUB config is BLS aware on RHEL 8 ppc64le systems
+====> * check_grub_core
+        Check whether we are on legacy (BIOS) system and instruct Leapp to upgrade GRUB core
+====> * check_nvme
+        Check if NVMe devices are used and possibly register additional actions.
+====> * check_systemd_broken_symlinks
+        Check whether some systemd symlinks are broken
+====> * checktargetrepos
+        Check whether target dnf repositories are specified on RHEL.
+====> * check_nfs
+        Check if NFS filesystem is in use. If yes, inhibit the upgrade process.
+====> * check_installed_kernels
+        Inhibit IPU (in-place upgrade) when installed kernels conflict with a safe upgrade.
+====> * check_sap_hana
+        If SAP HANA has been detected, several checks are performed to ensure a successful upgrade.
+====> * bacula_check
+        Actor checking for presence of Bacula installation.
+====> * check_kpatch
+        Carry over kpatch-dnf and it's config into the container
+====> * check_arm_bootloader
+        Install required RPM packages for ARM system upgrades on paths with
+====> * check_etc_releasever
+        Check releasever info and provide a guidance based on the facts
+====> * detect_grub_config_error
+        Check grub configuration for various errors.
+====> * network_deprecations
+        Ensures that network configuration doesn't rely on unsupported settings
+====> * check_target_iso
+        Check that the provided target ISO is a valid ISO image and is located on a persistent partition.
+====> * mysql_check
+        Actor checking for presence of MySQL installation.
+====> * check_yum_plugins_enabled
+        Checks that the required DNF plugins are enabled.
+====> * crypto_policies_check
+        This actor consumes previously gathered information about crypto policies on the source
+====> * openssh_permit_root_login
+        OpenSSH no longer allows root logins with password.
+====> * multipath_conf_check_8to9
+        Checks if changes to the multipath configuration files are necessary
+====> * enable_php_module
+        Enable the php:8.2 module on the target system if it was enabled on the source system.
+====> * check_microarchitecture
+        Inhibit if RHEL9 microarchitecture requirements are not satisfied
+====> * open_ssl_config_check
+        The OpenSSL configuration changed between RHEL8 and RHEL9 significantly with the rebase to
+====> * check_valid_grubcfg_hybrid
+        Check potential for boot failures in Azure Gen1 VMs due to invalid grubcfg
+====> * check_cifs
+        Check if CIFS filesystem is in use. If yes, inhibit the upgrade process.
+====> * check_fstab_mount_order
+        Checks order of entries in /etc/fstab based on their mount point and inhibits upgrade if overshadowing is detected.
+====> * roce_check
+        Check whether RoCE is used on the system and well configured for the upgrade.
+====> * check_detected_devices_and_drivers
+        Checks whether or not detected devices and drivers are usable on the target system.
+====> * check_lvm
+        Check if the LVM is installed and ensure the target userspace container
+====> * checkmemory
+        The actor check the size of RAM against RHEL8 minimal hardware requirements
+====> * check_mount_options
+        Check for mount options preventing the upgrade.
+====> * swap_distro_packages
+        Swap distribution specific packages.
+====> * check_ipa_server
+        Check for ipa-server and inhibit upgrade
+====> * check_ifcfg
+        Ensures that ifcfg files are compatible with NetworkManager
+====> * check_custom_modifications_actor
+        Checks CustomModifications messages and produces a report about files in leapp directories that have been
+====> * check_skipped_repositories
+        Produces a report if any repositories enabled on the system are going to be skipped.
+====> * check_kernel_rt
+        Workaround kernel-rt upgrade candidate issue during RHEL 8 to RHEL 9 upgrade.
+====> * check_boot_avail_space
+        Check if at least 100Mib of available space on /boot. If not, inhibit the upgrade process.
+====> * sssd_check_8to9
+        Check SSSD configuration for changes in RHEL9 and report them in model.
+====> * check_se_linux
+        Check SELinux status and produce decision messages for further action.
+====> * check_vdo
+        Check if VDO devices need to be migrated to lvm management.
+====> * check_insights_auto_register
+        Checks if system can be automatically registered into Red Hat Lightspeed
+====> * cephvolumescan
+        Retrieves the list of encrypted Ceph OSD
+====> * check_dynamic_linker_configuration
+        Check for customization of dynamic linker configuration.
+====> * unsupported_upgrade_check
+        Checks environment variables and produces a warning report if the upgrade is unsupported.
+====> * distribution_signed_rpm_check
+        Check if there are any packages that are not signed by distribution GPG keys.
+====> * check_third_party_target_python_modules
+        Produces a report if any third-party target Python modules are detected on the source system.
+====> * check_fips
+        Inhibit upgrade if FIPS is detected as enabled.
+====> * check_grubenv_to_file
+        Check whether grubenv is a symlink on Azure hybrid images using BIOS.
+====> * check_openssl_conf
+        Check whether the openssl configuration and openssl-IBMCA.
+====> * open_ssh_subsystem_sftp
+        The RHEL9 changes the SCP to use SFTP protocol internally. The both RHEL8 and RHEL9
+====> * check_luks
+        Check if any encrypted partitions are in use and whether they are supported for the upgrade.
+====> * check_rpm_transaction_events
+        Filter RPM transaction events based on installed RPM packages
+====> * check_skip_phase
+        Skip all the subsequent phases until the report phase.
+==> Processing phase `TargetTransactionFactsCollection`
+====> * create_iso_repofile
+        Create custom repofile containing information about repositories found in target OS installation ISO, if used.
+====> * target_userspace_creator
+        Initializes a directory to be populated as a minimal environment to run binaries from the target system.
+Extra Packages for Enterprise Linux 9 - x86_64   22 MB/s |  20 MB     00:00    
+AlmaLinux 9.8 - BaseOS                           42 MB/s |  46 MB     00:01    
+AlmaLinux 9.8 - AppStream                        34 MB/s |  29 MB     00:00    
+AlmaLinux 9.8 - CRB                              10 MB/s | 6.1 MB     00:00    
+AlmaLinux 9.8 - HighAvailability                358 kB/s | 153 kB     00:00    
+AlmaLinux 9.8 - ResilientStorage                446 kB/s | 168 kB     00:00    
+AlmaLinux 9.8 - Extras                           90 kB/s |  33 kB     00:00    
+AlmaLinux 9.8 - SAP                              27 kB/s |  11 kB     00:00    
+AlmaLinux 9.8 - SAPHANA                          71 kB/s |  28 kB     00:00    
+AlmaLinux 9.8 - RT                               37 MB/s |  39 MB     00:01    
+AlmaLinux 9.8 - NFV                              38 MB/s |  39 MB     00:01    
+Dependencies resolved.
+==============================================================================================
+ Package                       Arch    Version                     Repository             Size
+==============================================================================================
+Installing:
+ dnf                           noarch  4.14.0-34.el9_8.alma.1      almalinux9-baseos     467 k
+ dnf-plugins-core              noarch  4.3.0-26.el9                almalinux9-baseos      35 k
+ util-linux                    x86_64  2.37.4-25.el9               almalinux9-baseos     2.2 M
+Installing dependencies:
+ acl                           x86_64  2.4.0-1.el9_8               almalinux9-baseos      74 k
+ almalinux-gpg-keys            x86_64  9.8-1.el9                   almalinux9-baseos     9.7 k
+ almalinux-release             x86_64  9.8-1.el9                   almalinux9-baseos      20 k
+ almalinux-repos               x86_64  9.8-1.el9                   almalinux9-baseos     9.8 k
+ alternatives                  x86_64  1.24-2.el9                  almalinux9-baseos      38 k
+ attr                          x86_64  2.6.0-1.el9_8               almalinux9-baseos      62 k
+ audit-libs                    x86_64  3.1.5-8.el9                 almalinux9-baseos     121 k
+ basesystem                    noarch  11-13.el9                   almalinux9-baseos     7.0 k
+ bash                          x86_64  5.1.8-9.el9                 almalinux9-baseos     1.7 M
+ bzip2-libs                    x86_64  1.0.8-11.el9                almalinux9-baseos      39 k
+ ca-certificates               noarch  2025.2.80_v9.0.305-91.el9   almalinux9-baseos     943 k
+ coreutils                     x86_64  8.32-41.el9_8.1             almalinux9-baseos     1.1 M
+ coreutils-common              x86_64  8.32-41.el9_8.1             almalinux9-baseos     2.0 M
+ cracklib                      x86_64  2.9.6-28.el9                almalinux9-baseos      80 k
+ cracklib-dicts                x86_64  2.9.6-28.el9                almalinux9-baseos     3.6 M
+ crypto-policies               noarch  20260224-1.gitea0f072.el9_8 almalinux9-baseos      56 k
+ curl                          x86_64  7.76.1-40.el9_8.8           almalinux9-baseos     293 k
+ cyrus-sasl-lib                x86_64  2.1.27-22.el9               almalinux9-baseos     762 k
+ dbus                          x86_64  1:1.12.20-8.el9             almalinux9-baseos     6.8 k
+ dbus-broker                   x86_64  28-9.el9_8                  almalinux9-baseos     169 k
+ dbus-common                   noarch  1:1.12.20-8.el9             almalinux9-baseos      14 k
+ dbus-libs                     x86_64  1:1.12.20-8.el9             almalinux9-baseos     151 k
+ dnf-data                      noarch  4.14.0-34.el9_8.alma.1      almalinux9-baseos      36 k
+ elfutils-default-yama-scope   noarch  0.194-1.el9.alma.1          almalinux9-baseos     8.8 k
+ elfutils-libelf               x86_64  0.194-1.el9.alma.1          almalinux9-baseos     201 k
+ elfutils-libs                 x86_64  0.194-1.el9.alma.1          almalinux9-baseos     268 k
+ expat                         x86_64  2.5.0-6.el9_8.5             almalinux9-baseos     119 k
+ file-libs                     x86_64  5.39-17.el9                 almalinux9-baseos     587 k
+ filesystem                    x86_64  3.16-5.el9                  almalinux9-baseos     1.1 M
+ findutils                     x86_64  1:4.8.0-7.el9               almalinux9-baseos     536 k
+ gawk                          x86_64  5.1.0-6.el9_8.1             almalinux9-baseos     995 k
+ gdbm-libs                     x86_64  1:1.23-1.el9                almalinux9-baseos      55 k
+ glib2                         x86_64  2.68.4-19.el9_8.10          almalinux9-baseos     2.6 M
+ glibc                         x86_64  2.34-283.el9_8              almalinux9-baseos     2.0 M
+ glibc-common                  x86_64  2.34-283.el9_8              almalinux9-baseos     299 k
+ glibc-minimal-langpack        x86_64  2.34-283.el9_8              almalinux9-baseos      27 k
+ gmp                           x86_64  1:6.2.0-13.el9              almalinux9-baseos     314 k
+ gnupg2                        x86_64  2.3.3-5.el9_7               almalinux9-baseos     2.5 M
+ gnutls                        x86_64  3.8.10-9.el9_8              almalinux9-baseos     1.4 M
+ gpgme                         x86_64  1.15.1-6.el9                almalinux9-baseos     206 k
+ grep                          x86_64  3.6-5.el9                   almalinux9-baseos     257 k
+ gzip                          x86_64  1.12-2.el9_8                almalinux9-baseos     156 k
+ ima-evm-utils                 x86_64  1.6.2-2.el9                 almalinux9-baseos      70 k
+ json-c                        x86_64  0.14-11.el9                 almalinux9-baseos      42 k
+ keyutils                      x86_64  1.6.3-1.el9                 almalinux9-baseos      71 k
+ keyutils-libs                 x86_64  1.6.3-1.el9                 almalinux9-baseos      31 k
+ kmod-libs                     x86_64  28-11.el9                   almalinux9-baseos      62 k
+ krb5-libs                     x86_64  1.21.1-10.el9_8             almalinux9-baseos     755 k
+ libacl                        x86_64  2.4.0-1.el9_8               almalinux9-baseos      24 k
+ libarchive                    x86_64  3.5.3-11.el9_8              almalinux9-baseos     387 k
+ libassuan                     x86_64  2.5.5-3.el9                 almalinux9-baseos      67 k
+ libattr                       x86_64  2.6.0-1.el9_8               almalinux9-baseos      17 k
+ libblkid                      x86_64  2.37.4-25.el9               almalinux9-baseos     105 k
+ libbrotli                     x86_64  1.0.9-10.el9_8              almalinux9-baseos     312 k
+ libcap                        x86_64  2.48-10.el9_8.1             almalinux9-baseos      67 k
+ libcap-ng                     x86_64  0.8.2-7.el9                 almalinux9-baseos      32 k
+ libcom_err                    x86_64  1.46.5-8.el9                almalinux9-baseos      25 k
+ libcomps                      x86_64  0.1.18-1.el9                almalinux9-baseos      77 k
+ libcurl                       x86_64  7.76.1-40.el9_8.8           almalinux9-baseos     284 k
+ libdb                         x86_64  5.3.28-57.el9_6             almalinux9-baseos     736 k
+ libdnf                        x86_64  0.69.0-18.el9.alma.1        almalinux9-baseos     653 k
+ libeconf                      x86_64  0.4.1-7.el9_8               almalinux9-baseos      26 k
+ libevent                      x86_64  2.1.13-1.el9_8              almalinux9-baseos     261 k
+ libfdisk                      x86_64  2.37.4-25.el9               almalinux9-baseos     152 k
+ libffi                        x86_64  3.4.2-8.el9                 almalinux9-baseos      37 k
+ libgcc                        x86_64  11.5.0-14.el9.alma.1        almalinux9-baseos      84 k
+ libgcrypt                     x86_64  1.10.0-13.el9_8             almalinux9-baseos     505 k
+ libgomp                       x86_64  11.5.0-14.el9.alma.1        almalinux9-baseos     256 k
+ libgpg-error                  x86_64  1.42-5.el9                  almalinux9-baseos     211 k
+ libidn2                       x86_64  2.3.0-7.el9                 almalinux9-baseos      95 k
+ libksba                       x86_64  1.5.1-7.el9                 almalinux9-baseos     152 k
+ libmodulemd                   x86_64  2.13.0-2.el9                almalinux9-baseos     232 k
+ libmount                      x86_64  2.37.4-25.el9               almalinux9-baseos     133 k
+ libnghttp2                    x86_64  1.43.0-6.el9_8.2            almalinux9-baseos      72 k
+ libpsl                        x86_64  0.21.1-5.el9                almalinux9-baseos      63 k
+ libpwquality                  x86_64  1.4.4-8.el9                 almalinux9-baseos     105 k
+ librepo                       x86_64  1.19.0-1.el9                almalinux9-baseos      90 k
+ libreport-filesystem          noarch  2.15.2-6.el9.alma           almalinux9-baseos      11 k
+ libseccomp                    x86_64  2.5.2-2.el9                 almalinux9-baseos      71 k
+ libselinux                    x86_64  3.6-3.el9                   almalinux9-baseos      85 k
+ libsemanage                   x86_64  3.6-5.el9_6                 almalinux9-baseos     117 k
+ libsepol                      x86_64  3.6-3.el9                   almalinux9-baseos     329 k
+ libsigsegv                    x86_64  2.13-4.el9                  almalinux9-baseos      26 k
+ libsmartcols                  x86_64  2.37.4-25.el9               almalinux9-baseos      61 k
+ libsolv                       x86_64  0.7.24-6.el9_8              almalinux9-baseos     402 k
+ libssh                        x86_64  0.10.4-19.el9_8             almalinux9-baseos     214 k
+ libssh-config                 noarch  0.10.4-19.el9_8             almalinux9-baseos     8.2 k
+ libstdc++                     x86_64  11.5.0-14.el9.alma.1        almalinux9-baseos     741 k
+ libtasn1                      x86_64  4.16.0-10.el9_8             almalinux9-baseos      73 k
+ libtool-ltdl                  x86_64  2.4.6-46.el9                almalinux9-baseos      34 k
+ libunistring                  x86_64  0.9.10-15.el9               almalinux9-baseos     494 k
+ libutempter                   x86_64  1.2.1-6.el9                 almalinux9-baseos      26 k
+ libuuid                       x86_64  2.37.4-25.el9               almalinux9-baseos      26 k
+ libverto                      x86_64  0.3.2-3.el9                 almalinux9-baseos      21 k
+ libxcrypt                     x86_64  4.4.18-3.el9                almalinux9-baseos     115 k
+ libxml2                       x86_64  2.9.13-14.el9_8.5           almalinux9-baseos     748 k
+ libyaml                       x86_64  0.2.5-7.el9                 almalinux9-baseos      60 k
+ libzstd                       x86_64  1.5.5-1.el9                 almalinux9-baseos     294 k
+ lua-libs                      x86_64  5.4.4-4.el9                 almalinux9-baseos     129 k
+ lz4-libs                      x86_64  1.9.3-5.el9                 almalinux9-baseos      67 k
+ mpfr                          x86_64  4.1.0-10.el9                almalinux9-baseos     324 k
+ ncurses-base                  noarch  6.2-12.20210508.el9         almalinux9-baseos      60 k
+ ncurses-libs                  x86_64  6.2-12.20210508.el9         almalinux9-baseos     322 k
+ nettle                        x86_64  3.10.1-1.el9                almalinux9-baseos     562 k
+ npth                          x86_64  1.6-8.el9                   almalinux9-baseos      24 k
+ openldap                      x86_64  2.6.8-4.el9                 almalinux9-baseos     266 k
+ openssl                       x86_64  1:3.5.8-2.el9_8             almalinux9-baseos     1.4 M
+ openssl-fips-provider         x86_64  1:3.5.8-2.el9_8             almalinux9-baseos     813 k
+ openssl-libs                  x86_64  1:3.5.8-2.el9_8             almalinux9-baseos     2.3 M
+ p11-kit                       x86_64  0.26.4-1.el9_8              almalinux9-baseos     591 k
+ p11-kit-trust                 x86_64  0.26.4-1.el9_8              almalinux9-baseos     155 k
+ pam                           x86_64  1.5.1-28.el9_8.1            almalinux9-baseos     543 k
+ pcre                          x86_64  8.44-4.el9                  almalinux9-baseos     196 k
+ pcre2                         x86_64  10.40-7.el9_8               almalinux9-baseos     233 k
+ pcre2-syntax                  noarch  10.40-7.el9_8               almalinux9-baseos     140 k
+ popt                          x86_64  1.18-8.el9                  almalinux9-baseos      58 k
+ publicsuffix-list-dafsa       noarch  20210518-3.el9              almalinux9-baseos      57 k
+ python3                       x86_64  3.9.25-7.el9_8.3            almalinux9-baseos      26 k
+ python3-dateutil              noarch  1:2.9.0.post0-1.el9_7       almalinux9-baseos     290 k
+ python3-dbus                  x86_64  1.2.18-2.el9                almalinux9-baseos     132 k
+ python3-dnf                   noarch  4.14.0-34.el9_8.alma.1      almalinux9-baseos     412 k
+ python3-dnf-plugins-core      noarch  4.3.0-26.el9                almalinux9-baseos     245 k
+ python3-gpg                   x86_64  1.15.1-6.el9                almalinux9-baseos     261 k
+ python3-hawkey                x86_64  0.69.0-18.el9.alma.1        almalinux9-baseos     101 k
+ python3-libcomps              x86_64  0.1.18-1.el9                almalinux9-baseos      48 k
+ python3-libdnf                x86_64  0.69.0-18.el9.alma.1        almalinux9-baseos     771 k
+ python3-libs                  x86_64  3.9.25-7.el9_8.3            almalinux9-baseos     7.5 M
+ python3-pip-wheel             noarch  21.3.1-2.el9_8              almalinux9-baseos     1.1 M
+ python3-rpm                   x86_64  4.16.1.3-40.el9             almalinux9-baseos      64 k
+ python3-setuptools-wheel      noarch  53.0.0-15.el9               almalinux9-baseos     467 k
+ python3-six                   noarch  1.15.0-9.el9                almalinux9-baseos      36 k
+ python3-systemd               x86_64  234-19.el9                  almalinux9-baseos      82 k
+ readline                      x86_64  8.1-4.el9                   almalinux9-baseos     211 k
+ rpm                           x86_64  4.16.1.3-40.el9             almalinux9-baseos     484 k
+ rpm-build-libs                x86_64  4.16.1.3-40.el9             almalinux9-baseos      88 k
+ rpm-libs                      x86_64  4.16.1.3-40.el9             almalinux9-baseos     307 k
+ rpm-sign-libs                 x86_64  4.16.1.3-40.el9             almalinux9-baseos      20 k
+ sed                           x86_64  4.8-10.el9                  almalinux9-baseos     295 k
+ setup                         noarch  2.13.7-10.el9               almalinux9-baseos     140 k
+ shadow-utils                  x86_64  2:4.9-16.el9                almalinux9-baseos     1.1 M
+ sqlite-libs                   x86_64  3.34.1-11.el9_8             almalinux9-baseos     643 k
+ systemd-libs                  x86_64  252-67.el9_8.6.alma.1       almalinux9-baseos     637 k
+ systemd-pam                   x86_64  252-67.el9_8.6.alma.1       almalinux9-baseos     244 k
+ systemd-rpm-macros            noarch  252-67.el9_8.6.alma.1       almalinux9-baseos      32 k
+ tpm2-tss                      x86_64  3.2.3-1.el9                 almalinux9-baseos     594 k
+ tzdata                        noarch  2026e-1.el9_8               almalinux9-baseos     499 k
+ util-linux-core               x86_64  2.37.4-25.el9               almalinux9-baseos     430 k
+ xz-libs                       x86_64  5.2.5-8.el9_0               almalinux9-baseos      92 k
+ zlib                          x86_64  1.2.11-40.el9               almalinux9-baseos      90 k
+Installing weak dependencies:
+ gawk-all-langpacks            x86_64  5.1.0-6.el9_8.1             almalinux9-appstream  206 k
+ glibc-gconv-extra             x86_64  2.34-283.el9_8              almalinux9-baseos     1.5 M
+ libxcrypt-compat              x86_64  4.4.18-3.el9                almalinux9-appstream   88 k
+ python-unversioned-command    noarch  3.9.25-7.el9_8.3            almalinux9-appstream  9.2 k
+ rpm-plugin-systemd-inhibit    x86_64  4.16.1.3-40.el9             almalinux9-appstream   15 k
+ systemd                       x86_64  252-67.el9_8.6.alma.1       almalinux9-baseos     4.0 M
+
+Transaction Summary
+==============================================================================================
+Install  158 Packages
+
+Total download size: 69 M
+Installed size: 235 M
+Downloading Packages:
+(1/158): almalinux-gpg-keys-9.8-1.el9.x86_64.rp 238 kB/s | 9.7 kB     00:00    
+(2/158): almalinux-release-9.8-1.el9.x86_64.rpm 344 kB/s |  20 kB     00:00    
+(3/158): almalinux-repos-9.8-1.el9.x86_64.rpm   317 kB/s | 9.8 kB     00:00    
+(4/158): acl-2.4.0-1.el9_8.x86_64.rpm           846 kB/s |  74 kB     00:00    
+(5/158): alternatives-1.24-2.el9.x86_64.rpm     852 kB/s |  38 kB     00:00    
+(6/158): attr-2.6.0-1.el9_8.x86_64.rpm          1.4 MB/s |  62 kB     00:00    
+(7/158): audit-libs-3.1.5-8.el9.x86_64.rpm      2.6 MB/s | 121 kB     00:00    
+(8/158): basesystem-11-13.el9.noarch.rpm        145 kB/s | 7.0 kB     00:00    
+(9/158): bzip2-libs-1.0.8-11.el9.x86_64.rpm     1.1 MB/s |  39 kB     00:00    
+(10/158): bash-5.1.8-9.el9.x86_64.rpm            15 MB/s | 1.7 MB     00:00    
+(11/158): ca-certificates-2025.2.80_v9.0.305-91 6.9 MB/s | 943 kB     00:00    
+(12/158): coreutils-8.32-41.el9_8.1.x86_64.rpm  6.9 MB/s | 1.1 MB     00:00    
+(13/158): cracklib-2.9.6-28.el9.x86_64.rpm      1.6 MB/s |  80 kB     00:00    
+(14/158): coreutils-common-8.32-41.el9_8.1.x86_  12 MB/s | 2.0 MB     00:00    
+(15/158): crypto-policies-20260224-1.gitea0f072 827 kB/s |  56 kB     00:00    
+(16/158): curl-7.76.1-40.el9_8.8.x86_64.rpm     4.8 MB/s | 293 kB     00:00    
+(17/158): cyrus-sasl-lib-2.1.27-22.el9.x86_64.r 9.3 MB/s | 762 kB     00:00    
+(18/158): dbus-1.12.20-8.el9.x86_64.rpm         119 kB/s | 6.8 kB     00:00    
+(19/158): dbus-broker-28-9.el9_8.x86_64.rpm     2.7 MB/s | 169 kB     00:00    
+(20/158): dbus-common-1.12.20-8.el9.noarch.rpm  215 kB/s |  14 kB     00:00    
+(21/158): dbus-libs-1.12.20-8.el9.x86_64.rpm    3.5 MB/s | 151 kB     00:00    
+(22/158): dnf-data-4.14.0-34.el9_8.alma.1.noarc 2.6 MB/s |  36 kB     00:00    
+(23/158): dnf-plugins-core-4.3.0-26.el9.noarch. 1.5 MB/s |  35 kB     00:00    
+(24/158): dnf-4.14.0-34.el9_8.alma.1.noarch.rpm 5.4 MB/s | 467 kB     00:00    
+(25/158): elfutils-default-yama-scope-0.194-1.e 218 kB/s | 8.8 kB     00:00    
+(26/158): elfutils-libelf-0.194-1.el9.alma.1.x8 6.8 MB/s | 201 kB     00:00    
+(27/158): elfutils-libs-0.194-1.el9.alma.1.x86_ 8.9 MB/s | 268 kB     00:00    
+(28/158): expat-2.5.0-6.el9_8.5.x86_64.rpm      4.4 MB/s | 119 kB     00:00    
+(29/158): cracklib-dicts-2.9.6-28.el9.x86_64.rp 8.9 MB/s | 3.6 MB     00:00    
+(30/158): file-libs-5.39-17.el9.x86_64.rpm      6.4 MB/s | 587 kB     00:00    
+(31/158): filesystem-3.16-5.el9.x86_64.rpm      8.8 MB/s | 1.1 MB     00:00    
+(32/158): findutils-4.8.0-7.el9.x86_64.rpm      4.3 MB/s | 536 kB     00:00    
+(33/158): gdbm-libs-1.23-1.el9.x86_64.rpm       1.1 MB/s |  55 kB     00:00    
+(34/158): gawk-5.1.0-6.el9_8.1.x86_64.rpm       8.4 MB/s | 995 kB     00:00    
+(35/158): glibc-common-2.34-283.el9_8.x86_64.rp 4.5 MB/s | 299 kB     00:00    
+(36/158): glibc-2.34-283.el9_8.x86_64.rpm        19 MB/s | 2.0 MB     00:00    
+(37/158): glibc-minimal-langpack-2.34-283.el9_8 1.2 MB/s |  27 kB     00:00    
+(38/158): glib2-2.68.4-19.el9_8.10.x86_64.rpm    14 MB/s | 2.6 MB     00:00    
+(39/158): gmp-6.2.0-13.el9.x86_64.rpm           4.3 MB/s | 314 kB     00:00    
+(40/158): glibc-gconv-extra-2.34-283.el9_8.x86_  11 MB/s | 1.5 MB     00:00    
+(41/158): gnutls-3.8.10-9.el9_8.x86_64.rpm       16 MB/s | 1.4 MB     00:00    
+(42/158): gpgme-1.15.1-6.el9.x86_64.rpm         2.0 MB/s | 206 kB     00:00    
+(43/158): gnupg2-2.3.3-5.el9_7.x86_64.rpm        12 MB/s | 2.5 MB     00:00    
+(44/158): grep-3.6-5.el9.x86_64.rpm             2.4 MB/s | 257 kB     00:00    
+(45/158): gzip-1.12-2.el9_8.x86_64.rpm          1.6 MB/s | 156 kB     00:00    
+(46/158): keyutils-1.6.3-1.el9.x86_64.rpm       1.4 MB/s |  71 kB     00:00    
+(47/158): json-c-0.14-11.el9.x86_64.rpm         547 kB/s |  42 kB     00:00    
+(48/158): ima-evm-utils-1.6.2-2.el9.x86_64.rpm  622 kB/s |  70 kB     00:00    
+(49/158): keyutils-libs-1.6.3-1.el9.x86_64.rpm  392 kB/s |  31 kB     00:00    
+(50/158): kmod-libs-28-11.el9.x86_64.rpm        888 kB/s |  62 kB     00:00    
+(51/158): libacl-2.4.0-1.el9_8.x86_64.rpm       566 kB/s |  24 kB     00:00    
+(52/158): libarchive-3.5.3-11.el9_8.x86_64.rpm  5.8 MB/s | 387 kB     00:00    
+(53/158): libassuan-2.5.5-3.el9.x86_64.rpm      874 kB/s |  67 kB     00:00    
+(54/158): libattr-2.6.0-1.el9_8.x86_64.rpm      333 kB/s |  17 kB     00:00    
+(55/158): libblkid-2.37.4-25.el9.x86_64.rpm     4.3 MB/s | 105 kB     00:00    
+(56/158): krb5-libs-1.21.1-10.el9_8.x86_64.rpm  4.5 MB/s | 755 kB     00:00    
+(57/158): libcap-2.48-10.el9_8.1.x86_64.rpm     2.1 MB/s |  67 kB     00:00    
+(58/158): libcap-ng-0.8.2-7.el9.x86_64.rpm      967 kB/s |  32 kB     00:00    
+(59/158): libbrotli-1.0.9-10.el9_8.x86_64.rpm   3.2 MB/s | 312 kB     00:00    
+(60/158): libcom_err-1.46.5-8.el9.x86_64.rpm    382 kB/s |  25 kB     00:00    
+(61/158): libcomps-0.1.18-1.el9.x86_64.rpm      1.3 MB/s |  77 kB     00:00    
+(62/158): libcurl-7.76.1-40.el9_8.8.x86_64.rpm  6.2 MB/s | 284 kB     00:00    
+(63/158): libeconf-0.4.1-7.el9_8.x86_64.rpm     998 kB/s |  26 kB     00:00    
+(64/158): libdb-5.3.28-57.el9_6.x86_64.rpm      8.4 MB/s | 736 kB     00:00    
+(65/158): libdnf-0.69.0-18.el9.alma.1.x86_64.rp 6.9 MB/s | 653 kB     00:00    
+(66/158): libevent-2.1.13-1.el9_8.x86_64.rpm    5.4 MB/s | 261 kB     00:00    
+(67/158): libffi-3.4.2-8.el9.x86_64.rpm         1.4 MB/s |  37 kB     00:00    
+(68/158): libfdisk-2.37.4-25.el9.x86_64.rpm     2.3 MB/s | 152 kB     00:00    
+(69/158): libgcc-11.5.0-14.el9.alma.1.x86_64.rp 1.8 MB/s |  84 kB     00:00    
+(70/158): libgomp-11.5.0-14.el9.alma.1.x86_64.r 6.5 MB/s | 256 kB     00:00    
+(71/158): libgcrypt-1.10.0-13.el9_8.x86_64.rpm  7.5 MB/s | 505 kB     00:00    
+(72/158): libgpg-error-1.42-5.el9.x86_64.rpm    3.7 MB/s | 211 kB     00:00    
+(73/158): libidn2-2.3.0-7.el9.x86_64.rpm        2.0 MB/s |  95 kB     00:00    
+(74/158): libksba-1.5.1-7.el9.x86_64.rpm        2.5 MB/s | 152 kB     00:00    
+(75/158): libmount-2.37.4-25.el9.x86_64.rpm     3.1 MB/s | 133 kB     00:00    
+(76/158): libmodulemd-2.13.0-2.el9.x86_64.rpm   3.2 MB/s | 232 kB     00:00    
+(77/158): libnghttp2-1.43.0-6.el9_8.2.x86_64.rp 1.2 MB/s |  72 kB     00:00    
+(78/158): libpsl-0.21.1-5.el9.x86_64.rpm        1.1 MB/s |  63 kB     00:00    
+(79/158): libpwquality-1.4.4-8.el9.x86_64.rpm   1.6 MB/s | 105 kB     00:00    
+(80/158): libreport-filesystem-2.15.2-6.el9.alm 282 kB/s |  11 kB     00:00    
+(81/158): librepo-1.19.0-1.el9.x86_64.rpm       1.0 MB/s |  90 kB     00:00    
+(82/158): libseccomp-2.5.2-2.el9.x86_64.rpm     765 kB/s |  71 kB     00:00    
+(83/158): libselinux-3.6-3.el9.x86_64.rpm       795 kB/s |  85 kB     00:00    
+(84/158): libsemanage-3.6-5.el9_6.x86_64.rpm    1.0 MB/s | 117 kB     00:00    
+(85/158): libsigsegv-2.13-4.el9.x86_64.rpm      457 kB/s |  26 kB     00:00    
+(86/158): libsmartcols-2.37.4-25.el9.x86_64.rpm 1.2 MB/s |  61 kB     00:00    
+(87/158): libsepol-3.6-3.el9.x86_64.rpm         2.2 MB/s | 329 kB     00:00    
+(88/158): libssh-0.10.4-19.el9_8.x86_64.rpm     3.9 MB/s | 214 kB     00:00    
+(89/158): libssh-config-0.10.4-19.el9_8.noarch. 203 kB/s | 8.2 kB     00:00    
+(90/158): libsolv-0.7.24-6.el9_8.x86_64.rpm     3.3 MB/s | 402 kB     00:00    
+(91/158): libtasn1-4.16.0-10.el9_8.x86_64.rpm   1.0 MB/s |  73 kB     00:00    
+(92/158): libtool-ltdl-2.4.6-46.el9.x86_64.rpm  513 kB/s |  34 kB     00:00    
+(93/158): libstdc++-11.5.0-14.el9.alma.1.x86_64 5.6 MB/s | 741 kB     00:00    
+(94/158): libutempter-1.2.1-6.el9.x86_64.rpm    424 kB/s |  26 kB     00:00    
+(95/158): libuuid-2.37.4-25.el9.x86_64.rpm      632 kB/s |  26 kB     00:00    
+(96/158): libverto-0.3.2-3.el9.x86_64.rpm       462 kB/s |  21 kB     00:00    
+(97/158): libxcrypt-4.4.18-3.el9.x86_64.rpm     2.0 MB/s | 115 kB     00:00    
+(98/158): libunistring-0.9.10-15.el9.x86_64.rpm 2.6 MB/s | 494 kB     00:00    
+(99/158): libyaml-0.2.5-7.el9.x86_64.rpm        1.1 MB/s |  60 kB     00:00    
+(100/158): libxml2-2.9.13-14.el9_8.5.x86_64.rpm 6.3 MB/s | 748 kB     00:00    
+(101/158): libzstd-1.5.5-1.el9.x86_64.rpm       2.8 MB/s | 294 kB     00:00    
+(102/158): lz4-libs-1.9.3-5.el9.x86_64.rpm      914 kB/s |  67 kB     00:00    
+(103/158): lua-libs-5.4.4-4.el9.x86_64.rpm      1.0 MB/s | 129 kB     00:00    
+(104/158): ncurses-base-6.2-12.20210508.el9.noa 1.3 MB/s |  60 kB     00:00    
+(105/158): mpfr-4.1.0-10.el9.x86_64.rpm         2.9 MB/s | 324 kB     00:00    
+(106/158): ncurses-libs-6.2-12.20210508.el9.x86 4.8 MB/s | 322 kB     00:00    
+(107/158): nettle-3.10.1-1.el9.x86_64.rpm       8.7 MB/s | 562 kB     00:00    
+(108/158): npth-1.6-8.el9.x86_64.rpm            433 kB/s |  24 kB     00:00    
+(109/158): openldap-2.6.8-4.el9.x86_64.rpm      3.6 MB/s | 266 kB     00:00    
+(110/158): openssl-fips-provider-3.5.8-2.el9_8.  12 MB/s | 813 kB     00:00    
+(111/158): openssl-3.5.8-2.el9_8.x86_64.rpm      11 MB/s | 1.4 MB     00:00    
+(112/158): p11-kit-0.26.4-1.el9_8.x86_64.rpm    7.1 MB/s | 591 kB     00:00    
+(113/158): p11-kit-trust-0.26.4-1.el9_8.x86_64. 2.8 MB/s | 155 kB     00:00    
+(114/158): pam-1.5.1-28.el9_8.1.x86_64.rpm      9.9 MB/s | 543 kB     00:00    
+(115/158): pcre-8.44-4.el9.x86_64.rpm           2.4 MB/s | 196 kB     00:00    
+(116/158): pcre2-10.40-7.el9_8.x86_64.rpm       3.3 MB/s | 233 kB     00:00    
+(117/158): pcre2-syntax-10.40-7.el9_8.noarch.rp 2.4 MB/s | 140 kB     00:00    
+(118/158): popt-1.18-8.el9.x86_64.rpm           956 kB/s |  58 kB     00:00    
+(119/158): publicsuffix-list-dafsa-20210518-3.e 1.4 MB/s |  57 kB     00:00    
+(120/158): python3-3.9.25-7.el9_8.3.x86_64.rpm  1.3 MB/s |  26 kB     00:00    
+(121/158): openssl-libs-3.5.8-2.el9_8.x86_64.rp 6.6 MB/s | 2.3 MB     00:00    
+(122/158): python3-dbus-1.2.18-2.el9.x86_64.rpm 3.3 MB/s | 132 kB     00:00    
+(123/158): python3-dateutil-2.9.0.post0-1.el9_7 4.7 MB/s | 290 kB     00:00    
+(124/158): python3-dnf-4.14.0-34.el9_8.alma.1.n 9.4 MB/s | 412 kB     00:00    
+(125/158): python3-dnf-plugins-core-4.3.0-26.el 7.1 MB/s | 245 kB     00:00    
+(126/158): python3-hawkey-0.69.0-18.el9.alma.1. 4.6 MB/s | 101 kB     00:00    
+(127/158): python3-gpg-1.15.1-6.el9.x86_64.rpm  3.8 MB/s | 261 kB     00:00    
+(128/158): python3-libcomps-0.1.18-1.el9.x86_64 915 kB/s |  48 kB     00:00    
+(129/158): python3-libdnf-0.69.0-18.el9.alma.1.  12 MB/s | 771 kB     00:00    
+(130/158): python3-rpm-4.16.1.3-40.el9.x86_64.r 1.6 MB/s |  64 kB     00:00    
+(131/158): python3-pip-wheel-21.3.1-2.el9_8.noa  12 MB/s | 1.1 MB     00:00    
+(132/158): python3-six-1.15.0-9.el9.noarch.rpm  777 kB/s |  36 kB     00:00    
+(133/158): python3-setuptools-wheel-53.0.0-15.e 4.7 MB/s | 467 kB     00:00    
+(134/158): python3-systemd-234-19.el9.x86_64.rp 1.3 MB/s |  82 kB     00:00    
+(135/158): readline-8.1-4.el9.x86_64.rpm        4.3 MB/s | 211 kB     00:00    
+(136/158): rpm-4.16.1.3-40.el9.x86_64.rpm       6.4 MB/s | 484 kB     00:00    
+(137/158): rpm-build-libs-4.16.1.3-40.el9.x86_6 1.2 MB/s |  88 kB     00:00    
+(138/158): rpm-sign-libs-4.16.1.3-40.el9.x86_64 576 kB/s |  20 kB     00:00    
+(139/158): rpm-libs-4.16.1.3-40.el9.x86_64.rpm  5.2 MB/s | 307 kB     00:00    
+(140/158): sed-4.8-10.el9.x86_64.rpm            4.5 MB/s | 295 kB     00:00    
+(141/158): setup-2.13.7-10.el9.noarch.rpm       2.2 MB/s | 140 kB     00:00    
+(142/158): python3-libs-3.9.25-7.el9_8.3.x86_64  16 MB/s | 7.5 MB     00:00    
+(143/158): sqlite-libs-3.34.1-11.el9_8.x86_64.r 7.8 MB/s | 643 kB     00:00    
+(144/158): shadow-utils-4.9-16.el9.x86_64.rpm   9.3 MB/s | 1.1 MB     00:00    
+(145/158): systemd-pam-252-67.el9_8.6.alma.1.x8  10 MB/s | 244 kB     00:00    
+(146/158): systemd-libs-252-67.el9_8.6.alma.1.x 8.9 MB/s | 637 kB     00:00    
+(147/158): systemd-rpm-macros-252-67.el9_8.6.al 887 kB/s |  32 kB     00:00    
+(148/158): tzdata-2026e-1.el9_8.noarch.rpm       12 MB/s | 499 kB     00:00    
+(149/158): tpm2-tss-3.2.3-1.el9.x86_64.rpm      8.9 MB/s | 594 kB     00:00    
+(150/158): systemd-252-67.el9_8.6.alma.1.x86_64  18 MB/s | 4.0 MB     00:00    
+(151/158): util-linux-core-2.37.4-25.el9.x86_64 6.4 MB/s | 430 kB     00:00    
+(152/158): xz-libs-5.2.5-8.el9_0.x86_64.rpm     2.9 MB/s |  92 kB     00:00    
+(153/158): zlib-1.2.11-40.el9.x86_64.rpm        1.5 MB/s |  90 kB     00:00    
+(154/158): gawk-all-langpacks-5.1.0-6.el9_8.1.x 3.2 MB/s | 206 kB     00:00    
+(155/158): libxcrypt-compat-4.4.18-3.el9.x86_64 1.6 MB/s |  88 kB     00:00    
+(156/158): python-unversioned-command-3.9.25-7. 649 kB/s | 9.2 kB     00:00    
+(157/158): rpm-plugin-systemd-inhibit-4.16.1.3- 675 kB/s |  15 kB     00:00    
+(158/158): util-linux-2.37.4-25.el9.x86_64.rpm  8.7 MB/s | 2.2 MB     00:00    
+--------------------------------------------------------------------------------
+Total                                            14 MB/s |  69 MB     00:04     
+Running transaction check
+Transaction check succeeded.
+Running transaction test
+Transaction test succeeded.
+Running transaction
+  Running scriptlet: filesystem-3.16-5.el9.x86_64                           1/1 
+  Preparing        :                                                        1/1 
+  Installing       : tzdata-2026e-1.el9_8.noarch                          1/158 
+  Installing       : gawk-all-langpacks-5.1.0-6.el9_8.1.x86_64            2/158 
+  Installing       : python3-setuptools-wheel-53.0.0-15.el9.noarch        3/158 
+  Installing       : publicsuffix-list-dafsa-20210518-3.el9.noarch        4/158 
+  Installing       : pcre2-syntax-10.40-7.el9_8.noarch                    5/158 
+  Installing       : ncurses-base-6.2-12.20210508.el9.noarch              6/158 
+  Installing       : libssh-config-0.10.4-19.el9_8.noarch                 7/158 
+  Installing       : libreport-filesystem-2.15.2-6.el9.alma.noarch        8/158 
+  Installing       : dnf-data-4.14.0-34.el9_8.alma.1.noarch               9/158 
+  Installing       : coreutils-common-8.32-41.el9_8.1.x86_64             10/158 
+  Installing       : almalinux-gpg-keys-9.8-1.el9.x86_64                 11/158 
+  Installing       : almalinux-release-9.8-1.el9.x86_64                  12/158 
+  Installing       : almalinux-repos-9.8-1.el9.x86_64                    13/158 
+  Installing       : setup-2.13.7-10.el9.noarch                          14/158 
+  Running scriptlet: setup-2.13.7-10.el9.noarch                          14/158 
+  Installing       : filesystem-3.16-5.el9.x86_64                        15/158 
+  Installing       : basesystem-11-13.el9.noarch                         16/158 
+  Installing       : ncurses-libs-6.2-12.20210508.el9.x86_64             17/158 
+  Installing       : bash-5.1.8-9.el9.x86_64                             18/158 
+  Running scriptlet: bash-5.1.8-9.el9.x86_64                             18/158 
+  Installing       : glibc-gconv-extra-2.34-283.el9_8.x86_64             19/158 
+  Running scriptlet: glibc-gconv-extra-2.34-283.el9_8.x86_64             19/158 
+  Installing       : libgcc-11.5.0-14.el9.alma.1.x86_64                  20/158 
+  Running scriptlet: libgcc-11.5.0-14.el9.alma.1.x86_64                  20/158 
+  Installing       : glibc-minimal-langpack-2.34-283.el9_8.x86_64        21/158 
+  Installing       : glibc-common-2.34-283.el9_8.x86_64                  22/158 
+  Running scriptlet: glibc-2.34-283.el9_8.x86_64                         23/158 
+  Installing       : glibc-2.34-283.el9_8.x86_64                         23/158 
+  Running scriptlet: glibc-2.34-283.el9_8.x86_64                         23/158 
+  Installing       : zlib-1.2.11-40.el9.x86_64                           24/158 
+  Installing       : xz-libs-5.2.5-8.el9_0.x86_64                        25/158 
+  Installing       : bzip2-libs-1.0.8-11.el9.x86_64                      26/158 
+  Installing       : libzstd-1.5.5-1.el9.x86_64                          27/158 
+  Installing       : libacl-2.4.0-1.el9_8.x86_64                         28/158 
+  Installing       : libxcrypt-4.4.18-3.el9.x86_64                       29/158 
+  Installing       : libcap-2.48-10.el9_8.1.x86_64                       30/158 
+  Installing       : sqlite-libs-3.34.1-11.el9_8.x86_64                  31/158 
+  Installing       : libuuid-2.37.4-25.el9.x86_64                        32/158 
+  Installing       : libgpg-error-1.42-5.el9.x86_64                      33/158 
+  Installing       : popt-1.18-8.el9.x86_64                              34/158 
+  Installing       : libxml2-2.9.13-14.el9_8.5.x86_64                    35/158 
+  Installing       : libffi-3.4.2-8.el9.x86_64                           36/158 
+  Installing       : libsmartcols-2.37.4-25.el9.x86_64                   37/158 
+  Installing       : lua-libs-5.4.4-4.el9.x86_64                         38/158 
+  Installing       : readline-8.1-4.el9.x86_64                           39/158 
+  Installing       : crypto-policies-20260224-1.gitea0f072.el9_8.noar    40/158 
+  Running scriptlet: crypto-policies-20260224-1.gitea0f072.el9_8.noar    40/158 
+  Installing       : libgcrypt-1.10.0-13.el9_8.x86_64                    41/158 
+  Installing       : expat-2.5.0-6.el9_8.5.x86_64                        42/158 
+  Installing       : gmp-1:6.2.0-13.el9.x86_64                           43/158 
+  Installing       : keyutils-libs-1.6.3-1.el9.x86_64                    44/158 
+  Installing       : libattr-2.6.0-1.el9_8.x86_64                        45/158 
+  Installing       : libcap-ng-0.8.2-7.el9.x86_64                        46/158 
+  Installing       : audit-libs-3.1.5-8.el9.x86_64                       47/158 
+  Installing       : libcom_err-1.46.5-8.el9.x86_64                      48/158 
+  Installing       : libstdc++-11.5.0-14.el9.alma.1.x86_64               49/158 
+  Installing       : libtasn1-4.16.0-10.el9_8.x86_64                     50/158 
+  Installing       : p11-kit-0.26.4-1.el9_8.x86_64                       51/158 
+  Installing       : libunistring-0.9.10-15.el9.x86_64                   52/158 
+  Installing       : libidn2-2.3.0-7.el9.x86_64                          53/158 
+  Installing       : lz4-libs-1.9.3-5.el9.x86_64                         54/158 
+  Installing       : libassuan-2.5.5-3.el9.x86_64                        55/158 
+  Installing       : elfutils-libelf-0.194-1.el9.alma.1.x86_64           56/158 
+  Installing       : file-libs-5.39-17.el9.x86_64                        57/158 
+  Installing       : gdbm-libs-1:1.23-1.el9.x86_64                       58/158 
+  Installing       : json-c-0.14-11.el9.x86_64                           59/158 
+  Installing       : libsepol-3.6-3.el9.x86_64                           60/158 
+  Installing       : libsigsegv-2.13-4.el9.x86_64                        61/158 
+  Installing       : pcre-8.44-4.el9.x86_64                              62/158 
+  Installing       : grep-3.6-5.el9.x86_64                               63/158 
+  Installing       : pcre2-10.40-7.el9_8.x86_64                          64/158 
+  Installing       : libselinux-3.6-3.el9.x86_64                         65/158 
+  Installing       : sed-4.8-10.el9.x86_64                               66/158 
+  Installing       : findutils-1:4.8.0-7.el9.x86_64                      67/158 
+  Installing       : libsemanage-3.6-5.el9_6.x86_64                      68/158 
+  Installing       : shadow-utils-2:4.9-16.el9.x86_64                    69/158 
+  Running scriptlet: libutempter-1.2.1-6.el9.x86_64                      70/158 
+  Installing       : libutempter-1.2.1-6.el9.x86_64                      70/158 
+  Installing       : libpsl-0.21.1-5.el9.x86_64                          71/158 
+  Installing       : attr-2.6.0-1.el9_8.x86_64                           72/158 
+  Installing       : keyutils-1.6.3-1.el9.x86_64                         73/158 
+  Installing       : mpfr-4.1.0-10.el9.x86_64                            74/158 
+  Installing       : gawk-5.1.0-6.el9_8.1.x86_64                         75/158 
+  Installing       : libcomps-0.1.18-1.el9.x86_64                        76/158 
+  Installing       : libksba-1.5.1-7.el9.x86_64                          77/158 
+  Installing       : libxcrypt-compat-4.4.18-3.el9.x86_64                78/158 
+  Installing       : acl-2.4.0-1.el9_8.x86_64                            79/158 
+  Installing       : alternatives-1.24-2.el9.x86_64                      80/158 
+  Installing       : p11-kit-trust-0.26.4-1.el9_8.x86_64                 81/158 
+  Running scriptlet: p11-kit-trust-0.26.4-1.el9_8.x86_64                 81/158 
+  Installing       : openssl-fips-provider-1:3.5.8-2.el9_8.x86_64        82/158 
+  Installing       : openssl-libs-1:3.5.8-2.el9_8.x86_64                 83/158 
+  Installing       : coreutils-8.32-41.el9_8.1.x86_64                    84/158 
+  Running scriptlet: ca-certificates-2025.2.80_v9.0.305-91.el9.noarch    85/158 
+  Installing       : ca-certificates-2025.2.80_v9.0.305-91.el9.noarch    85/158 
+  Running scriptlet: ca-certificates-2025.2.80_v9.0.305-91.el9.noarch    85/158 
+  Installing       : systemd-libs-252-67.el9_8.6.alma.1.x86_64           86/158 
+  Running scriptlet: systemd-libs-252-67.el9_8.6.alma.1.x86_64           86/158 
+  Installing       : libblkid-2.37.4-25.el9.x86_64                       87/158 
+  Running scriptlet: libblkid-2.37.4-25.el9.x86_64                       87/158 
+  Installing       : libmount-2.37.4-25.el9.x86_64                       88/158 
+  Installing       : libfdisk-2.37.4-25.el9.x86_64                       89/158 
+  Installing       : dbus-libs-1:1.12.20-8.el9.x86_64                    90/158 
+  Installing       : util-linux-core-2.37.4-25.el9.x86_64                91/158 
+  Running scriptlet: util-linux-core-2.37.4-25.el9.x86_64                91/158 
+  Installing       : python3-pip-wheel-21.3.1-2.el9_8.noarch             92/158 
+  Installing       : python-unversioned-command-3.9.25-7.el9_8.3.noar    93/158 
+  Installing       : python3-3.9.25-7.el9_8.3.x86_64                     94/158 
+  Installing       : python3-libs-3.9.25-7.el9_8.3.x86_64                95/158 
+  Installing       : python3-libcomps-0.1.18-1.el9.x86_64                96/158 
+  Installing       : python3-six-1.15.0-9.el9.noarch                     97/158 
+  Installing       : python3-dateutil-1:2.9.0.post0-1.el9_7.noarch       98/158 
+  Installing       : python3-systemd-234-19.el9.x86_64                   99/158 
+  Installing       : gzip-1.12-2.el9_8.x86_64                           100/158 
+  Installing       : cracklib-2.9.6-28.el9.x86_64                       101/158 
+  Installing       : cracklib-dicts-2.9.6-28.el9.x86_64                 102/158 
+  Installing       : openssl-1:3.5.8-2.el9_8.x86_64                     103/158 
+  Installing       : kmod-libs-28-11.el9.x86_64                         104/158 
+  Installing       : libarchive-3.5.3-11.el9_8.x86_64                   105/158 
+  Installing       : libevent-2.1.13-1.el9_8.x86_64                     106/158 
+  Installing       : libbrotli-1.0.9-10.el9_8.x86_64                    107/158 
+  Installing       : libdb-5.3.28-57.el9_6.x86_64                       108/158 
+  Installing       : libeconf-0.4.1-7.el9_8.x86_64                      109/158 
+  Installing       : libpwquality-1.4.4-8.el9.x86_64                    110/158 
+  Installing       : pam-1.5.1-28.el9_8.1.x86_64                        111/158 
+  Installing       : util-linux-2.37.4-25.el9.x86_64                    112/158 
+  Installing       : libgomp-11.5.0-14.el9.alma.1.x86_64                113/158 
+  Installing       : libnghttp2-1.43.0-6.el9_8.2.x86_64                 114/158 
+  Installing       : libseccomp-2.5.2-2.el9.x86_64                      115/158 
+  Installing       : libtool-ltdl-2.4.6-46.el9.x86_64                   116/158 
+  Installing       : libverto-0.3.2-3.el9.x86_64                        117/158 
+  Installing       : krb5-libs-1.21.1-10.el9_8.x86_64                   118/158 
+  Installing       : cyrus-sasl-lib-2.1.27-22.el9.x86_64                119/158 
+  Installing       : openldap-2.6.8-4.el9.x86_64                        120/158 
+  Installing       : libssh-0.10.4-19.el9_8.x86_64                      121/158 
+  Installing       : libcurl-7.76.1-40.el9_8.8.x86_64                   122/158 
+  Installing       : curl-7.76.1-40.el9_8.8.x86_64                      123/158 
+  Installing       : rpm-libs-4.16.1.3-40.el9.x86_64                    124/158 
+  Installing       : rpm-4.16.1.3-40.el9.x86_64                         125/158 
+  Installing       : libsolv-0.7.24-6.el9_8.x86_64                      126/158 
+  Installing       : rpm-plugin-systemd-inhibit-4.16.1.3-40.el9.x86_6   127/158 
+  Running scriptlet: tpm2-tss-3.2.3-1.el9.x86_64                        128/158 
+  Installing       : tpm2-tss-3.2.3-1.el9.x86_64                        128/158 
+  Installing       : ima-evm-utils-1.6.2-2.el9.x86_64                   129/158 
+  Installing       : libyaml-0.2.5-7.el9.x86_64                         130/158 
+  Installing       : nettle-3.10.1-1.el9.x86_64                         131/158 
+  Installing       : gnutls-3.8.10-9.el9_8.x86_64                       132/158 
+  Installing       : glib2-2.68.4-19.el9_8.10.x86_64                    133/158 
+  Installing       : libmodulemd-2.13.0-2.el9.x86_64                    134/158 
+  Installing       : python3-dbus-1.2.18-2.el9.x86_64                   135/158 
+  Installing       : npth-1.6-8.el9.x86_64                              136/158 
+  Installing       : gnupg2-2.3.3-5.el9_7.x86_64                        137/158 
+  Installing       : gpgme-1.15.1-6.el9.x86_64                          138/158 
+  Installing       : librepo-1.19.0-1.el9.x86_64                        139/158 
+  Installing       : libdnf-0.69.0-18.el9.alma.1.x86_64                 140/158 
+  Installing       : python3-libdnf-0.69.0-18.el9.alma.1.x86_64         141/158 
+  Installing       : python3-hawkey-0.69.0-18.el9.alma.1.x86_64         142/158 
+  Installing       : python3-gpg-1.15.1-6.el9.x86_64                    143/158 
+  Installing       : rpm-sign-libs-4.16.1.3-40.el9.x86_64               144/158 
+  Installing       : systemd-rpm-macros-252-67.el9_8.6.alma.1.noarch    145/158 
+  Installing       : dbus-1:1.12.20-8.el9.x86_64                        146/158 
+  Installing       : systemd-pam-252-67.el9_8.6.alma.1.x86_64           147/158 
+  Running scriptlet: systemd-252-67.el9_8.6.alma.1.x86_64               148/158 
+  Installing       : systemd-252-67.el9_8.6.alma.1.x86_64               148/158 
+  Running scriptlet: systemd-252-67.el9_8.6.alma.1.x86_64               148/158 
+  Installing       : dbus-common-1:1.12.20-8.el9.noarch                 149/158 
+  Running scriptlet: dbus-common-1:1.12.20-8.el9.noarch                 149/158 
+  Installing       : dbus-broker-28-9.el9_8.x86_64                      150/158 
+  Running scriptlet: dbus-broker-28-9.el9_8.x86_64                      150/158 
+  Installing       : elfutils-default-yama-scope-0.194-1.el9.alma.1.n   151/158 
+  Running scriptlet: elfutils-default-yama-scope-0.194-1.el9.alma.1.n   151/158 
+  Installing       : elfutils-libs-0.194-1.el9.alma.1.x86_64            152/158 
+  Installing       : rpm-build-libs-4.16.1.3-40.el9.x86_64              153/158 
+  Installing       : python3-rpm-4.16.1.3-40.el9.x86_64                 154/158 
+  Installing       : python3-dnf-4.14.0-34.el9_8.alma.1.noarch          155/158 
+  Installing       : python3-dnf-plugins-core-4.3.0-26.el9.noarch       156/158 
+  Installing       : dnf-plugins-core-4.3.0-26.el9.noarch               157/158 
+  Installing       : dnf-4.14.0-34.el9_8.alma.1.noarch                  158/158 
+  Running scriptlet: dnf-4.14.0-34.el9_8.alma.1.noarch                  158/158 
+  Running scriptlet: filesystem-3.16-5.el9.x86_64                       158/158 
+  Running scriptlet: ca-certificates-2025.2.80_v9.0.305-91.el9.noarch   158/158 
+  Running scriptlet: rpm-4.16.1.3-40.el9.x86_64                         158/158 
+  Running scriptlet: glibc-common-2.34-283.el9_8.x86_64                 158/158 
+  Running scriptlet: glib2-2.68.4-19.el9_8.10.x86_64                    158/158 
+  Running scriptlet: systemd-252-67.el9_8.6.alma.1.x86_64               158/158 
+  Verifying        : acl-2.4.0-1.el9_8.x86_64                             1/158 
+  Verifying        : almalinux-gpg-keys-9.8-1.el9.x86_64                  2/158 
+  Verifying        : almalinux-release-9.8-1.el9.x86_64                   3/158 
+  Verifying        : almalinux-repos-9.8-1.el9.x86_64                     4/158 
+  Verifying        : alternatives-1.24-2.el9.x86_64                       5/158 
+  Verifying        : attr-2.6.0-1.el9_8.x86_64                            6/158 
+  Verifying        : audit-libs-3.1.5-8.el9.x86_64                        7/158 
+  Verifying        : basesystem-11-13.el9.noarch                          8/158 
+  Verifying        : bash-5.1.8-9.el9.x86_64                              9/158 
+  Verifying        : bzip2-libs-1.0.8-11.el9.x86_64                      10/158 
+  Verifying        : ca-certificates-2025.2.80_v9.0.305-91.el9.noarch    11/158 
+  Verifying        : coreutils-8.32-41.el9_8.1.x86_64                    12/158 
+  Verifying        : coreutils-common-8.32-41.el9_8.1.x86_64             13/158 
+  Verifying        : cracklib-2.9.6-28.el9.x86_64                        14/158 
+  Verifying        : cracklib-dicts-2.9.6-28.el9.x86_64                  15/158 
+  Verifying        : crypto-policies-20260224-1.gitea0f072.el9_8.noar    16/158 
+  Verifying        : curl-7.76.1-40.el9_8.8.x86_64                       17/158 
+  Verifying        : cyrus-sasl-lib-2.1.27-22.el9.x86_64                 18/158 
+  Verifying        : dbus-1:1.12.20-8.el9.x86_64                         19/158 
+  Verifying        : dbus-broker-28-9.el9_8.x86_64                       20/158 
+  Verifying        : dbus-common-1:1.12.20-8.el9.noarch                  21/158 
+  Verifying        : dbus-libs-1:1.12.20-8.el9.x86_64                    22/158 
+  Verifying        : dnf-4.14.0-34.el9_8.alma.1.noarch                   23/158 
+  Verifying        : dnf-data-4.14.0-34.el9_8.alma.1.noarch              24/158 
+  Verifying        : dnf-plugins-core-4.3.0-26.el9.noarch                25/158 
+  Verifying        : elfutils-default-yama-scope-0.194-1.el9.alma.1.n    26/158 
+  Verifying        : elfutils-libelf-0.194-1.el9.alma.1.x86_64           27/158 
+  Verifying        : elfutils-libs-0.194-1.el9.alma.1.x86_64             28/158 
+  Verifying        : expat-2.5.0-6.el9_8.5.x86_64                        29/158 
+  Verifying        : file-libs-5.39-17.el9.x86_64                        30/158 
+  Verifying        : filesystem-3.16-5.el9.x86_64                        31/158 
+  Verifying        : findutils-1:4.8.0-7.el9.x86_64                      32/158 
+  Verifying        : gawk-5.1.0-6.el9_8.1.x86_64                         33/158 
+  Verifying        : gdbm-libs-1:1.23-1.el9.x86_64                       34/158 
+  Verifying        : glib2-2.68.4-19.el9_8.10.x86_64                     35/158 
+  Verifying        : glibc-2.34-283.el9_8.x86_64                         36/158 
+  Verifying        : glibc-common-2.34-283.el9_8.x86_64                  37/158 
+  Verifying        : glibc-gconv-extra-2.34-283.el9_8.x86_64             38/158 
+  Verifying        : glibc-minimal-langpack-2.34-283.el9_8.x86_64        39/158 
+  Verifying        : gmp-1:6.2.0-13.el9.x86_64                           40/158 
+  Verifying        : gnupg2-2.3.3-5.el9_7.x86_64                         41/158 
+  Verifying        : gnutls-3.8.10-9.el9_8.x86_64                        42/158 
+  Verifying        : gpgme-1.15.1-6.el9.x86_64                           43/158 
+  Verifying        : grep-3.6-5.el9.x86_64                               44/158 
+  Verifying        : gzip-1.12-2.el9_8.x86_64                            45/158 
+  Verifying        : ima-evm-utils-1.6.2-2.el9.x86_64                    46/158 
+  Verifying        : json-c-0.14-11.el9.x86_64                           47/158 
+  Verifying        : keyutils-1.6.3-1.el9.x86_64                         48/158 
+  Verifying        : keyutils-libs-1.6.3-1.el9.x86_64                    49/158 
+  Verifying        : kmod-libs-28-11.el9.x86_64                          50/158 
+  Verifying        : krb5-libs-1.21.1-10.el9_8.x86_64                    51/158 
+  Verifying        : libacl-2.4.0-1.el9_8.x86_64                         52/158 
+  Verifying        : libarchive-3.5.3-11.el9_8.x86_64                    53/158 
+  Verifying        : libassuan-2.5.5-3.el9.x86_64                        54/158 
+  Verifying        : libattr-2.6.0-1.el9_8.x86_64                        55/158 
+  Verifying        : libblkid-2.37.4-25.el9.x86_64                       56/158 
+  Verifying        : libbrotli-1.0.9-10.el9_8.x86_64                     57/158 
+  Verifying        : libcap-2.48-10.el9_8.1.x86_64                       58/158 
+  Verifying        : libcap-ng-0.8.2-7.el9.x86_64                        59/158 
+  Verifying        : libcom_err-1.46.5-8.el9.x86_64                      60/158 
+  Verifying        : libcomps-0.1.18-1.el9.x86_64                        61/158 
+  Verifying        : libcurl-7.76.1-40.el9_8.8.x86_64                    62/158 
+  Verifying        : libdb-5.3.28-57.el9_6.x86_64                        63/158 
+  Verifying        : libdnf-0.69.0-18.el9.alma.1.x86_64                  64/158 
+  Verifying        : libeconf-0.4.1-7.el9_8.x86_64                       65/158 
+  Verifying        : libevent-2.1.13-1.el9_8.x86_64                      66/158 
+  Verifying        : libfdisk-2.37.4-25.el9.x86_64                       67/158 
+  Verifying        : libffi-3.4.2-8.el9.x86_64                           68/158 
+  Verifying        : libgcc-11.5.0-14.el9.alma.1.x86_64                  69/158 
+  Verifying        : libgcrypt-1.10.0-13.el9_8.x86_64                    70/158 
+  Verifying        : libgomp-11.5.0-14.el9.alma.1.x86_64                 71/158 
+  Verifying        : libgpg-error-1.42-5.el9.x86_64                      72/158 
+  Verifying        : libidn2-2.3.0-7.el9.x86_64                          73/158 
+  Verifying        : libksba-1.5.1-7.el9.x86_64                          74/158 
+  Verifying        : libmodulemd-2.13.0-2.el9.x86_64                     75/158 
+  Verifying        : libmount-2.37.4-25.el9.x86_64                       76/158 
+  Verifying        : libnghttp2-1.43.0-6.el9_8.2.x86_64                  77/158 
+  Verifying        : libpsl-0.21.1-5.el9.x86_64                          78/158 
+  Verifying        : libpwquality-1.4.4-8.el9.x86_64                     79/158 
+  Verifying        : librepo-1.19.0-1.el9.x86_64                         80/158 
+  Verifying        : libreport-filesystem-2.15.2-6.el9.alma.noarch       81/158 
+  Verifying        : libseccomp-2.5.2-2.el9.x86_64                       82/158 
+  Verifying        : libselinux-3.6-3.el9.x86_64                         83/158 
+  Verifying        : libsemanage-3.6-5.el9_6.x86_64                      84/158 
+  Verifying        : libsepol-3.6-3.el9.x86_64                           85/158 
+  Verifying        : libsigsegv-2.13-4.el9.x86_64                        86/158 
+  Verifying        : libsmartcols-2.37.4-25.el9.x86_64                   87/158 
+  Verifying        : libsolv-0.7.24-6.el9_8.x86_64                       88/158 
+  Verifying        : libssh-0.10.4-19.el9_8.x86_64                       89/158 
+  Verifying        : libssh-config-0.10.4-19.el9_8.noarch                90/158 
+  Verifying        : libstdc++-11.5.0-14.el9.alma.1.x86_64               91/158 
+  Verifying        : libtasn1-4.16.0-10.el9_8.x86_64                     92/158 
+  Verifying        : libtool-ltdl-2.4.6-46.el9.x86_64                    93/158 
+  Verifying        : libunistring-0.9.10-15.el9.x86_64                   94/158 
+  Verifying        : libutempter-1.2.1-6.el9.x86_64                      95/158 
+  Verifying        : libuuid-2.37.4-25.el9.x86_64                        96/158 
+  Verifying        : libverto-0.3.2-3.el9.x86_64                         97/158 
+  Verifying        : libxcrypt-4.4.18-3.el9.x86_64                       98/158 
+  Verifying        : libxml2-2.9.13-14.el9_8.5.x86_64                    99/158 
+  Verifying        : libyaml-0.2.5-7.el9.x86_64                         100/158 
+  Verifying        : libzstd-1.5.5-1.el9.x86_64                         101/158 
+  Verifying        : lua-libs-5.4.4-4.el9.x86_64                        102/158 
+  Verifying        : lz4-libs-1.9.3-5.el9.x86_64                        103/158 
+  Verifying        : mpfr-4.1.0-10.el9.x86_64                           104/158 
+  Verifying        : ncurses-base-6.2-12.20210508.el9.noarch            105/158 
+  Verifying        : ncurses-libs-6.2-12.20210508.el9.x86_64            106/158 
+  Verifying        : nettle-3.10.1-1.el9.x86_64                         107/158 
+  Verifying        : npth-1.6-8.el9.x86_64                              108/158 
+  Verifying        : openldap-2.6.8-4.el9.x86_64                        109/158 
+  Verifying        : openssl-1:3.5.8-2.el9_8.x86_64                     110/158 
+  Verifying        : openssl-fips-provider-1:3.5.8-2.el9_8.x86_64       111/158 
+  Verifying        : openssl-libs-1:3.5.8-2.el9_8.x86_64                112/158 
+  Verifying        : p11-kit-0.26.4-1.el9_8.x86_64                      113/158 
+  Verifying        : p11-kit-trust-0.26.4-1.el9_8.x86_64                114/158 
+  Verifying        : pam-1.5.1-28.el9_8.1.x86_64                        115/158 
+  Verifying        : pcre-8.44-4.el9.x86_64                             116/158 
+  Verifying        : pcre2-10.40-7.el9_8.x86_64                         117/158 
+  Verifying        : pcre2-syntax-10.40-7.el9_8.noarch                  118/158 
+  Verifying        : popt-1.18-8.el9.x86_64                             119/158 
+  Verifying        : publicsuffix-list-dafsa-20210518-3.el9.noarch      120/158 
+  Verifying        : python3-3.9.25-7.el9_8.3.x86_64                    121/158 
+  Verifying        : python3-dateutil-1:2.9.0.post0-1.el9_7.noarch      122/158 
+  Verifying        : python3-dbus-1.2.18-2.el9.x86_64                   123/158 
+  Verifying        : python3-dnf-4.14.0-34.el9_8.alma.1.noarch          124/158 
+  Verifying        : python3-dnf-plugins-core-4.3.0-26.el9.noarch       125/158 
+  Verifying        : python3-gpg-1.15.1-6.el9.x86_64                    126/158 
+  Verifying        : python3-hawkey-0.69.0-18.el9.alma.1.x86_64         127/158 
+  Verifying        : python3-libcomps-0.1.18-1.el9.x86_64               128/158 
+  Verifying        : python3-libdnf-0.69.0-18.el9.alma.1.x86_64         129/158 
+  Verifying        : python3-libs-3.9.25-7.el9_8.3.x86_64               130/158 
+  Verifying        : python3-pip-wheel-21.3.1-2.el9_8.noarch            131/158 
+  Verifying        : python3-rpm-4.16.1.3-40.el9.x86_64                 132/158 
+  Verifying        : python3-setuptools-wheel-53.0.0-15.el9.noarch      133/158 
+  Verifying        : python3-six-1.15.0-9.el9.noarch                    134/158 
+  Verifying        : python3-systemd-234-19.el9.x86_64                  135/158 
+  Verifying        : readline-8.1-4.el9.x86_64                          136/158 
+  Verifying        : rpm-4.16.1.3-40.el9.x86_64                         137/158 
+  Verifying        : rpm-build-libs-4.16.1.3-40.el9.x86_64              138/158 
+  Verifying        : rpm-libs-4.16.1.3-40.el9.x86_64                    139/158 
+  Verifying        : rpm-sign-libs-4.16.1.3-40.el9.x86_64               140/158 
+  Verifying        : sed-4.8-10.el9.x86_64                              141/158 
+  Verifying        : setup-2.13.7-10.el9.noarch                         142/158 
+  Verifying        : shadow-utils-2:4.9-16.el9.x86_64                   143/158 
+  Verifying        : sqlite-libs-3.34.1-11.el9_8.x86_64                 144/158 
+  Verifying        : systemd-252-67.el9_8.6.alma.1.x86_64               145/158 
+  Verifying        : systemd-libs-252-67.el9_8.6.alma.1.x86_64          146/158 
+  Verifying        : systemd-pam-252-67.el9_8.6.alma.1.x86_64           147/158 
+  Verifying        : systemd-rpm-macros-252-67.el9_8.6.alma.1.noarch    148/158 
+  Verifying        : tpm2-tss-3.2.3-1.el9.x86_64                        149/158 
+  Verifying        : tzdata-2026e-1.el9_8.noarch                        150/158 
+  Verifying        : util-linux-2.37.4-25.el9.x86_64                    151/158 
+  Verifying        : util-linux-core-2.37.4-25.el9.x86_64               152/158 
+  Verifying        : xz-libs-5.2.5-8.el9_0.x86_64                       153/158 
+  Verifying        : zlib-1.2.11-40.el9.x86_64                          154/158 
+  Verifying        : gawk-all-langpacks-5.1.0-6.el9_8.1.x86_64          155/158 
+  Verifying        : libxcrypt-compat-4.4.18-3.el9.x86_64               156/158 
+  Verifying        : python-unversioned-command-3.9.25-7.el9_8.3.noar   157/158 
+  Verifying        : rpm-plugin-systemd-inhibit-4.16.1.3-40.el9.x86_6   158/158 
+
+Installed:
+  acl-2.4.0-1.el9_8.x86_64                                                      
+  almalinux-gpg-keys-9.8-1.el9.x86_64                                           
+  almalinux-release-9.8-1.el9.x86_64                                            
+  almalinux-repos-9.8-1.el9.x86_64                                              
+  alternatives-1.24-2.el9.x86_64                                                
+  attr-2.6.0-1.el9_8.x86_64                                                     
+  audit-libs-3.1.5-8.el9.x86_64                                                 
+  basesystem-11-13.el9.noarch                                                   
+  bash-5.1.8-9.el9.x86_64                                                       
+  bzip2-libs-1.0.8-11.el9.x86_64                                                
+  ca-certificates-2025.2.80_v9.0.305-91.el9.noarch                              
+  coreutils-8.32-41.el9_8.1.x86_64                                              
+  coreutils-common-8.32-41.el9_8.1.x86_64                                       
+  cracklib-2.9.6-28.el9.x86_64                                                  
+  cracklib-dicts-2.9.6-28.el9.x86_64                                            
+  crypto-policies-20260224-1.gitea0f072.el9_8.noarch                            
+  curl-7.76.1-40.el9_8.8.x86_64                                                 
+  cyrus-sasl-lib-2.1.27-22.el9.x86_64                                           
+  dbus-1:1.12.20-8.el9.x86_64                                                   
+  dbus-broker-28-9.el9_8.x86_64                                                 
+  dbus-common-1:1.12.20-8.el9.noarch                                            
+  dbus-libs-1:1.12.20-8.el9.x86_64                                              
+  dnf-4.14.0-34.el9_8.alma.1.noarch                                             
+  dnf-data-4.14.0-34.el9_8.alma.1.noarch                                        
+  dnf-plugins-core-4.3.0-26.el9.noarch                                          
+  elfutils-default-yama-scope-0.194-1.el9.alma.1.noarch                         
+  elfutils-libelf-0.194-1.el9.alma.1.x86_64                                     
+  elfutils-libs-0.194-1.el9.alma.1.x86_64                                       
+  expat-2.5.0-6.el9_8.5.x86_64                                                  
+  file-libs-5.39-17.el9.x86_64                                                  
+  filesystem-3.16-5.el9.x86_64                                                  
+  findutils-1:4.8.0-7.el9.x86_64                                                
+  gawk-5.1.0-6.el9_8.1.x86_64                                                   
+  gawk-all-langpacks-5.1.0-6.el9_8.1.x86_64                                     
+  gdbm-libs-1:1.23-1.el9.x86_64                                                 
+  glib2-2.68.4-19.el9_8.10.x86_64                                               
+  glibc-2.34-283.el9_8.x86_64                                                   
+  glibc-common-2.34-283.el9_8.x86_64                                            
+  glibc-gconv-extra-2.34-283.el9_8.x86_64                                       
+  glibc-minimal-langpack-2.34-283.el9_8.x86_64                                  
+  gmp-1:6.2.0-13.el9.x86_64                                                     
+  gnupg2-2.3.3-5.el9_7.x86_64                                                   
+  gnutls-3.8.10-9.el9_8.x86_64                                                  
+  gpgme-1.15.1-6.el9.x86_64                                                     
+  grep-3.6-5.el9.x86_64                                                         
+  gzip-1.12-2.el9_8.x86_64                                                      
+  ima-evm-utils-1.6.2-2.el9.x86_64                                              
+  json-c-0.14-11.el9.x86_64                                                     
+  keyutils-1.6.3-1.el9.x86_64                                                   
+  keyutils-libs-1.6.3-1.el9.x86_64                                              
+  kmod-libs-28-11.el9.x86_64                                                    
+  krb5-libs-1.21.1-10.el9_8.x86_64                                              
+  libacl-2.4.0-1.el9_8.x86_64                                                   
+  libarchive-3.5.3-11.el9_8.x86_64                                              
+  libassuan-2.5.5-3.el9.x86_64                                                  
+  libattr-2.6.0-1.el9_8.x86_64                                                  
+  libblkid-2.37.4-25.el9.x86_64                                                 
+  libbrotli-1.0.9-10.el9_8.x86_64                                               
+  libcap-2.48-10.el9_8.1.x86_64                                                 
+  libcap-ng-0.8.2-7.el9.x86_64                                                  
+  libcom_err-1.46.5-8.el9.x86_64                                                
+  libcomps-0.1.18-1.el9.x86_64                                                  
+  libcurl-7.76.1-40.el9_8.8.x86_64                                              
+  libdb-5.3.28-57.el9_6.x86_64                                                  
+  libdnf-0.69.0-18.el9.alma.1.x86_64                                            
+  libeconf-0.4.1-7.el9_8.x86_64                                                 
+  libevent-2.1.13-1.el9_8.x86_64                                                
+  libfdisk-2.37.4-25.el9.x86_64                                                 
+  libffi-3.4.2-8.el9.x86_64                                                     
+  libgcc-11.5.0-14.el9.alma.1.x86_64                                            
+  libgcrypt-1.10.0-13.el9_8.x86_64                                              
+  libgomp-11.5.0-14.el9.alma.1.x86_64                                           
+  libgpg-error-1.42-5.el9.x86_64                                                
+  libidn2-2.3.0-7.el9.x86_64                                                    
+  libksba-1.5.1-7.el9.x86_64                                                    
+  libmodulemd-2.13.0-2.el9.x86_64                                               
+  libmount-2.37.4-25.el9.x86_64                                                 
+  libnghttp2-1.43.0-6.el9_8.2.x86_64                                            
+  libpsl-0.21.1-5.el9.x86_64                                                    
+  libpwquality-1.4.4-8.el9.x86_64                                               
+  librepo-1.19.0-1.el9.x86_64                                                   
+  libreport-filesystem-2.15.2-6.el9.alma.noarch                                 
+  libseccomp-2.5.2-2.el9.x86_64                                                 
+  libselinux-3.6-3.el9.x86_64                                                   
+  libsemanage-3.6-5.el9_6.x86_64                                                
+  libsepol-3.6-3.el9.x86_64                                                     
+  libsigsegv-2.13-4.el9.x86_64                                                  
+  libsmartcols-2.37.4-25.el9.x86_64                                             
+  libsolv-0.7.24-6.el9_8.x86_64                                                 
+  libssh-0.10.4-19.el9_8.x86_64                                                 
+  libssh-config-0.10.4-19.el9_8.noarch                                          
+  libstdc++-11.5.0-14.el9.alma.1.x86_64                                         
+  libtasn1-4.16.0-10.el9_8.x86_64                                               
+  libtool-ltdl-2.4.6-46.el9.x86_64                                              
+  libunistring-0.9.10-15.el9.x86_64                                             
+  libutempter-1.2.1-6.el9.x86_64                                                
+  libuuid-2.37.4-25.el9.x86_64                                                  
+  libverto-0.3.2-3.el9.x86_64                                                   
+  libxcrypt-4.4.18-3.el9.x86_64                                                 
+  libxcrypt-compat-4.4.18-3.el9.x86_64                                          
+  libxml2-2.9.13-14.el9_8.5.x86_64                                              
+  libyaml-0.2.5-7.el9.x86_64                                                    
+  libzstd-1.5.5-1.el9.x86_64                                                    
+  lua-libs-5.4.4-4.el9.x86_64                                                   
+  lz4-libs-1.9.3-5.el9.x86_64                                                   
+  mpfr-4.1.0-10.el9.x86_64                                                      
+  ncurses-base-6.2-12.20210508.el9.noarch                                       
+  ncurses-libs-6.2-12.20210508.el9.x86_64                                       
+  nettle-3.10.1-1.el9.x86_64                                                    
+  npth-1.6-8.el9.x86_64                                                         
+  openldap-2.6.8-4.el9.x86_64                                                   
+  openssl-1:3.5.8-2.el9_8.x86_64                                                
+  openssl-fips-provider-1:3.5.8-2.el9_8.x86_64                                  
+  openssl-libs-1:3.5.8-2.el9_8.x86_64                                           
+  p11-kit-0.26.4-1.el9_8.x86_64                                                 
+  p11-kit-trust-0.26.4-1.el9_8.x86_64                                           
+  pam-1.5.1-28.el9_8.1.x86_64                                                   
+  pcre-8.44-4.el9.x86_64                                                        
+  pcre2-10.40-7.el9_8.x86_64                                                    
+  pcre2-syntax-10.40-7.el9_8.noarch                                             
+  popt-1.18-8.el9.x86_64                                                        
+  publicsuffix-list-dafsa-20210518-3.el9.noarch                                 
+  python-unversioned-command-3.9.25-7.el9_8.3.noarch                            
+  python3-3.9.25-7.el9_8.3.x86_64                                               
+  python3-dateutil-1:2.9.0.post0-1.el9_7.noarch                                 
+  python3-dbus-1.2.18-2.el9.x86_64                                              
+  python3-dnf-4.14.0-34.el9_8.alma.1.noarch                                     
+  python3-dnf-plugins-core-4.3.0-26.el9.noarch                                  
+  python3-gpg-1.15.1-6.el9.x86_64                                               
+  python3-hawkey-0.69.0-18.el9.alma.1.x86_64                                    
+  python3-libcomps-0.1.18-1.el9.x86_64                                          
+  python3-libdnf-0.69.0-18.el9.alma.1.x86_64                                    
+  python3-libs-3.9.25-7.el9_8.3.x86_64                                          
+  python3-pip-wheel-21.3.1-2.el9_8.noarch                                       
+  python3-rpm-4.16.1.3-40.el9.x86_64                                            
+  python3-setuptools-wheel-53.0.0-15.el9.noarch                                 
+  python3-six-1.15.0-9.el9.noarch                                               
+  python3-systemd-234-19.el9.x86_64                                             
+  readline-8.1-4.el9.x86_64                                                     
+  rpm-4.16.1.3-40.el9.x86_64                                                    
+  rpm-build-libs-4.16.1.3-40.el9.x86_64                                         
+  rpm-libs-4.16.1.3-40.el9.x86_64                                               
+  rpm-plugin-systemd-inhibit-4.16.1.3-40.el9.x86_64                             
+  rpm-sign-libs-4.16.1.3-40.el9.x86_64                                          
+  sed-4.8-10.el9.x86_64                                                         
+  setup-2.13.7-10.el9.noarch                                                    
+  shadow-utils-2:4.9-16.el9.x86_64                                              
+  sqlite-libs-3.34.1-11.el9_8.x86_64                                            
+  systemd-252-67.el9_8.6.alma.1.x86_64                                          
+  systemd-libs-252-67.el9_8.6.alma.1.x86_64                                     
+  systemd-pam-252-67.el9_8.6.alma.1.x86_64                                      
+  systemd-rpm-macros-252-67.el9_8.6.alma.1.noarch                               
+  tpm2-tss-3.2.3-1.el9.x86_64                                                   
+  tzdata-2026e-1.el9_8.noarch                                                   
+  util-linux-2.37.4-25.el9.x86_64                                               
+  util-linux-core-2.37.4-25.el9.x86_64                                          
+  xz-libs-5.2.5-8.el9_0.x86_64                                                  
+  zlib-1.2.11-40.el9.x86_64                                                     
+
+Complete!
+==> Processing phase `TargetTransactionCheck`
+====> * check_systemd_services_tasks
+        Inhibit the upgrade if SystemdServicesTasks tasks are in conflict
+====> * multipath_upgrade_conf_update_8to9
+        Modifies multipath configuration files on the target RHEL-9 upgrade userspace so that
+====> * report_set_target_release
+        Reports information related to the release set in the subscription-manager after the upgrade.
+====> * tmp_actor_to_satisfy_sanity_checks
+        The actor does NOTHING but satisfy static sanity checks
+====> * missing_gpg_keys_inhibitor
+        Check if all used target repositories have signing gpg keys
+====> * target_userspace_crypto_policies
+        Set crypto policies inside the target userspace container.
+====> * adjust_local_repos
+        Adjust local repositories to the target user-space container.
+====> * request_multipath_conf_in_target_userspace
+        Aggregates information about multipath configs.
+====> * dnf_transaction_check
+        This actor tries to solve the RPM transaction to verify the all package dependencies can be successfully resolved.
+Dependencies resolved.
+================================================================================
+ Package           Architecture     Version             Repository         Size
+================================================================================
+Resetting modules:
+ httpd                                                                         
+ mariadb                                                                       
+ nginx                                                                         
+ perl                                                                          
+ perl-DBD-MySQL                                                                
+ perl-DBI                                                                      
+ perl-IO-Socket-SSL
+                                                                               
+ perl-libwww-perl                                                              
+ php                                                                           
+ python27                                                                      
+ python36                                                                      
+ virt                                                                          
+
+Transaction Summary
+================================================================================
+
+Complete!
+Extra Packages for Enterprise Linux 9 - x86_64   39 MB/s |  20 MB     00:00    
+Last metadata expiration check: 0:00:01 ago on Thu Oct 15 00:26:14 2026.
+========================================================================================================================
+ Package                                Arch    Version                                      Repository             Size
+========================================================================================================================
+Installing:
+ binutils-gold                          x86_64  2.35.2-72.el9                                almalinux9-baseos     734 k
+ fonts-filesystem                       noarch  1:2.0.5-7.el9.1                              almalinux9-baseos     9.0 k
+     replacing  fontpackages-filesystem.noarch 1.44-22.el8
+ initscripts-rename-device              x86_64  10.11.8-4.el9                                almalinux9-baseos      14 k
+ initscripts-service                    noarch  10.11.8-4.el9                                almalinux9-baseos      11 k
+ iptables-nft                           x86_64  1.8.10-11.el9_5                              almalinux9-baseos     187 k
+ kernel                                 x86_64  5.14.0-687.56.1.el9_8                        almalinux9-baseos     1.0 M
+ kernel-core                            x86_64  5.14.0-687.56.1.el9_8                        almalinux9-baseos      17 M
+ kernel-modules                         x86_64  5.14.0-687.56.1.el9_8                        almalinux9-baseos      40 M
+ kernel-modules-extra                   x86_64  5.14.0-687.56.1.el9_8                        almalinux9-baseos     1.5 M
+ leapp-deps-el9                         noarch  5.0.9-100.202502140957Z.51872205.main.el9    @commandline          6.6 k
+     replacing  leapp-deps.noarch 0.20.0-2.el8_10
+ leapp-repository-deps-el9              noarch  5.0.9-100.202502140957Z.51872205.main.el9    @commandline          6.7 k
+     replacing  leapp-upgrade-el8toel9-deps.noarch 1:0.24.0-1.el8.elevate.5
+ perl-AutoLoader                        noarch  5.74-484.el9_8                               almalinux9-appstream   20 k
+ perl-AutoSplit                         noarch  5.74-484.el9_8                               almalinux9-appstream   20 k
+ perl-B                                 x86_64  1.80-484.el9_8                               almalinux9-appstream  178 k
+ perl-Benchmark                         noarch  1.23-484.el9_8                               almalinux9-appstream   25 k
+ perl-Class-Struct                      noarch  0.66-484.el9_8                               almalinux9-appstream   21 k
+ perl-Config-Extensions                 noarch  0.03-484.el9_8                               almalinux9-appstream   11 k
+ perl-DBM_Filter                        noarch  0.06-484.el9_8                               almalinux9-appstream   30 k
+ perl-DirHandle                         noarch  1.05-484.el9_8                               almalinux9-appstream   11 k
+ perl-Dumpvalue                         noarch  2.27-484.el9_8                               almalinux9-appstream   17 k
+ perl-DynaLoader                        x86_64  1.47-484.el9_8                               almalinux9-appstream   24 k
+ perl-English                           noarch  1.11-484.el9_8                               almalinux9-appstream   12 k
+ perl-ExtUtils-Constant                 noarch  0.25-484.el9_8                               almalinux9-appstream   45 k
+ perl-Fcntl                             x86_64  1.13-484.el9_8                               almalinux9-appstream   19 k
+ perl-File-Basename                     noarch  2.85-484.el9_8                               almalinux9-appstream   16 k
+ perl-File-Compare                      noarch  1.100.600-484.el9_8                          almalinux9-appstream   12 k
+ perl-File-Copy                         noarch  2.34-484.el9_8                               almalinux9-appstream   19 k
+ perl-File-DosGlob                      x86_64  1.12-484.el9_8                               almalinux9-appstream   18 k
+ perl-File-Find                         noarch  1.37-484.el9_8                               almalinux9-appstream   24 k
+ perl-File-stat                         noarch  1.09-484.el9_8                               almalinux9-appstream   16 k
+ perl-FileCache                         noarch  1.10-484.el9_8                               almalinux9-appstream   13 k
+ perl-FileHandle                        noarch  2.03-484.el9_8                               almalinux9-appstream   14 k
+ perl-FindBin                           noarch  1.51-484.el9_8                               almalinux9-appstream   13 k
+ perl-GDBM_File                         x86_64  1.18-484.el9_8                               almalinux9-appstream   21 k
+ perl-Getopt-Std                        noarch  1.12-484.el9_8                               almalinux9-appstream   14 k
+ perl-Hash-Util                         x86_64  0.23-484.el9_8                               almalinux9-appstream   33 k
+ perl-Hash-Util-FieldHash               x86_64  1.20-484.el9_8                               almalinux9-appstream   36 k
+ perl-I18N-Collate                      noarch  1.02-484.el9_8                               almalinux9-appstream   13 k
+ perl-I18N-LangTags                     noarch  0.44-484.el9_8                               almalinux9-appstream   53 k
+ perl-I18N-Langinfo                     x86_64  0.19-484.el9_8                               almalinux9-appstream   21 k
+ perl-IPC-Open3                         noarch  1.21-484.el9_8                               almalinux9-appstream   21 k
+ perl-NDBM_File                         x86_64  1.15-484.el9_8                               almalinux9-appstream   21 k
+ perl-NEXT                              noarch  0.67-484.el9_8                               almalinux9-appstream   20 k
+ perl-Net                               noarch  1.02-484.el9_8                               almalinux9-appstream   24 k
+ perl-ODBM_File                         x86_64  1.16-484.el9_8                               almalinux9-appstream   21 k
+ perl-Opcode                            x86_64  1.48-484.el9_8                               almalinux9-appstream   35 k
+ perl-POSIX                             x86_64  1.94-484.el9_8                               almalinux9-appstream   95 k
+ perl-Pod-Functions                     noarch  1.13-484.el9_8                               almalinux9-appstream   12 k
+ perl-Safe                              noarch  2.41-484.el9_8                               almalinux9-appstream   24 k
+ perl-Search-Dict                       noarch  1.07-484.el9_8                               almalinux9-appstream   12 k
+ perl-SelectSaver                       noarch  1.02-484.el9_8                               almalinux9-appstream   10 k
+ perl-Symbol                            noarch  1.08-484.el9_8                               almalinux9-appstream   13 k
+ perl-Sys-Hostname                      x86_64  1.23-484.el9_8                               almalinux9-appstream   16 k
+ perl-Term-Complete                     noarch  1.403-484.el9_8                              almalinux9-appstream   12 k
+ perl-Term-ReadLine                     noarch  1.17-484.el9_8                               almalinux9-appstream   18 k
+ perl-Text-Abbrev                       noarch  1.02-484.el9_8                               almalinux9-appstream   11 k
+ perl-Thread                            noarch  3.05-484.el9_8                               almalinux9-appstream   17 k
+ perl-Thread-Semaphore                  noarch  2.13-484.el9_8                               almalinux9-appstream   14 k
+ perl-Tie                               noarch  4.6-484.el9_8                                almalinux9-appstream   30 k
+ perl-Tie-File                          noarch  1.06-484.el9_8                               almalinux9-appstream   42 k
+ perl-Tie-Memoize                       noarch  1.1-484.el9_8                                almalinux9-appstream   13 k
+ perl-Tie-RefHash                       noarch  1.40-4.el9                                   almalinux9-appstream   23 k
+ perl-Time                              noarch  1.03-484.el9_8                               almalinux9-appstream   17 k
+ perl-Unicode-UCD                       noarch  0.75-484.el9_8                               almalinux9-appstream   77 k
+ perl-User-pwent                        noarch  1.03-484.el9_8                               almalinux9-appstream   19 k
+ perl-autouse                           noarch  1.11-484.el9_8                               almalinux9-appstream   12 k
+ perl-base                              noarch  2.27-484.el9_8                               almalinux9-appstream   15 k
+ perl-blib                              noarch  1.07-484.el9_8                               almalinux9-appstream   11 k
+ perl-debugger                          noarch  1.56-484.el9_8                               almalinux9-appstream  132 k
+ perl-deprecate                         noarch  0.04-484.el9_8                               almalinux9-appstream   13 k
+ perl-diagnostics                       noarch  1.37-484.el9_8                               almalinux9-appstream  209 k
+ perl-doc                               noarch  5.32.1-484.el9_8                             almalinux9-appstream  4.5 M
+ perl-encoding-warnings                 noarch  0.13-484.el9_8                               almalinux9-appstream   15 k
+ perl-fields                            noarch  2.27-484.el9_8                               almalinux9-appstream   15 k
+ perl-filetest                          noarch  1.03-484.el9_8                               almalinux9-appstream   13 k
+ perl-if                                noarch  0.60.800-484.el9_8                           almalinux9-appstream   13 k
+ perl-less                              noarch  0.03-484.el9_8                               almalinux9-appstream   12 k
+ perl-lib                               x86_64  0.65-484.el9_8                               almalinux9-appstream   14 k
+ perl-locale                            noarch  1.09-484.el9_8                               almalinux9-appstream   12 k
+ perl-meta-notation                     noarch  5.32.1-484.el9_8                             almalinux9-appstream  8.4 k
+ perl-mro                               x86_64  1.23-484.el9_8                               almalinux9-appstream   27 k
+ perl-overload                          noarch  1.31-484.el9_8                               almalinux9-appstream   44 k
+ perl-overloading                       noarch  0.02-484.el9_8                               almalinux9-appstream   11 k
+ perl-ph                                x86_64  5.32.1-484.el9_8                             almalinux9-appstream   41 k
+ perl-sigtrap                           noarch  1.09-484.el9_8                               almalinux9-appstream   14 k
+ perl-sort                              noarch  2.04-484.el9_8                               almalinux9-appstream   12 k
+ perl-subs                              noarch  1.03-484.el9_8                               almalinux9-appstream   10 k
+ perl-vars                              noarch  1.05-484.el9_8                               almalinux9-appstream   12 k
+ perl-vmsish                            noarch  1.04-484.el9_8                               almalinux9-appstream   13 k
+ python3                                x86_64  3.9.25-7.el9_8.3                             almalinux9-baseos      26 k
+     replacing  platform-python.x86_64 3.6.8-78.el8_10.alma.1
+ rhel-net-naming-sysattrs               noarch  252-67.el9_8.6.alma.1                        almalinux9-baseos      30 k
+ rpm-plugin-audit                       x86_64  4.16.1.3-40.el9                              almalinux9-baseos      15 k
+ rpm-sign-libs                          x86_64  4.16.1.3-40.el9                              almalinux9-baseos      20 k
+ rsync-rrsync                           noarch  3.2.7-1.el9_8                                almalinux9-appstream   24 k
+ rsyslog-logrotate                      x86_64  8.2510.0-2.el9_8.2                           almalinux9-appstream  8.6 k
+ util-linux-core                        x86_64  2.37.4-25.el9                                almalinux9-baseos     430 k
+     replacing  hardlink.x86_64 1:1.3-6.el8
+ xfsprogs-xfs_scrub                     x86_64  6.4.0-7.el9                                  almalinux9-appstream   71 k
+Upgrading:
+ NetworkManager                         x86_64  1:1.54.3-5.el9_8                             almalinux9-baseos     2.4 M
+ NetworkManager-initscripts-updown      noarch  1:1.54.3-5.el9_8                             almalinux9-baseos      16 k
+ NetworkManager-libnm                   x86_64  1:1.54.3-5.el9_8                             almalinux9-baseos     1.9 M
+ NetworkManager-team                    x86_64  1:1.54.3-5.el9_8                             almalinux9-baseos      35 k
+ NetworkManager-tui                     x86_64  1:1.54.3-5.el9_8                             almalinux9-baseos     245 k
+ acl                                    x86_64  2.4.0-1.el9_8                                almalinux9-baseos      74 k
+ almalinux-backgrounds                  noarch  90.7-1.el9                                   almalinux9-appstream   10 M
+ almalinux-logos                        x86_64  90.7-1.el9                                   almalinux9-appstream  386 k
+ almalinux-logos-httpd                  noarch  90.7-1.el9                                   almalinux9-appstream   18 k
+ almalinux-release                      x86_64  9.8-1.el9                                    almalinux9-baseos      20 k
+ alsa-firmware                          noarch  1.2.4-6.el9                                  almalinux9-appstream  3.3 M
+ alsa-lib                               x86_64  1.2.15.3-1.el9                               almalinux9-appstream  525 k
+ alsa-tools-firmware                    x86_64  1.2.2-6.el9                                  almalinux9-appstream   36 k
+ apr                                    x86_64  1.7.0-12.el9_3                               almalinux9-appstream  122 k
+ apr-util                               x86_64  1.6.1-23.el9_8.1                             almalinux9-appstream   94 k
+ apr-util-bdb                           x86_64  1.6.1-23.el9_8.1                             almalinux9-appstream   12 k
+ apr-util-openssl                       x86_64  1.6.1-23.el9_8.1                             almalinux9-appstream   14 k
+ audit                                  x86_64  3.1.5-8.el9                                  almalinux9-baseos     253 k
+ audit-libs                             x86_64  3.1.5-8.el9                                  almalinux9-baseos     121 k
+ authselect                             x86_64  1.2.6-3.el9                                  almalinux9-baseos     139 k
+ authselect-compat                      x86_64  1.2.6-3.el9                                  almalinux9-appstream   31 k
+ authselect-libs                        x86_64  1.2.6-3.el9                                  almalinux9-baseos     236 k
+ basesystem                             noarch  11-13.el9                                    almalinux9-baseos     7.0 k
+ bash                                   x86_64  5.1.8-9.el9                                  almalinux9-baseos     1.7 M
+ bc                                     x86_64  1.07.1-14.el9                                almalinux9-baseos     118 k
+ binutils                               x86_64  2.35.2-72.el9                                almalinux9-baseos     4.5 M
+ biosdevname                            x86_64  0.7.3-10.el9                                 almalinux9-baseos      35 k
+ brotli                                 x86_64  1.0.9-10.el9_8                               almalinux9-appstream  311 k
+ bzip2-libs                             x86_64  1.0.8-11.el9                                 almalinux9-baseos      39 k
+ ca-certificates                        noarch  2025.2.80_v9.0.305-91.el9                    almalinux9-baseos     943 k
+ checkpolicy                            x86_64  3.6-1.el9                                    almalinux9-appstream  351 k
+ chkconfig                              x86_64  1.24-2.el9                                   almalinux9-baseos     160 k
+ chrony                                 x86_64  4.8-1.el9                                    almalinux9-baseos     347 k
+ coreutils                              x86_64  8.32-41.el9_8.1                              almalinux9-baseos     1.1 M
+ coreutils-common                       x86_64  8.32-41.el9_8.1                              almalinux9-baseos     2.0 M
+ cpio                                   x86_64  2.13-16.el9                                  almalinux9-baseos     270 k
+ cracklib                               x86_64  2.9.6-28.el9                                 almalinux9-baseos      80 k
+ cracklib-dicts                         x86_64  2.9.6-28.el9                                 almalinux9-baseos     3.6 M
+ cronie                                 x86_64  1.5.7-16.el9                                 almalinux9-baseos     115 k
+ cronie-anacron                         x86_64  1.5.7-16.el9                                 almalinux9-baseos      31 k
+ crontabs                               noarch  1.11-27.20190603git.el9_0                    almalinux9-baseos      18 k
+ crypto-policies                        noarch  20260224-1.gitea0f072.el9_8                  almalinux9-baseos      56 k
+ crypto-policies-scripts                noarch  20260224-1.gitea0f072.el9_8                  almalinux9-baseos      87 k
+ cryptsetup-libs                        x86_64  2.8.1-3.el9                                  almalinux9-baseos     559 k
+ curl                                   x86_64  7.76.1-40.el9_8.8                            almalinux9-baseos     293 k
+ cyrus-sasl-lib                         x86_64  2.1.27-22.el9                                almalinux9-baseos     762 k
+ dbus                                   x86_64  1:1.12.20-8.el9                              almalinux9-baseos     6.8 k
+ dbus-common                            noarch  1:1.12.20-8.el9                              almalinux9-baseos      14 k
+ dbus-daemon                            x86_64  1:1.12.20-8.el9                              almalinux9-appstream  196 k
+ dbus-glib                              x86_64  0.110-13.el9                                 almalinux9-appstream  122 k
+ dbus-libs                              x86_64  1:1.12.20-8.el9                              almalinux9-baseos     151 k
+ dbus-tools                             x86_64  1:1.12.20-8.el9                              almalinux9-baseos      50 k
+ dejavu-sans-fonts                      noarch  2.37-18.el9                                  almalinux9-baseos     1.3 M
+     replacing  dejavu-fonts-common.noarch 2.35-7.el8
+ device-mapper                          x86_64  9:1.02.207-4.el9_8.1                         almalinux9-baseos     138 k
+ device-mapper-libs                     x86_64  9:1.02.207-4.el9_8.1                         almalinux9-baseos     179 k
+ dhcp-client                            x86_64  12:4.4.2-20.b1.el9                           almalinux9-baseos     787 k
+ dhcp-common                            noarch  12:4.4.2-20.b1.el9                           almalinux9-baseos     127 k
+     replacing  dhcp-libs.x86_64 12:4.3.6-50.el8_10
+ diffutils                              x86_64  3.7-12.el9                                   almalinux9-baseos     388 k
+ dmidecode                              x86_64  1:3.6-2.el9                                  almalinux9-baseos     100 k
+ dnf                                    noarch  4.14.0-34.el9_8.alma.1                       almalinux9-baseos     467 k
+ dnf-data                               noarch  4.14.0-34.el9_8.alma.1                       almalinux9-baseos      36 k
+ dnf-plugins-core                       noarch  4.3.0-26.el9                                 almalinux9-baseos      35 k
+ dracut                                 x86_64  057-120.git20260728.el9_8                    almalinux9-baseos     386 k
+ dracut-config-rescue                   x86_64  057-120.git20260728.el9_8                    almalinux9-baseos      12 k
+ dracut-live                            x86_64  057-120.git20260728.el9_8                    almalinux9-appstream   24 k
+ dracut-network                         x86_64  057-120.git20260728.el9_8                    almalinux9-baseos      68 k
+ dracut-squash                          x86_64  057-120.git20260728.el9_8                    almalinux9-baseos      12 k
+ dwz                                    x86_64  0.16-1.el9                                   almalinux9-appstream  133 k
+ e2fsprogs                              x86_64  1.46.5-8.el9                                 almalinux9-baseos     1.0 M
+ e2fsprogs-libs                         x86_64  1.46.5-8.el9                                 almalinux9-baseos     221 k
+ efi-filesystem                         noarch  6-4.el9                                      almalinux9-baseos     7.1 k
+ efi-srpm-macros                        noarch  6-4.el9                                      almalinux9-appstream   21 k
+ elfutils-debuginfod-client             x86_64  0.194-1.el9.alma.1                           almalinux9-baseos      43 k
+ elfutils-default-yama-scope            noarch  0.194-1.el9.alma.1                           almalinux9-baseos     8.8 k
+ elfutils-libelf                        x86_64  0.194-1.el9.alma.1                           almalinux9-baseos     201 k
+ elfutils-libs                          x86_64  0.194-1.el9.alma.1                           almalinux9-baseos     268 k
+ emacs-filesystem                       noarch  1:27.2-18.el9_8.2                            almalinux9-appstream  8.1 k
+ epel-release                           noarch  9-11.el9                                     el9-epel               19 k
+ ethtool                                x86_64  2:6.15-2.el9                                 almalinux9-baseos     331 k
+ expat                                  x86_64  2.5.0-6.el9_8.5                              almalinux9-baseos     119 k
+ fail2ban-firewalld                     noarch  1.1.0-6.el9                                  el9-epel              9.5 k
+ fail2ban-selinux                       noarch  1.1.0-6.el9                                  el9-epel               31 k
+ fail2ban-server                        noarch  1.1.0-6.el9                                  el9-epel              465 k
+ file                                   x86_64  5.39-17.el9                                  almalinux9-baseos      47 k
+ file-libs                              x86_64  5.39-17.el9                                  almalinux9-baseos     587 k
+ filesystem                             x86_64  3.16-5.el9                                   almalinux9-baseos     1.1 M
+ findutils                              x86_64  1:4.8.0-7.el9                                almalinux9-baseos     536 k
+ firewalld                              noarch  1.3.4-20.el9_8                               almalinux9-baseos     453 k
+ firewalld-filesystem                   noarch  1.3.4-20.el9_8                               almalinux9-baseos     8.8 k
+ fontconfig                             x86_64  2.14.0-2.el9_1                               almalinux9-appstream  274 k
+ freetype                               x86_64  2.10.4-10.el9_5                              almalinux9-baseos     385 k
+ fuse-libs                              x86_64  2.9.9-17.el9                                 almalinux9-baseos      96 k
+ fxload                                 x86_64  2008_10_13-21.el9                            almalinux9-appstream   28 k
+ gawk                                   x86_64  5.1.0-6.el9_8.1                              almalinux9-baseos     995 k
+ gd                                     x86_64  2.3.2-3.el9_8.1                              almalinux9-appstream  130 k
+ gdbm                                   x86_64  1:1.23-1.el9                                 almalinux9-crb        149 k
+ gdbm-libs                              x86_64  1:1.23-1.el9                                 almalinux9-baseos      55 k
+ geolite2-city                          noarch  20191217-6.el9                               almalinux9-appstream   23 M
+ geolite2-country                       noarch  20191217-6.el9                               almalinux9-appstream  1.6 M
+ gettext                                x86_64  0.21-8.el9                                   almalinux9-baseos     1.1 M
+ gettext-libs                           x86_64  0.21-8.el9                                   almalinux9-baseos     302 k
+ ghc-srpm-macros                        noarch  1.5.0-6.el9                                  almalinux9-appstream  7.8 k
+ glib2                                  x86_64  2.68.4-19.el9_8.10                           almalinux9-baseos     2.6 M
+ glibc                                  x86_64  2.34-283.el9_8                               almalinux9-baseos     2.0 M
+ glibc-all-langpacks                    x86_64  2.34-283.el9_8                               almalinux9-baseos      18 M
+ glibc-common                           x86_64  2.34-283.el9_8                               almalinux9-baseos     299 k
+ glibc-gconv-extra                      x86_64  2.34-283.el9_8                               almalinux9-baseos     1.5 M
+ glibc-locale-source                    x86_64  2.34-283.el9_8                               almalinux9-appstream  4.0 M
+ glibc-minimal-langpack                 x86_64  2.34-283.el9_8                               almalinux9-baseos      27 k
+ gmp                                    x86_64  1:6.2.0-13.el9                               almalinux9-baseos     314 k
+ gmp-c++                                x86_64  1:6.2.0-13.el9                               almalinux9-appstream   18 k
+ gnupg2                                 x86_64  2.3.3-5.el9_7                                almalinux9-baseos     2.5 M
+ gnupg2-smime                           x86_64  2.3.3-5.el9_7                                almalinux9-appstream  240 k
+ gnutls                                 x86_64  3.8.10-9.el9_8                               almalinux9-baseos     1.4 M
+ go-srpm-macros                         noarch  3.8.1-1.el9                                  almalinux9-appstream   27 k
+ gobject-introspection                  x86_64  1.68.0-11.el9                                almalinux9-baseos     246 k
+ gpgme                                  x86_64  1.15.1-6.el9                                 almalinux9-baseos     206 k
+ grep                                   x86_64  3.6-5.el9                                    almalinux9-baseos     257 k
+ groff-base                             x86_64  1.22.4-10.el9                                almalinux9-baseos     1.0 M
+ grub2-common                           noarch  1:2.06-126.el9_8.alma.1                      almalinux9-baseos     911 k
+ grub2-pc                               x86_64  1:2.06-126.el9_8.alma.1                      almalinux9-baseos      14 k
+ grub2-pc-modules                       noarch  1:2.06-126.el9_8.alma.1                      almalinux9-baseos     997 k
+ grub2-tools                            x86_64  1:2.06-126.el9_8.alma.1                      almalinux9-baseos     1.9 M
+ grub2-tools-efi                        x86_64  1:2.06-126.el9_8.alma.1                      almalinux9-baseos     621 k
+ grub2-tools-extra                      x86_64  1:2.06-126.el9_8.alma.1                      almalinux9-baseos     931 k
+ grub2-tools-minimal                    x86_64  1:2.06-126.el9_8.alma.1                      almalinux9-baseos     687 k
+ grubby                                 x86_64  8.40-69.el9                                  almalinux9-baseos      32 k
+ gzip                                   x86_64  1.12-2.el9_8                                 almalinux9-baseos     156 k
+ hdparm                                 x86_64  9.62-2.el9                                   almalinux9-baseos      95 k
+ hostname                               x86_64  3.23-6.el9                                   almalinux9-baseos      27 k
+ htop                                   x86_64  3.3.0-1.el9                                  el9-epel              198 k
+ httpd                                  x86_64  2.4.62-13.el9_8.6                            almalinux9-appstream   46 k
+ httpd-filesystem                       noarch  2.4.62-13.el9_8.6                            almalinux9-appstream   13 k
+ httpd-tools                            x86_64  2.4.62-13.el9_8.6                            almalinux9-appstream   79 k
+ hwdata                                 noarch  0.348-9.22.el9                               almalinux9-baseos     1.7 M
+ ima-evm-utils                          x86_64  1.6.2-2.el9                                  almalinux9-baseos      70 k
+ info                                   x86_64  6.7-15.el9                                   almalinux9-baseos     224 k
+ initscripts                            x86_64  10.11.8-4.el9                                almalinux9-baseos     208 k
+ ipcalc                                 x86_64  1.0.0-5.el9                                  almalinux9-baseos      41 k
+ iproute                                x86_64  6.17.0-2.el9                                 almalinux9-baseos     838 k
+ iproute-tc                             x86_64  6.17.0-2.el9                                 almalinux9-baseos     442 k
+ iprutils                               x86_64  2.4.19-5.el9                                 almalinux9-baseos     244 k
+ ipset                                  x86_64  7.11-11.el9_5                                almalinux9-baseos      41 k
+ ipset-libs                             x86_64  7.11-11.el9_5                                almalinux9-baseos      68 k
+ iptables-libs                          x86_64  1.8.10-11.el9_5                              almalinux9-baseos     397 k
+ iputils                                x86_64  20210202-15.el9_7                            almalinux9-baseos     167 k
+ irqbalance                             x86_64  2:1.9.4-5.el9                                almalinux9-baseos      61 k
+ iwl100-firmware                        noarch  39.31.5.1-161.3.el9_8                        almalinux9-baseos     183 k
+ iwl1000-firmware                       noarch  1:39.31.5.1-161.3.el9_8                      almalinux9-baseos     183 k
+ iwl105-firmware                        noarch  18.168.6.1-161.3.el9_8                       almalinux9-baseos     262 k
+ iwl135-firmware                        noarch  18.168.6.1-161.3.el9_8                       almalinux9-baseos     270 k
+ iwl2000-firmware                       noarch  18.168.6.1-161.3.el9_8                       almalinux9-baseos     264 k
+ iwl2030-firmware                       noarch  18.168.6.1-161.3.el9_8                       almalinux9-baseos     273 k
+ iwl3160-firmware                       noarch  1:25.30.13.0-161.3.el9_8                     almalinux9-baseos     539 k
+ iwl5000-firmware                       noarch  8.83.5.1_1-161.3.el9_8                       almalinux9-baseos     180 k
+ iwl5150-firmware                       noarch  8.24.2.2-161.3.el9_8                         almalinux9-baseos     179 k
+ iwl6000g2a-firmware                    noarch  18.168.6.1-161.3.el9_8                       almalinux9-baseos     248 k
+ iwl6000g2b-firmware                    noarch  18.168.6.1-161.3.el9_8                       almalinux9-baseos     250 k
+ iwl6050-firmware                       noarch  41.28.5.1-161.3.el9_8                        almalinux9-baseos     205 k
+ iwl7260-firmware                       noarch  1:25.30.13.0-161.3.el9_8                     almalinux9-baseos      84 M
+ jansson                                x86_64  2.14-1.el9                                   almalinux9-baseos      45 k
+ jbigkit-libs                           x86_64  2.1-23.el9                                   almalinux9-appstream   52 k
+ jq                                     x86_64  1.6-19.el9_8.2                               almalinux9-baseos     186 k
+ json-c                                 x86_64  0.14-11.el9                                  almalinux9-baseos      42 k
+ kbd                                    x86_64  2.4.0-12.el9_8                               almalinux9-baseos     383 k
+ kbd-legacy                             noarch  2.4.0-12.el9_8                               almalinux9-baseos     502 k
+ kbd-misc                               noarch  2.4.0-12.el9_8                               almalinux9-baseos     1.5 M
+ kernel-tools                           x86_64  5.14.0-687.56.1.el9_8                        almalinux9-baseos     1.3 M
+ kernel-tools-libs                      x86_64  5.14.0-687.56.1.el9_8                        almalinux9-baseos     1.1 M
+ kexec-tools                            x86_64  2.0.29-17.el9                                almalinux9-baseos     481 k
+ keyutils-libs                          x86_64  1.6.3-1.el9                                  almalinux9-baseos      31 k
+ kmod                                   x86_64  28-11.el9                                    almalinux9-baseos     121 k
+ kmod-libs                              x86_64  28-11.el9                                    almalinux9-baseos      62 k
+ kpartx                                 x86_64  0.8.7-45.el9                                 almalinux9-baseos      49 k
+ krb5-libs                              x86_64  1.21.1-10.el9_8                              almalinux9-baseos     755 k
+ less                                   x86_64  590-6.el9                                    almalinux9-baseos     160 k
+ libX11                                 x86_64  1.8.12-1.el9                                 almalinux9-appstream  647 k
+ libX11-common                          noarch  1.8.12-1.el9                                 almalinux9-appstream  144 k
+ libX11-xcb                             x86_64  1.8.12-1.el9                                 almalinux9-appstream   10 k
+ libXau                                 x86_64  1.0.9-8.el9                                  almalinux9-appstream   30 k
+ libXpm                                 x86_64  3.5.13-10.el9                                almalinux9-appstream   57 k
+ libacl                                 x86_64  2.4.0-1.el9_8                                almalinux9-baseos      24 k
+ libarchive                             x86_64  3.5.3-11.el9_8                               almalinux9-baseos     387 k
+ libassuan                              x86_64  2.5.5-3.el9                                  almalinux9-baseos      67 k
+ libattr                                x86_64  2.6.0-1.el9_8                                almalinux9-baseos      17 k
+ libblkid                               x86_64  2.37.4-25.el9                                almalinux9-baseos     105 k
+ libbpf                                 x86_64  2:1.5.0-3.el9                                almalinux9-baseos     184 k
+ libcap                                 x86_64  2.48-10.el9_8.1                              almalinux9-baseos      67 k
+ libcap-ng                              x86_64  0.8.2-7.el9                                  almalinux9-baseos      32 k
+ libcom_err                             x86_64  1.46.5-8.el9                                 almalinux9-baseos      25 k
+ libcomps                               x86_64  0.1.18-1.el9                                 almalinux9-baseos      77 k
+ libcurl                                x86_64  7.76.1-40.el9_8.8                            almalinux9-baseos     284 k
+ libdaemon                              x86_64  0.14-23.el9                                  almalinux9-baseos      31 k
+ libdb                                  x86_64  5.3.28-57.el9_6                              almalinux9-baseos     736 k
+ libdb-utils                            x86_64  5.3.28-57.el9_6                              almalinux9-appstream  137 k
+ libdnf                                 x86_64  0.69.0-18.el9.alma.1                         almalinux9-baseos     653 k
+ libdrm                                 x86_64  2.4.128-1.el9                                almalinux9-baseos     159 k
+ libedit                                x86_64  3.1-39.20210216cvs.el9                       almalinux9-baseos     103 k
+ libestr                                x86_64  0.1.11-4.el9                                 almalinux9-appstream   25 k
+ libevent                               x86_64  2.1.13-1.el9_8                               almalinux9-baseos     261 k
+ libfastjson                            x86_64  0.99.9-5.el9                                 almalinux9-appstream   37 k
+ libfdisk                               x86_64  2.37.4-25.el9                                almalinux9-baseos     152 k
+ libffi                                 x86_64  3.4.2-8.el9                                  almalinux9-baseos      37 k
+ libgcc                                 x86_64  11.5.0-14.el9.alma.1                         almalinux9-baseos      84 k
+ libgcrypt                              x86_64  1.10.0-13.el9_8                              almalinux9-baseos     505 k
+ libgomp                                x86_64  11.5.0-14.el9.alma.1                         almalinux9-baseos     256 k
+ libgpg-error                           x86_64  1.42-5.el9                                   almalinux9-baseos     211 k
+ libibverbs                             x86_64  61.0-2.el9                                   almalinux9-baseos     463 k
+ libicu                                 x86_64  67.1-10.el9_6                                almalinux9-baseos     9.6 M
+ libidn2                                x86_64  2.3.0-7.el9                                  almalinux9-baseos      95 k
+ libjpeg-turbo                          x86_64  2.0.90-7.el9                                 almalinux9-appstream  174 k
+ libkcapi                               x86_64  1.4.0-3.el9_8                                almalinux9-baseos      45 k
+ libkcapi-hmaccalc                      x86_64  1.4.0-3.el9_8                                almalinux9-baseos      23 k
+ libksba                                x86_64  1.5.1-7.el9                                  almalinux9-baseos     152 k
+ libmaxminddb                           x86_64  1.5.2-4.el9                                  almalinux9-appstream   32 k
+ libmnl                                 x86_64  1.0.4-16.el9_4                               almalinux9-baseos      27 k
+ libmodulemd                            x86_64  2.13.0-2.el9                                 almalinux9-baseos     232 k
+ libmount                               x86_64  2.37.4-25.el9                                almalinux9-baseos     133 k
+ libndp                                 x86_64  1.9-1.el9                                    almalinux9-baseos      37 k
+ libnetfilter_conntrack                 x86_64  1.0.9-1.el9                                  almalinux9-baseos      58 k
+ libnfnetlink                           x86_64  1.0.1-23.el9_5                               almalinux9-baseos      28 k
+ libnftnl                               x86_64  1.2.6-4.el9_4                                almalinux9-baseos      87 k
+ libnghttp2                             x86_64  1.43.0-6.el9_8.2                             almalinux9-baseos      72 k
+ libnl3                                 x86_64  3.11.0-1.el9                                 almalinux9-baseos     359 k
+ libnl3-cli                             x86_64  3.11.0-1.el9                                 almalinux9-baseos     198 k
+ libnsl                                 x86_64  2.34-283.el9_8                               almalinux9-baseos      67 k
+ libnsl2                                x86_64  2.0.0-1.el9                                  almalinux9-appstream   30 k
+ libpath_utils                          x86_64  0.2.1-53.el9                                 almalinux9-baseos      29 k
+ libpcap                                x86_64  14:1.10.0-4.el9_8.1                          almalinux9-baseos     170 k
+ libpciaccess                           x86_64  0.16-7.el9                                   almalinux9-baseos      26 k
+ libpipeline                            x86_64  1.5.3-4.el9                                  almalinux9-baseos      48 k
+ libpkgconf                             x86_64  1.7.3-10.el9                                 almalinux9-baseos      35 k
+ libpng                                 x86_64  2:1.6.37-15.el9_8.2                          almalinux9-baseos     116 k
+ libpq                                  x86_64  13.23-3.el9_8                                almalinux9-appstream  208 k
+ libpsl                                 x86_64  0.21.1-5.el9                                 almalinux9-baseos      63 k
+ libpwquality                           x86_64  1.4.4-8.el9                                  almalinux9-baseos     105 k
+ librepo                                x86_64  1.19.0-1.el9                                 almalinux9-baseos      90 k
+ libreport-filesystem                   noarch  2.15.2-6.el9.alma                            almalinux9-baseos      11 k
+ libseccomp                             x86_64  2.5.2-2.el9                                  almalinux9-baseos      71 k
+ libsecret                              x86_64  0.20.4-4.el9                                 almalinux9-appstream  157 k
+ libselinux                             x86_64  3.6-3.el9                                    almalinux9-baseos      85 k
+ libselinux-utils                       x86_64  3.6-3.el9                                    almalinux9-baseos     164 k
+ libsemanage                            x86_64  3.6-5.el9_6                                  almalinux9-baseos     117 k
+ libsepol                               x86_64  3.6-3.el9                                    almalinux9-baseos     329 k
+ libsigsegv                             x86_64  2.13-4.el9                                   almalinux9-baseos      26 k
+ libsmartcols                           x86_64  2.37.4-25.el9                                almalinux9-baseos      61 k
+ libsolv                                x86_64  0.7.24-6.el9_8                               almalinux9-baseos     402 k
+ libss                                  x86_64  1.46.5-8.el9                                 almalinux9-baseos      31 k
+ libssh                                 x86_64  0.10.4-19.el9_8                              almalinux9-baseos     214 k
+ libssh-config                          noarch  0.10.4-19.el9_8                              almalinux9-baseos     8.2 k
+ libstdc++                              x86_64  11.5.0-14.el9.alma.1                         almalinux9-baseos     741 k
+ libsysfs                               x86_64  2.1.1-11.el9                                 almalinux9-baseos      34 k
+ libtalloc                              x86_64  2.4.3-1.el9                                  almalinux9-baseos      33 k
+ libtasn1                               x86_64  4.16.0-10.el9_8                              almalinux9-baseos      73 k
+ libteam                                x86_64  1.31-16.el9_1                                almalinux9-baseos      47 k
+ libtiff                                x86_64  4.4.0-18.el9_8.1                             almalinux9-appstream  196 k
+ libtirpc                               x86_64  1.3.3-9.el9                                  almalinux9-baseos      93 k
+ libunistring                           x86_64  0.9.10-15.el9                                almalinux9-baseos     494 k
+ libusbx                                x86_64  1.0.30-1.el9_8                               almalinux9-baseos      77 k
+ libuser                                x86_64  0.63-17.el9                                  almalinux9-baseos     384 k
+ libutempter                            x86_64  1.2.1-6.el9                                  almalinux9-baseos      26 k
+ libuuid                                x86_64  2.37.4-25.el9                                almalinux9-baseos      26 k
+ libverto                               x86_64  0.3.2-3.el9                                  almalinux9-baseos      21 k
+ libwebp                                x86_64  1.2.0-8.el9_3                                almalinux9-appstream  276 k
+ libxcb                                 x86_64  1.13.1-9.el9                                 almalinux9-appstream  225 k
+ libxcrypt                              x86_64  4.4.18-3.el9                                 almalinux9-baseos     115 k
+ libxkbcommon                           x86_64  1.0.3-4.el9                                  almalinux9-appstream  132 k
+ libxml2                                x86_64  2.9.13-14.el9_8.5                            almalinux9-baseos     748 k
+ libxslt                                x86_64  1.1.34-14.el9_8.1                            almalinux9-appstream  240 k
+ libyaml                                x86_64  0.2.5-7.el9                                  almalinux9-baseos      60 k
+ libzip                                 x86_64  1.7.3-8.el9                                  almalinux9-appstream   61 k
+ libzstd                                x86_64  1.5.5-1.el9                                  almalinux9-baseos     294 k
+ logrotate                              x86_64  3.18.0-12.el9                                almalinux9-baseos      73 k
+ lshw                                   x86_64  B.02.20-4.el9                                almalinux9-baseos     328 k
+ lsscsi                                 x86_64  0.32-6.el9                                   almalinux9-baseos      67 k
+ lua                                    x86_64  5.4.4-4.el9                                  almalinux9-appstream  187 k
+ lua-libs                               x86_64  5.4.4-4.el9                                  almalinux9-baseos     129 k
+ lz4                                    x86_64  1.9.3-5.el9                                  almalinux9-baseos      58 k
+ lz4-libs                               x86_64  1.9.3-5.el9                                  almalinux9-baseos      67 k
+ lzo                                    x86_64  2.10-7.el9                                   almalinux9-baseos      65 k
+ mailcap                                noarch  2.1.49-5.el9                                 almalinux9-baseos      32 k
+ make                                   x86_64  1:4.3-8.el9                                  almalinux9-baseos     530 k
+ man-db                                 x86_64  2.9.3-9.el9                                  almalinux9-baseos     1.1 M
+ mariadb                                x86_64  3:10.5.29-3.el9_7.alma.1                     almalinux9-appstream  1.6 M
+ mariadb-common                         x86_64  3:10.5.29-3.el9_7.alma.1                     almalinux9-appstream   27 k
+ mariadb-connector-c                    x86_64  3.2.6-2.el9_8                                almalinux9-appstream  193 k
+ mariadb-connector-c-config             noarch  3.2.6-2.el9_8                                almalinux9-appstream  7.6 k
+ mariadb-errmsg                         x86_64  3:10.5.29-3.el9_7.alma.1                     almalinux9-appstream  210 k
+ mariadb-gssapi-server                  x86_64  3:10.5.29-3.el9_7.alma.1                     almalinux9-appstream   14 k
+ mariadb-server                         x86_64  3:10.5.29-3.el9_7.alma.1                     almalinux9-appstream  9.7 M
+ mariadb-server-utils                   x86_64  3:10.5.29-3.el9_7.alma.1                     almalinux9-appstream  210 k
+ mod_http2                              x86_64  2.0.26-6.el9_8.2                             almalinux9-appstream  163 k
+ mod_ssl                                x86_64  1:2.4.62-13.el9_8.6                          almalinux9-appstream  111 k
+ mpfr                                   x86_64  4.1.0-10.el9                                 almalinux9-baseos     324 k
+ ncdu                                   x86_64  1.22-1.el9                                   el9-epel               62 k
+ ncurses                                x86_64  6.2-12.20210508.el9                          almalinux9-baseos     399 k
+ ncurses-base                           noarch  6.2-12.20210508.el9                          almalinux9-baseos      60 k
+ ncurses-c++-libs                       x86_64  6.2-12.20210508.el9                          almalinux9-appstream   36 k
+ ncurses-libs                           x86_64  6.2-12.20210508.el9                          almalinux9-baseos     322 k
+ netconsole-service                     noarch  10.11.8-4.el9                                almalinux9-baseos      11 k
+ nettle                                 x86_64  3.10.1-1.el9                                 almalinux9-baseos     562 k
+ newt                                   x86_64  0.52.21-11.el9                               almalinux9-baseos     100 k
+ nftables                               x86_64  1:1.0.9-9.el9_8                              almalinux9-baseos     453 k
+ npth                                   x86_64  1.6-8.el9                                    almalinux9-baseos      24 k
+ nspr                                   x86_64  4.39.0-5.el9_6                               almalinux9-appstream  134 k
+ nss                                    x86_64  3.124.0-5.el9_6                              almalinux9-appstream  726 k
+ nss-softokn                            x86_64  3.124.0-5.el9_6                              almalinux9-appstream  411 k
+ nss-softokn-freebl                     x86_64  3.124.0-5.el9_6                              almalinux9-appstream  381 k
+ nss-sysinit                            x86_64  3.124.0-5.el9_6                              almalinux9-appstream   18 k
+ nss-tools                              x86_64  3.124.0-5.el9_6                              almalinux9-appstream  434 k
+ nss-util                               x86_64  3.124.0-5.el9_6                              almalinux9-appstream   90 k
+ nss_db                                 x86_64  2.34-283.el9_8                               almalinux9-crb         49 k
+ numactl-libs                           x86_64  2.0.19-3.el9                                 almalinux9-baseos      30 k
+ ocaml-srpm-macros                      noarch  6-6.el9                                      almalinux9-appstream  7.7 k
+ oddjob                                 x86_64  0.34.7-7.el9                                 almalinux9-appstream   63 k
+ oddjob-mkhomedir                       x86_64  0.34.7-7.el9                                 almalinux9-appstream   26 k
+ oniguruma                              x86_64  6.9.6-1.el9.6                                almalinux9-baseos     217 k
+ openblas-srpm-macros                   noarch  2-11.el9                                     almalinux9-appstream  7.3 k
+ openldap                               x86_64  2.6.8-4.el9                                  almalinux9-baseos     266 k
+ openssh                                x86_64  9.9p1-12.el9_8.alma.1                        almalinux9-baseos     422 k
+ openssh-clients                        x86_64  9.9p1-12.el9_8.alma.1                        almalinux9-baseos     769 k
+ openssh-server                         x86_64  9.9p1-12.el9_8.alma.1                        almalinux9-baseos     545 k
+ openssl                                x86_64  1:3.5.8-2.el9_8                              almalinux9-baseos     1.4 M
+ openssl-libs                           x86_64  1:3.5.8-2.el9_8                              almalinux9-baseos     2.3 M
+ openssl-pkcs11                         x86_64  0.4.11-9.el9                                 almalinux9-baseos      71 k
+ os-prober                              x86_64  1.77-12.el9_5                                almalinux9-baseos      43 k
+ p11-kit                                x86_64  0.26.4-1.el9_8                               almalinux9-baseos     591 k
+ p11-kit-trust                          x86_64  0.26.4-1.el9_8                               almalinux9-baseos     155 k
+ pam                                    x86_64  1.5.1-28.el9_8.1                             almalinux9-baseos     543 k
+ parted                                 x86_64  3.5-3.el9                                    almalinux9-baseos     576 k
+ passwd                                 x86_64  0.80-12.el9                                  almalinux9-baseos     107 k
+ pciutils                               x86_64  3.7.0-7.el9                                  almalinux9-baseos      92 k
+ pciutils-libs                          x86_64  3.7.0-7.el9                                  almalinux9-baseos      40 k
+ pcre                                   x86_64  8.44-4.el9                                   almalinux9-baseos     196 k
+ pcre-cpp                               x86_64  8.44-4.el9                                   almalinux9-appstream   24 k
+ pcre-utf16                             x86_64  8.44-4.el9                                   almalinux9-appstream  183 k
+ pcre-utf32                             x86_64  8.44-4.el9                                   almalinux9-appstream  173 k
+ pcre2                                  x86_64  10.40-7.el9_8                                almalinux9-baseos     233 k
+ perl-Attribute-Handlers                noarch  1.01-484.el9_8                               almalinux9-appstream   26 k
+ perl-CPAN-Meta                         noarch  2.150010-460.el9                             almalinux9-appstream  176 k
+ perl-CPAN-Meta-Requirements            noarch  2.140-461.el9                                almalinux9-appstream   31 k
+ perl-CPAN-Meta-YAML                    noarch  0.018-461.el9                                almalinux9-appstream   26 k
+ perl-Carp                              noarch  1.50-460.el9                                 almalinux9-appstream   29 k
+ perl-Compress-Raw-Bzip2                x86_64  2.101-5.el9                                  almalinux9-appstream   34 k
+ perl-Compress-Raw-Zlib                 x86_64  2.101-5.el9                                  almalinux9-appstream   60 k
+ perl-DBD-MySQL                         x86_64  4.053-2.el9                                  almalinux9-appstream  144 k
+ perl-DBI                               x86_64  1.643-9.el9_8.7                              almalinux9-appstream  700 k
+ perl-Data-Dumper                       x86_64  2.174-462.el9                                almalinux9-appstream   55 k
+ perl-Devel-PPPort                      x86_64  3.62-4.el9                                   almalinux9-appstream  211 k
+ perl-Devel-Peek                        x86_64  1.28-484.el9_8                               almalinux9-appstream   31 k
+ perl-Devel-SelfStubber                 noarch  1.06-484.el9_8                               almalinux9-appstream   13 k
+ perl-Digest                            noarch  1.19-4.el9                                   almalinux9-appstream   25 k
+ perl-Digest-MD5                        x86_64  2.58-4.el9                                   almalinux9-appstream   36 k
+ perl-Encode                            x86_64  4:3.08-462.el9                               almalinux9-appstream  1.7 M
+ perl-Encode-Locale                     noarch  1.05-21.el9                                  almalinux9-appstream   19 k
+ perl-Errno                             x86_64  1.30-484.el9_8                               almalinux9-appstream   14 k
+ perl-Exporter                          noarch  5.74-461.el9                                 almalinux9-appstream   31 k
+ perl-ExtUtils-Command                  noarch  2:7.60-3.el9                                 almalinux9-appstream   14 k
+ perl-ExtUtils-Embed                    noarch  1.35-484.el9_8                               almalinux9-appstream   16 k
+ perl-ExtUtils-Install                  noarch  2.20-4.el9                                   almalinux9-appstream   44 k
+ perl-ExtUtils-MakeMaker                noarch  2:7.60-3.el9                                 almalinux9-appstream  289 k
+ perl-ExtUtils-Manifest                 noarch  1:1.73-4.el9                                 almalinux9-appstream   34 k
+ perl-ExtUtils-Miniperl                 noarch  1.09-484.el9_8                               almalinux9-appstream   14 k
+ perl-ExtUtils-ParseXS                  noarch  1:3.40-460.el9                               almalinux9-appstream  181 k
+ perl-File-Path                         noarch  2.18-4.el9                                   almalinux9-appstream   35 k
+ perl-File-Temp                         noarch  1:0.231.100-4.el9                            almalinux9-appstream   59 k
+ perl-Filter                            x86_64  2:1.60-4.el9                                 almalinux9-appstream   81 k
+ perl-Filter-Simple                     noarch  0.96-460.el9                                 almalinux9-appstream   27 k
+ perl-Getopt-Long                       noarch  1:2.52-4.el9                                 almalinux9-appstream   59 k
+ perl-HTTP-Tiny                         noarch  0.076-462.el9                                almalinux9-appstream   53 k
+ perl-IO                                x86_64  1.43-484.el9_8                               almalinux9-appstream   85 k
+ perl-IO-Compress                       noarch  2.102-4.el9_8.1                              almalinux9-appstream  254 k
+ perl-IO-Socket-IP                      noarch  0.41-5.el9                                   almalinux9-appstream   42 k
+ perl-IO-Socket-SSL                     noarch  2.073-2.el9                                  almalinux9-appstream  214 k
+ perl-IPC-SysV                          x86_64  2.09-4.el9                                   almalinux9-appstream   42 k
+ perl-JSON-PP                           noarch  1:4.06-4.el9                                 almalinux9-appstream   65 k
+ perl-MIME-Base64                       x86_64  3.16-4.el9                                   almalinux9-appstream   30 k
+ perl-Math-BigInt                       noarch  1:1.9998.18-460.el9                          almalinux9-appstream  188 k
+ perl-Math-BigInt-FastCalc              x86_64  0.500.900-460.el9                            almalinux9-appstream   27 k
+ perl-Math-BigRat                       noarch  0.2614-460.el9                               almalinux9-appstream   38 k
+ perl-Math-Complex                      noarch  1.59-484.el9_8                               almalinux9-appstream   45 k
+ perl-Memoize                           noarch  1.03-484.el9_8                               almalinux9-appstream   55 k
+ perl-Module-Load                       noarch  1:0.36-4.el9                                 almalinux9-appstream   17 k
+ perl-Mozilla-CA                        noarch  20200520-6.el9                               almalinux9-appstream   12 k
+ perl-Net-Ping                          noarch  2.74-5.el9                                   almalinux9-appstream   49 k
+ perl-Net-SSLeay                        x86_64  1.94-3.el9                                   almalinux9-appstream  391 k
+ perl-PathTools                         x86_64  3.78-461.el9                                 almalinux9-appstream   85 k
+ perl-PerlIO-via-QuotedPrint            noarch  0.09-4.el9                                   almalinux9-appstream   21 k
+ perl-Pod-Escapes                       noarch  1:1.07-460.el9                               almalinux9-appstream   20 k
+ perl-Pod-Html                          noarch  1.25-484.el9_8                               almalinux9-appstream   25 k
+ perl-Pod-Perldoc                       noarch  3.28.01-461.el9                              almalinux9-appstream   83 k
+ perl-Pod-Simple                        noarch  1:3.42-4.el9                                 almalinux9-appstream  215 k
+ perl-Pod-Usage                         noarch  4:2.01-4.el9                                 almalinux9-appstream   40 k
+ perl-Scalar-List-Utils                 x86_64  4:1.56-462.el9                               almalinux9-appstream   70 k
+ perl-SelfLoader                        noarch  1.26-484.el9_8                               almalinux9-appstream   20 k
+ perl-Socket                            x86_64  4:2.031-4.el9                                almalinux9-appstream   54 k
+ perl-Storable                          x86_64  1:3.21-460.el9                               almalinux9-appstream   95 k
+ perl-Term-ANSIColor                    noarch  5.01-461.el9                                 almalinux9-appstream   48 k
+ perl-Term-Cap                          noarch  1.17-460.el9                                 almalinux9-appstream   22 k
+ perl-Test                              noarch  1.31-484.el9_8                               almalinux9-appstream   27 k
+ perl-Test-Harness                      noarch  1:3.42-461.el9                               almalinux9-appstream  267 k
+ perl-Text-Balanced                     noarch  2.04-4.el9                                   almalinux9-appstream   47 k
+ perl-Text-ParseWords                   noarch  3.30-460.el9                                 almalinux9-appstream   16 k
+ perl-Text-Tabs+Wrap                    noarch  2013.0523-460.el9                            almalinux9-appstream   22 k
+ perl-Time-HiRes                        x86_64  4:1.9764-462.el9                             almalinux9-appstream   57 k
+ perl-Time-Local                        noarch  2:1.300-7.el9                                almalinux9-appstream   33 k
+ perl-URI                               noarch  5.09-3.el9                                   almalinux9-appstream  108 k
+ perl-Unicode-Collate                   x86_64  1.29-4.el9                                   almalinux9-appstream  732 k
+ perl-Unicode-Normalize                 x86_64  1.27-461.el9                                 almalinux9-appstream   90 k
+ perl-bignum                            noarch  0.51-460.el9                                 almalinux9-appstream   42 k
+ perl-constant                          noarch  1.33-461.el9                                 almalinux9-appstream   23 k
+ perl-devel                             x86_64  4:5.32.1-484.el9_8                           almalinux9-appstream  659 k
+ perl-encoding                          x86_64  4:3.00-462.el9                               almalinux9-appstream   62 k
+ perl-interpreter                       x86_64  4:5.32.1-484.el9_8                           almalinux9-appstream   69 k
+ perl-libnet                            noarch  3.13-4.el9                                   almalinux9-appstream  125 k
+ perl-libs                              x86_64  4:5.32.1-484.el9_8                           almalinux9-appstream  2.0 M
+ perl-macros                            noarch  4:5.32.1-484.el9_8                           almalinux9-appstream  9.3 k
+ perl-open                              noarch  1.12-484.el9_8                               almalinux9-appstream   15 k
+ perl-parent                            noarch  1:0.238-460.el9                              almalinux9-appstream   14 k
+ perl-perlfaq                           noarch  5.20210520-1.el9                             almalinux9-appstream  372 k
+ perl-podlators                         noarch  1:4.14-460.el9                               almalinux9-appstream  111 k
+ perl-srpm-macros                       noarch  1-41.el9                                     almalinux9-appstream  8.1 k
+ perl-threads                           x86_64  1:2.25-460.el9                               almalinux9-appstream   57 k
+ perl-threads-shared                    x86_64  1.61-460.el9                                 almalinux9-appstream   44 k
+ perl-utils                             noarch  5.32.1-484.el9_8                             almalinux9-appstream   54 k
+ perl-version                           x86_64  7:0.99.28-4.el9                              almalinux9-appstream   62 k
+ php                                    x86_64  8.0.30-8.el9_8                               almalinux9-appstream  9.6 k
+ php-cli                                x86_64  8.0.30-8.el9_8                               almalinux9-appstream  3.1 M
+ php-common                             x86_64  8.0.30-8.el9_8                               almalinux9-appstream  668 k
+     replacing  php-json.x86_64 7.2.24-1.module_el8.3.0+2010+7c76a223
+ php-gd                                 x86_64  8.0.30-8.el9_8                               almalinux9-appstream   41 k
+ php-gmp                                x86_64  8.0.30-8.el9_8                               almalinux9-appstream   31 k
+ php-mbstring                           x86_64  8.0.30-8.el9_8                               almalinux9-appstream  469 k
+ php-mysqlnd                            x86_64  8.0.30-8.el9_8                               almalinux9-appstream  151 k
+ php-pdo                                x86_64  8.0.30-8.el9_8                               almalinux9-appstream   82 k
+ php-pecl-zip                           x86_64  1.19.2-6.el9                                 almalinux9-appstream   54 k
+ php-xml                                x86_64  8.0.30-8.el9_8                               almalinux9-appstream  134 k
+ pigz                                   x86_64  2.8-1.el9                                    almalinux9-baseos      93 k
+ pinentry                               x86_64  1.1.1-8.el9                                  almalinux9-appstream   65 k
+ pkgconf                                x86_64  1.7.3-10.el9                                 almalinux9-baseos      40 k
+ pkgconf-m4                             noarch  1.7.3-10.el9                                 almalinux9-baseos      14 k
+ pkgconf-pkg-config                     x86_64  1.7.3-10.el9                                 almalinux9-baseos     9.9 k
+ plymouth                               x86_64  0.9.5-8.20210331git1ea1020.el9.alma.1        almalinux9-appstream  107 k
+ plymouth-core-libs                     x86_64  0.9.5-8.20210331git1ea1020.el9.alma.1        almalinux9-appstream   94 k
+ plymouth-scripts                       x86_64  0.9.5-8.20210331git1ea1020.el9.alma.1        almalinux9-appstream   14 k
+ policycoreutils                        x86_64  3.6-5.el9                                    almalinux9-baseos     205 k
+ policycoreutils-python-utils           noarch  3.6-5.el9                                    almalinux9-appstream   69 k
+ polkit                                 x86_64  0.117-14.el9                                 almalinux9-baseos     145 k
+ polkit-libs                            x86_64  0.117-14.el9                                 almalinux9-baseos     8.3 M
+ polkit-pkla-compat                     x86_64  0.1-21.el9                                   almalinux9-baseos      44 k
+ popt                                   x86_64  1.18-8.el9                                   almalinux9-baseos      58 k
+ postfix                                x86_64  2:3.5.25-3.el9_8                             almalinux9-appstream  1.4 M
+ postfix-ldap                           x86_64  2:3.5.25-3.el9_8                             almalinux9-appstream   39 k
+ postfix-mysql                          x86_64  2:3.5.25-3.el9_8                             almalinux9-appstream   24 k
+ postfix-pcre                           x86_64  2:3.5.25-3.el9_8                             almalinux9-appstream   21 k
+ procps-ng                              x86_64  3.3.17-14.el9                                almalinux9-baseos     332 k
+ psmisc                                 x86_64  23.4-3.el9                                   almalinux9-baseos     226 k
+ publicsuffix-list-dafsa                noarch  20210518-3.el9                               almalinux9-baseos      57 k
+ python-rpm-macros                      noarch  3.9-54.el9                                   almalinux9-appstream   14 k
+ python-srpm-macros                     noarch  3.9-54.el9                                   almalinux9-appstream   16 k
+ python3-PyMySQL                        noarch  0.10.1-6.el9                                 almalinux9-appstream   93 k
+ python3-audit                          x86_64  3.1.5-8.el9                                  almalinux9-appstream   82 k
+ python3-cffi                           x86_64  1.14.5-5.el9                                 almalinux9-baseos     241 k
+ python3-chardet                        noarch  4.0.0-5.el9                                  almalinux9-baseos     209 k
+ python3-configobj                      noarch  5.0.6-25.el9                                 almalinux9-appstream   62 k
+ python3-cryptography                   x86_64  36.0.1-5.el9_6                               almalinux9-baseos     1.2 M
+ python3-dateutil                       noarch  1:2.9.0.post0-1.el9_7                        almalinux9-baseos     290 k
+ python3-dbus                           x86_64  1.2.18-2.el9                                 almalinux9-baseos     132 k
+ python3-decorator                      noarch  4.4.2-6.el9                                  almalinux9-baseos      27 k
+ python3-dnf                            noarch  4.14.0-34.el9_8.alma.1                       almalinux9-baseos     412 k
+ python3-dnf-plugins-core               noarch  4.3.0-26.el9                                 almalinux9-baseos     245 k
+ python3-firewall                       noarch  1.3.4-20.el9_8                               almalinux9-baseos     355 k
+ python3-gobject-base                   x86_64  3.40.1-6.el9                                 almalinux9-baseos     176 k
+ python3-gpg                            x86_64  1.15.1-6.el9                                 almalinux9-baseos     261 k
+ python3-hawkey                         x86_64  0.69.0-18.el9.alma.1                         almalinux9-baseos     101 k
+ python3-idna                           noarch  2.10-8.el9_8                                 almalinux9-baseos      97 k
+ python3-iniparse                       noarch  0.4-45.el9                                   almalinux9-baseos      42 k
+ python3-libcomps                       x86_64  0.1.18-1.el9                                 almalinux9-baseos      48 k
+ python3-libdnf                         x86_64  0.69.0-18.el9.alma.1                         almalinux9-baseos     771 k
+ python3-libs                           x86_64  3.9.25-7.el9_8.3                             almalinux9-baseos     7.5 M
+     replacing  platform-python-pip.noarch 9.0.3-24.el8
+     replacing  platform-python-setuptools.noarch 39.2.0-9.el8_10
+ python3-libselinux                     x86_64  3.6-3.el9                                    almalinux9-appstream  186 k
+ python3-libsemanage                    x86_64  3.6-5.el9_6                                  almalinux9-appstream   78 k
+ python3-linux-procfs                   noarch  0.7.4-2.el9                                  almalinux9-baseos      29 k
+ python3-newt                           x86_64  0.52.21-11.el9                               almalinux9-appstream   40 k
+ python3-nftables                       x86_64  1:1.0.9-9.el9_8                              almalinux9-baseos      42 k
+ python3-perf                           x86_64  5.14.0-687.56.1.el9_8                        almalinux9-appstream  2.6 M
+ python3-pip                            noarch  21.3.1-2.el9_8                               almalinux9-appstream  1.7 M
+ python3-pip-wheel                      noarch  21.3.1-2.el9_8                               almalinux9-baseos     1.1 M
+ python3-ply                            noarch  3.11-14.el9                                  almalinux9-baseos     103 k
+ python3-policycoreutils                noarch  3.6-5.el9                                    almalinux9-appstream  2.0 M
+ python3-pycparser                      noarch  2.20-6.el9                                   almalinux9-baseos     124 k
+ python3-pycurl                         x86_64  7.43.0.6-8.el9                               almalinux9-appstream  173 k
+ python3-pyparsing                      noarch  2.4.7-9.el9                                  almalinux9-baseos     149 k
+ python3-pysocks                        noarch  1.7.1-12.el9                                 almalinux9-baseos      34 k
+ python3-pyudev                         noarch  0.22.0-6.el9                                 almalinux9-baseos      76 k
+ python3-pyxattr                        x86_64  0.7.2-4.el9                                  almalinux9-crb         34 k
+ python3-pyyaml                         x86_64  5.4.1-6.el9                                  almalinux9-baseos     190 k
+ python3-requests                       noarch  2.25.1-10.el9_6                              almalinux9-baseos     115 k
+ python3-rpm                            x86_64  4.16.1.3-40.el9                              almalinux9-baseos      64 k
+ python3-rpm-macros                     noarch  3.9-54.el9                                   almalinux9-appstream  9.1 k
+ python3-setools                        x86_64  4.4.4-1.el9                                  almalinux9-baseos     551 k
+ python3-setuptools                     noarch  53.0.0-15.el9                                almalinux9-baseos     831 k
+ python3-setuptools-wheel               noarch  53.0.0-15.el9                                almalinux9-baseos     467 k
+ python3-six                            noarch  1.15.0-9.el9                                 almalinux9-baseos      36 k
+ python3-systemd                        x86_64  234-19.el9                                   almalinux9-baseos      82 k
+ python3-unbound                        x86_64  1.24.2-3.el9_8.8                             almalinux9-appstream  100 k
+ python3-urllib3                        noarch  1.26.5-8.el9_8                               almalinux9-baseos     191 k
+ qemu-guest-agent                       x86_64  17:10.1.0-17.el9_8.5.alma.1                  almalinux9-appstream  497 k
+ qt5-srpm-macros                        noarch  5.15.9-1.el9                                 almalinux9-appstream  7.8 k
+ readline                               x86_64  8.1-4.el9                                    almalinux9-baseos     211 k
+ readonly-root                          noarch  10.11.8-4.el9                                almalinux9-baseos      13 k
+ redhat-rpm-config                      noarch  210-1.el9.alma.1                             almalinux9-appstream   64 k
+ rootfiles                              noarch  8.1-35.el9                                   almalinux9-baseos     9.3 k
+ rpcgen                                 x86_64  1.4-9.el9                                    almalinux9-appstream   54 k
+ rpm                                    x86_64  4.16.1.3-40.el9                              almalinux9-baseos     484 k
+ rpm-build-libs                         x86_64  4.16.1.3-40.el9                              almalinux9-baseos      88 k
+ rpm-libs                               x86_64  4.16.1.3-40.el9                              almalinux9-baseos     307 k
+ rpm-plugin-selinux                     x86_64  4.16.1.3-40.el9                              almalinux9-baseos      15 k
+ rpm-plugin-systemd-inhibit             x86_64  4.16.1.3-40.el9                              almalinux9-appstream   15 k
+ rsync                                  x86_64  3.2.7-1.el9_8                                almalinux9-baseos     449 k
+ rsync-daemon                           noarch  3.2.7-1.el9_8                                almalinux9-appstream  9.5 k
+ rsyslog                                x86_64  8.2510.0-2.el9_8.2                           almalinux9-appstream  821 k
+ rust-srpm-macros                       noarch  17-4.el9                                     almalinux9-appstream  9.2 k
+ sed                                    x86_64  4.8-10.el9                                   almalinux9-baseos     295 k
+ selinux-policy                         noarch  38.1.75-2.el9_8.1                            almalinux9-baseos      34 k
+ selinux-policy-targeted                noarch  38.1.75-2.el9_8.1                            almalinux9-baseos     6.5 M
+ setup                                  noarch  2.13.7-10.el9                                almalinux9-baseos     140 k
+ sg3_utils                              x86_64  1.47-10.el9_8.1                              almalinux9-baseos     936 k
+ sg3_utils-libs                         x86_64  1.47-10.el9_8.1                              almalinux9-baseos     101 k
+ shadow-utils                           x86_64  2:4.9-16.el9                                 almalinux9-baseos     1.1 M
+ shared-mime-info                       x86_64  2.1-5.el9                                    almalinux9-baseos     372 k
+ slang                                  x86_64  2.3.2-11.el9                                 almalinux9-baseos     373 k
+ snappy                                 x86_64  1.1.8-8.el9                                  almalinux9-baseos      34 k
+ sqlite                                 x86_64  3.34.1-11.el9_8                              almalinux9-appstream  758 k
+ sqlite-libs                            x86_64  3.34.1-11.el9_8                              almalinux9-baseos     643 k
+ squashfs-tools                         x86_64  4.4-10.git1.el9                              almalinux9-baseos     164 k
+ sscg                                   x86_64  4.0.3-2.el9                                  almalinux9-appstream   49 k
+ sudo                                   x86_64  1.9.17p2-3.el9_8.3                           almalinux9-baseos     1.3 M
+ systemd                                x86_64  252-67.el9_8.6.alma.1                        almalinux9-baseos     4.0 M
+     replacing  timedatex.x86_64 0.5-3.el8
+ systemd-container                      x86_64  252-67.el9_8.6.alma.1                        almalinux9-baseos     540 k
+ systemd-libs                           x86_64  252-67.el9_8.6.alma.1                        almalinux9-baseos     637 k
+ systemd-pam                            x86_64  252-67.el9_8.6.alma.1                        almalinux9-baseos     244 k
+ systemd-udev                           x86_64  252-67.el9_8.6.alma.1                        almalinux9-baseos     1.9 M
+ systemtap-sdt-devel                    x86_64  5.4-4.el9                                    almalinux9-appstream   68 k
+ tar                                    x86_64  2:1.34-13.el9_8                              almalinux9-baseos     878 k
+ teamd                                  x86_64  1.31-16.el9_1                                almalinux9-baseos     112 k
+ tpm2-tss                               x86_64  3.2.3-1.el9                                  almalinux9-baseos     594 k
+ tuned                                  noarch  2.27.0-2.el9_8                               almalinux9-baseos     369 k
+ tzdata                                 noarch  2026e-1.el9_8                                almalinux9-baseos     499 k
+ unbound-libs                           x86_64  1.24.2-3.el9_8.8                             almalinux9-baseos     580 k
+ unzip                                  x86_64  6.0-60.el9                                   almalinux9-baseos     180 k
+ util-linux                             x86_64  2.37.4-25.el9                                almalinux9-baseos     2.2 M
+ util-linux-user                        x86_64  2.37.4-25.el9                                almalinux9-baseos      28 k
+ vim-minimal                            x86_64  2:8.2.2637-26.el9_8.23                       almalinux9-baseos     675 k
+ virt-what                              x86_64  1.27-2.el9                                   almalinux9-baseos      41 k
+ which                                  x86_64  2.21-30.el9_6                                almalinux9-baseos      40 k
+ wpa_supplicant                         x86_64  1:2.11-2.el9                                 almalinux9-baseos     1.7 M
+ xfsprogs                               x86_64  6.4.0-7.el9                                  almalinux9-baseos     1.1 M
+ xkeyboard-config                       noarch  2.33-2.el9                                   almalinux9-appstream  783 k
+ xz                                     x86_64  5.2.5-8.el9_0                                almalinux9-baseos     214 k
+ xz-libs                                x86_64  5.2.5-8.el9_0                                almalinux9-baseos      92 k
+ yum                                    noarch  4.14.0-34.el9_8.alma.1                       almalinux9-baseos      89 k
+ zip                                    x86_64  3.0-35.el9                                   almalinux9-baseos     263 k
+ zlib                                   x86_64  1.2.11-40.el9                                almalinux9-baseos      90 k
+Installing dependencies:
+ almalinux-gpg-keys                     x86_64  9.8-1.el9                                    almalinux9-baseos     9.7 k
+ almalinux-repos                        x86_64  9.8-1.el9                                    almalinux9-baseos     9.8 k
+ alternatives                           x86_64  1.24-2.el9                                   almalinux9-baseos      38 k
+ annobin                                x86_64  12.98-2.el9                                  almalinux9-appstream  1.1 M
+ attr                                   x86_64  2.6.0-1.el9_8                                almalinux9-baseos      62 k
+ cpp                                    x86_64  11.5.0-14.el9.alma.1                         almalinux9-appstream   11 M
+ dbus-broker                            x86_64  28-9.el9_8                                   almalinux9-baseos     169 k
+ fonts-srpm-macros                      noarch  1:2.0.5-7.el9.1                              almalinux9-appstream   27 k
+ gcc-plugin-annobin                     x86_64  11.5.0-14.el9.alma.1                         almalinux9-appstream   36 k
+ glibc-devel                            x86_64  2.34-283.el9_8                               almalinux9-appstream   37 k
+ glibc-headers                          x86_64  2.34-283.el9_8                               almalinux9-appstream  443 k
+ graphite2                              x86_64  1.3.14-9.el9                                 almalinux9-baseos      94 k
+ harfbuzz                               x86_64  2.7.4-10.el9                                 almalinux9-baseos     623 k
+ httpd-core                             x86_64  2.4.62-13.el9_8.6                            almalinux9-appstream  1.4 M
+ hwloc-libs                             x86_64  2.4.1-6.el9_7                                almalinux9-baseos     2.1 M
+ inih                                   x86_64  49-6.el9                                     almalinux9-baseos      17 k
+ kernel-headers                         x86_64  5.14.0-687.56.1.el9_8                        almalinux9-appstream  2.6 M
+ kernel-modules-core                    x86_64  5.14.0-687.56.1.el9_8                        almalinux9-baseos      31 M
+ kernel-srpm-macros                     noarch  1.0-14.el9                                   almalinux9-appstream   14 k
+ keyutils                               x86_64  1.6.3-1.el9                                  almalinux9-baseos      71 k
+ langpacks-core-font-en                 noarch  3.0-16.el9                                   almalinux9-appstream  9.4 k
+ libbabeltrace                          x86_64  1.5.8-10.el9                                 almalinux9-appstream  186 k
+ libbrotli                              x86_64  1.0.9-10.el9_8                               almalinux9-baseos     312 k
+ libcbor                                x86_64  0.7.0-5.el9                                  almalinux9-baseos      56 k
+ libeconf                               x86_64  0.4.1-7.el9_8                                almalinux9-baseos      26 k
+ libfido2                               x86_64  1.13.0-2.el9                                 almalinux9-baseos      97 k
+ libmpc                                 x86_64  1.2.1-4.el9                                  almalinux9-appstream   61 k
+ libtool-ltdl                           x86_64  2.4.6-46.el9                                 almalinux9-baseos      34 k
+ libtraceevent                          x86_64  1.8.4-2.el9                                  almalinux9-baseos     245 k
+ liburing                               x86_64  2.12-1.el9                                   almalinux9-appstream   42 k
+ libxcrypt-devel                        x86_64  4.4.18-3.el9                                 almalinux9-appstream   28 k
+ linux-firmware-whence                  noarch  20260827-161.3.el9_8                         almalinux9-baseos     110 k
+ llvm-filesystem                        x86_64  21.1.8-2.el9                                 almalinux9-appstream   13 k
+ llvm-libs                              x86_64  21.1.8-2.el9                                 almalinux9-appstream   31 M
+ lmdb-libs                              x86_64  0.9.29-3.el9                                 almalinux9-baseos      60 k
+ lua-srpm-macros                        noarch  1-6.el9                                      almalinux9-appstream  8.4 k
+ mysql-common                           x86_64  8.0.46-1.el9_8                               almalinux9-appstream   67 k
+ mysql-libs                             x86_64  8.0.46-1.el9_8                               almalinux9-appstream  1.2 M
+ mysql-selinux                          noarch  1.0.14-1.el9_6                               almalinux9-appstream   36 k
+ openssl-fips-provider                  x86_64  1:3.5.8-2.el9_8                              almalinux9-baseos     813 k
+ pcre2-syntax                           noarch  10.40-7.el9_8                                almalinux9-baseos     140 k
+ perl-DBD-MariaDB                       x86_64  1.21-17.el9                                  almalinux9-appstream  149 k
+ protobuf-c                             x86_64  1.3.3-13.el9                                 almalinux9-baseos      34 k
+ pyproject-srpm-macros                  noarch  1.18.5-1.el9                                 almalinux9-appstream   12 k
+ python3-distro                         noarch  1.5.0-7.el9                                  almalinux9-appstream   36 k
+ python3-gobject-base-noarch            noarch  3.40.1-6.el9                                 almalinux9-baseos     152 k
+ python3-inotify                        noarch  0.9.6-25.el9                                 almalinux9-baseos      52 k
+ systemd-boot-unsigned                  x86_64  252-67.el9_8.6.alma.1                        almalinux9-appstream  142 k
+ systemd-rpm-macros                     noarch  252-67.el9_8.6.alma.1                        almalinux9-baseos      32 k
+ systemtap-sdt-dtrace                   x86_64  5.4-4.el9                                    almalinux9-appstream   69 k
+ userspace-rcu                          x86_64  0.12.1-6.el9                                 almalinux9-baseos     104 k
+ xml-common                             noarch  0.6.3-58.el9                                 almalinux9-appstream   31 k
+Installing weak dependencies:
+ gawk-all-langpacks                     x86_64  5.1.0-6.el9_8.1                              almalinux9-appstream  206 k
+ gcc                                    x86_64  11.5.0-14.el9.alma.1                         almalinux9-appstream   32 M
+ libcap-ng-python3                      x86_64  0.8.2-7.el9                                  almalinux9-appstream   29 k
+ libxcrypt-compat                       x86_64  4.4.18-3.el9                                 almalinux9-appstream   88 k
+ mod_lua                                x86_64  2.4.62-13.el9_8.6                            almalinux9-appstream   60 k
+ php-opcache                            x86_64  8.0.30-8.el9_8                               almalinux9-appstream  511 k
+ python-unversioned-command             noarch  3.9.25-7.el9_8.3                             almalinux9-appstream  9.2 k
+Removing:
+ bind-export-libs                       x86_64  32:9.11.36-16.el8_10.16                      @System               3.0 M
+ drpm                                   x86_64  0.4.1-3.el8                                  @System               136 k
+ fipscheck                              x86_64  1.5.0-4.el8                                  @System                47 k
+ fipscheck-lib                          x86_64  1.5.0-4.el8                                  @System                12 k
+ iptables                               x86_64  1.8.5-11.el8_9                               @System               1.9 M
+ iptables-ebtables                      x86_64  1.8.5-11.el8_9                               @System                14 k
+ iwl3945-firmware                       noarch  15.32.2.9-145.el8_10.1                       @System               606 k
+ iwl4965-firmware                       noarch  228.61.2.24-145.el8_10.1                     @System               643 k
+ iwl6000-firmware                       noarch  9.221.4.1-145.el8_10.1                       @System               903 k
+ libcgroup                              x86_64  0.41-19.el8                                  @System               136 k
+ libcroco                               x86_64  0.6.12-4.el8_2.1                             @System               323 k
+ libidn                                 x86_64  1.34-5.el8                                   @System               696 k
+ libmodulemd1                           x86_64  1.8.16-0.2.13.0.1                            @System               530 k
+ make-devel                             x86_64  1:4.2.1-11.el8                               @System               2.8 k
+ mozjs60                                x86_64  60.9.0-4.el8                                 @System                30 M
+ ncurses-compat-libs                    x86_64  6.1-10.20180224.el8                          @System               1.0 M
+ network-scripts                        x86_64  10.00.19-1.el8_10                            @System               173 k
+ perl-B-Debug                           noarch  1.26-2.el8                                   @System                41 k
+ python2                                x86_64  2.7.18-17.module_el8.10.0+3783+2756348e.alma @System                80 k
+ python2-PyMySQL                        noarch  0.8.0-10.module_el8.6.0+2781+fed64c13        @System               743 k
+ python2-backports                      x86_64  1.0-16.module_el8.6.0+2781+fed64c13          @System               638  
+ python2-backports-ssl_match_hostname   noarch  3.5.0.1-12.module_el8.6.0+2781+fed64c13      @System                18 k
+ python2-chardet                        noarch  3.0.4-10.module_el8.6.0+2781+fed64c13        @System               906 k
+ python2-idna                           noarch  2.5-7.module_el8.6.0+2781+fed64c13           @System               563 k
+ python2-ipaddress                      noarch  1.0.18-6.module_el8.6.0+2781+fed64c13        @System               228 k
+ python2-libs                           x86_64  2.7.18-17.module_el8.10.0+3783+2756348e.alma @System                25 M
+ python2-pip                            noarch  9.0.3-19.module_el8.6.0+2781+fed64c13        @System               7.5 M
+ python2-pip-wheel                      noarch  9.0.3-19.module_el8.6.0+2781+fed64c13        @System               906 k
+ python2-pysocks                        noarch  1.6.8-6.module_el8.6.0+2781+fed64c13         @System                80 k
+ python2-pyyaml                         x86_64  3.12-16.module_el8.6.0+2781+fed64c13         @System               665 k
+ python2-requests                       noarch  2.20.0-4.module_el8.9.0+3640+8d3927b5        @System               396 k
+ python2-setuptools                     noarch  39.0.1-14.module_el8.10.0+3783+2756348e      @System               3.0 M
+ python2-setuptools-wheel               noarch  39.0.1-14.module_el8.10.0+3783+2756348e      @System               337 k
+ python2-six                            noarch  1.11.0-6.module_el8.6.0+2781+fed64c13        @System               102 k
+ python2-urllib3                        noarch  1.24.2-4.module_el8.10.0+3783+2756348e       @System               651 k
+ python3-IPy                            noarch  1.00-3.el8                                   @System               129 k
+ python3-schedutils                     x86_64  0.6-6.el8                                    @System                44 k
+ python3-slip                           noarch  0.6.4-13.el8                                 @System                60 k
+ python3-slip-dbus                      noarch  0.6.4-13.el8                                 @System                70 k
+ python3-syspurpose                     x86_64  1.28.44-1.el8_10.alma.1                      @System               171 k
+ python36                               x86_64  3.6.8-39.module_el8.10.0+3769+3838165b       @System                13 k
+ qrencode-libs                          x86_64  3.4.4-5.el8                                  @System               136 k
+ trousers                               x86_64  0.3.15-2.el8                                 @System               371 k
+ trousers-lib                           x86_64  0.3.15-2.el8                                 @System               475 k
+ ustr                                   x86_64  1.0.4-26.el8                                 @System               301 k
+Removing dependent packages:
+ network-scripts-team                   x86_64  1.31-4.el8                                   @System               6.6 k
+Downgrading:
+ libaio                                 x86_64  0.3.111-13.el9                               almalinux9-baseos      23 k
+ linux-firmware                         noarch  20260827-161.3.el9_8                         almalinux9-baseos     662 M
+ memstrack                              x86_64  0.2.4-1.el9                                  almalinux9-appstream   49 k
+ microcode_ctl                          noarch  4:20260210-1.20260812.1.el9_8                almalinux9-baseos      15 M
+
+Transaction Summary
+========================================================================================================================
+Install    156 Packages
+Upgrade    563 Packages
+Remove      46 Packages
+Downgrade    4 Packages
+
+Total size: 1.2 G
+Total download size: 1.1 G
+Downloading Packages:
+Check completed.
+Applying transaction workaround - IRB directory fix
+
+Applying transaction workaround - remove obsolete RPM GPG keys from RPM DB
+
+Applying transaction workaround - import trusted gpg keys to RPM DB
+
+Applying transaction workaround - import trusted gpg keys to RPM DB
+
+====> * check_initramfs_tasks
+        Inhibit the upgrade if conflicting "initramfs" tasks are detected
+==> Processing phase `Reports`
+====> * verify_check_results
+        Check all dialogs and notify that user needs to make some choices.
+====> * verify_check_results
+        Check all generated results messages and notify user about them.
+
+Debug output written to /var/log/leapp/leapp-preupgrade.log
+
+============================================================
+                      REPORT OVERVIEW                       
+============================================================
+
+HIGH and MEDIUM severity reports:
+    1. GRUB2 core will be automatically updated during the upgrade
+    2. Remote root logins globally allowed using password
+    3. Packages not signed by the distribution vendor found on the system
+    4. MariaDB (mariadb-server) has been detected on your system
+
+Reports summary:
+    Errors:                      0
+    Inhibitors:                  0
+    HIGH severity reports:       3
+    MEDIUM severity reports:     1
+    LOW severity reports:        1
+    INFO severity reports:       2
+
+Before continuing, review the full report below for details about discovered problems and possible remediation instructions:
+    A report has been generated at /var/log/leapp/leapp-report.txt
+    A report has been generated at /var/log/leapp/leapp-report.json
+
+============================================================
+                   END OF REPORT OVERVIEW                   
+============================================================
+
+Answerfile has been generated at /var/log/leapp/answerfile
+
+# rc=0

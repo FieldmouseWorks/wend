@@ -1,0 +1,4 @@
+$ rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubby --update-kernel=ALL --args=modprobe.blacklist=floppy; if grep -qw '^floppy' /proc/modules; then echo 'floppy is still loaded'; exit 1; fi; echo 'floppy not loaded'
+floppy not loaded
+
+# rc=0

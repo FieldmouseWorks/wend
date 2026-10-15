@@ -1,0 +1,3 @@
+$ sed -i'.bak' 's/^dhcp=dhclient//g' /usr/lib/NetworkManager/conf.d/10-dhcp-dhclient.conf
+
+# rc=0

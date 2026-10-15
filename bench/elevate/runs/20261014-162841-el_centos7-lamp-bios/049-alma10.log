@@ -1,0 +1,3 @@
+$ systemctl restart NetworkManager
+
+# rc=0

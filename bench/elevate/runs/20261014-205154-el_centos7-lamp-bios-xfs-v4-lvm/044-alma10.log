@@ -1,0 +1,36 @@
+$ yum install -y http://repo.almalinux.org/elevate/elevate-release-latest-el9.noarch.rpm
+AlmaLinux 9 - AppStream                          35 MB/s |  29 MB     00:00    
+AlmaLinux 9 - BaseOS                             42 MB/s |  46 MB     00:01    
+AlmaLinux 9 - Extras                             83 kB/s |  33 kB     00:00    
+Extra Packages for Enterprise Linux 7 - x86_64  9.3 MB/s |  17 MB     00:01    
+Extra Packages for Enterprise Linux 9 openh264  1.0 kB/s | 2.5 kB     00:02    
+elevate-release-latest-el9.noarch.rpm           725 kB/s | 9.6 kB     00:00    
+Dependencies resolved.
+================================================================================
+ Package               Architecture Version            Repository          Size
+================================================================================
+Installing:
+ elevate-release       noarch       1.0-3.el9          @commandline       9.6 k
+
+Transaction Summary
+================================================================================
+Install  1 Package
+
+Total size: 9.6 k
+Installed size: 3.5 k
+Downloading Packages:
+Running transaction check
+Transaction check succeeded.
+Running transaction test
+Transaction test succeeded.
+Running transaction
+  Preparing        :                                                        1/1 
+  Installing       : elevate-release-1.0-3.el9.noarch                       1/1 
+  Verifying        : elevate-release-1.0-3.el9.noarch                       1/1 
+
+Installed:
+  elevate-release-1.0-3.el9.noarch                                              
+
+Complete!
+
+# rc=0

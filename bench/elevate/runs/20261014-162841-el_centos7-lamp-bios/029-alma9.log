@@ -1,0 +1,4 @@
+$ nmcli connection migrate
+Connection 'System eth0' (907cee6a-d098-4939-82e4-6de0631adac3) successfully migrated.
+
+# rc=0

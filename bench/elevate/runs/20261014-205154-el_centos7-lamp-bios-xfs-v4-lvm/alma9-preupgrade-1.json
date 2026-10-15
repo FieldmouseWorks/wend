@@ -1,0 +1,268 @@
+{
+  "entries": [
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "Limiting LVM device visibility and usage",
+            "url": "https://red.ht/limiting-lvm-devices-visibility-and-usage"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "While not required, switching to the LVM devices file from the LVM filter is possible using the following command. The command uses the existing LVM filter to create the system.devices file which is then used instead of the LVM filter. Before running the command, make sure that 'use_devicesfile=1' is set in /etc/lvm/lvm.conf.",
+            "type": "hint"
+          },
+          {
+            "context": [
+              "vgimportdevices"
+            ],
+            "type": "command"
+          }
+        ]
+      },
+      "key": "419ad408c11ef7e8e89a0fb83106988453f362d6",
+      "severity": "info",
+      "summary": "Beginning with RHEL 9, LVM devices file is used by default to select devices used by LVM. Since leapp detected the use of LVM filter in the /etc/lvm/lvm.conf configuration file, the configuration won't be modified to use devices file during the upgrade and the LVM filter will remain in use after the upgrade.",
+      "title": "LVM filter definition detected.",
+      "timeStamp": "2026-10-15T04:34:53.993256Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_lvm",
+      "id": "24dc821279a65cd999ead2f49d70f3a1fb353f9ce327ef5bfd07fb5ea54c1ebd",
+      "flags": [],
+      "tags": []
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "openssh-server"
+          },
+          {
+            "scheme": "file",
+            "title": "/etc/ssh/sshd_config"
+          }
+        ]
+      },
+      "key": "96da6937c25c6492e4f1228ee146795989fd3718",
+      "severity": "info",
+      "summary": "OpenSSH server configuration needs to be modified to contain Include directive for the RHEL9 to work properly and integrate with the other parts of the OS. The following snippet will be added to the /etc/ssh/sshd_config during the ApplicationsPhase: `Include /etc/ssh/sshd_config.d/*.conf`",
+      "title": "The upgrade will prepend the Include directive to OpenSSH sshd_config",
+      "timeStamp": "2026-10-15T04:34:54.080852Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "open_ssh_drop_in_directory_check",
+      "id": "3106c3a12dd53b59122b5c7ba20306ea5f7104c1fa3a58e94a7aa4f20fbc19a5",
+      "flags": [],
+      "tags": [
+        "authentication",
+        "security",
+        "network",
+        "services"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "key": "ac7030e05d2ee248d34f08a9fa040b352bc410a3",
+      "severity": "high",
+      "summary": "On legacy (BIOS) systems, GRUB2 core (located in the gap between the MBR and the first partition) cannot be updated during the rpm transaction and Leapp has to initiate the update running \"grub2-install\" after the transaction. No action is needed before the upgrade. After the upgrade, it is recommended to check the GRUB configuration.",
+      "title": "GRUB2 core will be automatically updated during the upgrade",
+      "timeStamp": "2026-10-15T04:34:54.305584Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_grub_core",
+      "id": "411096bd4141db41a1a0243371fed320226cd0f43435f7f3c8255fed7a7b8b59",
+      "flags": [],
+      "tags": [
+        "boot"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "Migrating to a RHEL 9 version of MariaDB",
+            "url": "https://access.redhat.com/articles/6743671"
+          }
+        ],
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "mariadb-server"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "Back up your data before proceeding with the upgrade and follow steps in the documentation section \"Migrating to a RHEL 9 version of MariaDB\" after the upgrade.",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "a0326f237a13f6a4ada2c6648d6c6387f5520de7",
+      "severity": "medium",
+      "summary": "MariaDB server component will be upgraded. Since RHEL-9 includes MariaDB server 10.5 by default, which is incompatible with 10.3 included in RHEL-8, it is necessary to proceed with additional steps for the complete upgrade of the MariaDB data.",
+      "title": "MariaDB (mariadb-server) has been detected on your system",
+      "timeStamp": "2026-10-15T04:34:54.421684Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "mariadb_check",
+      "id": "a483b924532e721088e14548c69d96ad752b07038e5ffa2cf53d90812968a9c9",
+      "flags": [],
+      "tags": [
+        "services"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "leapp-upgrade-el8toel9-deps"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp-data-almalinux"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp-upgrade-el8toel9"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp"
+          },
+          {
+            "scheme": "package",
+            "title": "python3-leapp"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp-deps"
+          },
+          {
+            "scheme": "repository",
+            "title": "elevate"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "You can file a request to add this repository to the scope of in-place upgrades by filing a support ticket",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "8e89e20c645cea600b240156071d81c64daab7ad",
+      "severity": "low",
+      "summary": "The following repositories with Red Hat-signed packages are unknown to Leapp:\n- elevate\nAnd the following packages installed from those repositories may not be upgraded:\n- leapp-upgrade-el8toel9-deps\n- leapp-data-almalinux\n- leapp-upgrade-el8toel9\n- leapp\n- python3-leapp\n- leapp-deps",
+      "title": "Some enabled RPM repositories are unknown to Leapp",
+      "timeStamp": "2026-10-15T04:34:54.565181Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_skipped_repositories",
+      "id": "a50ee2d4fa0adb9cf73b0cf49f12bee5584c75e1e6937cbd54856081a380a3da",
+      "flags": [],
+      "tags": [
+        "repository"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "key": "8fb81863f8413bd617c2a55b69b8e10ff03d7c72",
+      "severity": "info",
+      "summary": "SElinux relabeling will be scheduled as the status is permissive/enforcing.",
+      "title": "SElinux relabeling will be scheduled",
+      "timeStamp": "2026-10-15T04:34:57.017933Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_se_linux",
+      "id": "bfd7190b45294c9d1036b8fe8433431e04c187863ae4b2252b229bb1a4ac54aa",
+      "flags": [],
+      "tags": [
+        "selinux",
+        "security"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "Handling the migration of your custom and third-party applications",
+            "url": "https://red.ht/customize-rhel-upgrade-actors"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "The most simple solution that does not require additional knowledge about the upgrade process is the uninstallation of such packages before the upgrade and installing these (or their newer versions compatible with the target system) back after the upgrade. Also you can just try to upgrade the system on a testing machine (or after the full system backup) to see the result.\nHowever, it is common use case to migrate or upgrade installed third party packages together with the system during the in-place upgrade process. To examine how to customize the process to deal with such packages, follow the documentation in the attached link for more details.",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "13f0791ae5f19f50e7d0d606fb6501f91b1efb2c",
+      "severity": "high",
+      "summary": "The official solution for in-place upgrades contains instructions for the migration of packages signed by the vendor of the system distribution. Third-party content is not known to the upgrade process and it might need to be handled extra. Third-party packages may be removed automatically during the upgrade if they depend on official distribution content which is not present on the target system - therefore RPM dependencies of such packages cannot be satisfied and hence such packages cannot be installed on the target system.\n\nThe following packages have not been signed by the vendor of the distribution:\n    - kernel-workaround",
+      "title": "Packages not signed by the distribution vendor found on the system",
+      "timeStamp": "2026-10-15T04:34:57.466806Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "distribution_signed_rpm_check",
+      "id": "cf8713241e358d669d0808bcaef534b1d6499c901cf2ec17ac38c64de82d5212",
+      "flags": [],
+      "tags": [
+        "sanity"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "key": "5c729d77d060b671f037a5d75defec3ec3ff03dd",
+      "severity": "info",
+      "summary": "User has asserted all VDO devices on the system have been successfully converted to LVM management or no VDO devices are present.",
+      "title": "Skipping the VDO check of block devices",
+      "timeStamp": "2026-10-15T04:34:57.631342Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_vdo",
+      "id": "fcd6f2ebccc5a7ff0d0356d8d9d4a58b04f1308095ee873c09b9176350c2744c",
+      "flags": [],
+      "tags": [
+        "services",
+        "drivers"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "openssh-server"
+          },
+          {
+            "scheme": "file",
+            "title": "/etc/ssh/sshd_config"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "If you depend on remote root logins using passwords, consider setting up a different user for remote administration. Otherwise you can ignore this message.",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "e738f78bc8f3a84411a4210e3b609057139d1855",
+      "severity": "high",
+      "summary": "RHEL9 no longer allows remote root logins, but the server configuration explicitly overrides this default. The configuration file will not be updated and root is still going to be allowed to login with password. This is not recommended and considered as a security risk.",
+      "title": "Remote root logins globally allowed using password",
+      "timeStamp": "2026-10-15T04:34:57.904212Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "openssh_permit_root_login",
+      "id": "c000ed94f95e9f2b7adc87c513d1d8c5e826be0b963bcdbedbba6ea514d98dc3",
+      "flags": [],
+      "tags": [
+        "authentication",
+        "security",
+        "network",
+        "services"
+      ]
+    }
+  ],
+  "leapp_run_id": "0b4041d5-a36d-49da-a884-69ebcc7c44cf"
+}

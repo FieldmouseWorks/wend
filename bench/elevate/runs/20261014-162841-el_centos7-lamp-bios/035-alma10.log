@@ -1,0 +1,5 @@
+$ grep -H '^exclude=' /etc/yum.conf /etc/dnf/dnf.conf 2>/dev/null
+/etc/yum.conf:exclude=leapp,leapp-upgrade-el8toel9,python3-leapp,leapp-upgrade-el8toel9-fapolicyd,snactor
+/etc/dnf/dnf.conf:exclude=leapp,leapp-upgrade-el8toel9,python3-leapp,leapp-upgrade-el8toel9-fapolicyd,snactor
+
+# rc=0

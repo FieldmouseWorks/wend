@@ -1,0 +1,3 @@
+$ leapp answer --section check_vdo.confirm=True
+
+# rc=0

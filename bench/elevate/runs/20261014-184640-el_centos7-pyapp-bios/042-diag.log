@@ -1,0 +1,7 @@
+$ for f in /etc/sysconfig/network-scripts/ifcfg-*; do echo "## $f"; cat "$f"; done; nmcli -t connection show
+## /etc/sysconfig/network-scripts/ifcfg-*
+cat: '/etc/sysconfig/network-scripts/ifcfg-*': No such file or directory
+System eth0:ea0ea6bd-75b8-40f8-928a-4811baa2d29d:802-3-ethernet:eth0
+lo:16fe33a7-48cb-465f-b107-5ba01ef6c01e:loopback:lo
+
+# rc=0

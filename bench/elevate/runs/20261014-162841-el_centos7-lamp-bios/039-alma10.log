@@ -1,0 +1,4 @@
+$ rm -fr /root/tmp_leapp_py3; dnf clean all
+41 files removed
+
+# rc=0

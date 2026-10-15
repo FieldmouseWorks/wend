@@ -1,0 +1,219 @@
+{
+  "entries": [
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "Migrating to a RHEL 9 version of MariaDB",
+            "url": "https://access.redhat.com/articles/6743671"
+          }
+        ],
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "mariadb-server"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "Back up your data before proceeding with the upgrade and follow steps in the documentation section \"Migrating to a RHEL 9 version of MariaDB\" after the upgrade.",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "a0326f237a13f6a4ada2c6648d6c6387f5520de7",
+      "severity": "medium",
+      "summary": "MariaDB server component will be upgraded. Since RHEL-9 includes MariaDB server 10.5 by default, which is incompatible with 10.3 included in RHEL-8, it is necessary to proceed with additional steps for the complete upgrade of the MariaDB data.",
+      "title": "MariaDB (mariadb-server) has been detected on your system",
+      "timeStamp": "2026-10-15T02:46:57.908598Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "mariadb_check",
+      "id": "ea01080c0396915758d8e0b5179106c4d2c791e2cfdc9fc52afb605ce65edc55",
+      "flags": [],
+      "tags": [
+        "services"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "key": "8fb81863f8413bd617c2a55b69b8e10ff03d7c72",
+      "severity": "info",
+      "summary": "SElinux relabeling will be scheduled as the status is permissive/enforcing.",
+      "title": "SElinux relabeling will be scheduled",
+      "timeStamp": "2026-10-15T02:47:00.117001Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_se_linux",
+      "id": "a9795f25ac5c57bca91f6ad62e58c189eec4123a1ad648e878de421d23947bc2",
+      "flags": [],
+      "tags": [
+        "selinux",
+        "security"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "Handling the migration of your custom and third-party applications",
+            "url": "https://red.ht/customize-rhel-upgrade-actors"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "The most simple solution that does not require additional knowledge about the upgrade process is the uninstallation of such packages before the upgrade and installing these (or their newer versions compatible with the target system) back after the upgrade. Also you can just try to upgrade the system on a testing machine (or after the full system backup) to see the result.\nHowever, it is common use case to migrate or upgrade installed third party packages together with the system during the in-place upgrade process. To examine how to customize the process to deal with such packages, follow the documentation in the attached link for more details.",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "13f0791ae5f19f50e7d0d606fb6501f91b1efb2c",
+      "severity": "high",
+      "summary": "The official solution for in-place upgrades contains instructions for the migration of packages signed by the vendor of the system distribution. Third-party content is not known to the upgrade process and it might need to be handled extra. Third-party packages may be removed automatically during the upgrade if they depend on official distribution content which is not present on the target system - therefore RPM dependencies of such packages cannot be satisfied and hence such packages cannot be installed on the target system.\n\nThe following packages have not been signed by the vendor of the distribution:\n    - kernel-workaround",
+      "title": "Packages not signed by the distribution vendor found on the system",
+      "timeStamp": "2026-10-15T02:47:00.224945Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "distribution_signed_rpm_check",
+      "id": "1b98ddb3227e1f01dfe15ba70e395234525e9fcc7e373768c6619cb9cc630c59",
+      "flags": [],
+      "tags": [
+        "sanity"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "leapp-deps"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp-upgrade-el8toel9"
+          },
+          {
+            "scheme": "package",
+            "title": "python3-leapp"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp-upgrade-el8toel9-deps"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp-data-almalinux"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp"
+          },
+          {
+            "scheme": "repository",
+            "title": "elevate"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "You can file a request to add this repository to the scope of in-place upgrades by filing a support ticket",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "8e89e20c645cea600b240156071d81c64daab7ad",
+      "severity": "low",
+      "summary": "The following repositories with Red Hat-signed packages are unknown to Leapp:\n- elevate\nAnd the following packages installed from those repositories may not be upgraded:\n- leapp-deps\n- leapp-upgrade-el8toel9\n- python3-leapp\n- leapp-upgrade-el8toel9-deps\n- leapp-data-almalinux\n- leapp",
+      "title": "Some enabled RPM repositories are unknown to Leapp",
+      "timeStamp": "2026-10-15T02:47:00.446605Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_skipped_repositories",
+      "id": "cf5156c76d1b96230e0ed0c95e3cce01150a6b933b144fbb20e5e7bd76fee6c8",
+      "flags": [],
+      "tags": [
+        "repository"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "openssh-server"
+          },
+          {
+            "scheme": "file",
+            "title": "/etc/ssh/sshd_config"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "If you depend on remote root logins using passwords, consider setting up a different user for remote administration. Otherwise you can ignore this message.",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "e738f78bc8f3a84411a4210e3b609057139d1855",
+      "severity": "high",
+      "summary": "RHEL9 no longer allows remote root logins, but the server configuration explicitly overrides this default. The configuration file will not be updated and root is still going to be allowed to login with password. This is not recommended and considered as a security risk.",
+      "title": "Remote root logins globally allowed using password",
+      "timeStamp": "2026-10-15T02:47:01.570556Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "openssh_permit_root_login",
+      "id": "39ba7e5427e72026e75945887683057a4ab703df437dfcf2ffa92b80f0156450",
+      "flags": [],
+      "tags": [
+        "authentication",
+        "security",
+        "network",
+        "services"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "openssh-server"
+          },
+          {
+            "scheme": "file",
+            "title": "/etc/ssh/sshd_config"
+          }
+        ]
+      },
+      "key": "96da6937c25c6492e4f1228ee146795989fd3718",
+      "severity": "info",
+      "summary": "OpenSSH server configuration needs to be modified to contain Include directive for the RHEL9 to work properly and integrate with the other parts of the OS. The following snippet will be added to the /etc/ssh/sshd_config during the ApplicationsPhase: `Include /etc/ssh/sshd_config.d/*.conf`",
+      "title": "The upgrade will prepend the Include directive to OpenSSH sshd_config",
+      "timeStamp": "2026-10-15T02:47:04.105206Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "open_ssh_drop_in_directory_check",
+      "id": "1287e2ede94e21a2819bf0d9b6682041935d19e81482e301148c654157996314",
+      "flags": [],
+      "tags": [
+        "authentication",
+        "security",
+        "network",
+        "services"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "key": "ac7030e05d2ee248d34f08a9fa040b352bc410a3",
+      "severity": "high",
+      "summary": "On legacy (BIOS) systems, GRUB2 core (located in the gap between the MBR and the first partition) cannot be updated during the rpm transaction and Leapp has to initiate the update running \"grub2-install\" after the transaction. No action is needed before the upgrade. After the upgrade, it is recommended to check the GRUB configuration.",
+      "title": "GRUB2 core will be automatically updated during the upgrade",
+      "timeStamp": "2026-10-15T02:47:05.519896Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_grub_core",
+      "id": "bbfcf2b77e1130a0257c6f3e61dfcc5c2875d87b03f5bba80ae4b1d623e7be93",
+      "flags": [],
+      "tags": [
+        "boot"
+      ]
+    }
+  ],
+  "leapp_run_id": "83d8a03a-a58b-45b5-903c-1ec881361ea2"
+}

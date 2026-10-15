@@ -1,0 +1,186 @@
+{
+  "entries": [
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "leapp-data-almalinux"
+          },
+          {
+            "scheme": "package",
+            "title": "python3-leapp"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp-upgrade-el9toel10"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp-upgrade-el9toel10-deps"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp-deps"
+          },
+          {
+            "scheme": "package",
+            "title": "leapp"
+          },
+          {
+            "scheme": "repository",
+            "title": "elevate"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "You can file a request to add this repository to the scope of in-place upgrades by filing a support ticket",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "8e89e20c645cea600b240156071d81c64daab7ad",
+      "severity": "low",
+      "summary": "The following repositories with Red Hat-signed packages are unknown to Leapp:\n- elevate\nAnd the following packages installed from those repositories may not be upgraded:\n- leapp-data-almalinux\n- python3-leapp\n- leapp-upgrade-el9toel10\n- leapp-upgrade-el9toel10-deps\n- leapp-deps\n- leapp",
+      "title": "Some enabled RPM repositories are unknown to Leapp",
+      "timeStamp": "2026-10-15T03:30:27.882540Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_skipped_repositories",
+      "id": "005cadc4197a94ef86a8ca5284ee638705cccd0fe996bd8204681bc30690f17c",
+      "flags": [],
+      "tags": [
+        "repository"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "key": "8fb81863f8413bd617c2a55b69b8e10ff03d7c72",
+      "severity": "info",
+      "summary": "SElinux relabeling will be scheduled as the status is permissive/enforcing.",
+      "title": "SElinux relabeling will be scheduled",
+      "timeStamp": "2026-10-15T03:30:28.511313Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_se_linux",
+      "id": "42a8abfd7d1220c881469ac1c6cda0d762eb93ca93344fae1c1ceebb48860f47",
+      "flags": [],
+      "tags": [
+        "selinux",
+        "security"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "XFS supports bigtime feature",
+            "url": "https://red.ht/rhel-9-xfs-bigtime"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "Enable the \"bigtime\" feature on XFS v5 filesystems using the command:\n\txfs_admin -O bigtime=1 <filesystem_device>\n\nNote that for older XFS v5 filesystems this step can only be done offline right now (i.e. without the filesystem mounted).",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "efdddcf24f48b61eabf1bac6592f6abba92182b1",
+      "severity": "low",
+      "summary": "The XFS v5 filesystem format introduced the \"bigtime\" feature in RHEL 9, to support timestamps beyond the year 2038. XFS filesystems that do not have the \"bigtime\" feature enabled remain vulnerable to timestamp overflow issues. It is recommended to enable this feature on all XFS filesystems to ensure long-term compatibility and prevent potential failures. Following XFS file systems have not enabled the \"bigtime\" feature:\n    - /\n    - /boot",
+      "title": "Detected XFS filesystems without bigtime feature.",
+      "timeStamp": "2026-10-15T03:30:29.529296Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_old_xfs",
+      "id": "b3d6338ae3332b651ccc9562d21b59fba40fbd7d346f4f0fc955c0507e705a4b",
+      "flags": [],
+      "tags": []
+    },
+    {
+      "audience": "sysadmin",
+      "key": "ac7030e05d2ee248d34f08a9fa040b352bc410a3",
+      "severity": "high",
+      "summary": "On legacy (BIOS) systems, GRUB2 core (located in the gap between the MBR and the first partition) cannot be updated during the rpm transaction and Leapp has to initiate the update running \"grub2-install\" after the transaction. No action is needed before the upgrade. After the upgrade, it is recommended to check the GRUB configuration.",
+      "title": "GRUB2 core will be automatically updated during the upgrade",
+      "timeStamp": "2026-10-15T03:30:29.709143Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "check_grub_core",
+      "id": "e150be6f5b27ba68b38f0346b6eb3f366c80e24b2c924d511a0f77c46071e9fa",
+      "flags": [],
+      "tags": [
+        "boot"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "Migrating to a RHEL 10 without libdb",
+            "url": "https://access.redhat.com/articles/7099256"
+          }
+        ],
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "libdb"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "Back up your data before proceeding with the data upgrade/migration. For the conversion, the tool db_converter from the libdb-utils rpm could be used. This database format conversion must be performed before the system upgrade. The db_converter is not available in RHEL 10 systems. For more information, see the provided article.",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "fdc8f5b084e95922a4f59485a807a92cae2fc738",
+      "severity": "medium",
+      "summary": "Libdb was marked as deprecated in RHEL-9 and in RHEL-10 is not included anymore. There are a couple of alternatives in RHEL-10; the applications that depend on libdb will not work. Such applications must implement another type of backend storage. And migrate existing data to the new database format.",
+      "title": "Berkeley DB (libdb) has been detected on your system",
+      "timeStamp": "2026-10-15T03:30:31.060973Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "libdb_check",
+      "id": "fd68d80c7635c1dd3b606d9ccfd087e59fedc2d295ee1fc9783ddbf087eb862e",
+      "flags": [],
+      "tags": [
+        "services"
+      ]
+    },
+    {
+      "audience": "sysadmin",
+      "detail": {
+        "external": [
+          {
+            "title": "Migrating to a RHEL 10 version of MariaDB",
+            "url": "https://access.redhat.com/articles/7097551"
+          }
+        ],
+        "related_resources": [
+          {
+            "scheme": "package",
+            "title": "mariadb-server"
+          }
+        ],
+        "remediations": [
+          {
+            "context": "Back up your data before proceeding with the upgrade and follow steps in the documentation section \"Migrating to a RHEL 10 version of MariaDB\" after the upgrade. If the database has already been upgraded, meaning the system is already using MariaDB 10.11 then no further actions are required.",
+            "type": "hint"
+          }
+        ]
+      },
+      "key": "a0326f237a13f6a4ada2c6648d6c6387f5520de7",
+      "severity": "medium",
+      "summary": "MariaDB server component will be upgraded. Since RHEL-10 includes MariaDB server 10.11 by default, which is incompatible with 10.5 included in RHEL-9 as default stream, it is necessary to proceed with additional steps for the complete upgrade of the MariaDB data.",
+      "title": "MariaDB (mariadb-server) has been detected on your system",
+      "timeStamp": "2026-10-15T03:30:31.297976Z",
+      "hostname": "wend-vm.example.org",
+      "actor": "mariadb_check",
+      "id": "8db746906e7e046138b5f4e0085c7f992832820b860e2912461a56311f87b2fd",
+      "flags": [],
+      "tags": [
+        "services"
+      ]
+    }
+  ],
+  "leapp_run_id": "09e726dc-cfe8-4966-ab66-03a91e8fc1f2"
+}

@@ -1,0 +1,35 @@
+$ yum install -y http://repo.almalinux.org/elevate/elevate-release-latest-el8.noarch.rpm
+AlmaLinux 8 - BaseOS                             49 MB/s | 106 MB     00:02    
+AlmaLinux 8 - AppStream                          31 MB/s |  33 MB     00:01    
+AlmaLinux 8 - Extras                             56 kB/s |  24 kB     00:00    
+Extra Packages for Enterprise Linux 7 - x86_64  7.8 MB/s |  17 MB     00:02    
+elevate-release-latest-el8.noarch.rpm           469 kB/s | 9.9 kB     00:00    
+Dependencies resolved.
+================================================================================
+ Package               Architecture Version            Repository          Size
+================================================================================
+Installing:
+ elevate-release       noarch       1.0-3.el8          @commandline       9.9 k
+
+Transaction Summary
+================================================================================
+Install  1 Package
+
+Total size: 9.9 k
+Installed size: 3.5 k
+Downloading Packages:
+Running transaction check
+Transaction check succeeded.
+Running transaction test
+Transaction test succeeded.
+Running transaction
+  Preparing        :                                                        1/1 
+  Installing       : elevate-release-1.0-3.el8.noarch                       1/1 
+  Verifying        : elevate-release-1.0-3.el8.noarch                       1/1 
+
+Installed:
+  elevate-release-1.0-3.el8.noarch                                              
+
+Complete!
+
+# rc=0

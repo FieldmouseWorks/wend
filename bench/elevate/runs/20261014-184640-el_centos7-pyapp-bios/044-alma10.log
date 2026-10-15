@@ -1,0 +1,5 @@
+$ nmcli conn migrate
+Connection 'System eth0' (ea0ea6bd-75b8-40f8-928a-4811baa2d29d) successfully migrated.
+Connection 'lo' (16fe33a7-48cb-465f-b107-5ba01ef6c01e) successfully migrated.
+
+# rc=0

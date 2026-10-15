@@ -1,0 +1,12 @@
+$ rpm -qa | grep -E '\.el7([._]|$)|leapp|elevate' | sort
+elevate-release-1.0-3.el8.noarch
+kernel-3.10.0-1160.119.1.el7.x86_64
+kernel-3.10.0-1160.el7.x86_64
+leapp-0.18.0-2.el7.noarch
+leapp-data-almalinux-0.11-10.el8.20251222.noarch
+leapp-deps-el8-5.0.8-100.202411180921Z.f50e3474.main.el8.noarch
+leapp-repository-deps-el8-5.0.8-100.202411180921Z.f50e3474.main.el8.noarch
+leapp-upgrade-el7toel8-0.21.0-5.el7.elevate.5.noarch
+python2-leapp-0.18.0-2.el7.noarch
+
+# rc=0

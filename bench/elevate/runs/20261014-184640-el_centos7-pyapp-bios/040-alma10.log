@@ -1,0 +1,61 @@
+$ yum install -y leapp-upgrade leapp-data-almalinux
+ELevate                                         793 kB/s | 125 kB     00:00    
+Dependencies resolved.
+================================================================================
+ Package                       Arch    Version                   Repo      Size
+================================================================================
+Installing:
+ leapp-data-almalinux          noarch  0.11-10.el9.20251222      elevate  552 k
+ leapp-upgrade-el9toel10       noarch  1:0.24.0-1.el9.elevate.5  elevate  1.1 M
+Installing dependencies:
+ leapp                         noarch  0.20.0-2.el9              elevate   26 k
+ leapp-deps                    noarch  0.20.0-2.el9              elevate  8.3 k
+ leapp-upgrade-el9toel10-deps  noarch  1:0.24.0-1.el9.elevate.5  elevate   20 k
+ python3-leapp                 noarch  0.20.0-2.el9              elevate  187 k
+
+Transaction Summary
+================================================================================
+Install  6 Packages
+
+Total download size: 1.8 M
+Installed size: 34 M
+Downloading Packages:
+(1/6): leapp-0.20.0-2.el9.noarch.rpm            368 kB/s |  26 kB     00:00    
+(2/6): leapp-deps-0.20.0-2.el9.noarch.rpm        91 kB/s | 8.3 kB     00:00    
+(3/6): leapp-data-almalinux-0.11-10.el9.2025122 4.2 MB/s | 552 kB     00:00    
+(4/6): leapp-upgrade-el9toel10-0.24.0-1.el9.ele  11 MB/s | 1.1 MB     00:00    
+(5/6): leapp-upgrade-el9toel10-deps-0.24.0-1.el 200 kB/s |  20 kB     00:00    
+(6/6): python3-leapp-0.20.0-2.el9.noarch.rpm    2.2 MB/s | 187 kB     00:00    
+--------------------------------------------------------------------------------
+Total                                           8.4 MB/s | 1.8 MB     00:00     
+Running transaction check
+Transaction check succeeded.
+Running transaction test
+Transaction test succeeded.
+Running transaction
+  Preparing        :                                                        1/1 
+  Installing       : leapp-upgrade-el9toel10-deps-1:0.24.0-1.el9.elevate.   1/6 
+  Installing       : leapp-deps-0.20.0-2.el9.noarch                         2/6 
+  Installing       : python3-leapp-0.20.0-2.el9.noarch                      3/6 
+  Installing       : leapp-0.20.0-2.el9.noarch                              4/6 
+  Installing       : leapp-upgrade-el9toel10-1:0.24.0-1.el9.elevate.5.noa   5/6 
+  Installing       : leapp-data-almalinux-0.11-10.el9.20251222.noarch       6/6 
+  Running scriptlet: leapp-data-almalinux-0.11-10.el9.20251222.noarch       6/6 
+  Verifying        : leapp-0.20.0-2.el9.noarch                              1/6 
+  Verifying        : leapp-data-almalinux-0.11-10.el9.20251222.noarch       2/6 
+  Verifying        : leapp-deps-0.20.0-2.el9.noarch                         3/6 
+  Verifying        : leapp-upgrade-el9toel10-1:0.24.0-1.el9.elevate.5.noa   4/6 
+  Verifying        : leapp-upgrade-el9toel10-deps-1:0.24.0-1.el9.elevate.   5/6 
+  Verifying        : python3-leapp-0.20.0-2.el9.noarch                      6/6 
+
+Installed:
+  leapp-0.20.0-2.el9.noarch                                                     
+  leapp-data-almalinux-0.11-10.el9.20251222.noarch                              
+  leapp-deps-0.20.0-2.el9.noarch                                                
+  leapp-upgrade-el9toel10-1:0.24.0-1.el9.elevate.5.noarch                       
+  leapp-upgrade-el9toel10-deps-1:0.24.0-1.el9.elevate.5.noarch                  
+  python3-leapp-0.20.0-2.el9.noarch                                             
+
+Complete!
+
+# rc=0

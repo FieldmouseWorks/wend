@@ -1,0 +1,20 @@
+$ rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE}\t%{SUMMARY}\n'
+gpg-pubkey-8608cb71-4acc7220	gpg(CloudLinux Packager (CloudLinux Key) <packager@cloudlinux.com>)
+gpg-pubkey-fd431d51-4ae0493b	gpg(Red Hat, Inc. (release key 2) <security@redhat.com>)
+gpg-pubkey-28c12247-59e4bf5a	gpg(MariaDB Maxscale <maxscale@googlegroups.com>)
+gpg-pubkey-80935b88-65cb76aa	gpg(KernelCare Packages <packager@tuxcare.com>)
+gpg-pubkey-81b961a5-64106f70	gpg(ELevate <packager@almalinux.org>)
+gpg-pubkey-621e9f35-58adea78	gpg(Docker Release (CE rpm) <docker@docker.com>)
+gpg-pubkey-e3c94f49-54930db0	gpg(MariaDB Enterprise Signing Key <signing-key@mariadb.com>)
+gpg-pubkey-08b40d20-6581afc1	gpg(PostgreSQL RPM Repository <pgsql-pkg-yum@lists.postgresql.org>)
+gpg-pubkey-cdef74bb-53a89131	gpg(KernelCare <security@kernelcare.com>)
+gpg-pubkey-90e02617-677e6926	gpg(CloudLinux Extension Signer <cl-ext-signer@cloudlinux.com>)
+gpg-pubkey-be1229cf-5631588c	gpg(Microsoft (Release signing) <gpgsecurity@microsoft.com>)
+gpg-pubkey-3228467c-613798eb	gpg(Fedora (epel9) <epel@fedoraproject.org>)
+gpg-pubkey-b86b3716-61e69f29	gpg(AlmaLinux OS 9 <packager@almalinux.org>)
+gpg-pubkey-c74cd1d8-56fc10ab	gpg(MariaDB Signing Key <signing-key@mariadb.org>)
+gpg-pubkey-f748182b-6554862c	gpg(Microsoft Corporation - General GPG Signer <gpgsign@microsoft.com>)
+gpg-pubkey-2f86d6a1-5cf7cefb	gpg(Fedora EPEL (8) <epel@fedoraproject.org>)
+gpg-pubkey-8d50eb66-64061978	gpg(TuxCare (Software Signing Key) <packager@tuxcare.com>)
+
+# rc=0

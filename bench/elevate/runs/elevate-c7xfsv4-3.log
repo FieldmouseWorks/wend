@@ -1,0 +1,57 @@
+[elevate 20:52:38] setup: 'rm -f /etc/yum.repos.d/*.repo && curl -fsSo /etc/yum.repos.d/CentOS-Base.repo https://el7.repo.almal' -> rc=0
+[elevate 20:52:59] setup: 'yum clean all && yum upgrade -y' -> rc=0
+[elevate 20:55:42] alma8: 'yum install -y http://repo.almalinux.org/elevate/elevate-release-latest-el7.noarch.rpm' -> rc=0
+[elevate 20:56:04] alma8: 'yum install -y leapp-upgrade leapp-data-almalinux' -> rc=0
+[elevate 20:56:15] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 20:56:26] diag: 'for f in /etc/sysconfig/network-scripts/ifcfg-*; do echo "## $f"; cat "$f"; done; nmcli -t connectio' -> rc=0
+[elevate 20:57:29] alma8: 'leapp preupgrade' -> rc=1
+[elevate 20:57:41] alma8: 'echo PermitRootLogin yes >> /etc/ssh/sshd_config' -> rc=0
+[elevate 20:57:53] alma8: 'rmmod pata_acpi' -> rc=0
+[elevate 20:58:04] alma8: 'leapp answer --section remove_pam_pkcs11_module_check.confirm=True' -> rc=0
+[elevate 20:58:15] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 20:58:27] diag: 'for f in /etc/sysconfig/network-scripts/ifcfg-*; do echo "## $f"; cat "$f"; done; nmcli -t connectio' -> rc=0
+[elevate 21:02:35] alma8: 'leapp preupgrade' -> rc=0
+[elevate 21:11:01] alma8: 'leapp upgrade' -> rc=0
+[elevate 21:28:48] alma8: 'systemctl start mariadb; sleep 5; U=$(command -v mariadb-upgrade || command -v mysql_upgrade); $U -u' -> rc=0
+[elevate 21:29:57] alma8: degraded lost=['live:site', 'services'] net_kept=True kernel_current=True
+[elevate 21:30:08] alma9: "grep -H '^exclude=' /etc/yum.conf /etc/dnf/dnf.conf 2>/dev/null" -> rc=0
+[elevate 21:30:19] alma9: "sed -i '/^exclude=/{/leapp\\|elevate/d}' /etc/yum.conf /etc/dnf/dnf.conf" -> rc=0
+[elevate 21:30:29] alma9: "rpm -qa | grep -E '\\.el7([._]|$)|leapp|elevate' | sort" -> rc=0
+[elevate 21:30:40] alma9: 'dnf -y remove elevate-release-1.0-3.el8.noarch kernel-3.10.0-1160.119.1.el7.x86_64 kernel-3.10.0-116' -> rc=0
+[elevate 21:30:51] alma9: 'rm -fr /root/tmp_leapp_py3; dnf clean all' -> rc=0
+[elevate 21:31:02] alma9: "rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE}\\t%{SUMMARY}\\n'" -> rc=0
+[elevate 21:31:12] alma9: 'rpm -e gpg-pubkey-f4a80eb5-53a7ff4b' -> rc=0
+[elevate 21:32:03] alma9: 'yum install -y http://repo.almalinux.org/elevate/elevate-release-latest-el8.noarch.rpm' -> rc=0
+[elevate 21:32:14] alma9: 'yum install -y leapp-upgrade leapp-data-almalinux' -> rc=0
+[elevate 21:32:25] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 21:32:36] diag: 'for f in /etc/sysconfig/network-scripts/ifcfg-*; do echo "## $f"; cat "$f"; done; nmcli -t connectio' -> rc=0
+[elevate 21:33:17] alma9: 'leapp preupgrade' -> rc=1
+[elevate 21:33:28] alma9: "sed -i 's/^AllowZoneDrifting=.*/AllowZoneDrifting=no/' /etc/firewalld/firewalld.conf" -> rc=0
+[elevate 21:33:38] alma9: 'nmcli connection migrate' -> rc=0
+[elevate 21:33:49] alma9: 'leapp answer --section check_vdo.confirm=True' -> rc=0
+[elevate 21:34:00] alma9: 'leapp answer --section check_vdo.confirm=True' -> rc=0
+[elevate 21:34:11] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 21:34:21] diag: 'for f in /etc/sysconfig/network-scripts/ifcfg-*; do echo "## $f"; cat "$f"; done; nmcli -t connectio' -> rc=0
+[elevate 21:36:44] alma9: 'leapp preupgrade' -> rc=0
+[elevate 21:44:01] alma9: 'leapp upgrade' -> rc=0
+[elevate 21:58:32] alma9: 'systemctl start mariadb; sleep 5; U=$(command -v mariadb-upgrade || command -v mysql_upgrade); $U -u' -> rc=0
+[elevate 21:59:40] alma9: degraded lost=['live:boot_entries', 'live:site', 'network'] net_kept=True kernel_current=True
+[elevate 21:59:51] alma10: "grep -H '^exclude=' /etc/yum.conf /etc/dnf/dnf.conf 2>/dev/null" -> rc=0
+[elevate 22:00:02] alma10: "sed -i '/^exclude=/{/leapp\\|elevate/d}' /etc/yum.conf /etc/dnf/dnf.conf" -> rc=0
+[elevate 22:00:13] alma10: "rpm -qa | grep -E '\\.el8([._]|$)|leapp|elevate' | sort" -> rc=0
+[elevate 22:00:34] alma10: 'dnf -y remove elevate-release-1.0-3.el8.noarch kernel-4.18.0-553.173.1.el8_10.x86_64 kernel-core-4.1' -> rc=0
+[elevate 22:00:44] alma10: 'rm -fr /root/tmp_leapp_py3; dnf clean all' -> rc=0
+[elevate 22:00:55] alma10: "rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE}\\t%{SUMMARY}\\n'" -> rc=0
+[elevate 22:01:06] alma10: 'rpm -e gpg-pubkey-2f86d6a1-5cf7cefb' -> rc=0
+[elevate 22:01:27] alma10: 'yum install -y http://repo.almalinux.org/elevate/elevate-release-latest-el9.noarch.rpm' -> rc=0
+[elevate 22:01:38] alma10: 'yum install -y leapp-upgrade leapp-data-almalinux' -> rc=0
+[elevate 22:01:48] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 22:01:59] diag: 'for f in /etc/sysconfig/network-scripts/ifcfg-*; do echo "## $f"; cat "$f"; done; nmcli -t connectio' -> rc=0
+[elevate 22:02:30] alma10: 'leapp preupgrade' -> rc=1
+[elevate 22:02:42] alma10: 'nmcli conn migrate' -> rc=0
+[elevate 22:02:52] alma10: "sed -i'.bak' 's/^dhcp=dhclient//g' /usr/lib/NetworkManager/conf.d/10-dhcp-dhclient.conf" -> rc=0
+[elevate 22:03:03] alma10: 'systemctl restart NetworkManager' -> rc=0
+[elevate 22:03:14] lab: "rmmod floppy 2>/dev/null; echo 'blacklist floppy' > /etc/modprobe.d/elevate-lab-nofloppy.conf; grubb" -> rc=0
+[elevate 22:03:25] diag: 'for f in /etc/sysconfig/network-scripts/ifcfg-*; do echo "## $f"; cat "$f"; done; nmcli -t connectio' -> rc=0
+[elevate 22:03:56] alma10: 'leapp preupgrade' -> rc=1
+[elevate 22:04:00] done: reached alma9; 18 interventions; run in .wend/elevate/20261014-205154-el_centos7-lamp-bios-xfs-v4-lvm
