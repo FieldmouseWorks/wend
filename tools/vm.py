@@ -35,7 +35,7 @@ Networking is QEMU user mode: nothing on the host changes. The guest reaches the
 ssh is forwarded to a free port on 127.0.0.1 of its own, so one host runs several VM replays side by side (each guest
 takes 2 CPUs and 3 GB); they share the mirror shim and the installed boxes. A box is installed once per cache key
 (the box file, the adapter, and the part of this file the install runs: build_source), and a run that needs a box
-another run is installing waits for it. A run holds a shared lock on /var/tmp/wend-shim-<port>.users for each shim
+another run is installing waits for it. A run holds a shared lock on /var/tmp/wend-shim/<port>.users for each shim
 port the adapters name, for as long as it lives, so the shim isn't stopped under it: stop the shim only with
 `shim-stop`, which refuses while any run holds its port's lock. The lock follows the port, not $WEND_WORK: runs with
 different work directories still share the one shim listening there.
@@ -57,6 +57,7 @@ import shlex
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -179,12 +180,29 @@ class Locked:
 
 # Where the shim locks live: one per port, the same for every run on the host whatever its $WEND_WORK, since the
 # port is what runs share (the first run's shim serves them all). Read-only opens, so runs as different users share it.
-SHIM_LOCKS = "/var/tmp"
+SHIM_LOCKS = "/var/tmp/wend-shim"
 HOLDING = []  # this run's own holds
 
 
 def shim_lock(port):
-    return os.open(os.path.join(SHIM_LOCKS, f"wend-shim-{int(port)}.users"), os.O_RDONLY | os.O_CREAT, 0o644)
+    """The open lock file for a shim port, in SHIM_LOCKS. Not /var/tmp itself: anyone can unlink and recreate a file in
+    a sticky world-writable directory, and a shim-stop that locked the replacement would stop a shim a run is using.
+    So the directory must be a real directory owned by root or by this user (or the user sudo ran as), writable by
+    nobody else; anything else is refused, never used."""
+    try:
+        os.mkdir(SHIM_LOCKS)
+        os.chmod(SHIM_LOCKS, 0o755)  # whatever the umask: runs as other users open the locks read-only
+    except FileExistsError:
+        pass
+    st = os.lstat(SHIM_LOCKS)
+    owners = {0, os.geteuid()} | ({int(os.environ["SUDO_UID"])} if os.environ.get("SUDO_UID", "").isdigit() else set())
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid not in owners or st.st_mode & 0o022:
+        raise SystemExit(f"{SHIM_LOCKS} isn't a directory owned by root or this user and writable by nobody else; "
+                         "refusing to use the mirror shim's locks there")
+    fd = os.open(os.path.join(SHIM_LOCKS, f"{int(port)}.users"), os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    if os.fstat(fd).st_uid == os.geteuid():  # whatever the umask, as the directory
+        os.fchmod(fd, 0o644)
+    return fd
 
 
 def shim_ports():

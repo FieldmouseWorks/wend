@@ -141,7 +141,19 @@ try:
             f"rc {p.returncode}: {p.stdout}{p.stderr}")
         other.kill()
     shim.kill()
-    os.remove(os.path.join(vm.SHIM_LOCKS, f"wend-shim-{port}.users"))
+    os.remove(os.path.join(vm.SHIM_LOCKS, f"{port}.users"))
+
+    # a lock directory someone else could swap files in is refused, not used
+    real_locks = vm.SHIM_LOCKS
+    vm.SHIM_LOCKS = os.path.join(tmp, "open-locks")
+    os.mkdir(vm.SHIM_LOCKS)
+    os.chmod(vm.SHIM_LOCKS, 0o1777)
+    try:
+        vm.shim_lock(1)
+        say(False, "a world-writable lock directory is refused")
+    except SystemExit as e:
+        say("writable by nobody else" in str(e), "a world-writable lock directory is refused", str(e))
+    vm.SHIM_LOCKS = real_locks
 
     # the cache key: what the install runs, and nothing it doesn't
     src = open(os.path.join(ROOT, "tools", "vm.py")).read()
