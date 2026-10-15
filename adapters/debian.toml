@@ -11,7 +11,7 @@ release_file = "/etc/debian_version"
 ladder = ["etch", "lenny", "squeeze", "wheezy", "jessie", "stretch", "buster", "bullseye", "bookworm", "trixie"]
 
 # Paths no fix may write: the harness sets them on every hop.
-harness_owned = ["/etc/apt/sources.list", "/etc/apt/apt.conf.d/00wend"]
+harness_owned = ["/etc/apt/sources.list", "/etc/apt/sources.list.d/", "/etc/apt/apt.conf.d/00wend"]
 
 # The only places write-file may write. An allowlist, not "anything under /etc": /etc/cron.d, systemd units,
 # /etc/default/*, sudoers, profile.d, logrotate postrotate and apt.conf.d all run code or grant trust, so writing
@@ -71,7 +71,9 @@ signed = true
 [hop]
 # What the harness runs for every hop, around the fixes' pre and post steps. Shown here so reviewers know what a
 # fix's steps are relative to; fixes cannot change it.
-set_release = "{apt_conf} && printf 'deb {mirror} {release} main\\n' > /etc/apt/sources.list"
+# Third-party sources are set aside, not deleted: one built for the old release would pull packages across the hop,
+# and one marked trusted=yes would bypass a signed hop's checks. They stay in sources.list.d as *.wend-disabled.
+set_release = "{apt_conf} && printf 'deb {mirror} {release} main\\n' > /etc/apt/sources.list && for f in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do [ ! -f \"$f\" ] || mv \"$f\" \"$f.wend-disabled\" || exit 1; done"
 refresh = "apt-get update"
 upgrade = ["apt-get dist-upgrade", "apt-get autoremove --purge"]
 autoremove = "apt-get autoremove --purge"   # after prune_obsolete removes packages

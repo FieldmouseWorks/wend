@@ -386,6 +386,8 @@ See `adapters/debian.toml`. Notes that matter:
   before bullseye come from one dated snapshot.debian.org tree, whose `Release` files are archive.debian.org's byte
   for byte. It answers with redirects, which apt before 0.7.21 (etch, lenny) can't follow, so it goes through the
   mirror shim (see Enterprise Linux below). Runs pin it by its origin URL, `https://snapshot.debian.org/...`.
+- The harness owns `sources.list.d` too. Each hop sets third-party sources aside as `*.wend-disabled`: one built for
+  the old release would pull packages across the hop, and one marked `trusted=yes` would get around a signed hop.
 
 ### Ubuntu (`ubuntu`, apt backend)
 
