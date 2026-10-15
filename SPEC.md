@@ -1769,7 +1769,7 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
     our own sha256.
     - **Archive.** CI keeps, keyed by sha256, every metadata file a passing run pinned and every package it
       downloaded. That's the pinned tier of the vision doc: never evicted while a proven route references it. The
-      download list is a CI artifact, not part of the run file.
+      download list is a CI artifact, not part of the run file. Design in `docs/archive.md`.
     - **Fallback chain.** A client fetches each file by its expected hash from a list of sources in order: local
       cache, an org cache, the wend archive, the origin, then mirrors. The first bytes that hash right win. A source
       that serves wrong bytes is skipped, not trusted.
