@@ -384,10 +384,14 @@ fn repo_file(adapter: &Doc, release: &str, shim: &str) -> Result<String, String>
         .collect())
 }
 
-/// SPEC "Signed packages": rpm.transit's download skips dnf's signature check (--downloadonly), so the staged rpm
-/// checks every downloaded package against the release's keys and its add-ons' before any is installed. None when
-/// the release names no keys.
-fn transit_checksig(adapter: &Doc, release: &str, b: &str, ld: &str, rpm: &str) -> Result<Option<String>, String> {
+/// rpm -K lines that pass: rpm 4.11 prints `rsa sha1 (md5) pgp md5 OK` (upper case for what failed, no rsa/pgp when
+/// unsigned), later ones `digests signatures OK`.
+const SIG_OK: &str = ": (digests signatures OK|([a-z0-9()]+ )*(rsa|dsa|pgp|gpg) ([a-z0-9()]+ )*OK)$";
+
+/// SPEC "Signed packages": rpm.transit's download skips dnf's signature check (--downloadonly), so the old release's
+/// own rpm checks every downloaded package against the release's keys and its add-ons' before any is unpacked or
+/// run. None when the release names no keys.
+fn transit_checksig(adapter: &Doc, release: &str, b: &str) -> Result<Option<String>, String> {
     let mut keys = release_keys(release_of(adapter, release)?);
     if keys.is_empty() {
         return Ok(None);
@@ -403,13 +407,14 @@ fn transit_checksig(adapter: &Doc, release: &str, b: &str, ld: &str, rpm: &str) 
         }
     }
     let k = format!("{b}/keydb");
-    let imports: String = keys
-        .iter()
-        .map(|n| format!("{ld} {rpm} --dbpath {k} --import {KEYS}/{n}; "))
-        .collect();
+    // old rpm may import only a file's first key block (AlmaLinux 8's holds two): one block per file, each imported; a
+    // key it can't import shows up as NOKEY in -K below
+    let files: Vec<String> = keys.iter().map(|n| format!("{KEYS}/{n}")).collect();
+    let files = files.join(" ");
     Ok(Some(format!(
-        "rm -rf {k}; mkdir -p {k}; {ld} {rpm} --dbpath {k} --initdb; {imports}\
-         B=$({ld} {rpm} --dbpath {k} -K *.rpm 2>&1 | grep -v ': digests signatures OK$' || true); \
+        "rm -rf {k}; mkdir -p {k}; rpm --dbpath {k} --initdb; awk '/BEGIN PGP/ {{n++}} {{print > (\"{k}/key.\" n)}}' {files}; \
+         for f in {k}/key.*; do rpm --dbpath {k} --import $f || true; done; \
+         B=$(rpm --dbpath {k} -K *.rpm 2>&1 | grep -vE '{SIG_OK}' || true); \
          [ -z \"$B\" ] || {{ echo \"refusing, not signed by the release's keys:\"; echo \"$B\" | head -n 20; exit 1; }}"
     )))
 }
@@ -853,12 +858,10 @@ fn transit(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
             primary_list(&base, &format!("{b}/list"))
         ),
         format!(
-            "for r in *.rpm; do rpm2cpio $r | (cd {b}/stage && cpio -idmu --quiet 2>/dev/null) || {{ echo EXTRACTFAIL $r; exit 1; }}; done"
+            "{}for r in *.rpm; do rpm2cpio $r | (cd {b}/stage && cpio -idmu --quiet 2>/dev/null) || {{ echo EXTRACTFAIL $r; exit 1; }}; done",
+            transit_checksig(adapter, target, b)?.map(|c| c + "\n").unwrap_or_default()
         ),
-        match transit_checksig(adapter, target, b, &ld, &rpm_s)? {
-            Some(c) => format!("{ld} {rpm_s} --version\n{c}"),
-            None => format!("{ld} {rpm_s} --version"),
-        },
+        format!("{ld} {rpm_s} --version"),
         format!("rpm -e --nodeps --noscripts {remove}"),
         format!(
             "{ld} {rpm_s} -Uvh --nodeps --replacefiles --replacepkgs --oldpackage --nosignature --nodigest {b}/pkgs/*.rpm \

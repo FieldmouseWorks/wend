@@ -218,18 +218,25 @@ def package_names(base, out):
             f"{{ echo 'no package list from {base}'; exit 1; }}")
 
 
-def transit_checksig(adapter, release, b, ld, rpm):
-    """SPEC "Signed packages": rpm.transit's download skips dnf's signature check (--downloadonly), so the staged rpm
-    checks every downloaded package against the release's keys and its add-ons' before any is installed. No step
-    when the release names no keys."""
+SIG_OK = r": (digests signatures OK|([a-z0-9()]+ )*(rsa|dsa|pgp|gpg) ([a-z0-9()]+ )*OK)$"
+
+
+def transit_checksig(adapter, release, b):
+    """SPEC "Signed packages": rpm.transit's download skips dnf's signature check (--downloadonly), so the old
+    release's own rpm checks every downloaded package against the release's keys and its add-ons' before any is
+    unpacked or run. No step when the release names no keys. rpm 4.11 prints `rsa sha1 (md5) pgp md5 OK` (upper case
+    for what failed, no rsa/pgp when unsigned), later ones `digests signatures OK`."""
     keys = adapter["releases"][release].get("gpgkeys", [])
     if not keys:
         return []
     keys = keys + [a["gpgkeys"][release] for a in adapter.get("addons", {}).values() if release in a.get("gpgkeys", {})]
     k = f"{b}/keydb"
-    return [f"rm -rf {k}; mkdir -p {k}; {ld} {rpm} --dbpath {k} --initdb; "
-            + "".join(f"{ld} {rpm} --dbpath {k} --import {KEYS}/{n}; " for n in keys)
-            + f"B=$({ld} {rpm} --dbpath {k} -K *.rpm 2>&1 | grep -v ': digests signatures OK$' || true); "
+    # old rpm may import only a file's first key block (AlmaLinux 8's holds two): one block per file, each imported; a
+    # key it can't import shows up as NOKEY in -K below
+    return [f"rm -rf {k}; mkdir -p {k}; rpm --dbpath {k} --initdb; awk '/BEGIN PGP/ {{n++}} {{print > (\"{k}/key.\" n)}}' "
+            + " ".join(f"{KEYS}/{n}" for n in keys)
+            + f"; for f in {k}/key.*; do rpm --dbpath {k} --import $f || true; done; "
+            + f"B=$(rpm --dbpath {k} -K *.rpm 2>&1 | grep -vE '{SIG_OK}' || true); "
             "[ -z \"$B\" ] || { echo \"refusing, not signed by the release's keys:\"; echo \"$B\" | head -n 20; exit 1; }"]
 
 
@@ -461,9 +468,9 @@ class Rpm:
             f"ls | grep -qE '^{boot['release_package']}-' || {{ {primary_list(base, f'{b}/list')}; "
             f"f=$(grep -E '^{boot['release_package']}-{t['major']}[^/]*x86_64\\.rpm$' {b}/list | sort -V | tail -n1); "
             f"test -n \"$f\"; curl -sf -o {b}/pkgs/$f {base}/Packages/$f; }}",
+            *transit_checksig(adapter, target, b),
             f"for r in *.rpm; do rpm2cpio $r | (cd {b}/stage && cpio -idmu --quiet 2>/dev/null) || {{ echo EXTRACTFAIL $r; exit 1; }}; done",
             f"{ld} {rpmS} --version",
-            *transit_checksig(adapter, target, b, ld, rpmS),
             f"rpm -e --nodeps --noscripts {s['remove']}",
             f"{ld} {rpmS} -Uvh --nodeps --replacefiles --replacepkgs --oldpackage --nosignature --nodigest {b}/pkgs/*.rpm "
             f"> {b}/rpm.log 2>&1 || {{ grep -iE 'error|fail' {b}/rpm.log | head -n 20; }}",

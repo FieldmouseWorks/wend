@@ -473,9 +473,10 @@ they're written with `printf`). Every hop's `set_release` starts with `{keys}`, 
 sections, so its package manager refuses packages they don't sign (dnf imports them with `-y`). An add-on's
 `gpgkeys` table (release id = key name) does the same for its repo for that release. `rpm.transit`'s download is
 `--downloadonly`, which skips dnf's signature check, so when its release lists keys it checks every downloaded package
-itself (step 4) before installing any. Releases that list none keep `gpgcheck=0`: on EL, CentOS 5 to 8, whose keys
-can't check what later releases ship or whose rpm can't read the newer signatures. With `wend walk --run` every byte
-is checked against the run's pins anyway; signatures are what protects `--live` walks and CI replays.
+itself (step 4), with the box's own rpm, before unpacking or running any. Releases that list none keep `gpgcheck=0`:
+on EL, CentOS 5 to 8, whose keys can't check what later releases ship or whose rpm can't read the newer signatures.
+With `wend walk --run` every byte is checked against the run's pins anyway; signatures are what protects `--live`
+walks and CI replays.
 
 ## Op reference
 
@@ -672,10 +673,11 @@ repos kept in private `reposdir`s so `/etc/yum.repos.d` stays the harness's:
    `rpm`, `rpm-libs`, `glibc`, `dnf` or `python3-dnf` wasn't downloaded, or any of the add-on packages wasn't (as
    with the first five, EL7's dnf is still installed when that fails). Also fetch `transit.release_package` from
    `PKGLIST(BASE)` if the sync didn't.
-4. `rpm -e dnf` (the EL7 one), rebuild the database, and unpack every downloaded package into a staging dir. When
-   `release` lists `gpgkeys`: import them and its add-ons' keys for `release` into a fresh database in the work dir
-   with the staged rpm, and refuse, naming them, if `rpm -K` doesn't say `digests signatures OK` for every
-   downloaded package, before step 5 touches the old release.
+4. `rpm -e dnf` (the EL7 one) and rebuild the database. When `release` lists `gpgkeys`: import them and its add-ons'
+   keys for `release` into a fresh database in the work dir with the box's own rpm, and refuse, naming them, if
+   `rpm -K` doesn't report a good signature for every downloaded package (rpm 4.11: lower-case `rsa` or `pgp` and
+   `OK`; later rpm: `digests signatures OK`). Nothing downloaded is unpacked or run before this check. Then unpack
+   every downloaded package into a staging dir.
 5. `rpm -e --nodeps --noscripts {remove}` (the old release package), then run the staged rpm through the staged
    `ld-linux-x86-64.so.2 --library-path <stage>/usr/lib64` with `-Uvh --nodeps --replacefiles --replacepkgs
    --oldpackage --nosignature --nodigest` over every downloaded package. Its exit code is ignored and its errors are
