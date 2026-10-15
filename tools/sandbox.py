@@ -6,6 +6,7 @@ Follows SPEC.md "Sandbox requirements": a private tmpfs /dev per box (never a bi
 a hostname of the box's own (never the host's), daemons never start, and nothing is deleted until every mount under
 it is gone.
 """
+import fcntl
 import hashlib
 import os
 import subprocess
@@ -257,6 +258,15 @@ def build_box(box_id, box_doc, adapter, box_toml_bytes, adapter_bytes, log=print
     root = f"{WORK}/boxes/{box_id.replace('/', '_')}-{key}"
     if os.path.exists(f"{root}/.wend-ready"):
         return Box(root)
+    os.makedirs(f"{WORK}/boxes", exist_ok=True)
+    with open(f"{root}.lock", "a") as lock:  # runs side by side (tools/vm.py): one builds, the others wait for it
+        fcntl.flock(lock, fcntl.LOCK_EX)  # closing the file drops it
+        if not os.path.exists(f"{root}/.wend-ready"):
+            build_unlocked(root, box_id, box_doc, adapter, log)
+    return Box(root)
+
+
+def build_unlocked(root, box_id, box_doc, adapter, log):
     if os.path.exists(root):
         safe_rm(root)
     os.makedirs(root)
@@ -269,4 +279,3 @@ def build_box(box_id, box_doc, adapter, box_toml_bytes, adapter_bytes, log=print
         raise RuntimeError(f"box {box_id} fails its own checks at the start: {failed}\n" +
                            "\n".join(tail(h["checks"][c]["log"], 800) for c in failed))
     open(f"{root}/.wend-ready", "w").close()
-    return Box(root)
