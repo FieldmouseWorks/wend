@@ -424,7 +424,13 @@ See `adapters/el.toml`. Notes that matter:
   dead mirrors). After each hop it also rebuilds the rpm database and, on EL10, moves it to `/usr/lib/sysimage/rpm`.
 - CentOS 5's yum can't speak today's TLS, so repos go through a mirror shim the harness runs on the host
   (`[mirror]` in the adapter): plain http on 127.0.0.1, fetching `https://<host>/<path>` for
-  `http://127.0.0.1:<port>/<host>/<path>`, for a fixed list of hosts, and caching what it fetched.
+  `http://127.0.0.1:<port>/<host>/<path>`, for a fixed list of hosts, and caching what it fetched. It also keeps
+  every file it fetched under its sha256 (`.sha256/<hex>` in its cache, which no request can reach) and logs every
+  file it serves (`.fetched.log`: `<https url> sha256:<hex> <size>`). A live repo's `repomd.xml` is refetched each
+  time, so the store is the only place an older one survives. `wend replay --out RUN.json` turns the lines the
+  replay added to the log into a download list beside the run, `RUN.fetched/`: `fetched.txt` (each distinct file,
+  sorted) and `blobs/<hex>` (the bytes of every file in it that isn't a package, and of live EPEL's packages, which
+  go when they're updated). The gate uploads it for the archive (`docs/archive.md`, "Capture").
 - No EL release has an in-place path through a chroot (Leapp and redhat-upgrade-tool reboot), so every hop is a plain
   transaction plus fixes.
 - On a live box the hop to EL9 runs its transaction offline, as a chroot does, and out of reach of PID 1. Otherwise
@@ -1773,7 +1779,7 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
     our own sha256.
     - **Archive.** CI keeps, keyed by sha256, every metadata file a passing run pinned and every package it
       downloaded. That's the pinned tier of the vision doc: never evicted while a proven route references it. The
-      download list is a CI artifact, not part of the run file.
+      download list is a CI artifact, not part of the run file. Design in `docs/archive.md`.
     - **Fallback chain.** A client fetches each file by its expected hash from a list of sources in order: local
       cache, an org cache, the wend archive, the origin, then mirrors. The first bytes that hash right win. A source
       that serves wrong bytes is skipped, not trusted.
@@ -1789,8 +1795,9 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
       snapshot rare (the archive and the fallback chain), not making the client looser. Today that's not rare: a run
       pinning live AlmaLinux or EPEL repos goes stale as soon as they publish new metadata, often within a day.
     - **Order of work.** Done: the harness and the client record `sources`, the client walks through a verifying
-      cache (`wend walk --run`, with `--source` and `--offline`), and refuses an unpinned walk unless `--live`. Next:
-      CI uploads the download list, then the archive (wend#19). Until runs carry `sources`, integrity rests on TLS to the
+      cache (`wend walk --run`, with `--source` and `--offline`), and refuses an unpinned walk unless `--live`, and
+      the gate uploads an EL replay's download list with its metadata bytes (the mirror shim's log). Next: the same
+      for apt, then the archive (wend#19). Until runs carry `sources`, integrity rests on TLS to the
       mirrors and the shim's cache: EL releases from AlmaLinux 8 on, and EPEL for them, check signatures ("Signed
       packages"); older EL releases run with `gpgcheck=0` (CentOS 5's keys can't check what comes later), and the shim
       keeps only complete downloads and checks hash-named metadata against its name.
