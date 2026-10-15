@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -104,6 +105,12 @@ check(open(f"{w}/store/alias/sha1/{sha1(old_rpm)}").read() == f"sha256:{sha(old_
 os.remove(f"{w}/tree/{repo}/Packages/c-1.rpm")
 p = ingest("--fetched", f"{w}/fetched")
 check("0 referenced files not found" in p.stdout, "a later ingest finds a SHA-1-named package through its alias")
+shutil.rmtree(f"{w}/store/alias")
+os.remove(f"{w}/store/blob/sha256/{sha(old_rpm)[:2]}/{sha(old_rpm)}")
+open(f"{w}/fetched/run.fetched/blobs/{sha(old_rpm)}", "wb").write(old_rpm)
+p = ingest("--fetched", f"{w}/fetched")
+check("0 referenced files not found" in p.stdout,
+      "a SHA-1-named file gone from its url is found in a download list's blobs, under the sha256 it logged")
 blob = f"{w}/store/blob/sha256/{sha(used_rpm)[:2]}/{sha(used_rpm)}"
 check(open(blob, "rb").read() == used_rpm, "a blob is the upstream bytes, under blob/sha256/<2 hex>/<64 hex>")
 v = subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", "verify", f"{w}/store"], capture_output=True, text=True)

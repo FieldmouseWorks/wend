@@ -165,12 +165,15 @@ class Store:
         self.blob_dirs = list(blobs) + [b for d in fetched for b in glob.glob(f"{d}/**/blobs", recursive=True)]
         self.trees = list(trees)
         self.used = set()  # (url) every download list names
+        self.listed = {}  # url -> the sha256 hexes download lists give it: a SHA-1-named file's captured bytes
         for d in fetched:
             for p in glob.glob(f"{d}/**/fetched.txt", recursive=True):
                 for line in open(p):
                     f = line.split()
                     if len(f) == 3:
                         self.used.add(f[0])
+                        if re.fullmatch(r"sha256:[0-9a-f]{64}", f[1]):
+                            self.listed.setdefault(f[0], set()).add(f[1][7:])
         try:
             self.index = json.load(open(f"{path}/index/latest.json"))
         except FileNotFoundError:
@@ -200,6 +203,10 @@ class Store:
                 line = ""
             if re.fullmatch(r"sha256:[0-9a-f]{64}", line):
                 yield self.blob(line[7:]), None
+            for h in sorted(self.listed.get(url, ())):  # captured under the sha256 the shim logged
+                yield self.blob(h), None
+                for d in self.blob_dirs:
+                    yield f"{d}/{h}", None
         host_path = re.sub(r"^[a-z]+://", "", url)
         plain = plain_index(url)  # wheezy: the pin is the plain index, the archive serves only its .gz
         for t in self.trees:
