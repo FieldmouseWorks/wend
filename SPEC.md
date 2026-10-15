@@ -514,6 +514,11 @@ off after the box's own fragments, and stops the hop if `apt-config dump` still 
 `/etc/apt/apt.conf`, which apt reads last); an unsigned hop removes that file. Box builds still use
 `debootstrap --no-check-gpg`.
 
+Transport: every Debian and Ubuntu archive is given as host/path, so the box fetches it as plain http from the mirror
+shim on 127.0.0.1, and the shim fetches it from the archive over https (apt before 1.5 has no https of its own). That covers the unsigned hops too, where transport is the only
+check. The shim refetches a live archive's `dists/` metadata on every request, as it does rpm `repodata/`, except
+files named by their hash (`by-hash/`) and the dated snapshot.debian.org tree, which never change.
+
 With `wend walk --run` every byte is checked against the run's pins anyway; signatures are what protects `--live`
 walks and CI replays.
 
