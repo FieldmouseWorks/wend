@@ -92,8 +92,12 @@ class Apt:
         lad, r = adapter["ladder"], adapter["releases"]
         mirror = r["current"] if lad.index(release) >= lad.index(r["current_from"]) else r["archive"]
         hw = adapter.get("hardware", {}).get(release)  # the room the release's kernel needs in /boot (0: none known)
+        rel = adapter["releases"].get(release)
+        signed = isinstance(rel, dict) and rel.get("signed") is True  # SPEC "Signed packages"
+        conf = adapter["hop"].get("apt_conf", "") + ("" if signed else adapter["hop"].get("apt_unsigned", ""))
         return {"mirror": mirror, "release": release,
-                "boot_mib": str(hw.get("boot_mib", 0) if isinstance(hw, dict) else 0)}
+                "boot_mib": str(hw.get("boot_mib", 0) if isinstance(hw, dict) else 0),
+                "apt_conf": printf(conf, "/etc/apt/apt.conf.d/00wend")}
 
     def step(self, s, adapter, release=None):
         op = s["op"]

@@ -28,6 +28,9 @@ writable = [
 archive = "http://archive.debian.org/debian"
 current = "http://deb.debian.org/debian"
 current_from = "bullseye"
+# `signed`: the hop into the release checks the archive's signatures (SPEC "Signed packages"). Checked with gpgv
+# against the keyring the box has on the release before (debian-archive-keyring's last version there): from stretch's
+# keyring on, each next Release has a good signature; before that every one is by an expired or unknown key.
 
 [releases.etch]
 # tools/vm.py installs a VM box with the release's own debian-installer: its netboot kernel and initrd under the archive.
@@ -44,10 +47,22 @@ install = { netboot = "dists/etch/main/installer-amd64/current/images/netboot/de
   "d-i grub-installer/with_other_os boolean true",
 ], late = "sed -i 's/^# kopt=\\(.*\\)/# kopt=\\1 console=tty0 console=ttyS0,115200/' /target/boot/grub/menu.lst; in-target update-grub" }
 
+[releases.buster]
+signed = true
+
+[releases.bullseye]
+signed = true
+
+[releases.bookworm]
+signed = true
+
+[releases.trixie]
+signed = true
+
 [hop]
 # What the harness runs for every hop, around the fixes' pre and post steps. Shown here so reviewers know what a
 # fix's steps are relative to; fixes cannot change it.
-set_release = "printf 'deb {mirror} {release} main\\n' > /etc/apt/sources.list"
+set_release = "{apt_conf} && printf 'deb {mirror} {release} main\\n' > /etc/apt/sources.list"
 refresh = "apt-get update"
 upgrade = ["apt-get dist-upgrade", "apt-get autoremove --purge"]
 autoremove = "apt-get autoremove --purge"   # after prune_obsolete removes packages
@@ -68,13 +83,22 @@ installed_list = "dpkg-query -W -f '${Status} ${Package}\\n' | awk '$3==\"instal
 # tools/vm.py: the newest installed kernel, as `uname -r` names it (the package name after linux-image-, compared by its
 # numbers); after every reboot it has to be the running one. Signed and unsigned builds of one kernel are the same.
 kernel_newest = "dpkg-query -W -f '${Status} ${Package}\\n' 'linux-image-[0-9]*' 2>/dev/null | awk '$3 == \"installed\" && $4 !~ /-dbg$/ {v = $4; sub(/^linux-image-/, \"\", v); sub(/-unsigned$/, \"\", v); split(v, n, /[.-]/); k = sprintf(\"%05d%05d%05d%05d\", n[1], n[2], n[3], n[4]); if (k > best) {best = k; out = v}} END {if (out != \"\") print out}'"
-# Harness apt config, identical for every approach: old archive keys have expired, and local config files are kept.
+# Harness apt config, identical for every approach: local config files are kept, and the archive's expired Valid-Until
+# is ignored. Each hop's {apt_conf} writes it to /etc/apt/apt.conf.d/00wend, with apt_unsigned unless the release is
+# `signed`.
 apt_conf = """APT::Get::Assume-Yes "true";
-APT::Get::force-yes "true";
-APT::Get::AllowUnauthenticated "true";
+APT::Get::allow-downgrades "true";
+APT::Get::allow-remove-essential "true";
+APT::Get::allow-change-held-packages "true";
 Acquire::Check-Valid-Until "false";
-Acquire::AllowInsecureRepositories "true";
 Dpkg::Options { "--force-confdef"; "--force-confold"; };
+"""
+# SPEC "Signed packages": appended to apt_conf on a hop into a release that isn't `signed`, whose archive signatures
+# the box's keyring can't check any more (expired keys). force-yes also lets apt install what it couldn't
+# authenticate, so it lives here too; apt from 1.1 on reads the allow-* options above instead.
+apt_unsigned = """APT::Get::force-yes "true";
+APT::Get::AllowUnauthenticated "true";
+Acquire::AllowInsecureRepositories "true";
 """
 
 [predicates]

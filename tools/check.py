@@ -140,6 +140,7 @@ def check_adapter(a, where):
         if k in a.get("hop", {}) and not (isinstance(a["hop"][k], list) and all(isinstance(c, str) for c in a["hop"][k])):
             errs.append(f"{where}: hop.{k} must be a list of commands")
     errs += check_keys(a, where)
+    errs += check_signed(a, where)
     errs += check_relocate(a, where)
     return errs
 
@@ -175,6 +176,25 @@ def check_keys(a, where):
         if not (isinstance(g, dict) and all(r in ad.get("repos", {}) and isinstance(k, str) and k in keys
                                             for r, k in g.items())):
             errs.append(f"{where}: addons.{n}.gpgkeys must map releases the add-on has a repo for to names from [keys]")
+    return errs
+
+
+def check_signed(a, where):
+    """SPEC "Signed packages", apt: releases.*.signed is true or false, and an adapter with a signed release writes
+    its apt config per hop ({apt_conf} in hop.set_release) with the unsigned lines it drops (hop.apt_unsigned)."""
+    errs, rels = [], a.get("releases", {}) if isinstance(a.get("releases"), dict) else {}
+    signed = [r for r, rel in rels.items() if isinstance(rel, dict) and "signed" in rel]
+    for r in signed:
+        if not isinstance(rels[r]["signed"], bool) or a.get("backend") != "apt":
+            errs.append(f"{where}: releases.{r}.signed must be true or false, on the apt backend")
+    h = a.get("hop", {}) if isinstance(a.get("hop"), dict) else {}
+    if signed and not ("{apt_conf}" in str(h.get("set_release", "")) and isinstance(h.get("apt_unsigned"), str)):
+        errs.append(f"{where}: an adapter with signed releases must put {{apt_conf}} in hop.set_release and the "
+                    "lines unsigned releases add in hop.apt_unsigned")
+    if "apt_conf" in h and not (isinstance(h["apt_conf"], str) and not any(c in h["apt_conf"] for c in "'%\\")):
+        errs.append(f"{where}: hop.apt_conf must be text without ', % or \\ (it is written with printf)")
+    if "apt_unsigned" in h and not (isinstance(h["apt_unsigned"], str) and not any(c in h["apt_unsigned"] for c in "'%\\")):
+        errs.append(f"{where}: hop.apt_unsigned must be text without ', % or \\ (it is written with printf)")
     return errs
 
 

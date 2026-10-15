@@ -173,10 +173,16 @@ pub fn hop_vars(adapter: &Doc, release: &str) -> Result<Vars, String> {
                 .and_then(|t| get(t, "boot_mib"))
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
+            // SPEC "Signed packages": apt_unsigned only on a hop into a release that isn't signed
+            let signed = get(r, release).and_then(|x| get(x, "signed")) == Some(&Value::Bool(true));
+            let hop = get(adapter, "hop");
+            let text = |k: &str| hop.and_then(|h| get(h, k)).and_then(Value::as_str).unwrap_or("");
+            let conf = format!("{}{}", text("apt_conf"), if signed { "" } else { text("apt_unsigned") });
             Ok(vec![
                 ("mirror".into(), mirror.into()),
                 ("release".into(), release.into()),
                 ("boot_mib".into(), boot_mib.to_string()),
+                ("apt_conf".into(), printf(&conf, "/etc/apt/apt.conf.d/00wend")),
             ])
         }
         "rpm" => {

@@ -136,6 +136,20 @@ for name, mutate in {
     errs = check.check_adapter(a, "adapters/el.toml")
     print(("refused " if errs else "MISSED  ") + name + (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
     bad += not errs
+# SPEC "Signed packages", apt: a signed release drops apt_unsigned, so nothing may slip it back in
+for name, mutate in {
+    "a release that's signed in words, not true or false": lambda a: a["releases"]["buster"].update(signed="yes"),
+    "signed releases with no per-hop apt config": lambda a: a["hop"].update(
+        set_release=a["hop"]["set_release"].replace("{apt_conf} && ", "")),
+    "signed releases with no unsigned lines to drop": lambda a: a["hop"].pop("apt_unsigned"),
+    "an apt config that would break out of the harness's printf": lambda a: a["hop"].update(
+        apt_conf=a["hop"]["apt_conf"] + "'; rm -rf /; '"),
+}.items():
+    a = copy.deepcopy(adapters["debian"])
+    mutate(a)
+    errs = check.check_adapter(a, "adapters/debian.toml")
+    print(("refused " if errs else "MISSED  ") + name + (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
+    bad += not errs
 # a release's driver table is pinned: other bytes under its name, or none, fail the atlas
 a = copy.deepcopy(adapters["el"])
 a["hardware"]["alma9"]["drivers"] = "sha256:" + "0" * 64
