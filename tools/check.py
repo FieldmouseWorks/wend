@@ -244,7 +244,8 @@ def pes_errors(root=None):
     """SPEC "Package evolution data": each family's leapp-data extract is the pinned one and parses strictly."""
     import leappdata
     root = root or ROOT
-    errs = []
+    errs = [f"adapters/leapp/{fam}/manifest.toml: missing" for fam in leappdata.FAMILIES
+            if not os.path.isfile(f"{root}/adapters/leapp/{fam}/manifest.toml")]
     for d in sorted(glob.glob(f"{root}/adapters/leapp/*/")):
         fam = os.path.basename(d.rstrip("/"))
         where = f"adapters/leapp/{fam}/manifest.toml"
@@ -256,9 +257,9 @@ def pes_errors(root=None):
         files = m.get("files")
         if not (set(m) == {"upstream", "commit", "files"} and m["upstream"] == leappdata.UPSTREAM
                 and isinstance(m["commit"], str) and re.fullmatch(r"[0-9a-f]{40}", m["commit"])
-                and isinstance(files, dict) and files and set(files) <= set(leappdata.SOURCES)):
-            errs.append(f"{where}: must name leapp-data's upstream, a full commit id and [files.<source>] for known "
-                        f"sources {sorted(leappdata.SOURCES)}")
+                and isinstance(files, dict) and set(files) == set(leappdata.SOURCES)):
+            errs.append(f"{where}: must name leapp-data's upstream, a full commit id and [files.<source>] for every "
+                        f"source, {sorted(leappdata.SOURCES)}")
             continue
         extra = {os.path.basename(p)[:-len(".jsonl")] for p in glob.glob(f"{d}*.jsonl")} - set(files)
         if extra:

@@ -729,5 +729,7 @@ _pes_case("an unknown leapp-data action, repinned", ext=_with(action="install"))
 _pes_case("a leapp-data package set past its size cap, repinned",
           ext=_with(out=[{"name": f"p{i}", "repo": "base"} for i in range(300)]))
 _pes_case("a leapp-data extract in the directory but not pinned", extra=True)
+_pes_case("a leapp-data source dropped from the manifest and the directory",
+          man=_man[:_man.index("[files.epel]")], ext=None)
 _sh.rmtree(_t)
 sys.exit(1 if bad else 0)

@@ -33,6 +33,10 @@ DATA = {"almalinux": (HEAD, [
     ev(10, "removed", "7.6", ["before-start"]),
     ev(11, "removed", "10.0", ["new-name"]),
     ev(12, "removed", "8.0", ["needs-both", "other-half"]),
+    ev(14, "merged", "8.0", ["py2"], [("platform-py", "almalinux8-baseos")]),
+    ev(15, "merged", "9.0", ["platform-py"], [("py3", "almalinux9-appstream")]),
+    {"id": 13, "action": "replaced", "from": None, "to": "8.0", "in": [{"name": "to-module", "repo": "base"}],
+     "out": [{"name": "in-module", "repo": "almalinux8-appstream", "streams": ["mod:2"]}]},
 ]), "epel": (HEAD, [ev(20, "removed", "8.0", ["epel-thing"])])}
 
 
@@ -44,19 +48,20 @@ def fix(name, hop, when, post):
     return {"schema": "wend.fix/0", "family": "el", "hop": hop, "when": when, "post": post, "meta": {"name": name}}
 
 
+installs_py3 = fix("installs-py3", "alma9", {"installed": "py2"}, [{"op": "install", "packages": ["py3"]}])
 installs_new = fix("installs-new-name", "alma9", {"installed": "old-name"}, [{"op": "install", "packages": ["new-name"]}])
 gated = fix("only-gated", "alma9", {"installed": "gated-only"}, [{"op": "service.enable", "unit": "x", "like": ["x"]}])
 outside = fix("not-in-route", "alma9", {"installed": "gone-pkg"}, [{"op": "remove", "packages": ["gone-pkg"]}])
 repo = Repo()
 repo.adapters = {"el": adapter}
-repo.fixes = {"fixes/el/alma9/a.toml": installs_new, "fixes/el/alma9/b.toml": gated, "fixes/el/alma9/c.toml": outside}
-repo.fixes_by_id = {"a": installs_new, "b": gated, "c": outside}
+repo.fixes = {"fixes/el/alma9/d.toml": installs_py3, "fixes/el/alma9/a.toml": installs_new, "fixes/el/alma9/b.toml": gated, "fixes/el/alma9/c.toml": outside}
+repo.fixes_by_id = {"d": installs_py3, "a": installs_new, "b": gated, "c": outside}
 repo.routes = {"r": {"family": "el", "from": "centos7", "to": "alma10", "hops": ["alma9", "alma10"],
-                     "fixes": [{"id": "a"}, {"id": "b"}]},
+                     "fixes": [{"id": "a"}, {"id": "b"}, {"id": "d"}]},
                "r5": {"family": "el", "from": "centos5", "to": "alma10", "hops": ["centos6", "centos7", "alma9"],
                       "fixes": []}}
 
-box = ["gone-pkg", "kept-pkg", "moves-ok", "moves-crb", "old-name", "half-a", "half-b", "modular", "gated-only",
+box = ["py2", "to-module", "gone-pkg", "kept-pkg", "moves-ok", "moves-crb", "old-name", "half-a", "half-b", "modular", "gated-only",
        "old-but-here", "before-start", "needs-both", "epel-thing"]
 r = pesgaps.walk(repo, "r", box, data=DATA, own=box)
 h9, h10 = r["hops"]
@@ -84,6 +89,11 @@ expect(h9["deprecated"] == ["old-but-here"] and "old-but-here" not in gone, "dep
 expect("before-start" not in gone, "events before the start release don't apply")
 expect("needs-both" not in gone, "an event applies only when the box has every package it starts from")
 expect("epel-thing" not in gone and r["addons"] == [], "EPEL's events skip a box without epel-release")
+expect(gone.get("to-module", {}).get("becomes") == [{"name": "in-module", "streams": ["mod:2"]}],
+       "a successor only in a module stream the box hasn't enabled doesn't land")
+expect("platform-py" not in gone and [st["package"] for st in gone.get("py2", {}).get("steps", [])] == ["py2", "platform-py"]
+       and gone["py2"]["named_by"] == ["installs-py3"],
+       "a successor that goes again in the same hop extends the box package it came from, and its fix counts")
 expect([g["package"] for g in h10["gone"]] == ["new-name"], "the next hop starts from what the last one left")
 r = pesgaps.walk(repo, "r", box + ["epel-release"], data=DATA, own=["gone-pkg"], streams=["mod:1"])
 gone = {g["package"]: g for g in r["hops"][0]["gone"]}

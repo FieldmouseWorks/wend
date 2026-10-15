@@ -1158,7 +1158,7 @@ pins the commit and, per file, the upstream file's sha256 and the extract's. `we
 isn't the pinned one, a header that disagrees with the manifest, or an extract outside its strict schema (exact keys,
 known actions, package names as in "Preconditions", repo ids and module streams by pattern, capped sizes). It lives
 under `adapters/`, so the gate judges every PR by the base branch's copy. `tools/leappdata.py COMMIT` is the only
-way to refresh it: a maintainer PR, with the changed events (the tool prints them) in its body. No bot bumps it.
+way to refresh it: a maintainer PR, with the changed events (the tool prints them) in its body. No bot bumps it. (The Rust client's `wend check` doesn't read leapp-data and doesn't check it yet.)
 `tools/leappdata.py --check` downloads the pinned files again and confirms the extract rebuilds byte for byte. The
 attribution is in `adapters/leapp/NOTICE` and the license in `adapters/leapp/LICENSE`.
 

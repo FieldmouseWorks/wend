@@ -29,6 +29,7 @@ import tomllib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIR = os.path.join(ROOT, "adapters", "leapp", "el")
+FAMILIES = ("el",)  # check.py refuses an atlas without each one's extract
 UPSTREAM = "https://github.com/AlmaLinux/leapp-data"
 RAW = "https://raw.githubusercontent.com/AlmaLinux/leapp-data"
 # <source>: the file in leapp-data. `almalinux` covers CentOS 7 -> AlmaLinux 8 -> 9 -> 10; `epel` is ELevate's EPEL
@@ -168,8 +169,8 @@ def changes(old, new):
         for k in keys:
             by.setdefault(src[k]["action"], []).append(src[k])
         for a, es in sorted(by.items()):
-            some = ", ".join(sorted({p["name"] for e in es for p in e["in"]})[:8])
-            out.append(f"  {word} {len(es)} {a}: {some}{', ...' if len(es) > 8 else ''}")
+            ns = sorted({p["name"] for e in es for p in e["in"]})
+            out.append(f"  {word} {len(es)} {a}: {', '.join(ns[:8])}{', ...' if len(ns) > 8 else ''}")
     return out or ["  no event changed"]
 
 
@@ -191,7 +192,7 @@ def main(argv):
     if not check and not re.fullmatch(r"[0-9a-f]{40}", argv[0]):
         print("COMMIT is a full 40-character commit id, never a branch or tag: the pin must not move")
         return 2
-    bad, rows = 0, {}
+    bad, rows, staged = 0, {}, {}
     os.makedirs(DIR, exist_ok=True)
     for s, path in SOURCES.items():
         commit = heads[s]["commit"]
@@ -209,11 +210,15 @@ def main(argv):
         except ValueError as e:
             print(f"  the old extract doesn't parse ({e}): everything counts as added")
             old = []
-        open(out, "w").write(text)
+        staged[out] = text  # written only once every source has downloaded and parsed
         rows[s] = (path, hashlib.sha256(data).hexdigest(), hashlib.sha256(text.encode()).hexdigest())
         print(f"{s}: {path} sha256:{rows[s][1]} -> {os.path.relpath(out, ROOT)} ({text.count(chr(10)) - 1} events)")
         print("\n".join(changes(old, parse(text, s)[1])))
     if not check:
+        for out, text in staged.items():
+            open(out + ".new", "w").write(text)
+        for out in staged:
+            os.replace(out + ".new", out)
         write_manifest(argv[0], rows)
     return bad
 

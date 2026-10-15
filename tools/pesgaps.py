@@ -43,8 +43,11 @@ def load(family="el"):
     errs = check.pes_errors()
     if errs:
         raise SystemExit("the leapp-data extract isn't the pinned one:\n" + "\n".join(errs))
-    return {os.path.basename(p)[:-len(".jsonl")]: leappdata.parse(open(p).read(), p)
-            for p in sorted(glob.glob(os.path.join(DATA, family, "*.jsonl")))}
+    out = {os.path.basename(p)[:-len(".jsonl")]: leappdata.parse(open(p).read(), p)
+           for p in sorted(glob.glob(os.path.join(DATA, family, "*.jsonl")))}
+    if set(out) != set(leappdata.SOURCES):
+        raise SystemExit(f"adapters/leapp/{family}: expected the extracts {sorted(leappdata.SOURCES)}, found {sorted(out)}")
+    return out
 
 
 def ver(text):
@@ -55,7 +58,7 @@ def release_version(adapter, rel):
     """(major, minor) of a release: the minor from its pinned repo URL (vault.centos.org/7.9.2009 is 7.9), or 99 for a
     live repo that moves with the release (repo.almalinux.org/almalinux/9 is the newest 9.x)."""
     r = adapter["releases"][rel]
-    m = re.search(r"/\d+\.(\d+)", next(iter(r["repos"].values())))
+    m = re.search(r"/\d+\.(\d+)", next(iter(r.get("repos", {}).values()), ""))
     return (r["major"], int(m.group(1)) if m else 99)
 
 
@@ -65,7 +68,7 @@ def enabled_repos(adapter, route, addons):
     out = {}
     for rel in [route["from"], *route["hops"], *[r for r, d in adapter["releases"].items() if "transit" in d]]:
         r = adapter["releases"][rel]
-        out.setdefault(r["major"], set()).update(k.lower() for k in r["repos"])
+        out.setdefault(r["major"], set()).update(k.lower() for k in r.get("repos", {}))
         out[r["major"]].update(addons)
     return out
 
@@ -76,7 +79,7 @@ def repo_ok(repo, enabled):
 
 
 def names(x):
-    """Every package name a fix mentions: its `installed` preconditions and its steps' package lists (not meta)."""
+    """Every package name a fix's steps install, remove or reinstall (not its `installed` gates, not meta)."""
     out = set()
     if isinstance(x, dict):
         for k, v in x.items():
@@ -105,6 +108,11 @@ def holds(w, pkgs):
     if "not" in w:
         return "installed" not in w["not"] or not holds(w["not"], pkgs)
     return True
+
+
+def in_stream(p, mods):
+    """A package of an event is outside module streams ("" in its streams) or in one the box has enabled."""
+    return bool((mods | {""}) & set(p.get("streams", [""])))
 
 
 def steps_of(fix, phase):
@@ -154,34 +162,44 @@ def walk(repo, route_path, packages, data=None, own=None, streams=()):
             apply_steps(f, "pre", pkgs)
         events = sorted((e for s in sources for e in data[s][1] if prev < ver(e["to"]) <= now),
                         key=lambda e: (ver(e["to"]), e["id"]))
-        gone = {}
+        gone, origin = {}, {}  # origin: a successor this hop installed -> the box package it stands for
         for e in events:
             ins = [p["name"] for p in e["in"]]
-            have = [p["name"] for p in e["in"] if p["name"] in pkgs and (mods | {""}) & set(p.get("streams", [""]))]
+            have = [p["name"] for p in e["in"] if p["name"] in pkgs and in_stream(p, mods)]
             if not have or (e["action"] != "merged" and len(have) < len(ins)):
                 continue
             if e["action"] == "deprecated":
                 h["deprecated"] += [n for n in have if n not in h["deprecated"]]
                 continue
-            kept = {p["name"] for p in e["out"] if repo_ok(p["repo"], enabled)}
+            # an output only in a module stream lands only where that stream is enabled: rpm.transit enables none,
+            # not even EL8's defaults (el9-fail2ban-through-el8), and every hop resets them
+            kept = {p["name"] for p in e["out"] if repo_ok(p["repo"], enabled) and in_stream(p, mods)}
             for n in have:
                 if n in kept:
                     continue
-                g = gone.setdefault(n, {"package": n, "action": e["action"], "at": e["to"], "own": n in own,
-                                        "becomes": [], "events": []})
+                # a successor going again (python -> platform-python at 8.0 -> python3 at 9.0, both in the hop
+                # through EL8) extends the box package it came from, not a new entry
+                root = origin.get(n, n)
+                g = gone.setdefault(root, {"package": root, "action": e["action"], "at": e["to"], "own": root in own,
+                                           "becomes": [], "steps": [], "events": []})
                 g["events"].append(e["id"])
+                step = {"package": n, "action": e["action"], "at": e["to"], "becomes": []}
+                g["steps"].append(step)
                 for p in e["out"]:
-                    if p["name"] == n:
-                        g["becomes"].append({"name": n, "repo": p["repo"]})  # moved where the route doesn't go
-                        continue
                     o = {"name": p["name"]} | ({} if repo_ok(p["repo"], enabled) else {"repo": p["repo"]}) | \
-                        ({"streams": [x for x in p["streams"] if x]} if any(p.get("streams", [""])) else {})
-                    if o not in g["becomes"]:
-                        g["becomes"].append(o)
+                        ({} if in_stream(p, mods) else {"streams": [x for x in p["streams"] if x]})
+                    if p["name"] == n and "repo" not in o and "streams" not in o:
+                        continue
+                    step["becomes"].append(o)
+                    if p["name"] in kept:
+                        origin[p["name"]] = root
+                g["becomes"] = [o for o in g["becomes"] if o["name"] != n] + \
+                    [o for o in step["becomes"] if o not in g["becomes"]]
                 pkgs.discard(n)
             pkgs |= kept
         for g in gone.values():
-            touched = {g["package"]} | {o["name"] for o in g["becomes"]}
+            touched = {g["package"]} | {o["name"] for st in g["steps"] for o in st["becomes"]} | \
+                {st["package"] for st in g["steps"]}
             g["named_by"] = [f["meta"]["name"] for f in mine if names(f) & touched]
             g["elsewhere"] = [d["meta"]["name"] for d in others if names(d) & touched]
             h["gone"].append(g)
@@ -202,6 +220,7 @@ def text(report, label):
         b = [o["name"] + (f" (in {o['repo']}, which the route doesn't enable)" if "repo" in o else "") +
              (f" (module {'/'.join(o['streams'])})" if "streams" in o else "") for o in g["becomes"]]
         return ", ".join(b[:most]) + (f" and {len(b) - most} more" if len(b) > most else "")
+    stranded = lambda g: not g["named_by"] and any("repo" in o or "streams" in o for o in g["becomes"])
     total = [0, 0]
     if not all(h["checked"] for h in report["hops"]):
         out.append("  (leapp-data starts at EL7. The hops before it aren't modelled, so the box's packages keep the names "
@@ -218,8 +237,9 @@ def text(report, label):
         out.append(f"    the box's own packages that go: {len(own)}, {len(unnamed)} that no fix in the route names"
                    if own else "    none of the box's own packages go")
         for g in sorted(own, key=lambda g: (bool(g["named_by"]), g["package"].lower())):
-            b = becomes(g)
-            s = f"      {g['package']}: {g['action']} at {g['at']}{' -> ' + b if b else ''}"
+            s = f"      {g['package']}: " + ", then ".join(
+                (f"{st['package']} " if i else "") + f"{st['action']} at {st['at']}" +
+                (f" -> {becomes(st)}" if st["becomes"] else "") for i, st in enumerate(g["steps"]))
             s += f"; named by {', '.join(g['named_by'])}" if g["named_by"] else "; no fix names it"
             if g["elsewhere"]:
                 s += f" (outside the route: {', '.join(g['elsewhere'])})"
@@ -227,10 +247,9 @@ def text(report, label):
         deps = sorted((g for g in h["gone"] if not g["own"]), key=lambda g: g["package"].lower())
         if deps:
             out.append(f"    dependencies that go ({len(deps)}): " +
-                       ", ".join(g["package"] + (" *" if not g["named_by"] and any("repo" in o for o in g["becomes"])
-                                                 else "") for g in deps))
-            if any(not g["named_by"] and any("repo" in o for o in g["becomes"]) for g in deps):
-                out.append("      * goes to a repo the route doesn't enable")
+                       ", ".join(g["package"] + (" *" if stranded(g) else "") for g in deps))
+            if any(stranded(g) for g in deps):
+                out.append("      * goes to a repo or module stream the route doesn't enable")
         if h["deprecated"]:
             out.append(f"    deprecated ({len(h['deprecated'])}): {', '.join(sorted(h['deprecated'], key=str.lower))}")
     out.append(f"  {total[0]} of the box's own packages go with no fix naming them, {total[1]} named by a fix")
@@ -252,26 +271,41 @@ def box_packages(repo, box_id):
     return log.split(), [m for m in mods.split() if leappdata.STREAM.fullmatch(m)]
 
 
+def route_path(repo, name):
+    """A route by its path or its short name (centos7-to-alma10), as the client takes it; None if there's none, or the
+    family has no leapp-data."""
+    hits = [p for p, d in repo.routes.items() if name in (p, f"{d['family']}/{os.path.basename(p)[:-5]}",
+                                                           os.path.basename(p)[:-5])]
+    if len(hits) != 1 or not os.path.isdir(f"{DATA}/{repo.routes[hits[0]]['family']}"):
+        return None
+    return hits[0]
+
+
 def main(repo, rest):
     as_json = "--json" in rest
     rest = [x for x in rest if x != "--json"]
-    if rest[:1] == ["--all"]:
+    if rest == ["--all"]:
         jobs = [(r, b) for r, d in sorted(repo.routes.items()) for b, bd in sorted(repo.boxes.items())
                 if d["family"] == bd["family"] and bd["release"] == d["from"] and os.path.isdir(f"{DATA}/{d['family']}")]
-    elif "--packages" in rest:
-        f = rest[rest.index("--packages") + 1]
+    elif len(rest) == 3 and rest[1] == "--packages" and route_path(repo, rest[0]):
+        f = rest[2]
         given = open(f).read().split()
         odd = [n for n in given if not leappdata.NAME.fullmatch(n)]
         if odd:
             print(f"{f}: not package names, one per line: {odd[:5]}")
             return 2
-        report = walk(repo, rest[0], given)
+        report = walk(repo, route_path(repo, rest[0]), given)
         print(json.dumps(report, indent=1) if as_json else text(report, os.path.basename(f)))
         return 0
-    elif len(rest) == 2:
-        jobs = [tuple(rest)]
+    elif len(rest) == 2 and route_path(repo, rest[0]) and rest[1] in repo.boxes:
+        r, b = route_path(repo, rest[0]), rest[1]
+        if (repo.boxes[b]["family"], repo.boxes[b]["release"]) != (repo.routes[r]["family"], repo.routes[r]["from"]):
+            print(f"{b} doesn't start where {r} starts ({repo.routes[r]['family']} {repo.routes[r]['from']})")
+            return 2
+        jobs = [(r, b)]
     else:
-        print(__doc__)
+        print(__doc__.split("\n\n")[1])
+        print("ROUTE: an EL route, by path or short name (centos7-to-alma10); BOX: a box id (el/centos7-lamp)")
         return 2
     reports = []
     for r, b in jobs:
