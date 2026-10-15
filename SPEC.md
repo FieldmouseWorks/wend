@@ -471,10 +471,10 @@ they're written with `printf`). Every hop's `set_release` starts with `{keys}`, 
 `/etc/wend/keys/<name>` (the files stay on the machine afterwards). A release that lists keys in
 `releases.<id>.gpgkeys` gets `gpgcheck=1` and `gpgkey=file:///etc/wend/keys/<name> ...` in each of its repo
 sections, so its package manager refuses packages they don't sign (dnf imports them with `-y`). An add-on's
-`gpgkeys` table (release id = key name) does the same for its repo for that release. After writing them, `{keys}`
+`gpgkeys` table (release id = key name) does the same for its repo for that release. `{drop_keys}` in `hop.after`
 removes from the rpm database the keys dnf imported for earlier releases that `releases.<id>.drop_keys` names, by
 short key id (8 lowercase hex digits, as in `gpg-pubkey-<id>`), with `rpm -e --allmatches`; a key the box doesn't
-have is skipped. A newer rpm can refuse to load an older release's key (EL9's rpm can't load AlmaLinux 8's SHA-1
+have is skipped. It runs in `hop.after` because a step of the hop can import them (`rpm.transit`'s dnf does). A newer rpm can refuse to load an older release's key (EL9's rpm can't load AlmaLinux 8's SHA-1
 self-signed 2021 key) and warns about it on every verify, which fails the pkgdb check.
 
 Packages that reach the box any other way are checked by `CHECKSIG` before anything uses them, when the release lists

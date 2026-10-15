@@ -124,6 +124,8 @@ for name, mutate in {
         gpgkeys=["RPM-GPG-KEY-nobody"]),
     "a release that drops a key by something other than its short id": lambda a: a["releases"]["alma9"].update(
         drop_keys=["3ABB34F8; rm -rf /"]),
+    "keys to drop that the hops never drop": lambda a: a["hop"].update(
+        after=[c for c in a["hop"]["after"] if c != "{drop_keys}"]),
     "an add-on key for a release the add-on has no repo for": lambda a: a["addons"]["epel"]["gpgkeys"].update(
         centos5="RPM-GPG-KEY-EPEL-8"),
     "signing keys the hops never write": lambda a: a["hop"].update(

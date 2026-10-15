@@ -167,6 +167,9 @@ def check_keys(a, where):
         d = rel.get("drop_keys", []) if isinstance(rel, dict) else []
         if not (isinstance(d, list) and all(isinstance(k, str) and re.fullmatch(r"[0-9a-f]{8}", k) for k in d)):
             errs.append(f"{where}: releases.{r}.drop_keys must list short key ids (8 lowercase hex digits)")
+    if any(isinstance(rel, dict) and rel.get("drop_keys") for rel in a.get("releases", {}).values()) and \
+            "{drop_keys}" not in str(a.get("hop", {}).get("after", "")):
+        errs.append(f"{where}: an adapter whose releases drop keys must put {{drop_keys}} in hop.after")
     for n, ad in a.get("addons", {}).items() if isinstance(a.get("addons", {}), dict) else ():
         g = ad.get("gpgkeys", {}) if isinstance(ad, dict) else {}
         if not (isinstance(g, dict) and all(r in ad.get("repos", {}) and isinstance(k, str) and k in keys

@@ -1,7 +1,7 @@
 """The harness's printf() and the EL adapter's {keys} by behaviour: every file they write holds exactly the content
 asked for, under the shells hops run in (sh, bash, and EL7's bash 4.2 when WEND_EL7_BASH names one), also for content
-that starts with "-" (every armoured key does) or holds %, a backslash or "\\n" as text; and {keys} on the alma9 hop
-removes the AlmaLinux 8 keys a box has (a stand-in rpm on PATH) and nothing else. It runs the PR's own
+that starts with "-" (every armoured key does) or holds %, a backslash or "\\n" as text; and {drop_keys} on the
+alma9 hop removes the AlmaLinux 8 keys a box has (a stand-in rpm on PATH) and nothing else. It runs the PR's own
 backends.py and adapter text, so the gate's schema job (which never runs the PR's code) doesn't run it: `wend check`
 and the client job do.
 python3 tools/test_printf.py"""
@@ -38,7 +38,7 @@ for sh in shells:
         # the adapter's own [keys], through write_keys() as set_release's {keys} runs it
         saved, backends.KEYS = backends.KEYS, os.path.join(d, "keys")
         try:
-            r = subprocess.run([sh, "-c", backends.write_keys(el, "alma8")], capture_output=True, text=True)
+            r = subprocess.run([sh, "-c", backends.write_keys(el)], capture_output=True, text=True)
         finally:
             backends.KEYS = saved
         for n, a in el.get("keys", {}).items():
@@ -54,7 +54,7 @@ for sh in shells:
         os.chmod(os.path.join(d, "bin", "rpm"), 0o755)
         saved, backends.KEYS = backends.KEYS, os.path.join(d, "keys")
         try:
-            r = subprocess.run([sh, "-c", backends.write_keys(el, "alma9")], capture_output=True, text=True,
+            r = subprocess.run([sh, "-c", backends.drop_keys(el, "alma9")], capture_output=True, text=True,
                                env={**os.environ, "PATH": f"{d}/bin:{os.environ['PATH']}"})
         finally:
             backends.KEYS = saved
@@ -62,5 +62,5 @@ for sh in shells:
         ok = r.returncode == 0 and got == "-e --allmatches gpg-pubkey-3abb34f8\n"
         bad += not ok
         print(("passed  " if ok else f"WRONG   rc={r.returncode} removed={got!r} ") +
-              f"{sh}: {{keys}} on the alma9 hop removes only the dropped keys the box has")
+              f"{sh}: {{drop_keys}} on the alma9 hop removes only the dropped keys the box has")
 sys.exit(1 if bad else 0)

@@ -117,9 +117,10 @@ major = 9
 pm = "dnf"
 repos = { baseos = "repo.almalinux.org/almalinux/9/BaseOS/x86_64/os", appstream = "repo.almalinux.org/almalinux/9/AppStream/x86_64/os" }
 gpgkeys = ["RPM-GPG-KEY-AlmaLinux-9"]
-# AlmaLinux 8's and EPEL 8's keys, which dnf imported on the alma8 hop, leave the rpm database before EL9's rpm reads
-# it: AlmaLinux 8's 2021 key 3abb34f8 is self-signed with SHA-1, which EL9's rpm can't load, so every rpm -V warns
-# about it and the pkgdb check fails (remi, wend#103). Short key ids, as rpm names them gpg-pubkey-<id>.
+# AlmaLinux 8's and EPEL 8's keys, which dnf imports on the alma8 hop or in rpm.transit, leave the rpm database at the
+# end of the hop (hop.after): AlmaLinux 8's 2021 key 3abb34f8 is self-signed with SHA-1, which EL9's rpm can't load,
+# so every rpm -V warns about it and the pkgdb check fails (remi, wend#103). Short key ids, as rpm names them
+# gpg-pubkey-<id>.
 drop_keys = ["3abb34f8", "ced7258b", "2f86d6a1"]
 # EL8 module streams don't exist on EL9: reset them, and tell dnf which platform it is on (a chroot has no os-release
 # it trusts yet). EL9's rpm only reads EL8's Berkeley DB read-only, so the database is rebuilt (as sqlite) before any
@@ -464,6 +465,9 @@ after = [
   # EL10's rpm keeps its database in /usr/lib/sysimage/rpm; move it there and leave a symlink
   "D=$(rpm --eval '%{_dbpath}'); if [ \"$D\" != /var/lib/rpm ] && [ ! -L /var/lib/rpm ] && [ -s /var/lib/rpm/rpmdb.sqlite ] && [ ! -s \"$D/rpmdb.sqlite\" ]; then mkdir -p \"$D\" && cp -a /var/lib/rpm/. \"$D\"/ && rm -rf /var/lib/rpm && ln -s \"$D\" /var/lib/rpm; fi",
   "rm -f /var/lib/rpm/__db.*; rpm --rebuilddb",
+  # SPEC "Signed packages": the earlier releases' keys the release lists in drop_keys, once nothing in the hop can
+  # import them any more (rpm.transit's dnf imports AlmaLinux 8's mid-hop, on the way to alma9)
+  "{drop_keys}",
   "{pm} clean packages",
   # hop.kernel_before holds the release's rescue image back while the hop runs; the machine's next kernel update
   # builds it

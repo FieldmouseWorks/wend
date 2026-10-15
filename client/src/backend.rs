@@ -194,7 +194,8 @@ pub fn hop_vars(adapter: &Doc, release: &str) -> Result<Vars, String> {
                 }),
                 ("pm".into(), "$(command -v dnf || command -v yum)".into()),
                 ("clean_repos".into(), CLEAN_REPOS.into()),
-                ("keys".into(), write_keys(adapter, release)),
+                ("keys".into(), write_keys(adapter)),
+                ("drop_keys".into(), drop_keys(adapter, release)),
                 (
                     "dnf_opts".into(),
                     format!(
@@ -359,34 +360,33 @@ fn gpg(names: &[String]) -> String {
     format!("gpgcheck=1\ngpgkey={}\n", files.join(" "))
 }
 
-/// Shell that writes every key in the adapter's [keys] under KEYS, then removes the gpg-pubkey entries the release
-/// lists in drop_keys from the rpm database ("true" if there is nothing to do).
-fn write_keys(adapter: &Doc, release: &str) -> String {
-    let mut steps = vec![];
-    if let Some(ks) = get(adapter, "keys")
-        .and_then(Value::as_object)
-        .filter(|k| !k.is_empty())
-    {
-        steps.push(format!("mkdir -p {KEYS}"));
-        steps.extend(ks.iter().map(|(n, a)| printf(&scalar(a), &format!("{KEYS}/{n}"))));
+/// Shell that writes every key in the adapter's [keys] under KEYS ("true" if it has none).
+fn write_keys(adapter: &Doc) -> String {
+    match get(adapter, "keys").and_then(Value::as_object) {
+        Some(ks) if !ks.is_empty() => std::iter::once(format!("mkdir -p {KEYS}"))
+            .chain(ks.iter().map(|(n, a)| printf(&scalar(a), &format!("{KEYS}/{n}"))))
+            .collect::<Vec<_>>()
+            .join(" && "),
+        _ => "true".into(),
     }
+}
+
+/// Shell that removes the gpg-pubkey entries the release lists in drop_keys from the rpm database, those the box
+/// has ("true" if it lists none).
+fn drop_keys(adapter: &Doc, release: &str) -> String {
     let drop = get(adapter, "releases")
         .and_then(|r| get(r, release))
         .and_then(|r| get(r, "drop_keys"))
         .and_then(strings)
         .unwrap_or_default();
-    if !drop.is_empty() {
-        steps.push(format!(
-            "{{ _wd=$(for _wk in {}; do rpm -q gpg-pubkey-$_wk >/dev/null 2>&1 && echo gpg-pubkey-$_wk; done); \
-             [ -z \"$_wd\" ] || rpm -e --allmatches $_wd; }}",
-            drop.join(" ")
-        ));
+    if drop.is_empty() {
+        return "true".into();
     }
-    if steps.is_empty() {
-        "true".into()
-    } else {
-        steps.join(" && ")
-    }
+    format!(
+        "{{ _wd=$(for _wk in {}; do rpm -q gpg-pubkey-$_wk >/dev/null 2>&1 && echo gpg-pubkey-$_wk; done); \
+         [ -z \"$_wd\" ] || rpm -e --allmatches $_wd; }}",
+        drop.join(" ")
+    )
 }
 
 fn release_keys(rel: &Value) -> Vec<String> {

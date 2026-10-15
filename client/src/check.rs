@@ -478,6 +478,24 @@ fn check_keys(a: &Doc, wh: &str) -> Vec<String> {
             ));
         }
     }
+    let drops = get(a, "releases")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .any(|(_, rel)| {
+            get(rel, "drop_keys")
+                .and_then(Value::as_array)
+                .is_some_and(|d| !d.is_empty())
+        });
+    if drops
+        && !get(a, "hop")
+            .and_then(|h| get(h, "after"))
+            .is_some_and(|x| x.to_string().contains("{drop_keys}"))
+    {
+        errs.push(format!(
+            "{wh}: an adapter whose releases drop keys must put {{drop_keys}} in hop.after"
+        ));
+    }
     for (n, ad) in get(a, "addons").and_then(Value::as_object).into_iter().flatten() {
         let ok = match get(ad, "gpgkeys") {
             None => true,
