@@ -281,7 +281,8 @@ def main(argv):
         d = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_fetched.py"]).returncode
         v = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_archive.py"]).returncode
         m = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_primary.py"]).returncode
-        return a or b or u or g or n or i or k or e or r or p or f or s or d or v or m
+        o = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_r2push.py"]).returncode
+        return a or b or u or g or n or i or k or e or r or p or f or s or d or v or m or o
     if c == "list":
         return cmd_list()
     if c == "replay":

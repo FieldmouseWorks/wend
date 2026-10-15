@@ -165,7 +165,10 @@ Each one a small PR.
    takes bytes from download lists, the shim's store or cache, or the origin, verifies each against the chain, and
    writes blobs, aliases and the index. `tools/archive.py verify` rehashes the store.
 4. **Sources** (built). Source packages for everything ingested, by `ingest` itself.
-5. **R2 push.** Upload new blobs and the index (S3 API, standard library only), checking each upload's digest.
+5. **R2 push** (built). `tools/r2push.py` uploads new blobs and aliases, then the index, `latest.json` last, so
+   the index R2 serves never names a blob it lacks (S3 API, SigV4, standard library only). Each PUT carries the
+   body's sha256, and R2 refuses a body that doesn't match. `STORE/.pushed` remembers what's up. The credentials are
+   an Object Read & Write token for this bucket, in a file only its owner can read; nothing prints them.
 6. **Client.** The archive as a by-digest source, in the default chain.
 7. **Box inputs.** A box build records the sources it read, as a hop does, and the store ingests them.
 8. **Signing, then public.** The index signature and `archive/allowed_signers`; then the bucket gets public read.
