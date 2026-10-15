@@ -1,0 +1,14 @@
+# The leapp-data pin (SPEC "Package evolution data"). Written by tools/leappdata.py; refresh only by PR,
+# with what changed in the PR body. ./wend check refuses an extract that doesn't match it.
+upstream = "https://github.com/AlmaLinux/leapp-data"
+commit = "867e72c02c13a5c0029a95ca73931b771af349c8"
+
+[files.almalinux]
+path = "files/almalinux/pes-events.json"
+upstream_sha256 = "sha256:32567136f8a515e4ab69e67faf2b9cbd3e0c1af4ee8ffa9d4bb445ccdcad8665"
+sha256 = "sha256:d39fa1d38fdbe4d5495972ca6ad2eaa9a52625d99d1fedf319e83ed8161f72dd"
+
+[files.epel]
+path = "vendors.d/epel_pes.json_template"
+upstream_sha256 = "sha256:a55f699dfebd6cf7291f146b0a71ebd42f11e1bab793a9ca993054c226360554"
+sha256 = "sha256:1b43a4656a4514b23071f478fd23241102af71a7557c33058fcd15da22791279"
