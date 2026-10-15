@@ -19,7 +19,8 @@ What goes in: every top file a passing run pins; under it, each index some downl
 package index (primary, Packages: the files that vouch for packages); and each package a download list names. Never
 the rest of a repo. Blobs are kept as upstream served them, under blob/sha256/<2 hex>/<64 hex>. index/latest.json
 maps each url to every digest the store has for it, with its size, when it was first stored and the runs that
-reference it. Nothing is ever evicted. verify rehashes every blob and checks the index against them.
+reference it. A file a chain names only by another hash (CentOS 5's SHA-1) also gets alias/<alg>/<hex>, one line
+naming its blob. Nothing is ever evicted. verify rehashes every blob and checks the index against them.
 """
 import datetime
 import glob
@@ -195,6 +196,17 @@ class Store:
         e = self.index["files"].setdefault(url, {}).setdefault(
             f"sha256:{h}", {"size": len(data), "first": self.stamp, "runs": []})
         e["runs"] = sorted(set(e["runs"]) | set(runs))
+        return h
+
+    def alias(self, digest, h):
+        """alias/<alg>/<hex>: for a file a chain names by another hash (CentOS 5's SHA-1), one line naming its blob."""
+        alg, other = digest
+        p = f"{self.path}/alias/{alg}/{other}"
+        if alg != "sha256" and not os.path.exists(p):
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(f"{p}.tmp", "w") as f:
+                f.write(f"sha256:{h}\n")
+            os.replace(f"{p}.tmp", p)
 
     def ingest(self, pins):
         """pins: {(url, (alg, hex)): set of run refs} from runs on main. Walks each chain down."""
@@ -209,7 +221,7 @@ class Store:
             if data is None:
                 self.missing.append(url)
                 continue
-            self.keep(url, data, runs)
+            self.alias(d, self.keep(url, data, runs))
             if url.endswith(PACKAGES):
                 continue
             for child, cd in children(url, data):
