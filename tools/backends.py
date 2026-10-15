@@ -220,26 +220,42 @@ def package_names(base, out):
             f"{{ echo 'no package list from {base}'; exit 1; }}")
 
 
-SIG_OK = r": (digests signatures OK|([a-z0-9()]+ )*(rsa|dsa|pgp|gpg) ([a-z0-9()]+ )*OK)$"
+# Where an RPM's header+payload signature (tag 1002) sits, read from od's bytes after the 96-byte lead: "<signature
+# offset> <length> <signed data offset>", or nothing if it isn't an RPM or has no such signature
+RPM_SIG = ("function be(p) { return ((b[p] * 256 + b[p + 1]) * 256 + b[p + 2]) * 256 + b[p + 3] } "
+           "{ for (i = 1; i <= NF; i++) b[n++] = $i } "
+           "END { if (n < 16 || b[0] != 142 || b[1] != 173 || b[2] != 232) exit; il = be(8); s = 16 + 16 * il; "
+           "for (e = 0; e < il; e++) if (be(16 + 16 * e) == 1002) { o = be(24 + 16 * e); c = be(28 + 16 * e) } "
+           "if (!c) exit; x = 96 + s + be(12); x += (8 - x % 8) % 8; print 96 + s + o, c, x }")
+
+
+def checksig(adapter, release, k, files):
+    """SPEC "Signed packages": shell that checks files (RPMs fetched outside the package manager, or by one that can't
+    check them) against the release's keys and its add-ons', and refuses any not signed by them. "" when the release
+    names no keys. gpgv checks each package's header+payload signature, not rpm: EL7's rpm 4.11 can't use signing
+    subkeys, which AlmaLinux 8 signs with, and gpgv works the same on every release."""
+    keys = adapter["releases"][release].get("gpgkeys", [])
+    if not keys:
+        return ""
+    keys = keys + [a["gpgkeys"][release] for a in adapter.get("addons", {}).values() if release in a.get("gpgkeys", {})]
+    return (f"rm -rf {k}; mkdir -m 700 -p {k}; G=$(command -v gpg2 || command -v gpg); V=$(command -v gpgv2 || command -v gpgv); "
+            "[ -n \"$G\" ] && [ -n \"$V\" ] || { echo 'refusing: no gpg and gpgv to check signatures with'; exit 1; }; "
+            # one key block per file (AlmaLinux 8's holds two), each into a binary keyring; one that won't read refuses
+            f"awk '/BEGIN PGP/ {{n++}} {{print > (\"{k}/key.\" n)}}' " + " ".join(f"{KEYS}/{n}" for n in keys) + "; "
+            f"for f in {k}/key.*; do \"$G\" --homedir {k} --batch --dearmor < $f >> {k}/ring || "
+            "{ echo \"refusing: can't read key $f\"; exit 1; }; done; "
+            f"B=; for r in {files}; do set -- $(od -An -v -tu1 -j96 -N65536 $r 2>/dev/null | awk '{RPM_SIG}'); "
+            f"if [ $# -eq 3 ] && tail -c +$(($1 + 1)) $r | head -c $2 > {k}/sig && tail -c +$(($3 + 1)) $r > {k}/data && "
+            f"\"$V\" --homedir {k} --keyring {k}/ring {k}/sig {k}/data >/dev/null 2>&1; then :; else B=\"$B $r\"; fi; done; "
+            f"rm -f {k}/data; [ -z \"$B\" ] || {{ echo \"refusing, not signed by the release's keys:\"; "
+            "printf '%s\\n' $B | head -n 20; exit 1; }")
 
 
 def transit_checksig(adapter, release, b):
-    """SPEC "Signed packages": rpm.transit's download skips dnf's signature check (--downloadonly), so the old
-    release's own rpm checks every downloaded package against the release's keys and its add-ons' before any is
-    unpacked or run. No step when the release names no keys. rpm 4.11 prints `rsa sha1 (md5) pgp md5 OK` (upper case
-    for what failed, no rsa/pgp when unsigned), later ones `digests signatures OK`."""
-    keys = adapter["releases"][release].get("gpgkeys", [])
-    if not keys:
-        return []
-    keys = keys + [a["gpgkeys"][release] for a in adapter.get("addons", {}).values() if release in a.get("gpgkeys", {})]
-    k = f"{b}/keydb"
-    # old rpm may import only a file's first key block (AlmaLinux 8's holds two): one block per file, each imported; a
-    # key it can't import shows up as NOKEY in -K below
-    return [f"rm -rf {k}; mkdir -p {k}; rpm --dbpath {k} --initdb; awk '/BEGIN PGP/ {{n++}} {{print > (\"{k}/key.\" n)}}' "
-            + " ".join(f"{KEYS}/{n}" for n in keys)
-            + f"; for f in {k}/key.*; do rpm --dbpath {k} --import $f || true; done; "
-            + f"B=$(rpm --dbpath {k} -K *.rpm 2>&1 | grep -vE '{SIG_OK}' || true); "
-            "[ -z \"$B\" ] || { echo \"refusing, not signed by the release's keys:\"; echo \"$B\" | head -n 20; exit 1; }"]
+    """rpm.transit downloads with EL7's dnf, which can't check these signatures (--nogpgcheck): check every
+    downloaded package before any is unpacked or run. No step when the release names no keys."""
+    c = checksig(adapter, release, f"{b}/keydb", "*.rpm")
+    return [c] if c else []
 
 
 def bootstrap_pins(adapter, release):
@@ -348,13 +364,15 @@ class Rpm:
 
     def op_rpm_swap_release(self, s, adapter, release, v, rel):
         """Replace the release package by hand. EL5's centos-release has epoch 10, so yum won't "upgrade" it to EL6's
-        epoch-0 one, and a vendor switch (CentOS -> AlmaLinux) isn't an upgrade at all."""
+        epoch-0 one, and a vendor switch (CentOS -> AlmaLinux) isn't an upgrade at all. The package is fetched with
+        curl, so it is checked against the release's keys (when it names any) before the old one goes."""
         base = f"{v['shim']}/{next(iter(rel['repos'].values()))}"
         return (f"set -e; cd /tmp; {primary_list(base, '/tmp/wend-pkglist')}; "
                 f"f=$(grep -E '^{ere(s['install'])}-[0-9][^/]*(x86_64|noarch)\\.rpm$' /tmp/wend-pkglist | head -n1); "
                 f"test -n \"$f\"; curl -sf -o /tmp/$f {base}/Packages/$f; "
+                + "".join(f"{c}; " for c in [checksig(adapter, release, "/tmp/wend-keydb", "/tmp/$f")] if c) +
                 f"rpm -e --nodeps --noscripts {s['remove']}; rpm -ivh --nodeps --noscripts /tmp/$f; "
-                f"rm -f /tmp/$f /tmp/wend-pkglist; {CLEAN_REPOS}")
+                f"rm -rf /tmp/$f /tmp/wend-pkglist /tmp/wend-keydb; {CLEAN_REPOS}")
 
     def op_rpm_drop_unneeded(self, s, adapter, release, v, rel):
         """Remove these packages, together, only if nothing else installed still requires them; otherwise keep them
@@ -460,7 +478,7 @@ class Rpm:
             f"yum -y --setopt=reposdir={b}/old install dnf",
             # EL7's dnf 4.0 has no --nobest. rc ignored, as in the lab: what matters is that the new rpm, glibc and
             # dnf were fetched (checked next)
-            f"dnf -y {o} --setopt=best=False --setopt=deltarpm=false --downloadonly --destdir={b}/pkgs distro-sync "
+            f"dnf -y {o} --setopt=best=False --setopt=deltarpm=false --nogpgcheck --downloadonly --destdir={b}/pkgs distro-sync "
             f"> {b}/dl.log 2>&1 || tail -n 20 {b}/dl.log",
             f"cd {b}/pkgs; for n in rpm rpm-libs glibc dnf python3-dnf; do ls | grep -qE \"^$n-[0-9]\" || "
             "{ echo \"not downloaded: $n\"; exit 1; }; done",

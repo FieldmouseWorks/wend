@@ -270,7 +270,8 @@ def main(argv):
         r = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_relocate.py"]).returncode
         p = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_pesgaps.py"]).returncode
         f = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_printf.py"]).returncode
-        return a or b or u or g or n or i or k or e or r or p or f
+        s = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_checksig.py"]).returncode
+        return a or b or u or g or n or i or k or e or r or p or f or s
     if c == "list":
         return cmd_list()
     if c == "replay":

@@ -471,9 +471,16 @@ they're written with `printf`). Every hop's `set_release` starts with `{keys}`, 
 `/etc/wend/keys/<name>` (the files stay on the machine afterwards). A release that lists keys in
 `releases.<id>.gpgkeys` gets `gpgcheck=1` and `gpgkey=file:///etc/wend/keys/<name> ...` in each of its repo
 sections, so its package manager refuses packages they don't sign (dnf imports them with `-y`). An add-on's
-`gpgkeys` table (release id = key name) does the same for its repo for that release. `rpm.transit`'s download is
-`--downloadonly`, which skips dnf's signature check, so when its release lists keys it checks every downloaded package
-itself (step 4), with the box's own rpm, before unpacking or running any. Releases that list none keep `gpgcheck=0`:
+`gpgkeys` table (release id = key name) does the same for its repo for that release.
+
+Packages that reach the box any other way are checked by `CHECKSIG` before anything uses them, when the release lists
+keys: `rpm.transit`'s download (EL7's dnf and rpm 4.11 can't use signing subkeys, which AlmaLinux 8 signs with, so it
+downloads with `--nogpgcheck`) and `rpm.swap-release`'s package (fetched with curl). `CHECKSIG` splits the release's
+keys and its add-ons' keys for that release into one block each, reads them into a scratch keyring with the box's
+`gpg2` (or `gpg`), and checks each package's header+payload signature (signature header tag 1002, over every byte from
+the main header to the end) with `gpgv2` (or `gpgv`). It refuses, naming them, every file that isn't an RPM, has no
+such signature, or isn't signed by one of those keys, and refuses outright if a key won't read or there is no gpg.
+Releases that list none keep `gpgcheck=0`:
 on EL, CentOS 5 to 8, whose keys can't check what later releases ship or whose rpm can't read the newer signatures.
 With `wend walk --run` every byte is checked against the run's pins anyway; signatures are what protects `--live`
 walks and CI replays.
@@ -610,8 +617,9 @@ parse on a real box.
 manager, because an epoch drop (CentOS 5's `centos-release` has epoch 10, EL6's has none) or a vendor switch isn't an
 upgrade to yum. Effect: `remove` is gone from the database (its scriptlets don't run), and the first
 `install-<digit>...` package for x86_64 or noarch listed in `BASE`'s metadata is installed (a release's base repo
-carries exactly one; CentOS 5's `sort` has no `-V` to pick among several). Fails if there is no such package.
-Reference: find it in `PKGLIST(BASE)`, download it, `rpm -e --nodeps --noscripts {remove}`,
+carries exactly one; CentOS 5's `sort` has no `-V` to pick among several). Fails if there is no such package, or,
+when the release lists `gpgkeys`, if `CHECKSIG` (see "Signed packages") refuses it; `remove` is still installed then.
+Reference: find it in `PKGLIST(BASE)`, download it, `CHECKSIG` it, `rpm -e --nodeps --noscripts {remove}`,
 `rpm -ivh --nodeps --noscripts` the file, `CLEAN_REPOS`.
 
 **`rpm.drop-arch`** `arches` (list of `i[3-6]86`, at least one). Removes every installed package built for one of
@@ -668,15 +676,13 @@ repos kept in private `reposdir`s so `/etc/yum.repos.d` stays the harness's:
    and refuse, naming them, if any of those packages has no package of the same name there. Only the work dir has
    changed at that point.
 2. `yum install dnf` from `old` (CentOS 7 extras ships an EL7 dnf).
-3. With that dnf and `new`: `--downloadonly` distro-sync into the work dir, `--releasever` = the release's major,
+3. With that dnf and `new`: `--nogpgcheck --downloadonly` distro-sync into the work dir, `--releasever` = the release's major,
    `--allowerasing --setopt=best=False` (EL7's dnf 4.0 has no `--nobest`), no weak deps, no protected packages. Its exit code is ignored; the step fails if
    `rpm`, `rpm-libs`, `glibc`, `dnf` or `python3-dnf` wasn't downloaded, or any of the add-on packages wasn't (as
    with the first five, EL7's dnf is still installed when that fails). Also fetch `transit.release_package` from
    `PKGLIST(BASE)` if the sync didn't.
-4. `rpm -e dnf` (the EL7 one) and rebuild the database. When `release` lists `gpgkeys`: import them and its add-ons'
-   keys for `release` into a fresh database in the work dir with the box's own rpm, and refuse, naming them, if
-   `rpm -K` doesn't report a good signature for every downloaded package (rpm 4.11: lower-case `rsa` or `pgp` and
-   `OK`; later rpm: `digests signatures OK`). Nothing downloaded is unpacked or run before this check. Then unpack
+4. `rpm -e dnf` (the EL7 one) and rebuild the database. When `release` lists `gpgkeys`: `CHECKSIG` (see "Signed
+   packages") over every downloaded package. Nothing downloaded is unpacked or run before this check. Then unpack
    every downloaded package into a staging dir.
 5. `rpm -e --nodeps --noscripts {remove}` (the old release package), then run the staged rpm through the staged
    `ld-linux-x86-64.so.2 --library-path <stage>/usr/lib64` with `-Uvh --nodeps --replacefiles --replacepkgs

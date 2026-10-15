@@ -386,14 +386,19 @@ fn repo_file(adapter: &Doc, release: &str, shim: &str) -> Result<String, String>
         .collect())
 }
 
-/// rpm -K lines that pass: rpm 4.11 prints `rsa sha1 (md5) pgp md5 OK` (upper case for what failed, no rsa/pgp when
-/// unsigned), later ones `digests signatures OK`.
-const SIG_OK: &str = ": (digests signatures OK|([a-z0-9()]+ )*(rsa|dsa|pgp|gpg) ([a-z0-9()]+ )*OK)$";
+/// Where an RPM's header+payload signature (tag 1002) sits, read from od's bytes after the 96-byte lead: "<signature
+/// offset> <length> <signed data offset>", or nothing if it isn't an RPM or has no such signature.
+const RPM_SIG: &str = "function be(p) { return ((b[p] * 256 + b[p + 1]) * 256 + b[p + 2]) * 256 + b[p + 3] } \
+     { for (i = 1; i <= NF; i++) b[n++] = $i } \
+     END { if (n < 16 || b[0] != 142 || b[1] != 173 || b[2] != 232) exit; il = be(8); s = 16 + 16 * il; \
+     for (e = 0; e < il; e++) if (be(16 + 16 * e) == 1002) { o = be(24 + 16 * e); c = be(28 + 16 * e) } \
+     if (!c) exit; x = 96 + s + be(12); x += (8 - x % 8) % 8; print 96 + s + o, c, x }";
 
-/// SPEC "Signed packages": rpm.transit's download skips dnf's signature check (--downloadonly), so the old release's
-/// own rpm checks every downloaded package against the release's keys and its add-ons' before any is unpacked or
-/// run. None when the release names no keys.
-fn transit_checksig(adapter: &Doc, release: &str, b: &str) -> Result<Option<String>, String> {
+/// SPEC "Signed packages": shell that checks files (RPMs fetched outside the package manager, or by one that can't
+/// check them) against the release's keys and its add-ons', and refuses any not signed by them. None when the
+/// release names no keys. gpgv checks each package's header+payload signature, not rpm: EL7's rpm 4.11 can't use
+/// signing subkeys, which AlmaLinux 8 signs with, and gpgv works the same on every release.
+fn checksig(adapter: &Doc, release: &str, k: &str, files: &str) -> Result<Option<String>, String> {
     let mut keys = release_keys(release_of(adapter, release)?);
     if keys.is_empty() {
         return Ok(None);
@@ -408,16 +413,20 @@ fn transit_checksig(adapter: &Doc, release: &str, b: &str) -> Result<Option<Stri
             keys.push(scalar(k));
         }
     }
-    let k = format!("{b}/keydb");
-    // old rpm may import only a file's first key block (AlmaLinux 8's holds two): one block per file, each imported; a
-    // key it can't import shows up as NOKEY in -K below
-    let files: Vec<String> = keys.iter().map(|n| format!("{KEYS}/{n}")).collect();
-    let files = files.join(" ");
+    let key_files: Vec<String> = keys.iter().map(|n| format!("{KEYS}/{n}")).collect();
+    let key_files = key_files.join(" ");
+    // one key block per file (AlmaLinux 8's holds two), each into a binary keyring; one that won't read refuses
     Ok(Some(format!(
-        "rm -rf {k}; mkdir -p {k}; rpm --dbpath {k} --initdb; awk '/BEGIN PGP/ {{n++}} {{print > (\"{k}/key.\" n)}}' {files}; \
-         for f in {k}/key.*; do rpm --dbpath {k} --import $f || true; done; \
-         B=$(rpm --dbpath {k} -K *.rpm 2>&1 | grep -vE '{SIG_OK}' || true); \
-         [ -z \"$B\" ] || {{ echo \"refusing, not signed by the release's keys:\"; echo \"$B\" | head -n 20; exit 1; }}"
+        "rm -rf {k}; mkdir -m 700 -p {k}; G=$(command -v gpg2 || command -v gpg); V=$(command -v gpgv2 || command -v gpgv); \
+         [ -n \"$G\" ] && [ -n \"$V\" ] || {{ echo 'refusing: no gpg and gpgv to check signatures with'; exit 1; }}; \
+         awk '/BEGIN PGP/ {{n++}} {{print > (\"{k}/key.\" n)}}' {key_files}; \
+         for f in {k}/key.*; do \"$G\" --homedir {k} --batch --dearmor < $f >> {k}/ring || \
+         {{ echo \"refusing: can't read key $f\"; exit 1; }}; done; \
+         B=; for r in {files}; do set -- $(od -An -v -tu1 -j96 -N65536 $r 2>/dev/null | awk '{RPM_SIG}'); \
+         if [ $# -eq 3 ] && tail -c +$(($1 + 1)) $r | head -c $2 > {k}/sig && tail -c +$(($3 + 1)) $r > {k}/data && \
+         \"$V\" --homedir {k} --keyring {k}/ring {k}/sig {k}/data >/dev/null 2>&1; then :; else B=\"$B $r\"; fi; done; \
+         rm -f {k}/data; [ -z \"$B\" ] || {{ echo \"refusing, not signed by the release's keys:\"; \
+         printf '%s\\n' $B | head -n 20; exit 1; }}"
     )))
 }
 
@@ -544,7 +553,7 @@ fn rpm_step(s: &Value, adapter: &Doc, release: &str) -> Result<String, String> {
             out + &packages(s)?
         }
         "write-file" => printf(str_of(s, "content")?, str_of(s, "path")?),
-        "rpm.swap-release" => swap_release(s, &v, release_of(adapter, release)?)?,
+        "rpm.swap-release" => swap_release(s, adapter, release, &v)?,
         "rpm.drop-arch" => drop_arch(s)?,
         "rpm.drop-unneeded" => format!(
             "P=; for p in {}; do ! rpm -q $p >/dev/null 2>&1 || P=\"$P $p\"; done; \
@@ -651,16 +660,21 @@ fn rpm_step(s: &Value, adapter: &Doc, release: &str) -> Result<String, String> {
 }
 
 /// Replace the release package by hand. EL5's centos-release has epoch 10, so yum won't "upgrade" it to EL6's
-/// epoch-0 one, and a vendor switch (CentOS -> AlmaLinux) isn't an upgrade at all.
-fn swap_release(s: &Value, v: &Vars, rel: &Value) -> Result<String, String> {
+/// epoch-0 one, and a vendor switch (CentOS -> AlmaLinux) isn't an upgrade at all. The package is fetched with
+/// curl, so it is checked against the release's keys (when it names any) before the old one goes.
+fn swap_release(s: &Value, adapter: &Doc, release: &str, v: &Vars) -> Result<String, String> {
+    let rel = release_of(adapter, release)?;
     let base = format!("{}/{}", var(v, "shim"), first_repo(rel)?);
     let (install, remove) = (ere(str_of(s, "install")?), str_of(s, "remove")?);
+    let check = checksig(adapter, release, "/tmp/wend-keydb", "/tmp/$f")?
+        .map(|c| c + "; ")
+        .unwrap_or_default();
     Ok(format!(
         "set -e; cd /tmp; {}; \
          f=$(grep -E '^{install}-[0-9][^/]*(x86_64|noarch)\\.rpm$' /tmp/wend-pkglist | head -n1); \
          test -n \"$f\"; curl -sf -o /tmp/$f {base}/Packages/$f; \
-         rpm -e --nodeps --noscripts {remove}; rpm -ivh --nodeps --noscripts /tmp/$f; \
-         rm -f /tmp/$f /tmp/wend-pkglist; {CLEAN_REPOS}",
+         {check}rpm -e --nodeps --noscripts {remove}; rpm -ivh --nodeps --noscripts /tmp/$f; \
+         rm -rf /tmp/$f /tmp/wend-pkglist /tmp/wend-keydb; {CLEAN_REPOS}",
         primary_list(&base, "/tmp/wend-pkglist")
     ))
 }
@@ -840,7 +854,7 @@ fn transit(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
         repo_lines,
         format!("yum -y --setopt=reposdir={b}/old install dnf"),
         format!(
-            "dnf -y {o} --setopt=best=False --setopt=deltarpm=false --downloadonly --destdir={b}/pkgs distro-sync \
+            "dnf -y {o} --setopt=best=False --setopt=deltarpm=false --nogpgcheck --downloadonly --destdir={b}/pkgs distro-sync \
              > {b}/dl.log 2>&1 || tail -n 20 {b}/dl.log"
         ),
         [
@@ -861,7 +875,7 @@ fn transit(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
         ),
         format!(
             "{}for r in *.rpm; do rpm2cpio $r | (cd {b}/stage && cpio -idmu --quiet 2>/dev/null) || {{ echo EXTRACTFAIL $r; exit 1; }}; done",
-            transit_checksig(adapter, target, b)?.map(|c| c + "\n").unwrap_or_default()
+            checksig(adapter, target, &format!("{b}/keydb"), "*.rpm")?.map(|c| c + "\n").unwrap_or_default()
         ),
         format!("{ld} {rpm_s} --version"),
         format!("rpm -e --nodeps --noscripts {remove}"),
