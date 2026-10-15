@@ -99,15 +99,23 @@ def names(x):
 
 def holds(w, pkgs):
     """A precondition on the model's package set. Anything but `installed` is unknown here, and unknown holds."""
+    return truth(w, pkgs) is not False
+
+
+def truth(w, pkgs):
+    """True, False, or None for unknown (any predicate but `installed`), through not, all and any."""
     if "installed" in w:
         return w["installed"] in pkgs
-    if "all" in w:
-        return all(holds(x, pkgs) for x in w["all"])
-    if "any" in w:
-        return any(holds(x, pkgs) for x in w["any"])
     if "not" in w:
-        return "installed" not in w["not"] or not holds(w["not"], pkgs)
-    return True
+        t = truth(w["not"], pkgs)
+        return None if t is None else not t
+    if "all" in w:
+        ts = [truth(x, pkgs) for x in w["all"]]
+        return False if False in ts else None if None in ts else True
+    if "any" in w:
+        ts = [truth(x, pkgs) for x in w["any"]]
+        return True if True in ts else None if None in ts else False
+    return None
 
 
 def in_stream(p, mods):
@@ -160,10 +168,18 @@ def walk(repo, route_path, packages, data=None, own=None, streams=()):
         firing = [f for f in mine if holds(f.get("when", {}), pkgs)]
         for f in firing:
             apply_steps(f, "pre", pkgs)
+        # Within one release, leapp-data can map a package more than once (one event written from 8.0, another from
+        # 8.3). The one written from the latest release applies; the others are shown beside it, not applied.
         events = sorted((e for s in sources for e in data[s][1] if prev < ver(e["to"]) <= now),
-                        key=lambda e: (ver(e["to"]), e["id"]))
-        gone, origin = {}, {}  # origin: a successor this hop installed -> the box package it stands for
+                        key=lambda e: (ver(e["to"]), tuple(-x for x in ver(e["from"] or "0.0")), e["id"]))
+        rivals = {}
         for e in events:
+            for p in e["in"]:
+                rivals.setdefault((e["to"], p["name"]), []).append(e)
+        gone, origin, done = {}, {}, set()  # origin: a successor this hop installed -> the box package it stands for
+        for e in events:
+            if any((e["to"], p["name"]) in done for p in e["in"]):
+                continue
             ins = [p["name"] for p in e["in"]]
             have = list(dict.fromkeys(p["name"] for p in e["in"] if p["name"] in pkgs and in_stream(p, mods)))
             if not have or (e["action"] != "merged" and len(have) < len(ins)):
@@ -174,6 +190,7 @@ def walk(repo, route_path, packages, data=None, own=None, streams=()):
             # an output only in a module stream lands only where that stream is enabled: rpm.transit enables none,
             # not even EL8's defaults (el9-fail2ban-through-el8), and every hop resets them
             kept = {p["name"] for p in e["out"] if repo_ok(p["repo"], enabled) and in_stream(p, mods)}
+            done |= {(e["to"], n) for n in have}
             for n in have:
                 if n in kept:
                     continue
@@ -184,6 +201,10 @@ def walk(repo, route_path, packages, data=None, own=None, streams=()):
                                            "becomes": [], "steps": [], "events": []})
                 g["events"].append(e["id"])
                 step = {"package": n, "action": e["action"], "at": e["to"], "becomes": []}
+                alt = [{"action": r["action"], "becomes": [p["name"] for p in r["out"]]}
+                       for r in rivals[(e["to"], n)] if r is not e]
+                if alt:
+                    step["also"] = alt  # leapp-data maps it another way too
                 g["steps"].append(step)
                 for p in e["out"]:
                     o = {"name": p["name"]} | ({} if repo_ok(p["repo"], enabled) else {"repo": p["repo"]}) | \
@@ -199,7 +220,7 @@ def walk(repo, route_path, packages, data=None, own=None, streams=()):
             pkgs |= kept
         for g in gone.values():
             touched = {g["package"]} | {o["name"] for st in g["steps"] for o in st["becomes"]} | \
-                {st["package"] for st in g["steps"]}
+                {st["package"] for st in g["steps"]} | {n for st in g["steps"] for a in st.get("also", []) for n in a["becomes"]}
             g["named_by"] = [f["meta"]["name"] for f in mine if names(f) & touched]
             g["elsewhere"] = [d["meta"]["name"] for d in others if names(d) & touched]
             h["gone"].append(g)
@@ -239,7 +260,9 @@ def text(report, label):
         for g in sorted(own, key=lambda g: (bool(g["named_by"]), g["package"].lower())):
             s = f"      {g['package']}: " + ", then ".join(
                 (f"{st['package']} " if i else "") + f"{st['action']} at {st['at']}" +
-                (f" -> {becomes(st)}" if st["becomes"] else "") for i, st in enumerate(g["steps"]))
+                (f" -> {becomes(st)}" if st["becomes"] else "") +
+                "".join(f" (leapp-data also says {a['action']}{' -> ' + ', '.join(a['becomes']) if a['becomes'] else ''})"
+                        for a in st.get("also", [])) for i, st in enumerate(g["steps"]))
             s += f"; named by {', '.join(g['named_by'])}" if g["named_by"] else "; no fix names it"
             if g["elsewhere"]:
                 s += f" (outside the route: {', '.join(g['elsewhere'])})"

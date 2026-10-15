@@ -35,6 +35,9 @@ DATA = {"almalinux": (HEAD, [
     ev(12, "removed", "8.0", ["needs-both", "other-half"]),
     ev(16, "replaced", "8.0", ["dep-x"], [("app-y", "almalinux8-baseos")]),
     ev(17, "removed", "9.0", ["app-y"]),
+    {"id": 18, "action": "removed", "from": "8.3", "to": "9.0", "in": [{"name": "rival", "repo": "epel"}], "out": []},
+    {"id": 19, "action": "replaced", "from": "8.0", "to": "9.0", "in": [{"name": "rival", "repo": "epel"}],
+     "out": [{"name": "rival-new", "repo": "almalinux9-appstream"}]},
     ev(14, "merged", "8.0", ["py2"], [("platform-py", "almalinux8-baseos")]),
     ev(15, "merged", "9.0", ["platform-py"], [("py3", "almalinux9-appstream")]),
     {"id": 13, "action": "replaced", "from": None, "to": "8.0", "in": [{"name": "to-module", "repo": "base"}],
@@ -63,7 +66,7 @@ repo.routes = {"r": {"family": "el", "from": "centos7", "to": "alma10", "hops": 
                "r5": {"family": "el", "from": "centos5", "to": "alma10", "hops": ["centos6", "centos7", "alma9"],
                       "fixes": []}}
 
-box = ["dep-x", "app-y", "py2", "to-module", "gone-pkg", "kept-pkg", "moves-ok", "moves-crb", "old-name", "half-a", "half-b", "modular", "gated-only",
+box = ["rival", "dep-x", "app-y", "py2", "to-module", "gone-pkg", "kept-pkg", "moves-ok", "moves-crb", "old-name", "half-a", "half-b", "modular", "gated-only",
        "old-but-here", "before-start", "needs-both", "epel-thing"]
 r = pesgaps.walk(repo, "r", box, data=DATA, own=box)
 h9, h10 = r["hops"]
@@ -95,6 +98,12 @@ expect(gone.get("to-module", {}).get("becomes") == [{"name": "in-module", "strea
        "a successor only in a module stream the box hasn't enabled doesn't land")
 expect(gone.get("app-y", {}).get("own") and [st["package"] for st in gone.get("dep-x", {}).get("steps", [])] == ["dep-x"],
        "a successor the box already had goes as itself, not as the package it replaced")
+expect([(st["action"], st.get("also")) for st in gone.get("rival", {}).get("steps", [])] ==
+       [("removed", [{"action": "replaced", "becomes": ["rival-new"]}])],
+       "of two mappings at one release, the one written from the later release applies and the other is shown")
+expect(pesgaps.holds({"not": {"all": [{"installed": "a"}, {"installed": "b"}]}}, {"a", "b"}) is False and
+       pesgaps.holds({"not": {"file": "/etc/x"}}, set()) and pesgaps.holds({"not": {"any": [{"installed": "a"},
+       {"file": "/etc/x"}]}}, set()), "a negated all/any is evaluated; unknown leaves still hold")
 expect("platform-py" not in gone and [st["package"] for st in gone.get("py2", {}).get("steps", [])] == ["py2", "platform-py"]
        and gone["py2"]["named_by"] == ["installs-py3"],
        "a successor that goes again in the same hop extends the box package it came from, and its fix counts")
