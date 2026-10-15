@@ -113,7 +113,7 @@ small. A blob a later run no longer references can be swept once there are numbe
   stays up. remi's `/data` copy is the second copy, and the one that can rebuild R2.
 - **Reading.** The client already fetches each file by its expected digest from an ordered list of sources and keeps
   the first bytes that hash right (`wend walk --run`, `--source`). The archive is one more source, of a new kind: it
-  is addressed by digest, not by `host/path`, so the client asks for `blob/sha256/<hex>` directly (or for
+  is addressed by digest, not by `host/path`, so the client asks for `blob/sha256/<2>/<hex>` directly (or for
   `alias/<alg>/<hex>` first, when the chain gave it another hash). The default chain
   becomes local cache → `--source`s (an org cache) → the wend archive → origin → mirrors and vaults. A pinned file gone
   from all of them still refuses, as decided on 2026-10-11. `--live` stays the explicit escape.
@@ -169,7 +169,10 @@ Each one a small PR.
    the index R2 serves never names a blob it lacks (S3 API, SigV4, standard library only). Each PUT carries the
    body's sha256, and R2 refuses a body that doesn't match. `STORE/.pushed` remembers what's up. The credentials are
    an Object Read & Write token for this bucket, in a file only its owner can read; nothing prints them.
-6. **Client.** The archive as a by-digest source, in the default chain.
+6. **Client** (built, as an option). `wend walk --run RUN.json --archive URL|DIR` asks each archive by digest,
+   after the `--source`s and before the origin. An alias is only a pointer: the blob it names is still checked
+   against the digest the chain gave, so a wrong alias is a refusal. The archive joins the default chain (no flag
+   needed) once the bucket is public, at step 8.
 7. **Box inputs.** A box build records the sources it read, as a hop does, and the store ingests them.
 8. **Signing, then public.** The index signature and `archive/allowed_signers`; then the bucket gets public read.
    It stays private until this step.
