@@ -73,6 +73,9 @@ jobs:
       - name: the archive's store, by behaviour on a made-up repo (runs the PR's own tools, so not in the gate)
         working-directory: .
         run: python3 -B tools/test_archive.py
+      - name: VM replays side by side (per-guest ports, the install lock, the box cache key), by behaviour with a stand-in QEMU (runs the PR's own vm.py, so not in the gate)
+        working-directory: .
+        run: python3 -B tools/test_vm_parallel.py
       - name: the atlas passes the client's own check
         working-directory: .
         run: client/target/x86_64-unknown-linux-musl/release/wend check

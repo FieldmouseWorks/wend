@@ -28,11 +28,16 @@ A box with a [shelter] plan (SPEC "Sheltering an app", Proof) needs root: its sh
 of the box first, copied into the guest before the hop that drops Python 2, and probed for confinement after every
 reboot from that hop on, as installed (SELinux permissive) and in an enforcing window.
 
-Networking is QEMU user mode: nothing on the host changes. The guest reaches the mirror shim at 10.0.2.2. The guest's
-ssh and http are forwarded to fixed ports on 127.0.0.1 (10022, 10080), so one host runs one VM replay at a time; a
-second one fails at once ("qemu exited at once"). Disks go under $WEND_WORK/vm (default /var/tmp/wend/vm, which the
-chroot harness, run as root, may own: point WEND_WORK somewhere the user can write).
+Networking is QEMU user mode: nothing on the host changes. The guest reaches the mirror shim at 10.0.2.2. Each guest's
+ssh is forwarded to a free port on 127.0.0.1 of its own, so one host runs several VM replays side by side (each guest
+takes 2 CPUs and 3 GB); they share the mirror shim and the installed boxes. A box is installed once per cache key
+(the box file, the adapter, and the part of this file the install runs: build_source), and a run that needs a box
+another run is installing waits for it. Disks go under $WEND_WORK/vm (default /var/tmp/wend/vm, which the chroot
+harness, run as root, may own: point WEND_WORK somewhere the user can write). Every run records the commit it ran
+(run.json "head"), so a run on a stale head shows as one.
 """
+import ast
+import fcntl
 import gzip
 import hashlib
 import http.client
@@ -70,7 +75,6 @@ MAC = "52:54:00:12:34:56"
 # The box's static address. Not 10.0.2.15, which slirp's DHCP hands out: the forwards point here, so a box that falls
 # back to DHCP is unreachable and fails the hop, instead of passing because DHCP happened to give the same address.
 ADDR = "10.0.2.20"
-SSH_FWD, HTTP_FWD = 10022, 10080
 # The firmware the guests boot: "bios" (SeaBIOS) or "uefi" (OVMF without Secure Boot, the host's edk2-ovmf build).
 # A UEFI guest's NVRAM (boot entries) is a copy of OVMF's variable store next to each disk, carried along every overlay.
 FIRMWARE = "bios"
@@ -136,6 +140,76 @@ def log(msg):
     print(time.strftime("%H:%M:%S"), msg, flush=True)
 
 
+def free_port():
+    """A port on 127.0.0.1 nothing listens on right now, for a guest's ssh forward. Another process can take it before
+    QEMU binds it: Guest.start asks again when QEMU says so."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+class Locked:
+    """An exclusive flock on `path` (created if need be) for the with block: one run installs a box, the others wait
+    for it and then use it. Said once when it has to wait."""
+
+    def __init__(self, path, what):
+        self.path, self.what = path, what
+
+    def __enter__(self):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        self.f = open(self.path, "a")
+        try:
+            fcntl.flock(self.f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            log(f"another run is {self.what}; waiting for it")
+            fcntl.flock(self.f, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        self.f.close()  # closing the file drops the lock
+
+
+def head():
+    """The commit this checkout is on and whether tracked files differ from it, or None outside a git checkout. As
+    root (sudo -E) in a checkout someone else owns, git refuses the repository unless told it's safe; this only reads."""
+    git = ["git", "-c", "safe.directory=*", "-C", ROOT]
+    try:
+        rev = subprocess.run(git + ["rev-parse", "HEAD"], capture_output=True, text=True, timeout=60)
+        st = subprocess.run(git + ["status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True,
+                            timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if rev.returncode or st.returncode:
+        return None
+    return {"commit": rev.stdout.strip(), "dirty": bool(st.stdout.strip())}
+
+
+def build_source(path=None):
+    """This file's part of the box cache key: the source of build() and of every top-level function, class and
+    assignment in this file that it reaches by name, through any of them. A change to what only a replay runs (the
+    hops, shelters, relocate, prune) keeps the installed boxes; a change to anything the install runs (the kickstart,
+    the preseed, Guest, the box's checks) installs them again."""
+    src = open(path or os.path.abspath(__file__)).read()
+    defs = {}
+    for node in ast.parse(src).body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            defs.setdefault(node.name, []).append(node)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            for t in (node.targets if isinstance(node, ast.Assign) else [node.target]):
+                for n in ast.walk(t):
+                    if isinstance(n, ast.Name):
+                        defs.setdefault(n.id, []).append(node)
+    seen, todo = set(), ["build"]
+    while todo:
+        name = todo.pop()
+        if name in seen or name not in defs:
+            continue
+        seen.add(name)
+        todo += [n.id for node in defs[name] for n in ast.walk(node) if isinstance(n, ast.Name)]
+    nodes = {id(node): node for name in sorted(seen) for node in defs[name]}
+    return "\n".join(ast.get_source_segment(src, n) for n in sorted(nodes.values(), key=lambda n: n.lineno)).encode()
+
+
 def load(path):
     return tomllib.load(open(os.path.join(ROOT, path), "rb"))
 
@@ -193,14 +267,12 @@ GUESTS = []  # every qemu this run started: killed on the way out, whatever happ
 class Guest:
     def __init__(self, disk, key, ssh_port, hw=("virtio", "virtio")):
         self.disk, self.key, self.ssh_port, self.hw = disk, key, ssh_port, hw
+        self.fwd = None  # the host port forwarded to the guest's ssh, picked when it starts
         base = disk[:-len(".qcow2")]
         self.console, self.monitor_path, self.proc = base + ".console.log", None, None
         self.reboot_notes = []  # what went wrong reading boots in the last reboot(), for the run record
 
-    def start(self, extra=()):
-        # QEMU's monitor socket: a unix socket path has to fit in 108 bytes, which a run directory under a checkout
-        # doesn't, so it lives in a short directory of its own (removed on the way out, with the guest)
-        self.monitor_path = os.path.join(tempfile.mkdtemp(prefix="wend-vm-"), "monitor")
+    def argv(self, extra=()):
         fw = [] if FIRMWARE == "bios" else [
             "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF_CODE}",
             "-drive", f"if=pflash,format=raw,file={nvram(self.disk)}"]
@@ -208,14 +280,29 @@ class Guest:
                 *[x.format(disk=self.disk) for x in DISKS[self.hw[0]]],
                 *[x.format(disk=e, i=i) for i, e in enumerate(extras(self.disk), 1) for x in DISKS_EXTRA[self.hw[0]]],
                 "-netdev",
-                f"user,id=n0,hostfwd=tcp:127.0.0.1:{SSH_FWD}-{ADDR}:{self.ssh_port},hostfwd=tcp:127.0.0.1:{HTTP_FWD}-{ADDR}:80",
+                f"user,id=n0,hostfwd=tcp:127.0.0.1:{self.fwd}-{ADDR}:{self.ssh_port}",
                 "-device", f"{NICS[self.hw[1]]},netdev=n0,mac={MAC}", "-display", "none",
                 "-serial", f"file:{self.console}", "-monitor", f"unix:{self.monitor_path},server,nowait", *extra]
-        self.proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=open(self.console + ".qemu", "a"))
-        GUESTS.append(self)
-        time.sleep(2)
-        if self.proc.poll() is not None:
-            raise RuntimeError(f"qemu exited at once: {open(self.console + '.qemu').read()[-800:]}")
+        return argv
+
+    def start(self, extra=()):
+        for attempt in range(5):
+            # QEMU's monitor socket: a unix socket path has to fit in 108 bytes, which a run directory under a
+            # checkout doesn't, so it lives in a short directory of its own (removed on the way out, with the guest)
+            self.monitor_path = os.path.join(tempfile.mkdtemp(prefix="wend-vm-"), "monitor")
+            self.fwd = free_port()
+            err = self.console + ".qemu"
+            at = os.path.getsize(err) if os.path.exists(err) else 0
+            self.proc = subprocess.Popen(self.argv(extra), stdout=subprocess.DEVNULL, stderr=open(err, "a"))
+            GUESTS.append(self)
+            time.sleep(2)
+            if self.proc.poll() is None:
+                return
+            said = open(err, errors="replace").read()[at:]
+            shutil.rmtree(os.path.dirname(self.monitor_path), ignore_errors=True)
+            if "host forwarding" not in said:  # anything but another process taking the port first
+                break
+        raise RuntimeError(f"qemu exited at once: {said[-800:]}")
 
     def ssh(self, cmd, timeout=600, stdin=None):
         try:
@@ -244,7 +331,7 @@ class Guest:
             return p.returncode or tar.returncode, (p.stdout + p.stderr + err.read()).decode(errors="replace")
 
     def ssh_argv(self, cmd):
-        return ["ssh", "-q", "-i", self.key, "-p", str(SSH_FWD), "-o", "StrictHostKeyChecking=no",
+        return ["ssh", "-q", "-i", self.key, "-p", str(self.fwd), "-o", "StrictHostKeyChecking=no",
                 "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
                 "-o", "ServerAliveInterval=15", "-o", "LogLevel=ERROR",
                 # CentOS 5's OpenSSH 4.3 offers only these; later releases negotiate the modern ones
@@ -537,13 +624,21 @@ def build(box_id):
     box_doc = load(f"boxes/{box_id}/box.toml")
     fam = box_doc["family"]
     raw = open(os.path.join(ROOT, f"boxes/{box_id}/box.toml"), "rb").read() + \
-        open(os.path.join(ROOT, f"adapters/{fam}.toml"), "rb").read() + open(os.path.abspath(__file__), "rb").read() + \
+        open(os.path.join(ROOT, f"adapters/{fam}.toml"), "rb").read() + build_source() + \
         FIRMWARE.encode() + (json.dumps(LAYOUT, sort_keys=True).encode() if layout_tag() else b"")
     tag = "-".join(filter(None, [FIRMWARE, layout_tag()]))  # the default layout keeps the cache key it had
     d = os.path.join(WORK, f"{box_id.replace('/', '_')}-{tag}-{hashlib.sha256(raw).hexdigest()[:12]}")
+    if not os.path.exists(os.path.join(d, "base.qcow2")):
+        with Locked(d + ".lock", f"installing {box_id} for this key"):
+            if not os.path.exists(os.path.join(d, "base.qcow2")):  # it may have, while this one waited
+                install(box_id, box_doc, d)
+    return d, box_doc
+
+
+def install(box_id, box_doc, d):
+    """build()'s install, into the cache directory d, under its lock."""
+    fam = box_doc["family"]
     base = os.path.join(d, "base.qcow2")
-    if os.path.exists(base):
-        return d, box_doc
     inst = load(f"adapters/{fam}.toml")["releases"][box_doc["release"]]["install"]
     root_fs = LAYOUT["root_fs"] or box_doc.get("vm", {}).get("root_fs")
     if root_fs and root_fs not in inst.get("root_fs", []):
@@ -649,7 +744,6 @@ def build(box_id):
     sandbox.host(f"chmod a-w {base}")
     if FIRMWARE == "uefi":
         os.rename(nvram(disk), nvram(base))
-    return d, box_doc
 
 
 def pocket_sources(release, pockets):
@@ -837,6 +931,9 @@ def replay(route_path, box_id, resume=None):
     stamp = time.strftime("%Y%m%d-%H%M%S")
     tag = "-".join(filter(None, [FIRMWARE, layout_tag()]))
     out_dir = os.path.join(ROOT, ".wend", "vm", f"{stamp}-{box_id.replace('/', '_')}-{tag}-{os.getpid()}")
+    w.head = head()
+    at = w.head or {}
+    log(f"replaying at {at.get('commit', 'no git head')}{' (with local changes)' if at.get('dirty') else ''}")
     os.makedirs(out_dir)
     port = box_doc.get("vm", {}).get("ssh_port", 22)
     hw = hardware(a, route["from"])
@@ -873,7 +970,7 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
         g.start()
         if not g.wait_ssh():
             hops.append({"to": hop, "ok": False, "stage": "the guest didn't come up before the hop"})
-            g.kill()  # free the forwarded ports; the overlay and console stay for a look
+            g.kill()  # free the forwarded port; the overlay and console stay for a look
             break
         if start_net is None:
             start_net = net_read(g, plan)
@@ -976,7 +1073,7 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
         hops += prune(a, w, route["to"], box_doc, out_dir, prev, key, port, hw, start_net, plan)
     complete = len(hops) == len(todo) + bool(route.get("finish", {}).get("prune_obsolete"))
     run = {"schema": "wend.vmrun/0", "route": check.content_id(route), "box": box_id, "from": route["from"],
-           "to": route["to"], "started": stamp, "firmware": FIRMWARE,
+           "to": route["to"], "started": stamp, "head": w.head, "firmware": FIRMWARE,
            **({"efi_start": efi_start} if FIRMWARE == "uefi" else {}),
            "layout": {k: v for k, v in LAYOUT.items() if v}, "hops": hops,
            "result": "pass" if complete and all(h["ok"] for h in hops) and not resume else
@@ -1029,7 +1126,7 @@ def relocate(box_id):
     g = Guest(disk, os.path.join(d, "key"), box_doc.get("vm", {}).get("ssh_port", 22), hw)
     g.start()
     stages = []
-    run = {"schema": "wend.vmrelocate/0", "box": box_id, "started": stamp, "firmware": FIRMWARE,
+    run = {"schema": "wend.vmrelocate/0", "box": box_id, "started": stamp, "head": head(), "firmware": FIRMWARE,
            "layout": {k: v for k, v in LAYOUT.items() if v}, "new_disk": fills["new_disk"], "stages": stages,
            "runner": {"kind": "vm", "host": os.uname().nodename, "kernel": os.uname().release}}
 
@@ -1221,6 +1318,6 @@ if __name__ == "__main__":
     try:
         sys.exit(main(sys.argv[1:]))
     finally:
-        for guest in GUESTS:  # an exception or Ctrl-C must not leave a guest holding 3 GB and the forwarded ports
+        for guest in GUESTS:  # an exception or Ctrl-C must not leave a guest holding 3 GB and its forwarded port
             guest.kill()
             shutil.rmtree(os.path.dirname(guest.monitor_path), ignore_errors=True)
