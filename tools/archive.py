@@ -47,6 +47,7 @@ import bz2
 import fcntl
 import os
 import re
+import struct
 import subprocess
 import sys
 import urllib.request
@@ -190,6 +191,29 @@ def source_repo(base):
     for pattern, to in SOURCE_REPOS:
         if re.match(pattern, base):
             return re.sub(pattern, to, base)
+    return None
+
+
+def rpm_sourcerpm(data):
+    """The SOURCERPM tag (1044) of a binary .rpm's header, or None: for a package a run pins directly, which no
+    primary names. Lead (96 bytes), signature header (padded to 8), then the main header."""
+    def header(at):
+        if data[at:at + 4] != b"\x8e\xad\xe8\x01":
+            return None, None
+        n, size = struct.unpack(">II", data[at + 8:at + 16])
+        store = at + 16 + 16 * n
+        return [struct.unpack(">IIII", data[at + 16 + 16 * i:at + 32 + 16 * i]) for i in range(n)], (store, size)
+    try:
+        sig, (store, size) = header(96)
+        if sig is None:
+            return None
+        main, (store, _) = header(96 + (16 + 16 * len(sig) + size + 7) // 8 * 8)
+        for tag, typ, off, _ in main or []:
+            if tag == 1044 and typ == 6:
+                v = data[store + off:data.index(b"\0", store + off)].decode()
+                return v if re.fullmatch(r"[A-Za-z0-9._+~^-]+\.src\.rpm", v) else None
+    except (struct.error, ValueError, TypeError, UnicodeDecodeError):
+        pass
     return None
 
 
@@ -459,6 +483,11 @@ class Store:
             if not key[0].endswith(PACKAGES):
                 continue
             what = self.built_from.get(key)
+            if what is None and key[0].endswith(".rpm") and not key[0].endswith(".src.rpm"):
+                # pinned directly (an old EPEL package no repo serves any more): its own header names its source
+                srpm = rpm_sourcerpm(open(self.blob(self.kept[key][7:]), "rb").read())
+                if srpm:
+                    what = ("rpm", srpm, key[0].rsplit("/", 1)[0] + "/")
             if what is None:
                 self.no_source[key] = "no package index names its source (pinned directly, or no sourcerpm)"
             elif what[0] == "rpm":

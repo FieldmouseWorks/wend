@@ -280,6 +280,29 @@ p = subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", "ingest", f"{w}/
 check(p.returncode == 0 and "unreadable" not in p.stdout and
       f"no source https://{el}/x86_64/Packages/t-1.rpm" in p.stdout,
       "unreadable source metadata leaves gaps, never a failed ingest")
+import struct  # noqa: E402
+sys.path.insert(0, HERE)
+import archive  # noqa: E402
+
+
+def rpm(tags, sig_store=b"\0" * 5):
+    """A made-up binary .rpm: lead, a signature header (whose odd size needs the 8-byte padding), the main header."""
+    def header(entries, store):
+        return (b"\x8e\xad\xe8\x01\0\0\0\0" + struct.pack(">II", len(entries), len(store)) +
+                b"".join(struct.pack(">IIII", *e) for e in entries) + store)
+    sig = header([(1000, 4, 0, 1)], sig_store)
+    store, entries = b"", []
+    for tag, v in tags:
+        entries.append((tag, 6, len(store), 1))
+        store += v + b"\0"
+    return b"\xed\xab\xee\xdb" + b"\0" * 92 + sig + b"\0" * (-len(sig) % 8) + header(entries, store) + b"payload"
+
+
+check(archive.rpm_sourcerpm(rpm([(1000, b"p7zip"), (1044, b"p7zip-9.20.1-2.el5.src.rpm")])) ==
+      "p7zip-9.20.1-2.el5.src.rpm", "a directly pinned .rpm's own header names its source (EPEL 5's p7zip)")
+check(archive.rpm_sourcerpm(rpm([(1044, b"../../etc/passwd")])) is None and
+      archive.rpm_sourcerpm(rpm([(1000, b"x")])) is None and archive.rpm_sourcerpm(b"\xed\xab\xee\xdb short") is None,
+      "a header with no source, a source name that isn't one, or a truncated rpm names nothing")
 import shutil as sh  # noqa: E402
 if sh.which("ssh-keygen"):  # the index signature (docs/archive.md, step 8)
     a = lambda *x: subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", *x], capture_output=True, text=True)

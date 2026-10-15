@@ -68,7 +68,8 @@ Only files that proven routes and boxes reference. Never a mirror of a whole dis
    - **Debian, Ubuntu:** the `.dsc` and every file it lists, from the `<comp>/source/Sources` index the pinned
      `Release` lists, so the chain runs from the run's pin as the binaries' does. The binary's `Source:` field names
      the source and its version.
-   - **EL:** the `.src.rpm` its `primary.xml` names (`<rpm:sourcerpm>`), from the repo's source repo, checked against
+   - **EL:** the `.src.rpm` its `primary.xml` names (`<rpm:sourcerpm>`), or for a package a run pins directly (old
+     EPEL 5 builds no repo serves) the one its own RPM header names, from the repo's source repo, checked against
      that repo's own metadata. Source repos aren't pinned by any run, so their `repomd.xml` is taken live and recorded
      in the index, marked `"live": true`; the index signature (step 8) is what vouches for it. Where each repo's sources live is a table in
      `tools/archive.py` (`SOURCE_REPOS`): `vault.centos.org/<v>/<repo>/Source/` (`SRPMS/` for CentOS 5), AlmaLinux's
