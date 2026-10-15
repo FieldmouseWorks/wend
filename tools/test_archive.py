@@ -159,10 +159,13 @@ put(f"{el}/Source/repodata/repomd.xml", md(sprim))
 put(f"{el}/Source/repodata/{sha(sprim)}-primary.xml.gz", sprim)
 put(f"{el}/Source/Packages/t-1.src.rpm", src_rpm)
 deb_bin, dsc, tar = b"!<arch> deb", b"Format: 3.0 (quilt)\n", b"tarball"
+zbin, zdsc = b"!<arch> z", b"Format: z\n"
 packages = (f"Package: x\nSource: xsrc (1.0-1)\nVersion: 1.0-1+b1\nFilename: pool/main/x/xsrc/x_1.0-1+b1_amd64.deb\n"
-            f"SHA256: {sha(deb_bin)}\n").encode()
+            f"SHA256: {sha(deb_bin)}\n\n"  # z: a binNMU whose stanza names no source version
+            f"Package: z\nVersion: 2-1+b3\nFilename: pool/main/z/z/z_2-1+b3_amd64.deb\nSHA256: {sha(zbin)}\n").encode()
 sources = (f"Package: xsrc\nVersion: 1.0-1\nDirectory: pool/main/x/xsrc\nChecksums-Sha256:\n"
-           f" {sha(dsc)} {len(dsc)} xsrc_1.0-1.dsc\n {sha(tar)} {len(tar)} xsrc_1.0.orig.tar.xz\n").encode()
+           f" {sha(dsc)} {len(dsc)} xsrc_1.0-1.dsc\n {sha(tar)} {len(tar)} xsrc_1.0.orig.tar.xz\n\n"
+           f"Package: z\nVersion: 2-1\nDirectory: pool/main/z/z\nChecksums-Sha256:\n {sha(zdsc)} {len(zdsc)} z_2-1.dsc\n").encode()
 pz, sz = lzma.compress(packages), lzma.compress(sources)
 release = (f"Suite: test\nSHA256:\n {sha(pz)} {len(pz)} main/binary-amd64/Packages.xz\n"
            f" {sha(sz)} {len(sz)} main/source/Sources.xz\n").encode()
@@ -173,12 +176,15 @@ put(f"{deb}/dists/test/main/source/Sources.xz", sz)
 put(f"{deb}/pool/main/x/xsrc/x_1.0-1+b1_amd64.deb", deb_bin)
 put(f"{deb}/pool/main/x/xsrc/xsrc_1.0-1.dsc", dsc)
 put(f"{deb}/pool/main/x/xsrc/xsrc_1.0.orig.tar.xz", tar)
+put(f"{deb}/pool/main/z/z/z_2-1+b3_amd64.deb", zbin)
+put(f"{deb}/pool/main/z/z/z_2-1.dsc", zdsc)
 os.makedirs(f"{w}/runs3")
 os.makedirs(f"{w}/fetched3/r.fetched")
 open(f"{w}/fetched3/r.fetched/fetched.txt", "w").write(
     f"https://{el}/x86_64/Packages/t-1.rpm sha256:{sha(bin_rpm)} 1\n"
     f"https://{el}/x86_64/Packages/l-1.rpm sha256:{sha(lone_rpm)} 1\n"
-    f"https://{deb}/pool/main/x/xsrc/x_1.0-1+b1_amd64.deb sha256:{sha(deb_bin)} 1\n")
+    f"https://{deb}/pool/main/x/xsrc/x_1.0-1+b1_amd64.deb sha256:{sha(deb_bin)} 1\n"
+    f"https://{deb}/pool/main/z/z/z_2-1+b3_amd64.deb sha256:{sha(zbin)} 1\n")
 json.dump({"result": "pass", "box": "s", "started": "5", "hops": [{"sources": {
     f"https://{el}/x86_64/repodata/repomd.xml": f"sha256:{sha(md(prim))}",
     f"https://{deb}/dists/test/Release": f"sha256:{sha(release)}"}}]}, open(f"{w}/runs3/r.json", "w"))
@@ -194,6 +200,9 @@ check(entry(f"https://{deb}/pool/main/x/xsrc/x_1.0-1+b1_amd64.deb", deb_bin)["so
       f"https://{deb}/pool/main/x/xsrc/xsrc_1.0-1.dsc" and
       entry(f"https://{deb}/pool/main/x/xsrc/xsrc_1.0.orig.tar.xz", tar)["runs"] == ["s@5"],
       "a deb's .dsc and the files it lists are stored from the Sources index its pinned Release lists")
+check(entry(f"https://{deb}/pool/main/z/z/z_2-1+b3_amd64.deb", zbin)["source"].get("url") ==
+      f"https://{deb}/pool/main/z/z/z_2-1.dsc",
+      "a binNMU whose stanza names no source version finds its source without the +bN")
 check(p.returncode == 0 and f"no source https://{el}/x86_64/Packages/l-1.rpm" in p.stdout and
       "missing" in entry(f"https://{el}/x86_64/Packages/l-1.rpm", lone_rpm)["source"],
       "a package whose source isn't there is a reported gap, recorded in the index, not a failure")

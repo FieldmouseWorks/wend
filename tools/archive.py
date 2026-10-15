@@ -567,6 +567,8 @@ class Store:
 
         def lookup(what):
             key = (what[1], what[2])
+            if key not in found and re.search(r"\+b\d+$", what[2]):  # a binNMU whose Source names no version
+                key = (what[1], re.sub(r"\+b\d+$", "", what[2]))
             if key not in found:
                 for comp in sorted(c for c in self.deb_sources if c.rsplit("/", 1)[0] == suite and c not in read):
                     read_comp(comp)
