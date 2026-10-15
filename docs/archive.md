@@ -106,6 +106,21 @@ small. A blob a later run no longer references can be swept once there are numbe
   becomes local cache → `--source`s (an org cache) → the wend archive → origin → mirrors and vaults. A pinned file gone
   from all of them still refuses, as decided on 2026-10-11. `--live` stays the explicit escape.
 
+## Where old files go (the vaults at the end of the chain)
+
+The archive is the guarantee for proven routes. This table is the cheap fallback for a route's first trip, before
+anything is archived, and for a file the archive misses. It is data, not prediction logic: one more place the chain
+asks, after the origin. Every file is still checked against its pin, so a fallback can only fail to have the bytes,
+never hand over wrong ones. Checked 2026-10-15.
+
+| Origin | Where its old files go | Byte-exact? |
+|---|---|---|
+| repo.almalinux.org `<major>/` | vault.almalinux.org `<major>.<minor>/` once the next minor ships (8.3 through 9.7, 10.0 through 10.2 there today) | Packages yes. Metadata: only each minor's final `repomd.xml`, never the daily ones in between |
+| deb.debian.org, archive.debian.org | snapshot.debian.org, by date (#106 pins etch there) | Yes, every file Debian ever published |
+| archive.ubuntu.com | old-releases.ubuntu.com once a release leaves the archive (precise is there; trusty, still on ESM, isn't) | Yes, the same files moved |
+| dl.fedoraproject.org EPEL | **Nowhere usable.** Fedora's build system (kojipkgs.fedoraproject.org) keeps every build, but only the *unsigned* RPM. The signed copy EPEL shipped (`data/signed/<key>/`) is kept only while the build is current: fail2ban 1.0.2-3.el8 (current) has it, 1.0.2-7.el9 and 1.0.2-12.el9 (superseded) don't. Unsigned bytes don't hash to the pin | No. The archive is EPEL's only byte-exact copy, which is why capture keeps EPEL's packages |
+| vault.centos.org | It is the vault | Yes |
+
 ## Size
 
 Measured on remi, 2026-10-15. Its mirror shim cache holds everything every EL run there has fetched, old package
