@@ -13,11 +13,11 @@ flate2 = "1"
 libc = "0.2.190"
 lzma-rs = "0.3"
 regex = "1"
-ruzstd = "0.8"
+ruzstd = "0.9"
 serde_json = { version = "1", features = ["preserve_order"] }
-sha1 = "0.10"
-sha2 = "0.10"
-toml = { version = "0.8", features = ["preserve_order"] }
+sha1 = "0.11"
+sha2 = "0.11"
+toml = { version = "1.1", features = ["preserve_order"] }
 
 [profile.release]
 lto = true
