@@ -170,15 +170,19 @@ Each one a small PR.
    the index R2 serves never names a blob it lacks (S3 API, SigV4, standard library only). Each PUT carries the
    body's sha256, and R2 refuses a body that doesn't match. `STORE/.pushed` remembers what's up. The credentials are
    an Object Read & Write token for this bucket, in a file only its owner can read; nothing prints them.
-6. **Client** (built, as an option). `wend walk --run RUN.json --archive URL|DIR` asks each archive by digest,
-   after the `--source`s and before the origin. An alias is only a pointer: the blob it names is still checked
-   against the digest the chain gave, so a wrong alias is a refusal. The archive joins the default chain (no flag
-   needed) once the bucket is public, at step 8.
+6. **Client** (built). `wend walk --run RUN.json` asks wend's archive, `https://archive.fieldmouseworks.com`, by
+   digest, after the `--source`s and any `--archive URL|DIR` and before the origin (not with `--offline` or
+   `--no-archive`). An alias is only a pointer: the blob it names is still checked against the digest the chain
+   gave, so a wrong alias is a refusal.
 7. **Box inputs.** A box build records the sources it read, as a hop does, and the store ingests them.
 8. **Signing, then public.** `tools/archive.py sign STORE --key KEY` (built) writes `<index>.sig` beside every index
    file, and `r2push.py` sends each just before its index. `verify` checks them against `archive/allowed_signers`
    (committed). The key was made on remi (a root-only file; the private half never leaves remi), and remi's push
-   wrapper signs before every push. Then the bucket gets public read. It stays private until this step.
+   wrapper signs before every push. Public since 2026-10-15 at `https://archive.fieldmouseworks.com` (R2 custom
+   domain; no listing, no r2.dev). Check it yourself:
+   `curl -sO https://archive.fieldmouseworks.com/index/latest.json{,.sig}` then
+   `ssh-keygen -Y verify -f archive/allowed_signers -I wend-archive -n wend-archive -s latest.json.sig < latest.json`.
+   `r2push.py` marks an index `no-cache` and a blob or alias immutable, so an edge cache can't serve a stale index.
 9. **Gate artifacts** (built). `tools/gate_fetched.py DIR` downloads every unexpired `fetched-N` artifact not yet
    seen (a read-only Actions token; GitHub wants one even on a public repo) and unpacks each under `DIR/<id>/`;
    `archive.py ingest STORE --fetched DIR` then takes what passing runs on main pin. Artifacts from runs that never

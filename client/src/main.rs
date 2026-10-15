@@ -29,14 +29,16 @@ wend: walk a proven upgrade route on a machine. No model, no network beyond your
   wend hop ROUTE HOP [--fired N,..] the commands one hop of a route runs, with the named fixes (default: every
                                     fix the route pins on that hop)
   wend walk ROUTE --root DIR --checks FILE [--box NAME] [--out RUN.json] [--work DIR]
-            (--run RUN.json [--cache DIR] [--source URL|DIR]... [--archive URL|DIR]... [--offline] | --live)
+            (--run RUN.json [--cache DIR] [--source URL|DIR]... [--archive URL|DIR]... [--no-archive]
+             [--offline] | --live)
                                     walk a route on a root filesystem, in place (root needed): each hop's
                                     fixes, the upgrade, the checks; a hop that breaks anything is rolled back
                                     and the walk stops. FILE has [roles] (shell checks), like a CI box file.
                                     --run: the repos only serve what that run's pinned sources vouch for,
-                                    from the cache, each --source (laid out host/path), each --archive (wend's
-                                    archive, by digest: docs/archive.md), then the origin. A pinned file no
-                                    source has refuses the walk before it touches anything.
+                                    from the cache, each --source (laid out host/path), each --archive, then
+                                    wend's own archive (by digest, https://archive.fieldmouseworks.com:
+                                    docs/archive.md; not with --offline or --no-archive), then the origin. A
+                                    pinned file no source has refuses the walk before it touches anything.
                                     --live: no pins, today's mirrors, nothing verified; the run says so
   wend facts                        what preflight reads about this machine: CPU level features, firmware, memory,
                                     free disk, PCI devices and their drivers, its own Python 2 programs (JSON)
@@ -93,6 +95,7 @@ fn main() -> ExitCode {
         cache: opt(&mut args, "--cache"),
         sources: std::iter::from_fn(|| opt(&mut args, "--source")).collect(),
         archives: std::iter::from_fn(|| opt(&mut args, "--archive")).collect(),
+        no_archive: flag(&mut args, "--no-archive"),
         offline: flag(&mut args, "--offline"),
         live: flag(&mut args, "--live"),
     };
@@ -381,6 +384,7 @@ struct WalkOpts {
     cache: Option<String>,
     sources: Vec<String>,
     archives: Vec<String>,
+    no_archive: bool,
     offline: bool,
     live: bool,
 }
@@ -489,7 +493,12 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
             // the cache feeds the root: held to the work directory's rules (root's, nobody else can write)
             let cache = PathBuf::from(o.cache.clone().unwrap_or_else(|| format!("{}/cache", work.display())));
             let cache = sandbox::work_dir(&cache, &root.dir)?;
-            let p = fetch::Proxy::start(&run, &cache, o.sources.clone(), o.archives.clone(), o.offline)?;
+            // wend's own archive last among the sources: every byte is still checked against the run's pins
+            let mut archives = o.archives.clone();
+            if !o.offline && !o.no_archive {
+                archives.push(fetch::ARCHIVE.to_string());
+            }
+            let p = fetch::Proxy::start(&run, &cache, o.sources.clone(), archives, o.offline)?;
             // before anything touches the root: a snapshot gone from every source refuses here
             p.ensure_pinned().map_err(|e| {
                 format!(
@@ -499,10 +508,10 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
             })?;
             Some((p, run))
         }
-        None if o.offline || o.cache.is_some() || !o.sources.is_empty() || !o.archives.is_empty() => {
+        None if o.offline || o.no_archive || o.cache.is_some() || !o.sources.is_empty() || !o.archives.is_empty() => {
             return Err(
-                "--cache, --source, --archive and --offline need --run RUN.json: its pinned sources are what gets \
-                 verified"
+                "--cache, --source, --archive, --no-archive and --offline need --run RUN.json: its pinned sources \
+                 are what gets verified"
                     .into(),
             )
         }
