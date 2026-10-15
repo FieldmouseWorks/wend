@@ -29,12 +29,14 @@ wend: walk a proven upgrade route on a machine. No model, no network beyond your
   wend hop ROUTE HOP [--fired N,..] the commands one hop of a route runs, with the named fixes (default: every
                                     fix the route pins on that hop)
   wend walk ROUTE --root DIR --checks FILE [--box NAME] [--out RUN.json] [--work DIR]
-            [--run RUN.json [--cache DIR] [--source URL|DIR]... [--offline]]
+            (--run RUN.json [--cache DIR] [--source URL|DIR]... [--offline] | --live)
                                     walk a route on a root filesystem, in place (root needed): each hop's
                                     fixes, the upgrade, the checks; a hop that breaks anything is rolled back
                                     and the walk stops. FILE has [roles] (shell checks), like a CI box file.
                                     --run: the repos only serve what that run's pinned sources vouch for,
-                                    from the cache, each --source (laid out host/path), then the origin
+                                    from the cache, each --source (laid out host/path), then the origin. A
+                                    pinned file no source has refuses the walk before it touches anything.
+                                    --live: no pins, today's mirrors, nothing verified; the run says so
   wend facts                        what preflight reads about this machine: CPU level features, firmware, memory,
                                     free disk, PCI devices and their drivers, its own Python 2 programs (JSON)
   wend preflight ROUTE [--facts FILE] [--json]
@@ -55,6 +57,16 @@ fn opt(args: &mut Vec<String>, name: &str) -> Option<String> {
     let v = args.remove(i + 1);
     args.remove(i);
     Some(v)
+}
+
+fn flag(args: &mut Vec<String>, name: &str) -> bool {
+    match args.iter().position(|a| a == name) {
+        Some(i) => {
+            args.remove(i);
+            true
+        }
+        None => false,
+    }
 }
 
 fn main() -> ExitCode {
@@ -79,13 +91,8 @@ fn main() -> ExitCode {
         run: opt(&mut args, "--run"),
         cache: opt(&mut args, "--cache"),
         sources: std::iter::from_fn(|| opt(&mut args, "--source")).collect(),
-        offline: match args.iter().position(|a| a == "--offline") {
-            Some(i) => {
-                args.remove(i);
-                true
-            }
-            None => false,
-        },
+        offline: flag(&mut args, "--offline"),
+        live: flag(&mut args, "--live"),
     };
     let Some(cmd) = args.first().cloned() else {
         println!("{USAGE}");
@@ -372,6 +379,7 @@ struct WalkOpts {
     cache: Option<String>,
     sources: Vec<String>,
     offline: bool,
+    live: bool,
 }
 
 /// The adapter with its repos pointed at the proxy: apt's mirrors become <proxy>/<host>/<path>, and the rpm shim is
@@ -430,6 +438,21 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
         .checks
         .as_deref()
         .ok_or("walk needs --checks FILE: the health checks a hop must keep green")?;
+    // SPEC "Moved mirrors": verified by default. Today's mirrors only when asked, and the run records it.
+    match (&o.run, o.live) {
+        (None, false) => {
+            return Err(
+                "walk needs --run RUN.json, a passing CI run of this route whose pinned sources every \
+                        download is checked against. To walk against today's mirrors with nothing verified, \
+                        pass --live instead (the run records it)."
+                    .into(),
+            )
+        }
+        (Some(_), true) => {
+            return Err("--run and --live don't mix: --run verifies every download, --live verifies none".into())
+        }
+        _ => {}
+    }
     if unsafe { libc::geteuid() } != 0 {
         return Err("walking a root needs root (chroot, mount). Use a throwaway VM or a copy of the machine.".into());
     }
@@ -462,7 +485,15 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
             // the cache feeds the root: held to the work directory's rules (root's, nobody else can write)
             let cache = PathBuf::from(o.cache.clone().unwrap_or_else(|| format!("{}/cache", work.display())));
             let cache = sandbox::work_dir(&cache, &root.dir)?;
-            Some(fetch::Proxy::start(&run, &cache, o.sources.clone(), o.offline)?)
+            let p = fetch::Proxy::start(&run, &cache, o.sources.clone(), o.offline)?;
+            // before anything touches the root: a snapshot gone from every source refuses here
+            p.ensure_pinned().map_err(|e| {
+                format!(
+                    "{e}\nThe walk stopped before its first step. Add a --source that still has them, or walk against today's \
+                     mirrors with --live (unverified; the run records it)."
+                )
+            })?;
+            Some((p, run))
         }
         None if o.offline || o.cache.is_some() || !o.sources.is_empty() => {
             return Err(
@@ -471,6 +502,10 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
         }
         None => None,
     };
+    let pinned_by = proxy
+        .as_ref()
+        .map(|(_, run)| json!({"route": run["route"], "box": run["box"], "started": run["started"]}));
+    let proxy = proxy.map(|(p, _)| p);
     let proxied = proxy.as_ref().map(|p| proxied_adapter(a, &p.base())).transpose()?;
     let compile_with = proxied.as_ref().unwrap_or(a);
     if let (Some(m), None) = (get(a, "mirror"), &proxy) {
@@ -595,6 +630,14 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
         }
     };
     sandbox::safe_rm(&snap, &work)?;
+    let mut run = run;
+    if let Value::Object(m) = &mut run {
+        // how far to trust the run's sources: verified against another run's pins, or today's mirrors as they were
+        m.insert("live".into(), Value::Bool(o.live));
+        if let Some(p) = &pinned_by {
+            m.insert("pinned_by".into(), p.clone());
+        }
+    }
     let text = serde_json::to_string_pretty(&run).unwrap() + "\n";
     match &o.out {
         Some(p) => std::fs::write(p, &text).map_err(|e| format!("{p}: {e}"))?,

@@ -143,6 +143,20 @@ impl Proxy {
         format!("http://127.0.0.1:{}", self.port)
     }
 
+    /// SPEC "Moved mirrors": every top file the run pins, from the cache, a --source or the origin, verified before
+    /// the walk touches anything. A snapshot no source has any more refuses the walk here, not halfway through a hop.
+    pub fn ensure_pinned(&self) -> Result<(), String> {
+        let missing = learn_all(&self.state);
+        if missing.is_empty() {
+            return Ok(());
+        }
+        Err(format!(
+            "{} of the run's pinned sources can't be had from the cache, any --source or the origin:\n  {}",
+            missing.len(),
+            missing.join("\n  ")
+        ))
+    }
+
     /// What the proxy refused since the last call (each once), for the walk's log.
     pub fn take_refused(&self) -> Vec<String> {
         std::mem::take(&mut *lock(&self.state.refused))
@@ -281,27 +295,35 @@ fn answer(s: &State, path: &str) -> Result<PathBuf, (u16, String)> {
     // the package manager may have read its indexes from its own cache: learn every pinned index once, then look again
     // (held for the whole pass, so a parallel request waits for it instead of being refused; tried again until every
     // pinned index was had)
-    {
-        let mut done = lock(&s.learned_all);
-        if !*done {
-            let mut all = true;
-            for (k, p) in &s.tops {
-                if p.plain {
-                    all &= fetch_plain(s, k, p, false).is_ok();
-                } else if let Ok(f) = fetch(s, k, p) {
-                    learn(s, k, p, &f);
-                } else {
-                    all = false;
-                }
-            }
-            *done = all;
-        }
-    }
+    learn_all(s);
     let pin = lock(&s.pins).get(key).cloned();
     if let Some(p) = pin {
         return fetch(s, key, &p);
     }
     Err((403, format!("refused {key}: no pinned index lists it")))
+}
+
+/// Fetch and learn every top file the run pins, once (tried again until every one was had). What couldn't be had,
+/// each with why, sorted.
+fn learn_all(s: &State) -> Vec<String> {
+    let mut done = lock(&s.learned_all);
+    if *done {
+        return vec![];
+    }
+    let mut missing = vec![];
+    for (k, p) in &s.tops {
+        let r = if p.plain {
+            fetch_plain(s, k, p, false).map(|_| ())
+        } else {
+            fetch(s, k, p).map(|f| learn(s, k, p, &f))
+        };
+        if let Err((_, why)) = r {
+            missing.push(why);
+        }
+    }
+    *done = missing.is_empty();
+    missing.sort();
+    missing
 }
 
 /// %XX decoded (yum asks for libstdc%2B%2B); anything malformed stays as it is.
@@ -851,6 +873,32 @@ mod tests {
         assert_eq!(gunzip(&body).unwrap(), pinned.as_bytes());
         assert_eq!(get(px.port, "GET", "/h.test/debian/pool/a.deb"), (200, a));
         assert_eq!(get(px.port, "GET", "/h.test/debian/pool/b.deb").0, 403);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_vanished_snapshot_refuses_before_the_walk() {
+        let dir = std::env::temp_dir().join(format!("wend-pinned-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let src = dir.join("src/h.test/el/repodata");
+        std::fs::create_dir_all(&src).unwrap();
+        let repomd = "<repomd></repomd>";
+        let run = serde_json::json!({"hops": [{"sources": {
+            "https://h.test/el/repodata/repomd.xml": format!("sha256:{}", sha256_hex(repomd.as_bytes()))}}]});
+        let px = Proxy::start(
+            &run,
+            &dir.join("cache"),
+            vec![dir.join("src").display().to_string()],
+            true,
+        )
+        .unwrap();
+        // the mirror moved on: other bytes at the pinned path
+        std::fs::write(src.join("repomd.xml"), "<repomd>newer</repomd>").unwrap();
+        let e = px.ensure_pinned().unwrap_err();
+        assert!(e.contains("h.test/el/repodata/repomd.xml"), "{e}");
+        // a source that still has the snapshot
+        std::fs::write(src.join("repomd.xml"), repomd).unwrap();
+        px.ensure_pinned().unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 
