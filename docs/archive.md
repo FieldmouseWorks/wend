@@ -70,7 +70,7 @@ Only files that proven routes and boxes reference. Never a mirror of a whole dis
      the source and its version.
    - **EL:** the `.src.rpm` its `primary.xml` names (`<rpm:sourcerpm>`), from the repo's source repo, checked against
      that repo's own metadata. Source repos aren't pinned by any run, so their `repomd.xml` is taken live and recorded
-     in the index; the index signature (step 8) is what vouches for it. Where each repo's sources live is a table in
+     in the index, marked `"live": true`; the index signature (step 8) is what vouches for it. Where each repo's sources live is a table in
      `tools/archive.py` (`SOURCE_REPOS`): `vault.centos.org/<v>/<repo>/Source/` (`SRPMS/` for CentOS 5), AlmaLinux's
      current sources under `vault.almalinux.org/<major>/<repo>/Source/`, EPEL's `source/tree/`.
 

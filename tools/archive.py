@@ -175,6 +175,7 @@ SOURCE_REPOS = (
     (r"^(https://vault\.almalinux\.org/[^/]+/[^/]+/)x86_64/os/$", r"\1Source/"),
     (r"^(https://dl\.fedoraproject\.org/pub/epel/\d+/Everything/)x86_64/$", r"\1source/tree/"),
     (r"^(https://archives\.fedoraproject\.org/pub/archive/epel/\d+/)x86_64/$", r"\1SRPMS/"),
+    (r"^(https://archives\.fedoraproject\.org/pub/archive/epel/[0-9.]+/Everything/)x86_64/$", r"\1source/tree/"),
 )
 
 
@@ -272,14 +273,14 @@ class Store:
         self.stamp = now()
         self.added, self.found = [], set()
         self.rotted = set()  # store blobs get() found not hashing to their name: keep() rewrites them
-        self.missing = []  # (url, digest, depth, parent, why)
+        self.missing = []  # (url, digest, depth, parent (url, digest), why)
         self.unreadable = []  # (url, why)
         self.kept = {}  # (url, digest) -> "sha256:<hex>"
         self.edges = {}  # (url, digest) -> [(child url, child digest)]
-        self.found_under = set()  # (parent, stem): a form of an index its parent lists that this ingest found
+        self.found_under = set()  # ((parent url, parent digest), stem): a form of an index that parent lists, found
         self.built_from = {}  # (package url, digest) -> source_names() value, for every package stored
-        self.deb_sources = {}  # "<.../dists/X>/<comp>" -> [(Sources url, digest)] a pinned Release lists
-        self.no_source = {}  # package url -> why no source was stored
+        self.deb_sources = {}  # "<.../dists/X>/<comp>" -> [(Sources url, digest, the Release that lists it)]
+        self.no_source = {}  # (package url, digest) -> why no source was stored
 
     def blob(self, hexdigest):
         return f"{self.path}/blob/sha256/{hexdigest[:2]}/{hexdigest}"
@@ -400,9 +401,10 @@ class Store:
                 for child, cd in listed:
                     m = re.match(r"(.*/dists/[^/]+)/(.+)/source/Sources(\.[a-z0-9]+)?$", child)
                     if m:
-                        self.deb_sources.setdefault(f"{m[1]}/{m[2]}", []).append((child, cd))
-            rank = lambda c: next((i for i, ext in enumerate((".bz2", ".gz", ".xz")) if c[0].endswith(ext)), -1)
-            for child, cd in sorted(listed, key=rank):  # popped last-in first: .xz, .gz, .bz2, then plain
+                        self.deb_sources.setdefault(f"{m[1]}/{m[2]}", []).append((child, cd, (url, d)))
+            # popped last-in first: .gz, then plain, then the rest (the client learns packages from .gz or plain only)
+            rank = lambda c: 3 if c[0].endswith(".gz") else 0 if c[0].endswith((".xz", ".bz2", ".zst")) else 2
+            for child, cd in sorted(listed, key=rank):
                 if child in names:
                     self.built_from[(child, cd)] = names[child]
                 if child.endswith(PACKAGES):
@@ -411,7 +413,7 @@ class Store:
                     wanted = bool(PACKAGE_INDEX.search(child)) or child in self.used
                 if wanted and depth < 3:
                     self.edges.setdefault((url, d), []).append((child, cd))
-                    todo.append((child, cd, depth + 1, url))
+                    todo.append((child, cd, depth + 1, (url, d)))
         for key, runs in pins.items():
             stack, done = [key], set()
             while stack:
@@ -441,60 +443,80 @@ class Store:
 
     def sources(self):
         """Store the source of every package stored: the .src.rpm its primary names, from its source repo
-        (SOURCE_REPOS), or the .dsc and files its Sources stanza lists, from the Sources index its pinned Release
-        lists. Every source file is checked against that metadata. A package whose source can't be found gets
-        "source": {"missing": why} in the index; that's a gap to fill before the archive goes public, not a failure."""
-        wanted = {}  # group key -> {package key: what}
-        for key, what in self.built_from.items():
-            if key not in self.kept:
+        (SOURCE_REPOS), or the .dsc and files its Sources stanza lists, from the Sources indexes its pinned Releases
+        list. Every source file is checked against that metadata, and gets the runs of the packages built from it.
+        A package whose source can't be found gets "source": {"missing": why} in the index and is listed; that's a
+        gap to fill before the archive goes public, not a failure."""
+        groups = {}  # source repo base, or ("deb", mirror, suite dir) -> {package key: what}
+        for key in sorted(self.kept):
+            if not key[0].endswith(PACKAGES):
                 continue
-            if what[0] == "rpm":
-                group = source_repo(what[2])
-            else:
-                group = ("deb", what[3], what[4]) if what[4] in self.deb_sources else None
-            if not group:
-                self.no_source[key[0]] = "no source repo known for its repo"
-                continue
-            wanted.setdefault(group, {})[key] = what
-        for group, packages in sorted(wanted.items(), key=lambda g: str(g[0])):
-            found = self.rpm_sources(group) if isinstance(group, str) else self.deb_source_index(*group[1:])
-            for key, what in packages.items():
-                files = found.get(what[1] if what[0] == "rpm" else (what[1], what[2]))
-                if not files:
-                    self.no_source[key[0]] = "its source isn't in the source metadata now"
-                    continue
-                stored = []
-                for u, d in files:
-                    data, why = self.get(u, d)
-                    if data is None:
-                        self.no_source[key[0]] = f"{u}: {why}"
-                        break
-                    h = self.keep(u, data)
-                    self.alias(d, h)
-                    stored.append((u, f"sha256:{h}"))
+            what = self.built_from.get(key)
+            if what is None:
+                self.no_source[key] = "no package index names its source (pinned directly, or no sourcerpm)"
+            elif what[0] == "rpm":
+                base = source_repo(what[2])
+                if base:
+                    groups.setdefault(base, {})[key] = what
                 else:
-                    runs = self.index["files"][key[0]][self.kept[key]]["runs"]
-                    for u, hd in stored:
-                        e = self.index["files"][u][hd]
-                        e["runs"] = sorted(set(e["runs"]) | set(runs))
-                    main = next((x for x in stored if x[0].endswith((".dsc", ".src.rpm"))), stored[0])
-                    self.index["files"][key[0]][self.kept[key]]["source"] = {"url": main[0], "digest": main[1]}
-        for u, why in self.no_source.items():
-            for hd in self.index["files"].get(u, {}).values():
-                hd.setdefault("source", {"missing": why})
+                    self.no_source[key] = f"no source repo known for {what[2]}"
+            elif any(c.rsplit("/", 1)[0] == what[4].rsplit("/", 1)[0] for c in self.deb_sources):
+                groups.setdefault(("deb", what[3], what[4].rsplit("/", 1)[0]), {})[key] = what
+            else:
+                self.no_source[key] = "its suite's Release lists no Sources"
+        stored = {}  # (url, digest) -> "sha256:<hex>", or None when it couldn't be had: each source file once
+        for group, packages in sorted(groups.items(), key=lambda g: str(g[0])):
+            meta = []  # (url, "sha256:<hex>") of the metadata this group's sources came through
+            if isinstance(group, str):
+                found, why = self.rpm_sources(group, meta)
+                lookup = lambda what: found.get(what[1])
+            else:
+                lookup, why = self.deb_lookup(group[1], group[2], packages.values(), meta), ""
+            runs_of_group = set()
+            for key, what in packages.items():
+                files = lookup(what)
+                if not files:
+                    self.no_source[key] = why or "its source isn't listed (with a sha1 or sha256) in the metadata now"
+                    continue
+                for u, d in files:
+                    if (u, d) not in stored:
+                        data, err = self.get(u, d)
+                        stored[(u, d)] = None if data is None else f"sha256:{self.keep(u, data)}"
+                        if data is not None:
+                            self.alias(d, stored[(u, d)][7:])
+                        else:
+                            self.no_source[key] = f"{u}: {err}"
+                if any(stored[f] is None for f in files):
+                    self.no_source.setdefault(key, "a source file couldn't be had")
+                    continue
+                runs = self.index["files"][key[0]][self.kept[key]]["runs"]
+                runs_of_group |= set(runs)
+                for u, d in files:
+                    e = self.index["files"][u][stored[(u, d)]]
+                    e["runs"] = sorted(set(e["runs"]) | set(runs))
+                main = next((f for f in files if f[0].endswith((".dsc", ".src.rpm"))), files[0])
+                self.index["files"][key[0]][self.kept[key]]["source"] = {"url": main[0], "digest": stored[main]}
+            for u, hd in meta:
+                e = self.index["files"][u][hd]
+                e["runs"] = sorted(set(e["runs"]) | runs_of_group)
+        for key, why in self.no_source.items():
+            self.index["files"][key[0]][self.kept[key]].setdefault("source", {"missing": why})
 
-    def rpm_sources(self, base):
-        """{"<name>.src.rpm": [(url, digest)]} from a source repo's live metadata."""
+    def rpm_sources(self, base, meta):
+        """({"<name>.src.rpm": [(url, digest)]}, why it's empty) from a source repo's live metadata. Its repomd.xml
+        is pinned by no run: its index entry says "live", and the archive's signature is what vouches for it."""
         url = f"{base}repodata/repomd.xml"
         data = self.live(url)
         if data is None:
-            return {}
-        self.keep(url, data)
+            return {}, f"its source repo's metadata couldn't be had ({url})"
+        h = self.keep(url, data)
+        self.index["files"][url][f"sha256:{h}"]["live"] = True
+        meta.append((url, f"sha256:{h}"))
         try:
             listed = children(url, data)
         except ValueError as e:
             self.unreadable.append((url, str(e)))
-            return {}
+            return {}, f"{url}: {e}"
         rank = lambda c: next((i for i, ext in enumerate((".gz", ".xz", ".zst")) if c[0].endswith(ext)), 9)
         for child, cd in sorted((c for c in listed if PACKAGE_INDEX.search(c[0])), key=rank):
             primary, _ = self.get(child, cd)
@@ -505,21 +527,53 @@ class Store:
             except ValueError as e:  # a .zst with no decoder here: try the next form
                 self.unreadable.append((child, str(e)))
                 continue
-            self.alias(cd, self.keep(child, primary))
-            return {u.rsplit("/", 1)[1]: [(u, d)] for u, d in entries}
-        return {}
+            h = self.keep(child, primary)
+            self.alias(cd, h)
+            meta.append((child, f"sha256:{h}"))
+            return {u.rsplit("/", 1)[1]: [(u, d)] for u, d in entries}, ""
+        return {}, f"no readable primary under {url}"
 
-    def deb_source_index(self, mirror, comp):
-        """{(package, version): [(url, digest)]} from the Sources index a pinned Release lists for comp, any form."""
-        rank = lambda f: next((i for i, ext in enumerate((".xz", ".gz", ".bz2", "/Sources")) if f[0].endswith(ext)), 9)
-        for u, d in sorted(self.deb_sources[comp], key=rank):
-            data, _ = self.get(u, d)
-            if data is None:
-                continue
-            self.alias(d, self.keep(u, data))
-            entries = sources_entries(decompress(u, data).decode("utf-8", "replace"))
-            return {k: [(f"{mirror}/{name}", fd) for name, fd in files] for k, files in entries.items()}
-        return {}
+    def deb_lookup(self, mirror, suite, wanted, meta):
+        """A function from a package's what to its source files, reading the Sources indexes the pinned Releases list:
+        every Release digest's for the packages' own components first, then the suite's other components (an Ubuntu
+        universe binary is often built from a main source)."""
+        found, read = {}, set()
+
+        def read_comp(comp):
+            read.add(comp)
+            rank = lambda f: next((i for i, ext in enumerate((".gz", ".xz", "/Sources", ".bz2")) if f[0].endswith(ext)), 9)
+            done = set()  # one form per Release, but every Release digest's (a point release is its own file)
+            for u, d, release in sorted(self.deb_sources.get(comp, []), key=rank):
+                if release in done:
+                    continue
+                data, _ = self.get(u, d)
+                if data is None:
+                    continue
+                try:
+                    entries = sources_entries(decompress(u, data).decode("utf-8", "replace"))
+                except Exception as e:
+                    self.unreadable.append((u, str(e)))
+                    continue
+                h = self.keep(u, data)
+                self.alias(d, h)
+                meta.append((u, f"sha256:{h}"))
+                done.add(release)
+                for k, files in entries.items():
+                    found.setdefault(k, [(f"{mirror}/{name}", fd) for name, fd in files])
+
+        for what in wanted:
+            if what[4] not in read and what[4] in self.deb_sources:
+                read_comp(what[4])
+
+        def lookup(what):
+            key = (what[1], what[2])
+            if key not in found:
+                for comp in sorted(c for c in self.deb_sources if c.rsplit("/", 1)[0] == suite and c not in read):
+                    read_comp(comp)
+                    if key in found:
+                        break
+            return found.get(key)
+        return lookup
 
     def unfound(self):
         """{url: why} for referenced files no source had at their digest. The one exception: an index its parent lists
@@ -629,7 +683,7 @@ def main(argv):
         print(f"  unreadable {u} ({why})")
     if s.no_source:
         print(f"{len(s.no_source)} stored packages have no source stored yet (gaps to fill before going public):")
-        for u, why in sorted(s.no_source.items()):
+        for (u, _), why in sorted(s.no_source.items()):
             print(f"  no source {u} ({why})")
     return 1 if missing or s.unreadable else 0
 

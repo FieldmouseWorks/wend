@@ -203,6 +203,62 @@ p = subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", "ingest", f"{w}/
 check(f"no source https://{deb}/pool/main/x/xsrc/x_1.0-1+b1_amd64.deb" in p.stdout and
       not os.path.exists(f"{w}/store4/blob/sha256/{sha(b'evil')[:2]}/{sha(b'evil')}"),
       "a source file that doesn't hash to what Sources lists is refused")
+# a point release: two runs pin the same Release url at two digests, each listing its own Packages and Sources; a
+# universe binary built from a main source; a package a run pins directly
+def put5(rel, data):
+    os.makedirs(os.path.dirname(f"{w}/tree5/{rel}"), exist_ok=True)
+    open(f"{w}/tree5/{rel}", "wb").write(data)
+
+
+m5 = "deb.example.org/ubuntu"
+rel5, fetched5 = [], []
+for v in ("1", "2"):
+    debv, dscv = f"!<arch> x{v}".encode(), f"Format: {v}\n".encode()
+    pk = (f"Package: x\nVersion: {v}\nFilename: pool/main/x/x/x_{v}_amd64.deb\nSHA256: {sha(debv)}\n").encode()
+    srcs = (f"Package: x\nVersion: {v}\nDirectory: pool/main/x/x\nChecksums-Sha256:\n"
+            f" {sha(dscv)} {len(dscv)} x_{v}.dsc\n").encode()
+    if v == "2":  # universe's y is built from main's x
+        yv = b"!<arch> y"
+        upk = f"Package: y\nSource: x\nVersion: 2\nFilename: pool/universe/x/x/y_2_amd64.deb\nSHA256: {sha(yv)}\n"
+        uz = gzip.compress(upk.encode())
+        put5(f"{m5}/pool/universe/x/x/y_2_amd64.deb", yv)
+        fetched5.append(f"https://{m5}/pool/universe/x/x/y_2_amd64.deb sha256:{sha(yv)} 1")
+    pz5, px5, sz5 = gzip.compress(pk), lzma.compress(pk), gzip.compress(srcs)
+    rel = (f"SHA256:\n {sha(pz5)} {len(pz5)} main/binary-amd64/Packages.gz\n {sha(px5)} {len(px5)} "
+           f"main/binary-amd64/Packages.xz\n {sha(sz5)} {len(sz5)} main/source/Sources.gz\n" +
+           (f" {sha(uz)} {len(uz)} universe/binary-amd64/Packages.gz\n" if v == "2" else "")).encode()
+    rel5.append(rel)
+    os.makedirs(f"{w}/b5/{v}/blobs", exist_ok=True)  # each Release's metadata, as each run's capture kept it
+    for b in (rel, pz5, px5, sz5) + ((uz,) if v == "2" else ()):
+        open(f"{w}/b5/{v}/blobs/{sha(b)}", "wb").write(b)
+    put5(f"{m5}/pool/main/x/x/x_{v}_amd64.deb", debv)
+    put5(f"{m5}/pool/main/x/x/x_{v}.dsc", dscv)
+    fetched5.append(f"https://{m5}/pool/main/x/x/x_{v}_amd64.deb sha256:{sha(debv)} 1")
+lone = b"\xed\xab\xee\xdb pinned"
+put5("pkgs.example.org/p-1.rpm", lone)
+open(f"{w}/b5/1/fetched.txt", "w").write("\n".join(fetched5) + "\n")
+os.makedirs(f"{w}/runs5")
+for i, rel in enumerate(rel5):
+    json.dump({"result": "pass", "box": "u", "started": str(i), "hops": [{"sources": {
+        f"https://{m5}/dists/s/Release": f"sha256:{sha(rel)}",
+        "https://pkgs.example.org/p-1.rpm": f"sha256:{sha(lone)}"}}]}, open(f"{w}/runs5/{i}.json", "w"))
+p = subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", "ingest", f"{w}/store5", "--offline", "--tree",
+                    f"{w}/tree5", "--runs", f"{w}/runs5", "--fetched", f"{w}/b5"], capture_output=True, text=True)
+idx = json.load(open(f"{w}/store5/index/latest.json"))["files"]
+src = lambda u: [e.get("source", {}) for e in idx.get(u, {}).values()]
+check([x.get("url") for x in src(f"https://{m5}/pool/main/x/x/x_1_amd64.deb")] == [f"https://{m5}/pool/main/x/x/x_1.dsc"]
+      and [x.get("url") for x in src(f"https://{m5}/pool/main/x/x/x_2_amd64.deb")] ==
+      [f"https://{m5}/pool/main/x/x/x_2.dsc"],
+      "two digests of one Release each get their packages and their sources stored (a point release)")
+check(f"https://{m5}/dists/s/main/binary-amd64/Packages.gz" in idx and
+      f"https://{m5}/dists/s/main/binary-amd64/Packages.xz" not in idx,
+      "of a package index's forms, the .gz the client reads is kept")
+check([x.get("url") for x in src(f"https://{m5}/pool/universe/x/x/y_2_amd64.deb")] ==
+      [f"https://{m5}/pool/main/x/x/x_2.dsc"], "a binary built from another component's source finds it there")
+check("missing" in src("https://pkgs.example.org/p-1.rpm")[0] and "no source https://pkgs.example.org/p-1.rpm" in p.stdout,
+      "a package a run pins directly is a listed gap, not silently sourceless")
+check(any(e.get("live") for e in json.load(open(f"{w}/store3/index/latest.json"))["files"][
+    f"https://{el}/Source/repodata/repomd.xml"].values()), "a source repo's repomd.xml, pinned by no run, is marked live")
 import shutil as sh  # noqa: E402
 if sh.which("zstd"):  # EPEL 10 serves its primary only as .zst; CI's runners have zstd, not every laptop does
     sys.path.insert(0, HERE)
