@@ -15,6 +15,20 @@ permissions:
   contents: read
 
 jobs:
+  # the oldest Rust Cargo.toml's rust-version promises, so the promise can't drift while everything else builds on
+  # rust-toolchain.toml's pin
+  msrv:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: |
+          v=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
+          test -n "$v"
+          rustup toolchain install "$v" --profile minimal
+          cargo "+$v" build --locked --all-targets
   client:
     runs-on: ubuntu-24.04
     defaults:
