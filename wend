@@ -99,9 +99,11 @@ def summary(run):
 
 def cmd_replay(route_path, box, out=None, keep=False, steps=None):
     need_root([box.split("/")[0]])
+    import fetched
     import walk
     repo = Repo()
     w = None
+    since = fetched.mark()
     try:
         with root_umask():
             w = walk.Walk(repo, repo.routes[route_path], box)
@@ -113,7 +115,8 @@ def cmd_replay(route_path, box, out=None, keep=False, steps=None):
         if steps and w:
             json.dump(w.steps, open(steps, "w"), indent=1)
     p = save_run(run, out)
-    print(summary(run), "\nrun:", os.path.relpath(p, ROOT))
+    n = fetched.collect(since, p[:-len(".json")] + ".fetched")  # docs/archive.md "Capture"
+    print(summary(run), "\nrun:", os.path.relpath(p, ROOT) + (f" (and {n} fetched files listed beside it)" if n else ""))
     return 0 if run["result"] == "pass" else 1
 
 
@@ -271,7 +274,8 @@ def main(argv):
         p = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_pesgaps.py"]).returncode
         f = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_printf.py"]).returncode
         s = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_checksig.py"]).returncode
-        return a or b or u or g or n or i or k or e or r or p or f or s
+        d = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_fetched.py"]).returncode
+        return a or b or u or g or n or i or k or e or r or p or f or s or d
     if c == "list":
         return cmd_list()
     if c == "replay":

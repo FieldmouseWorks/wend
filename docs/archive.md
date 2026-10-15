@@ -117,10 +117,12 @@ again. Fresh CI replays, once capture is in, replace them. That's cheaper than d
 Each one a small PR.
 
 1. This document.
-2. **Capture.** The harness writes the download list and keeps the metadata it read; the shim keeps old
-   `repomd.xml` versions by digest; the gate replay job uploads both as an artifact. This stops the rot for every run
-   from then on. Runs already on main whose EL pins are gone get replaced by fresh CI replays, which this makes
-   archivable.
+2. **Capture, EL** (with this document). The shim keeps every file it fetched by digest and logs what it served;
+   `wend replay --out` writes the download list and the metadata bytes beside the run; the gate uploads them. This
+   stops the rot for every EL run from then on. Runs already on main whose EL pins are gone get replaced by fresh CI
+   replays. remi's shim is a long-running process, so it has to be restarted once this lands.
+   **Capture, apt.** The same from the box's own `/var/lib/apt/lists` and `/var/cache/apt/archives`, since apt doesn't
+   go through the shim. Less urgent: of apt's pins only the current Debian releases' change (at point releases).
 3. **The store.** `tools/archive.py` on remi: ingest a download list (or a run file), fetch what's missing, verify
    the chain, store blobs, write the index. Measures as it goes.
 4. **Sources.** Source packages for everything ingested.

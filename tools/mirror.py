@@ -6,6 +6,10 @@ https://<host>/<path> once and serves it from disk after that. Only the hosts be
 Started by tools/sandbox.py when an adapter has a [mirror] table. Standard library only.
 
   python3 tools/mirror.py PORT CACHE_DIR
+
+For the archive (docs/archive.md, "Capture"), every file it fetches is also hard-linked under CACHE_DIR/.sha256/<hex>,
+so a live repo's repomd.xml that the next fetch replaces survives under its digest, and every file it serves is logged
+to CACHE_DIR/.fetched.log as "<https url> sha256:<hex> <size>". tools/fetched.py reads that log.
 """
 import hashlib
 import http.server
@@ -20,6 +24,10 @@ import urllib.request
 ALLOWED = {"vault.centos.org", "repo.almalinux.org", "vault.almalinux.org", "archives.fedoraproject.org",
            "dl.fedoraproject.org"}
 CACHE = sys.argv[2] if len(sys.argv) > 2 else "/var/tmp/wend/mirror"
+STORE = os.path.join(CACHE, ".sha256")  # not reachable through the shim: a request's first segment must be a host
+LOG = os.path.join(CACHE, ".fetched.log")
+DIGESTS = {}  # (inode, mtime_ns, size) -> sha256 hex of a cached file, so a cache hit isn't rehashed every time
+LOG_LOCK = threading.Lock()
 
 
 def fetch(url, local, sha256=None):
@@ -40,10 +48,46 @@ def fetch(url, local, sha256=None):
             raise OSError(f"short read: {size} of {want} bytes")
         if sha256 and h.hexdigest() != sha256:
             raise OSError("sha256 does not match the file name")
+        keep(tmp, h.hexdigest())
         os.replace(tmp, local)
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
+
+
+def keep(path, hexdigest):
+    """Hard-link a complete file under STORE by its sha256 (once), and remember its digest."""
+    st = os.stat(path)
+    DIGESTS[(st.st_ino, st.st_mtime_ns, st.st_size)] = hexdigest
+    os.makedirs(STORE, exist_ok=True)
+    try:
+        os.link(path, os.path.join(STORE, hexdigest))
+    except FileExistsError:
+        pass
+
+
+def digest_of(f, local):
+    """The sha256 of an open cached file, kept under STORE if it isn't yet (files cached before the store existed)."""
+    st = os.fstat(f.fileno())
+    hexdigest = DIGESTS.get((st.st_ino, st.st_mtime_ns, st.st_size))
+    if hexdigest is None:
+        h = hashlib.sha256()
+        while chunk := f.read(1 << 20):
+            h.update(chunk)
+        f.seek(0)
+        hexdigest = h.hexdigest()
+        keep(local, hexdigest)
+    return hexdigest, st.st_size
+
+
+def log_served(url, hexdigest, size):
+    line = f"{url} sha256:{hexdigest} {size}\n".encode()
+    with LOG_LOCK:
+        fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(fd, line)
+        finally:
+            os.close(fd)
 
 
 def byte_range(header, size):
@@ -97,29 +141,30 @@ class H(http.server.BaseHTTPRequestHandler):
                         break
             if err and not os.path.exists(local):  # a live mirror hiccup: serve the last good copy if there is one
                 return self.send_error(err.code if isinstance(err, urllib.error.HTTPError) else 502, str(err)[:100])
-        size = os.path.getsize(local)
-        r = byte_range(self.headers.get("Range", ""), size)  # anaconda (tools/vm.py) reads rpm headers this way
-        if r == "unsatisfiable":
-            self.send_response(416)
-            self.send_header("Content-Range", f"bytes */{size}")
-            self.end_headers()
-            return
-        if r:
-            start, end = r
-            self.send_response(206)
-            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-            self.send_header("Content-Length", str(end - start + 1))
-            self.end_headers()
-            if body:
-                with open(local, "rb") as f:
+        with open(local, "rb") as f:  # one open file: the bytes served are the bytes hashed and logged
+            size = os.fstat(f.fileno()).st_size
+            if body and not local.endswith(".index"):  # directory listings aren't archived
+                log_served(f"https://{parts[0]}/{parts[1]}", *digest_of(f, local))
+            r = byte_range(self.headers.get("Range", ""), size)  # anaconda (tools/vm.py) reads rpm headers this way
+            if r == "unsatisfiable":
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+            if r:
+                start, end = r
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+                self.send_header("Content-Length", str(end - start + 1))
+                self.end_headers()
+                if body:
                     f.seek(start)
                     self.wfile.write(f.read(end - start + 1))
-            return
-        self.send_response(200)
-        self.send_header("Content-Length", str(size))
-        self.end_headers()
-        if body:
-            with open(local, "rb") as f:
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            if body:
                 shutil.copyfileobj(f, self.wfile)
 
     def do_GET(self):
