@@ -11,6 +11,9 @@ not runs/ (runs/ holds what CI proved).
 
   python3 tools/vm.py build BOX            install the box in a VM (cached by box file + adapter)
   python3 tools/vm.py replay ROUTE BOX     walk ROUTE on a fresh copy of it, rebooting after every hop
+  python3 tools/vm.py shim-stop PID        stop the mirror shim (tools/mirror.py) running as PID, unless a VM run is
+                                           using it (exit 3: left running); runs that start meanwhile wait, then start
+                                           a fresh one from their own checkout
   python3 tools/vm.py replay ROUTE BOX --from RUN HOP
                                            the same from RUN's disk after the hop before HOP (partial-pass at best)
   python3 tools/vm.py --extra-disk GB relocate BOX
@@ -32,7 +35,9 @@ Networking is QEMU user mode: nothing on the host changes. The guest reaches the
 ssh is forwarded to a free port on 127.0.0.1 of its own, so one host runs several VM replays side by side (each guest
 takes 2 CPUs and 3 GB); they share the mirror shim and the installed boxes. A box is installed once per cache key
 (the box file, the adapter, and the part of this file the install runs: build_source), and a run that needs a box
-another run is installing waits for it. Disks go under $WEND_WORK/vm (default /var/tmp/wend/vm, which the chroot
+another run is installing waits for it. A run holds a shared lock on $WEND_WORK/mirror.users for as long as it lives,
+so the shim isn't stopped under it: stop the shim only with `shim-stop`, which refuses while any run holds it.
+Disks go under $WEND_WORK/vm (default /var/tmp/wend/vm, which the chroot
 harness, run as root, may own: point WEND_WORK somewhere the user can write). Every run records the commit it ran
 (run.json "head"), so a run on a stale head shows as one.
 """
@@ -167,6 +172,58 @@ class Locked:
 
     def __exit__(self, *exc):
         self.f.close()  # closing the file drops the lock
+
+
+SHIM_USERS = os.path.join(sandbox.WORK, "mirror.users")  # every VM run holds a shared flock on it while it runs
+HOLDING = []  # this run's own hold on SHIM_USERS
+
+
+def shim_fd():
+    """An open file for flocks on SHIM_USERS; read-only, so a run as another user than the one that made it can lock it
+    too."""
+    os.makedirs(sandbox.WORK, exist_ok=True)
+    return os.open(SHIM_USERS, os.O_RDONLY | os.O_CREAT, 0o644)
+
+
+def use_shim():
+    """Hold a shared lock on SHIM_USERS until this process exits (the kernel drops it then, however it ends), before
+    anything starts or reads the shim. Waits while a shim-stop holds it exclusively."""
+    if not HOLDING:
+        fd = shim_fd()
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        HOLDING.append(fd)
+
+
+def shim_stop(pid):
+    """Stop the mirror shim running as pid, only while no VM run holds SHIM_USERS: the exclusive lock is held through
+    the kill, so a run that starts meanwhile waits for it and then starts its own shim. 0 stopped (or wasn't running),
+    3 in use and left running, 2 pid isn't a mirror shim."""
+    fd = shim_fd()
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(f"the mirror shim is in use by a VM run; left running (pid {pid})")
+            return 3
+        try:
+            cmd = open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0")
+        except FileNotFoundError:
+            print(f"no process {pid}: nothing to stop")
+            return 0
+        if not any(os.path.basename(a) == b"mirror.py" for a in cmd):
+            print(f"process {pid} isn't tools/mirror.py: {b' '.join(cmd).decode(errors='replace')[:200]}")
+            return 2
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(50):
+            if not os.path.exists(f"/proc/{pid}") or open(f"/proc/{pid}/stat").read().split(") ")[-1][:1] == "Z":
+                print(f"stopped the mirror shim (pid {pid})")
+                return 0
+            time.sleep(0.2)
+        os.kill(pid, signal.SIGKILL)
+        print(f"killed the mirror shim (pid {pid}) after it ignored SIGTERM")
+        return 0
+    finally:
+        os.close(fd)
 
 
 def head():
@@ -1300,6 +1357,10 @@ def main(args):
             LAYOUT["extra_disks"], args = LAYOUT["extra_disks"] + [int(args[1])], args[2:]
         else:
             return __doc__
+    if args[:1] == ["shim-stop"] and len(args) == 2 and args[1].isdigit():
+        return shim_stop(int(args[1]))
+    if args[:1] in (["build"], ["replay"], ["relocate"]):
+        use_shim()
     if args[:1] == ["build"] and len(args) == 2:
         build(args[1])
         return 0

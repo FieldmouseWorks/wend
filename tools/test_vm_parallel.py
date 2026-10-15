@@ -1,6 +1,6 @@
 """VM replays side by side (tools/vm.py), by behaviour, the parts that don't need KVM: two guests started at once get
 ssh forwards on different host ports and both run; a guest whose port another process takes first asks again for
-another one; a second run that needs a box another run is installing waits for it; and the box cache key follows what
+another one; the mirror shim can't be stopped while a run uses it (shim-stop); a second run that needs a box another run is installing waits for it; and the box cache key follows what
 the install runs, not the whole file (build_source). QEMU is a stand-in that binds its hostfwd port as QEMU does and
 says what QEMU says when it can't. It runs the PR's own vm.py, so the gate's schema job doesn't run it: the client job
 does.
@@ -8,6 +8,7 @@ python3 tools/test_vm_parallel.py"""
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -16,6 +17,8 @@ import time
 sys.dont_write_bytecode = True
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
+tmp = tempfile.mkdtemp(prefix="wend-test-vm-")
+os.environ["WEND_WORK"] = os.path.join(tmp, "work")  # before vm reads it
 import vm  # noqa: E402
 
 bad = 0
@@ -27,7 +30,6 @@ def say(ok, what, detail=""):
     bad += not ok
 
 
-tmp = tempfile.mkdtemp(prefix="wend-test-vm-")
 bin_dir = os.path.join(tmp, "bin")
 os.makedirs(bin_dir)
 open(os.path.join(bin_dir, "qemu-system-x86_64"), "w").write(f"""#!{sys.executable}
@@ -102,6 +104,33 @@ try:
         order.append("second in")
     t.join()
     say(order == ["first done", "second in"], "a run waits while another installs the same box", str(order))
+
+    # the shim: shim-stop refuses while a run holds it, stops it once none does, and stops nothing else
+    fake = os.path.join(tmp, "fake", "mirror.py")
+    os.makedirs(os.path.dirname(fake))
+    open(fake, "w").write("import time\ntime.sleep(60)\n")
+    shim = subprocess.Popen([sys.executable, fake])
+    run = subprocess.Popen([sys.executable, "-B", "-c", "import sys, time; sys.path.insert(0, sys.argv[1]); import vm; "
+                            "vm.use_shim(); print('holding', flush=True); time.sleep(60)", os.path.join(ROOT, "tools")],
+                           stdout=subprocess.PIPE, text=True)
+    run.stdout.readline()
+    stop = lambda pid: subprocess.run([sys.executable, "-B", os.path.join(ROOT, "tools", "vm.py"), "shim-stop", str(pid)],
+                                      capture_output=True, text=True)  # noqa: E731
+    p = stop(shim.pid)
+    say(p.returncode == 3 and shim.poll() is None, "shim-stop leaves the shim running while a VM run uses it",
+        f"rc {p.returncode}: {p.stdout}{p.stderr}")
+    run.kill()
+    run.wait()
+    p = stop(shim.pid)
+    time.sleep(0.5)
+    say(p.returncode == 0 and shim.poll() is not None, "shim-stop stops the shim once no run uses it",
+        f"rc {p.returncode}: {p.stdout}{p.stderr}")
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    p = stop(other.pid)
+    say(p.returncode == 2 and other.poll() is None, "shim-stop refuses a process that isn't the shim",
+        f"rc {p.returncode}: {p.stdout}{p.stderr}")
+    other.kill()
+    shim.kill()
 
     # the cache key: what the install runs, and nothing it doesn't
     src = open(os.path.join(ROOT, "tools", "vm.py")).read()
