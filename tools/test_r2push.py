@@ -34,7 +34,7 @@ h = r2push.signed_headers("GET", "https://examplebucket.s3.amazonaws.com/test.tx
 check(h["authorization"].endswith("Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41"),
       "the signer reproduces AWS's SigV4 example (GET Object)")
 
-got, fail = [], set()
+got, fail, caching = [], set(), []
 
 
 class S3(http.server.BaseHTTPRequestHandler):
@@ -45,6 +45,7 @@ class S3(http.server.BaseHTTPRequestHandler):
               self.headers["Authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKID/") and key not in fail)
         if ok:  # before the reply, so the push can't return ahead of the record
             got.append((key, body))
+            caching.append((key, self.headers["Cache-Control"]))
         self.send_response(200 if ok else 400)
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -87,6 +88,8 @@ check(sorted(keys[:3]) == sorted(k for k in files if k.startswith(("blob", "alia
       keys[3:] == ["index/20261015-000000.json", "index/latest.json"],
       "blobs and aliases go up first, then the stamped index, latest.json last; half-written files never")
 check(all(body == files[k] for k, body in got), "each file lands byte for byte")
+check(all((c == "no-cache") == k.startswith("index/") and (c == "no-cache" or "immutable" in c) for k, c in caching),
+      "an index is never cached at the edge; blobs and aliases are, forever")
 got.clear()
 r2push.push(store, bucket)
 check([k for k, _ in got] == ["index/latest.json"], "a second push sends only latest.json")

@@ -89,8 +89,10 @@ class Bucket:
         url = f"{self.base}/{key}"
         for attempt in range(3):
             size = os.path.getsize(path)
-            h = signed_headers("PUT", url, {"content-type": content_type, "content-length": size}, payload,
-                               self.access_key, self.secret_key)
+            # a blob or alias never changes under its key; an index or its signature changes on every push
+            cache = "no-cache" if key.startswith("index/") else "public, max-age=31536000, immutable"
+            h = signed_headers("PUT", url, {"content-type": content_type, "content-length": size,
+                                            "cache-control": cache}, payload, self.access_key, self.secret_key)
             try:
                 with open(path, "rb") as body:
                     req = urllib.request.Request(url, data=body, method="PUT", headers=h)
