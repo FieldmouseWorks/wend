@@ -62,12 +62,22 @@ Only files that proven routes and boxes reference. Never a mirror of a whole dis
    packages, so a box can still be built once its vault rots. Not yet: a box build pins nothing today (runs pin
    only their hops' sources, and CI reuses cached boxes), so there is no chain to check these against. Boxes have to
    record their own sources first (see Order of work).
-5. **The matching source packages.** The archive will be public, and redistributing GPL binaries means offering their
-   source. For each binary, the archive keeps the source it names: the `.src.rpm` (vault.centos.org `Source/`,
-   AlmaLinux `Source/`, EPEL `source/tree/`) or the `.dsc` and the files it lists. They are found through the same
-   repos' source metadata and checked against it. When upstream no longer has a source (a rotted vault), the archive
-   records that in the index rather than inventing one, and the gap is a reason to keep the archive private for that
-   release until snapshot.debian.org or another source fills it.
+5. **The matching source packages** (built). The archive will be public, and redistributing GPL binaries means
+   offering their source. For each binary stored, the archive keeps the source it was built from, and the binary's
+   index entry names it (`"source": {"url", "digest"}`):
+   - **Debian, Ubuntu:** the `.dsc` and every file it lists, from the `<comp>/source/Sources` index the pinned
+     `Release` lists, so the chain runs from the run's pin as the binaries' does. The binary's `Source:` field names
+     the source and its version.
+   - **EL:** the `.src.rpm` its `primary.xml` names (`<rpm:sourcerpm>`), from the repo's source repo, checked against
+     that repo's own metadata. Source repos aren't pinned by any run, so their `repomd.xml` is taken live and recorded
+     in the index, marked `"live": true`; the index signature (step 8) is what vouches for it. Where each repo's sources live is a table in
+     `tools/archive.py` (`SOURCE_REPOS`): `vault.centos.org/<v>/<repo>/Source/` (`SRPMS/` for CentOS 5), AlmaLinux's
+     current sources under `vault.almalinux.org/<major>/<repo>/Source/`, EPEL's `source/tree/`.
+
+   When upstream no longer has a source (a rotted vault, an EPEL build since replaced, etch's md5-only `Sources`,
+   wheezy whose `Release` is gone), the index records `"source": {"missing": why}` rather than inventing one, and
+   `ingest` lists the gaps. They don't fail an ingest. They are what has to be filled (from snapshot.debian.org,
+   Koji's source RPMs, or a minor-release vault) before that release goes public.
 
 "Referenced" means: by a run file on main whose `result` is `pass`, or by a box file on main. The archive never
 evicts a blob that such a file references. No eviction at all in the first version: storage is cheap and the set is
@@ -154,7 +164,7 @@ Each one a small PR.
 3. **The store** (built). `tools/archive.py ingest` on remi walks every passing run's pins down their chains,
    takes bytes from download lists, the shim's store or cache, or the origin, verifies each against the chain, and
    writes blobs, aliases and the index. `tools/archive.py verify` rehashes the store.
-4. **Sources.** Source packages for everything ingested.
+4. **Sources** (built). Source packages for everything ingested, by `ingest` itself.
 5. **R2 push.** Upload new blobs and the index (S3 API, standard library only), checking each upload's digest.
 6. **Client.** The archive as a by-digest source, in the default chain.
 7. **Box inputs.** A box build records the sources it read, as a hop does, and the store ingests them.
