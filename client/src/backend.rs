@@ -518,12 +518,14 @@ pub fn addon_repo_ids(adapter: &Doc) -> Vec<(String, String)> {
     ids
 }
 
-/// Append the name of every package in a repo to out, from its primary metadata (gzip or xz, as EPEL 8 has it).
+/// Append the name of every package in a repo to out, from its primary metadata (gzip, xz as EPEL 8 and 9 have it, or
+/// zstd as EPEL 10 has it).
 fn package_names(base: &str, out: &str) -> String {
     format!(
         "R=$(curl -sf {base}/repodata/repomd.xml | grep -o 'href=\"[^\"]*primary.xml[.a-z]*\"' | head -n1 | \
          sed 's/href=\"//;s/\"//') && test -n \"$R\" && curl -sf -o {out}.z {base}/$R && \
-         case $R in *.xz) xz -dc < {out}.z > {out}.x;; *.gz) gzip -dc < {out}.z > {out}.x;; *) false;; esac && \
+         case $R in *.xz) xz -dc < {out}.z > {out}.x;; *.zst) zstd -dc < {out}.z > {out}.x;; \
+         *.gz) gzip -dc < {out}.z > {out}.x;; *) false;; esac && \
          grep -o '<name>[^<]*</name>' {out}.x | sed 's/<[^>]*>//g' > {out}.one && test -s {out}.one && \
          cat {out}.one >> {out} && rm -f {out}.z {out}.x {out}.one || \
          {{ echo 'no package list from {base}'; exit 1; }}"

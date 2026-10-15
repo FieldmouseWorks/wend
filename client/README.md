@@ -163,9 +163,10 @@ package counts) except timing, the runner line and `log_sha256`, which hashes co
   as empty directories.
 - Interrupting `walk` mid-hop leaves the root mid-hop. The snapshot of its state before the hop stays in the work
   directory, and the error says how to restore it. The same goes for any walk that stops on an error.
-- The verifying proxy parses gzip and plain indexes only. apt's `.xz`/`.bz2` indexes are served verified, and their
-  packages are learned from the `.gz` form the same `Release` lists. yum's `primary.sqlite` is served verified, and
-  packages come from `primary.xml.gz`, which the proxy fetches itself.
+- The verifying proxy parses gzip, xz, zstd and plain indexes (xz and zstd in pure Rust, so the static build stays
+  simple). apt's `.bz2`/`.lzma` indexes are served verified, and their packages are learned from the `.gz` or plain
+  form the same `Release` lists. yum's `primary.sqlite` is served verified, and packages come from `primary.xml`
+  (`.gz`, or `.xz` and `.zst` as EPEL 9 and 10 list it), which the proxy fetches itself.
 - Boxes are CI fixtures the client never sees, so it doesn't check them (or whether a run's box exists).
 - The checker's error messages follow tools/check.py's but aren't identical (Python prints `repr()` of values);
   parity compares verdicts, not wording.
