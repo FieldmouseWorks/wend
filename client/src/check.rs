@@ -426,6 +426,7 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
     errs.extend(check_hardware(a, wh));
     errs.extend(check_runtimes(a, wh));
     errs.extend(check_keys(a, wh));
+    errs.extend(check_signed(a, wh));
     errs
 }
 
@@ -523,6 +524,48 @@ fn check_keys(a: &Doc, wh: &str) -> Vec<String> {
             errs.push(format!(
                 "{wh}: addons.{n}.gpgkeys must map releases the add-on has a repo for to names from [keys]"
             ));
+        }
+    }
+    errs
+}
+
+/// SPEC "Signed packages", apt: releases.*.signed is true or false, and an adapter with a signed release writes its
+/// apt config per hop ({apt_conf} in hop.set_release) with the unsigned lines it drops (hop.apt_unsigned).
+fn check_signed(a: &Doc, wh: &str) -> Vec<String> {
+    let mut errs = vec![];
+    let signed: Vec<(&String, &Value)> = get(a, "releases")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter_map(|(r, rel)| get(rel, "signed").map(|s| (r, s)))
+        .collect();
+    for (r, s) in &signed {
+        if !s.is_boolean() || get(a, "backend").and_then(Value::as_str) != Some("apt") {
+            errs.push(format!(
+                "{wh}: releases.{r}.signed must be true or false, on the apt backend"
+            ));
+        }
+    }
+    let h = get(a, "hop");
+    let text = |k: &str| h.and_then(|h| get(h, k));
+    if !signed.is_empty()
+        && !(text("set_release")
+            .and_then(Value::as_str)
+            .is_some_and(|s| s.contains("{apt_conf}"))
+            && text("apt_unsigned").is_some_and(Value::is_string))
+    {
+        errs.push(format!(
+            "{wh}: an adapter with signed releases must put {{apt_conf}} in hop.set_release and the lines unsigned \
+             releases add in hop.apt_unsigned"
+        ));
+    }
+    for k in ["apt_conf", "apt_unsigned"] {
+        if let Some(v) = text(k) {
+            if !v.as_str().is_some_and(|t| !t.contains(['\'', '%', '\\'])) {
+                errs.push(format!(
+                    "{wh}: hop.{k} must be text without ', % or \\ (it is written with printf)"
+                ));
+            }
         }
     }
     errs

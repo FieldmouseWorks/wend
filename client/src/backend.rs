@@ -196,10 +196,30 @@ pub fn hop_vars(adapter: &Doc, release: &str) -> Result<Vars, String> {
                 .and_then(|t| get(t, "boot_mib"))
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
+            // SPEC "Signed packages": apt_unsigned only on a hop into a release that isn't signed
+            let signed = get(adapter, "releases")
+                .and_then(|r| get(r, release))
+                .and_then(|x| get(x, "signed"))
+                == Some(&Value::Bool(true));
+            let hop = get(adapter, "hop");
+            let text = |k: &str| hop.and_then(|h| get(h, k)).and_then(Value::as_str).unwrap_or("");
+            let conf = format!("{}{}", text("apt_conf"), if signed { "" } else { text("apt_unsigned") });
             Ok(vec![
                 ("mirror".into(), mirror),
                 ("release".into(), release.into()),
                 ("boot_mib".into(), boot_mib.to_string()),
+                (
+                    "apt_conf".into(),
+                    format!(
+                        "{} && {}",
+                        printf(&conf, "/etc/apt/apt.conf.d/00wend"),
+                        if signed {
+                            format!("{} && {APT_SIGNED_CHECK}", printf(APT_SIGNED, APT_SIGNED_FILE))
+                        } else {
+                            format!("rm -f {APT_SIGNED_FILE}")
+                        }
+                    ),
+                ),
             ])
         }
         "rpm" => {
@@ -382,6 +402,16 @@ fn gpg(names: &[String]) -> String {
     let files: Vec<String> = names.iter().map(|k| format!("file://{KEYS}/{k}")).collect();
     format!("gpgcheck=1\ngpgkey={}\n", files.join(" "))
 }
+
+/// SPEC "Signed packages": on a hop into a signed apt release, the box's own apt config can't switch authentication
+/// off. These lines go in a fragment read after the box's own, and apt-config must then show none of the switches on.
+const APT_SIGNED_FILE: &str = "/etc/apt/apt.conf.d/zzzz-wend-signed";
+const APT_SIGNED: &str = r#"APT::Get::AllowUnauthenticated "false";
+APT::Get::force-yes "false";
+Acquire::AllowInsecureRepositories "false";
+Acquire::AllowDowngradeToInsecureRepositories "false";
+"#;
+const APT_SIGNED_CHECK: &str = r#"if apt-config dump 2>/dev/null | grep -iqE '^(APT::Get::AllowUnauthenticated|APT::Get::force-yes|Acquire::AllowInsecureRepositories|Acquire::AllowDowngradeToInsecureRepositories) "(1|yes|true|with|on|enable)";'; then echo 'wend: the box'\''s apt config switches package authentication off (apt-config dump), refusing a hop into a signed release'; exit 1; fi"#;
 
 /// Shell that writes every key in the adapter's [keys] under KEYS ("true" if it has none).
 fn write_keys(adapter: &Doc) -> String {
