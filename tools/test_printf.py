@@ -1,7 +1,8 @@
 """The harness's printf() and the EL adapter's {keys} by behaviour: every file they write holds exactly the content
 asked for, under the shells hops run in (sh, bash, and EL7's bash 4.2 when WEND_EL7_BASH names one), also for content
 that starts with "-" (every armoured key does) or holds %, a backslash or "\\n" as text; and {drop_keys} on the
-alma9 hop removes the AlmaLinux 8 keys a box has (a stand-in rpm on PATH) and nothing else. It runs the PR's own
+alma9 hop removes the AlmaLinux 8 keys a box has (a stand-in rpm on PATH) and nothing else; and {apt_conf} on a hop into a
+signed apt release refuses a box whose own apt config still switches authentication off (a stand-in apt-config). It runs the PR's own
 backends.py and adapter text, so the gate's schema job (which never runs the PR's code) doesn't run it: `wend check`
 and the client job do.
 python3 tools/test_printf.py"""
@@ -63,4 +64,20 @@ for sh in shells:
         bad += not ok
         print(("passed  " if ok else f"WRONG   rc={r.returncode} removed={got!r} ") +
               f"{sh}: {{drop_keys}} on the alma9 hop removes only the dropped keys the box has")
+        ub = tomllib.load(open(os.path.join(os.path.dirname(HERE), "adapters", "ubuntu.toml"), "rb"))
+        os.makedirs(os.path.join(d, "apt"))
+        for dump, want in (('APT::Get::Assume-Yes "true";\nAPT::Get::force-yes "false";', 0),
+                           ('APT::Get::force-yes "true";', 1), ('Acquire::AllowInsecureRepositories "1";', 1)):
+            with open(os.path.join(d, "bin", "apt-config"), "w") as f:
+                f.write(f"#!/bin/sh\nprintf '%s\\n' '{dump}'\n")
+            os.chmod(os.path.join(d, "bin", "apt-config"), 0o755)
+            script = backends.Apt().hop_vars(ub, "xenial")["apt_conf"].replace("/etc/apt/apt.conf.d/", f"{d}/apt/")
+            r = subprocess.run([sh, "-c", script], capture_output=True, text=True,
+                               env={**os.environ, "PATH": f"{d}/bin:{os.environ['PATH']}"})
+            ok = r.returncode == want and os.path.exists(f"{d}/apt/zzzz-wend-signed") and \
+                (want == 0 or "refusing a hop into a signed release" in r.stdout)
+            bad += not ok
+            print(("passed  " if ok else f"WRONG   rc={r.returncode} {r.stdout.strip()[:120]} ") +
+                  f"{sh}: {{apt_conf}} on a signed hop {'refuses' if want else 'accepts'} a box whose apt config dumps "
+                  f"{dump.splitlines()[-1]!r}")
 sys.exit(1 if bad else 0)

@@ -63,6 +63,18 @@ def printf(content, path):
     return "printf '%b' '" + content.replace("\\", "\\\\").replace("\n", "\\n") + f"' > {path}"
 
 
+# SPEC "Signed packages": on a hop into a signed apt release, the box's own apt config can't switch authentication off.
+# These lines go in a fragment read after the box's own (apt reads apt.conf.d in order, then apt.conf), and apt-config
+# must then show none of the switches on, or the hop stops before apt fetches anything.
+APT_SIGNED_FILE = "/etc/apt/apt.conf.d/zzzz-wend-signed"
+APT_SIGNED = ('APT::Get::AllowUnauthenticated "false";\nAPT::Get::force-yes "false";\n'
+              'Acquire::AllowInsecureRepositories "false";\nAcquire::AllowDowngradeToInsecureRepositories "false";\n')
+APT_SIGNED_CHECK = ("if apt-config dump 2>/dev/null | grep -iqE '^(APT::Get::AllowUnauthenticated|APT::Get::force-yes|"
+                    "Acquire::AllowInsecureRepositories|Acquire::AllowDowngradeToInsecureRepositories) "
+                    "\"(1|yes|true|with|on|enable)\";'; then echo 'wend: the box'\\''s apt config switches package "
+                    "authentication off (apt-config dump), refusing a hop into a signed release'; exit 1; fi")
+
+
 class Apt:
     name = "apt"
     # Everything an adapter may declare for this backend. check.py holds adapters to these lists, so an adapter
@@ -97,7 +109,8 @@ class Apt:
         conf = adapter["hop"].get("apt_conf", "") + ("" if signed else adapter["hop"].get("apt_unsigned", ""))
         return {"mirror": mirror, "release": release,
                 "boot_mib": str(hw.get("boot_mib", 0) if isinstance(hw, dict) else 0),
-                "apt_conf": printf(conf, "/etc/apt/apt.conf.d/00wend")}
+                "apt_conf": printf(conf, "/etc/apt/apt.conf.d/00wend") + " && " +
+                (f"{printf(APT_SIGNED, APT_SIGNED_FILE)} && {APT_SIGNED_CHECK}" if signed else f"rm -f {APT_SIGNED_FILE}")}
 
     def step(self, s, adapter, release=None):
         op = s["op"]

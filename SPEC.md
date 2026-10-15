@@ -496,7 +496,11 @@ predecessor's keyring). Every hop's `set_release` starts with `{apt_conf}`, whic
 for that hop: `hop.apt_conf` always, plus `hop.apt_unsigned` (unauthenticated installs and insecure repos allowed)
 only on a hop into a release that isn't `signed`. So apt refuses packages the archive's signed index doesn't vouch
 for from buster and xenial on, and older hops, whose keys have expired or were never shipped to the release before,
-keep working unauthenticated. Box builds still use `debootstrap --no-check-gpg`.
+keep working unauthenticated. On a signed hop `{apt_conf}` also writes `/etc/apt/apt.conf.d/zzzz-wend-signed`, which
+turns `AllowUnauthenticated`, `force-yes`, `AllowInsecureRepositories` and `AllowDowngradeToInsecureRepositories`
+off after the box's own fragments, and stops the hop if `apt-config dump` still shows any of them on (set in
+`/etc/apt/apt.conf`, which apt reads last); an unsigned hop removes that file. Box builds still use
+`debootstrap --no-check-gpg`.
 
 With `wend walk --run` every byte is checked against the run's pins anyway; signatures are what protects `--live`
 walks and CI replays.
