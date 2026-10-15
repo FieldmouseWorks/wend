@@ -532,14 +532,18 @@ fn out_of_tree(module: &str, file: Option<&str>) -> bool {
 #[cfg(target_arch = "x86_64")]
 fn cpu_features() -> (Vec<&'static str>, bool) {
     use std::arch::x86_64::{__cpuid, __cpuid_count};
-    // leaves above the CPU's maximum are never read
-    let (max, ext_max) = (__cpuid(0).eax, __cpuid(0x8000_0000).eax);
-    let l1 = __cpuid(1);
-    let l7 = if max >= 7 { __cpuid_count(7, 0).ebx } else { 0 };
-    let e1 = if ext_max >= 0x8000_0001 {
-        __cpuid(0x8000_0001).ecx
-    } else {
-        0
+    // leaves above the CPU's maximum are never read. CPUID is always there on x86_64; newer Rust calls the intrinsics
+    // safe, the MSRV still calls them unsafe, so the block keeps both building.
+    #[allow(unused_unsafe)]
+    let (l1, l7, e1) = unsafe {
+        let (max, ext_max) = (__cpuid(0).eax, __cpuid(0x8000_0000).eax);
+        let l7 = if max >= 7 { __cpuid_count(7, 0).ebx } else { 0 };
+        let e1 = if ext_max >= 0x8000_0001 {
+            __cpuid(0x8000_0001).ecx
+        } else {
+            0
+        };
+        (__cpuid(1), l7, e1)
     };
     let bits: [(&str, u32, u32); 16] = [
         ("sse3", l1.ecx, 0),

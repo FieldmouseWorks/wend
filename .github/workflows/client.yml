@@ -15,6 +15,20 @@ permissions:
   contents: read
 
 jobs:
+  # the oldest Rust Cargo.toml's rust-version promises, so the promise can't drift while everything else builds on
+  # rust-toolchain.toml's pin
+  msrv:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: |
+          v=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
+          test -n "$v"
+          rustup toolchain install "$v" --profile minimal
+          cargo "+$v" build --locked --all-targets
   client:
     runs-on: ubuntu-24.04
     defaults:
@@ -73,6 +87,9 @@ jobs:
       - name: the archive's store, by behaviour on a made-up repo (runs the PR's own tools, so not in the gate)
         working-directory: .
         run: python3 -B tools/test_archive.py
+      - name: primary metadata however it's compressed (gz, EPEL 9's xz, EPEL 10's zst), by behaviour (runs the PR's own tools, so not in the gate)
+        working-directory: .
+        run: WEND_ALL_DECODERS=1 python3 -B tools/test_primary.py
       - name: the atlas passes the client's own check
         working-directory: .
         run: client/target/x86_64-unknown-linux-musl/release/wend check

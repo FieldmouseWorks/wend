@@ -581,6 +581,31 @@ fn gunzip(b: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// An index as its name says it's compressed: gzip, xz (EPEL 9's primary.xml) or zstd (EPEL 10's), or as it is. None
+/// for a compression there's no decoder here for, or bytes that don't decode.
+fn decompress(key: &str, b: &[u8]) -> Option<Vec<u8>> {
+    let mut out = vec![];
+    if key.ends_with(".gz") {
+        return gunzip(b);
+    } else if key.ends_with(".xz") {
+        lzma_rs::xz_decompress(&mut &b[..], &mut out).ok()?;
+    } else if key.ends_with(".zst") {
+        // every frame, as zstd -dc reads them
+        let mut rest = b;
+        while !rest.is_empty() {
+            ruzstd::decoding::StreamingDecoder::new(&mut rest)
+                .ok()?
+                .read_to_end(&mut out)
+                .ok()?;
+        }
+    } else if [".bz2", ".lzma"].iter().any(|z| key.ends_with(z)) {
+        return None;
+    } else {
+        out = b.to_vec();
+    }
+    Some(out)
+}
+
 fn pin_more(s: &State, key: String, digest: Digest, scheme: &str) {
     let origin = format!("{scheme}://{key}");
     lock(&s.pins).entry(key).or_insert(Pin {
@@ -607,8 +632,14 @@ fn learn(s: &State, key: &str, p: &Pin, file: &Path) {
         for (href, d) in &entries {
             pin_more(s, format!("{base}{href}"), d.clone(), &scheme);
         }
-        // yum and dnf may read primary.sqlite instead, which this can't parse: learn the packages from the XML
-        for (href, _) in entries.iter().filter(|(h, _)| h.ends_with("primary.xml.gz")) {
+        // yum and dnf may read primary.sqlite instead, which this can't parse: learn the packages from the XML, however
+        // it's compressed (EPEL 9 lists it only as .xz, EPEL 10 only as .zst)
+        let primary = |h: &str| {
+            [".gz", ".xz", ".zst"]
+                .iter()
+                .any(|z| h.ends_with(&format!("primary.xml{z}")))
+        };
+        for (href, _) in entries.iter().filter(|(h, _)| primary(h)) {
             let k = format!("{base}{href}");
             let pin = lock(&s.pins).get(&k).cloned();
             if let Some(pp) = pin {
@@ -617,7 +648,7 @@ fn learn(s: &State, key: &str, p: &Pin, file: &Path) {
                 }
             }
         }
-    } else if let Some(stem) = [".xz", ".bz2", ".lzma"].iter().find_map(|z| key.strip_suffix(z)) {
+    } else if let Some(stem) = [".bz2", ".lzma"].iter().find_map(|z| key.strip_suffix(z)) {
         // no decoder here for these: learn the packages from the gzip (or plain) form the same Release lists
         for k in [format!("{stem}.gz"), stem.to_string()] {
             let sib = lock(&s.pins).get(&k).cloned();
@@ -628,15 +659,8 @@ fn learn(s: &State, key: &str, p: &Pin, file: &Path) {
                 }
             }
         }
-    } else {
-        let plain = if key.ends_with(".gz") {
-            gunzip(&bytes)
-        } else {
-            Some(bytes)
-        };
-        if let Some(x) = plain {
-            learn_index(s, key, &x);
-        }
+    } else if let Some(x) = decompress(key, &bytes) {
+        learn_index(s, key, &x);
     }
 }
 
@@ -829,6 +853,104 @@ mod tests {
         assert_eq!(get(px.port, "HEAD", "/h.test/el/repodata/repomd.xml").0, 200);
         assert_eq!(px.take_refused().len(), 3);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two packages cut from EPEL's own primary.xml (2026-10-15), compressed by xz and zstd themselves: EPEL 9 lists its
+    /// primary only as .xz, EPEL 10 only as .zst.
+    type Fixture = (&'static str, &'static [u8], [(&'static str, &'static str); 2]);
+    const EPEL: [Fixture; 2] = [
+        (
+            "primary.xml.xz",
+            include_bytes!("../testdata/epel9-primary.xml.xz"),
+            [
+                (
+                    "Packages/3/3cpio-0.14.0-1.el9.x86_64.rpm",
+                    "0022bf15d74e01ea04f94c853445e2bfa839633447905c1329bb8442251f9333",
+                ),
+                (
+                    "Packages/3/3proxy-1.0.0-1.el9.x86_64.rpm",
+                    "3905164ef1b309ddb097bb731de946ec3a62413455f55b9a61e607bab5d4d3e7",
+                ),
+            ],
+        ),
+        (
+            "primary.xml.zst",
+            include_bytes!("../testdata/epel10-primary.xml.zst"),
+            [
+                (
+                    "Packages/3/3cpio-0.14.0-1.el10_2.x86_64.rpm",
+                    "f910ffeb1d39dedb050dbb2449d544912bbd410f46292f24cf1e1b25b407577e",
+                ),
+                (
+                    "Packages/3/3proxy-1.0.0-1.el10_3.x86_64.rpm",
+                    "17b64343997888c9c35e49cac6e13f3aae7c23a4dbb1c43036bb7b00cae21b83",
+                ),
+            ],
+        ),
+    ];
+
+    #[test]
+    fn decompresses_epel_primary_xz_and_zst() {
+        for (name, z, want) in EPEL {
+            let xml = decompress(name, z).unwrap();
+            let got = primary_entries(&String::from_utf8(xml).unwrap());
+            let want: Vec<_> = want
+                .iter()
+                .map(|(h, d)| (h.to_string(), Digest::parse("sha256", d).unwrap()))
+                .collect();
+            assert_eq!(got, want, "{name}");
+        }
+        // zstd -dc reads every frame of a file, and so does this
+        let (_, z, _) = EPEL[1];
+        let two = decompress("x.zst", &[z, z].concat()).unwrap();
+        let one = decompress("x.zst", z).unwrap();
+        assert_eq!(two, [one.clone(), one].concat());
+        assert_eq!(decompress("Packages.bz2", b"BZh9"), None);
+        assert_eq!(decompress("Packages", b"as is").unwrap(), b"as is");
+    }
+
+    #[test]
+    fn learns_packages_from_a_primary_listed_only_as_xz_or_zst() {
+        for (i, (name, z, want)) in EPEL.into_iter().enumerate() {
+            let dir = std::env::temp_dir().join(format!("wend-epel-test-{}-{i}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let src = dir.join("src/h.test/epel");
+            std::fs::create_dir_all(src.join("repodata")).unwrap();
+            std::fs::create_dir_all(src.join("Packages/3")).unwrap();
+            for (href, _) in want {
+                std::fs::write(src.join(href), b"not the rpm the index names").unwrap();
+            }
+            let href = format!("repodata/{}-{name}", sha256_hex(z));
+            std::fs::write(src.join(&href), z).unwrap();
+            let repomd = format!(
+                r#"<repomd><data type="primary"><checksum type="sha256">{}</checksum><location href="{href}"/></data></repomd>"#,
+                sha256_hex(z)
+            );
+            std::fs::write(src.join("repodata/repomd.xml"), &repomd).unwrap();
+            let run = serde_json::json!({"hops": [{"sources": {
+                "https://h.test/epel/repodata/repomd.xml": format!("sha256:{}", sha256_hex(repomd.as_bytes()))}}]});
+            let px = Proxy::start(
+                &run,
+                &dir.join("cache"),
+                vec![dir.join("src").display().to_string()],
+                true,
+            )
+            .unwrap();
+            // listed: pinned at the index's hash, so wrong bytes are a bad source (502), not an unknown package (403)
+            for (href, _) in want {
+                assert_eq!(
+                    get(px.port, "GET", &format!("/h.test/epel/{href}")).0,
+                    502,
+                    "{name}: {href}"
+                );
+            }
+            assert_eq!(
+                get(px.port, "GET", "/h.test/epel/Packages/3/unlisted.rpm").0,
+                403,
+                "{name}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]
