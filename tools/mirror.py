@@ -120,6 +120,10 @@ def byte_range(header, size):
 
 
 class H(http.server.BaseHTTPRequestHandler):
+    # keep-alive: apt pipelines its requests, and etch's apt turns an HTTP/1.0 close after each response into
+    # retries that end in a corrupt file (MD5Sum mismatch). Every response below says its Content-Length.
+    protocol_version = "HTTP/1.1"
+
     def _go(self, body):
         parts = self.path.lstrip("/").split("?")[0].split("/", 1)
         # Only <allowed host>/<relative path>: no empty or dot segments, so the path can't leave the cache
@@ -159,6 +163,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if r == "unsatisfiable":
                 self.send_response(416)
                 self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
             if r:
