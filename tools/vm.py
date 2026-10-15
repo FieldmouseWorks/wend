@@ -285,11 +285,13 @@ def shim_stop(pid):
 
 def head():
     """The commit this checkout is on and whether tracked files differ from it, or None outside a git checkout. As
-    root (sudo -E) in a checkout someone else owns, git refuses the repository unless told it's safe; this only reads."""
-    git = ["git", "-c", "safe.directory=*", "-C", ROOT]
+    root (sudo -E) in a checkout someone else owns, git refuses the repository unless told it's safe; this only reads,
+    and with what the checkout's own config could make git run switched off (core.fsmonitor is a command `git status`
+    runs, and submodules would run git in other repositories)."""
+    git = ["git", "-c", "safe.directory=*", "-c", "core.fsmonitor=false", "-C", ROOT]
     try:
         rev = subprocess.run(git + ["rev-parse", "HEAD"], capture_output=True, text=True, timeout=60)
-        st = subprocess.run(git + ["status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True,
+        st = subprocess.run(git + ["status", "--porcelain", "--untracked-files=no", "--ignore-submodules"], capture_output=True, text=True,
                             timeout=60)
     except (OSError, subprocess.TimeoutExpired):
         return None
