@@ -10,19 +10,22 @@ A run pins each hop's top metadata file by sha256 (`hops[].sources`), and `wend 
 pinned file is gone from every source. On 2026-10-15 the 82 run files on main pin 31 URLs (54 distinct digests). Fetched
 that day:
 
-| Where | Pinned URLs | Still served |
+| Where | Pinned URLs | Still serving the pinned bytes |
 |---|---|---|
 | archive.debian.org, deb.debian.org, archive.ubuntu.com | 15 | all 15 (wheezy's plain index through its `.gz`) |
 | vault.centos.org, archives.fedoraproject.org (p7zip) | 7 | all 7 |
-| repo.almalinux.org (8, 9, 10) | 6 | **none** |
-| dl.fedoraproject.org (EPEL 8, 9, 10) | 3 | **none** |
+| repo.almalinux.org (8, 9, 10) | 6 | **none** (every URL answers, republished that day) |
+| dl.fedoraproject.org (EPEL 8, 9, 10) | 3 | **none** (likewise) |
 
-Every pin of a live EL repo has already rotted, so no route past CentOS 7's vault replays pinned today. That needs no
-mirror outage: these repos republish metadata every few days and keep no old copies. Fetching a pin later doesn't
-work, because by then the bytes are gone. **The archive's first job is to keep metadata at the moment a run reads it.**
-Packages last longer (AlmaLinux moves an old minor's packages to vault.almalinux.org, and the bytes stay the same), so
-they can be fetched afterwards by digest. Vaults rot too, more slowly: archive.debian.org now 404s 10 of etch's
-251 installer udebs.
+Every pin of a live EL repo is already stale, so no route past CentOS 7's vault replays pinned today. That needs no
+outage: the URLs all answer, but these repos republish their metadata daily and keep no old copies (vault.almalinux.org
+keeps only each minor release's final metadata). Fetching a pin later doesn't work, because by then the bytes are
+gone. **The archive's first job is to keep metadata at the moment a run reads it.** Packages mostly last longer:
+AlmaLinux keeps every package version within a minor release and moves the whole tree, bytes unchanged, to
+vault.almalinux.org when the next minor ships, so they can be fetched afterwards by digest. EPEL is the exception:
+its live repos keep only the latest build of each package, so an EPEL package a run used is gone as soon as it's
+updated. Capture has to cover those too (a later step; Fedora's build system keeps old builds, which may serve as
+a source). Vaults rot too, more slowly: archive.debian.org now 404s 10 of etch's 251 installer udebs.
 
 ## What it is
 
