@@ -2,7 +2,7 @@
 name = "wend"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.87"
 license = "MIT OR Apache-2.0"
 description = "wend client: walk a proven upgrade route on a machine, no model, no network beyond the mirrors"
 repository = "https://github.com/FieldmouseWorks/wend"
@@ -11,7 +11,9 @@ publish = false
 [dependencies]
 flate2 = "1"
 libc = "0.2.190"
+lzma-rs = "0.3"
 regex = "1"
+ruzstd = "0.8"
 serde_json = { version = "1", features = ["preserve_order"] }
 sha1 = "0.10"
 sha2 = "0.10"

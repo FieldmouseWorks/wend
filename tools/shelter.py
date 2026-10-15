@@ -17,7 +17,6 @@ The chroot tier has no image store: the image ID is the digest of the built root
 stays at its path. tools/podman_standin.sh stands in for `podman run` while checks run, and proves the userland
 only, never confinement (runs record confinement_proved: false).
 """
-import gzip
 import hashlib
 import os
 import re
@@ -217,9 +216,8 @@ def read_repos(adapter, release):
         base = f"{shim}/{url}/"
         repomd = urllib.request.urlopen(base + "repodata/repomd.xml", timeout=300).read()
         indexes[f"https://{url}/repodata/repomd.xml"] = "sha256:" + hashlib.sha256(repomd).hexdigest()
-        href = next(x.split('"')[1] for x in repomd.decode().split("<location ")[1:]
-                    if "primary.xml.gz" in x.split('"')[1])
-        root = ET.fromstring(gzip.decompress(urllib.request.urlopen(base + href, timeout=300).read()))
+        href = backends.primary_href(repomd.decode())
+        root = ET.fromstring(backends.unpack(href, urllib.request.urlopen(base + href, timeout=300).read()))
         for p in root.findall("c:package", NS):
             if p.find("c:arch", NS).text not in ("x86_64", "noarch"):
                 continue

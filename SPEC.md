@@ -704,7 +704,7 @@ A fix with a non-empty `reinstall` must pass the install rule. Reference, with w
 repos kept in private `reposdir`s so `/etc/yum.repos.d` stays the harness's:
 1. Write a repo file for `transit.from`'s repos plus `transit.extra_repos` (`old`), and one for `release`'s repos
    (`new`). Installed add-ons add their repo for `release` to `new`. Before that, if any add-on vendor's package is
-   installed: read the package names in the primary metadata (gzip or xz) of `release`'s repos and its add-on repos,
+   installed: read the package names in the primary metadata (gzip, xz or zstd) of `release`'s repos and its add-on repos,
    and refuse, naming them, if any of those packages has no package of the same name there. Only the work dir has
    changed at that point.
 2. `yum install dnf` from `old` (CentOS 7 extras ships an EL7 dnf).
