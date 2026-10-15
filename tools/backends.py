@@ -75,15 +75,17 @@ class Apt:
         """SPEC.md "Pinned sources": the Release/InRelease file apt read for this hop, by its origin URL."""
         root = os.path.realpath(root)
         url = f"{self.origin(adapter, release)}/dists/{release}"  # apt names its lists after the URL it fetched
-        stem = re.sub(r"^[a-z]+://", "", f"{self.hop_vars(adapter, release)['mirror']}/dists/{release}").replace("/", "_")
+        bare = re.sub(r"^[a-z]+://", "", f"{self.hop_vars(adapter, release)['mirror']}/dists/{release}").replace("/", "_")
+        stems = [bare] + ([bare.replace(":", "%3a")] if ":" in bare else [])  # newer apt writes a port's colon as %3a
         lists = f"{root}/var/lib/apt/lists"
-        found = {f"{url}/{n}": file_sha256(root, f"{lists}/{stem}_{n}") for n in ("InRelease", "Release")}
+        found = {f"{url}/{n}": file_sha256(root, f"{lists}/{stem}_{n}") for stem in stems for n in ("InRelease", "Release")}
         found = {u: h for u, h in found.items() if h}
         if not found and plain_dir(root, lists):
             # apt 0.9 throws the Release away when its signing key fails: pin the indexes it kept, by the path the
             # Release lists them under (their bytes are the uncompressed ones the Release hashes)
             for n in sorted(os.listdir(lists)):
-                h = file_sha256(root, f"{lists}/{n}") if n.startswith(f"{stem}_") and not n.endswith(".gpg") else None
+                stem = next((x for x in stems if n.startswith(f"{x}_")), None)
+                h = file_sha256(root, f"{lists}/{n}") if stem and not n.endswith(".gpg") else None
                 if h:
                     found[f"{url}/{n[len(stem) + 1:].replace('_', '/')}"] = h
         return dict(sorted(found.items()))

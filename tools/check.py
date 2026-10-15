@@ -38,7 +38,7 @@ UNSAFE = ["%", "'", '"', " ", "\t", "\n", "$", "`", ";", "&", "|", "<", ">", "("
 # metacharacters, no printf %, and no leading - (it would read as an option).
 SAFE_VALUE = r"[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*"
 REPO_URL = r"[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)+"
-APT_URL = r"https?://[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)*"
+APT_URL = r"https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._-]+)*"
 ADAPTER_KEYS = {"schema", "family", "backend", "release_file", "ladder", "may_skip", "harness_owned", "writable",
                 "managed", "force", "releases", "mirror", "hop", "predicates", "pm_options", "box", "ops", "checks",
                 "kv", "hardware", "addons", "runtimes", "relocate", "keys"}

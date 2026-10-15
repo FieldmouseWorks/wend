@@ -54,7 +54,7 @@ const UNSAFE: &[&str] = &[
 /// metacharacters, no printf %, and no leading - (it would read as an option).
 const SAFE_VALUE: &str = r"[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*";
 const REPO_URL: &str = r"[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)+";
-const APT_URL: &str = r"https?://[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)*";
+const APT_URL: &str = r"https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._-]+)*";
 const ADAPTER_KEYS: &[&str] = &[
     "schema",
     "family",
