@@ -122,6 +122,14 @@ jobs:
         with:
           name: run-${{ strategy.job-index }}
           path: run.json
+      # docs/archive.md "Capture": what the replay downloaded, with the metadata's bytes, which live repos replace within
+      # days. remi ingests it for the runs that land; it's never filed in runs/ and never trusted beyond their pins.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fetched-${{ strategy.job-index }}
+          path: run.fetched
+          if-no-files-found: ignore
+          retention-days: 90
 
   decoys:
     # Every pinned fix fired on exactly the boxes it claims. A passing replay that touched an unclaimed box fails here.
@@ -138,7 +146,7 @@ jobs:
       - uses: actions/checkout@v4
         with: { ref: "${{ github.base_ref }}", path: .base }
       - uses: actions/download-artifact@v4
-        with: { path: new-runs }
+        with: { path: new-runs, pattern: "run-*" }
       - run: |
           rm -rf tools adapters && cp -r .base/tools .base/adapters . && rm -rf .base
           python3 -B tools/file_runs.py new-runs    # files each run.json under runs/<family>/<route>/<box>/
