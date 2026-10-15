@@ -23,9 +23,18 @@ writable = [
   "/etc/mysql/mariadb.conf.d/*.cnf",
 ]
 
+[mirror]
+# archive.debian.org has lost files (some of etch's, lenny's, squeeze's and wheezy's packages answer 404 now). The
+# archived releases come from a dated snapshot.debian.org tree instead: its dists/*/Release files are byte for byte
+# archive.debian.org's, and it has every file they list. It answers with redirects, which etch's and lenny's apt
+# can't follow, so it goes through tools/mirror.py, the shim EL uses (the same port: one shim serves both).
+shim = "http://127.0.0.1:8085"
+probe = "snapshot.debian.org/archive/debian-archive/20261003T165950Z/debian/dists/etch/Release"
+
 [releases]
-# Where each release's packages live today. Old ones move to the archive; the harness picks per release.
-archive = "http://archive.debian.org/debian"
+# Where each release's packages live today. Old ones move to the archive; the harness picks per release. A host/path
+# goes through the [mirror] shim.
+archive = "snapshot.debian.org/archive/debian-archive/20261003T165950Z/debian"
 current = "http://deb.debian.org/debian"
 current_from = "bullseye"
 

@@ -151,21 +151,44 @@ pub fn caps(backend: &str) -> Option<&'static Caps> {
     }
 }
 
+/// An apt adapter's mirror for the release, as the adapter gives it: a URL, or host/path through the [mirror] shim.
+fn release_mirror<'a>(adapter: &'a Doc, release: &str) -> Result<&'a str, String> {
+    let lad = list_of(adapter, "ladder")?;
+    let r = get(adapter, "releases").ok_or("the adapter has no [releases]")?;
+    let idx = |x: &str| {
+        lad.iter()
+            .position(|y| y == x)
+            .ok_or(format!("{x} is not on the ladder"))
+    };
+    if idx(release)? >= idx(str_of(r, "current_from")?)? {
+        str_of(r, "current")
+    } else {
+        str_of(r, "archive")
+    }
+}
+
+/// The release's apt mirror by its origin URL (a host/path one is fetched from https://<host>/<path>): what runs
+/// pin sources by (SPEC.md "Pinned sources").
+pub fn apt_origin(adapter: &Doc, release: &str) -> Result<String, String> {
+    let m = release_mirror(adapter, release)?;
+    Ok(if m.contains("://") {
+        m.to_string()
+    } else {
+        format!("https://{m}")
+    })
+}
+
 /// The values a hop's templates use (SPEC.md, "Adapter format").
 pub fn hop_vars(adapter: &Doc, release: &str) -> Result<Vars, String> {
     match backend_of(adapter) {
         "apt" => {
-            let lad = list_of(adapter, "ladder")?;
-            let r = get(adapter, "releases").ok_or("the adapter has no [releases]")?;
-            let idx = |x: &str| {
-                lad.iter()
-                    .position(|y| y == x)
-                    .ok_or(format!("{x} is not on the ladder"))
-            };
-            let mirror = if idx(release)? >= idx(str_of(r, "current_from")?)? {
-                str_of(r, "current")?
+            let m = release_mirror(adapter, release)?;
+            // a host/path mirror goes through the [mirror] shim, as rpm repos do
+            let mirror = if m.contains("://") {
+                m.to_string()
             } else {
-                str_of(r, "archive")?
+                let shim = get(adapter, "mirror").ok_or("the adapter has no [mirror]")?;
+                format!("{}/{m}", str_of(shim, "shim")?)
             };
             // the room the release's kernel needs in /boot (0: none known)
             let boot_mib = get(adapter, "hardware")
@@ -174,7 +197,7 @@ pub fn hop_vars(adapter: &Doc, release: &str) -> Result<Vars, String> {
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
             Ok(vec![
-                ("mirror".into(), mirror.into()),
+                ("mirror".into(), mirror),
                 ("release".into(), release.into()),
                 ("boot_mib".into(), boot_mib.to_string()),
             ])

@@ -382,6 +382,10 @@ See `adapters/debian.toml`. Notes that matter:
 - The `services` check needs "explicitly installed". apt has it in `/var/lib/apt/extended_states`.
 - `current`: every binary a service runs comes from a package that the release in sources.list still ships
   (`apt-cache madison`). This closed the "PHP 5 still serving on trixie" hole, without per-release version tables.
+- archive.debian.org has lost files (in 2026, some of every archived release's packages answer 404), so releases
+  before bullseye come from one dated snapshot.debian.org tree, whose `Release` files are archive.debian.org's byte
+  for byte. It answers with redirects, which apt before 0.7.21 (etch, lenny) can't follow, so it goes through the
+  mirror shim (see Enterprise Linux below). Runs pin it by its origin URL, `https://snapshot.debian.org/...`.
 
 ### Ubuntu (`ubuntu`, apt backend)
 
@@ -894,9 +898,9 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `writable`, `managed` | the allowlists (globs) named by `write-file` (`writable`) and the `rpm.*` file ops (`managed`). Nothing under `/etc/wend/` is ever on either |
 | `[kv."<path>"]` | the files `kv.*` may touch: `keys` (the only keys it may set or unset; never one that grants access) and `set` (false for files with sections, which only take `kv.unset`) |
 | `force` | required: the `force-remove` flags this family allows, a subset of its backend's (apt: `depends`, `remove-essential`; rpm: `depends`, `scripts`) |
-| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`), and optional `releases.<id>.upgrade` like rpm's. rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader"). apt: a start release may have `releases.<id>.install` too |
+| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`; each an http(s) URL, or host/path through the `[mirror]` shim), and optional `releases.<id>.upgrade` like rpm's. rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader"). apt: a start release may have `releases.<id>.install` too |
 | `[addons.<name>]` | rpm: `marker`, `vendor`, `repos` (see "Add-on repositories") |
-| `[mirror]` | rpm: `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts) |
+| `[mirror]` | `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts): every rpm repo, and an apt mirror given as host/path |
 | `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), `autoremove`, `obsolete`, `installed_list`, `kernel_newest` (the VM tier's newest-kernel query); apt also `apt_conf`, the harness's apt config |
 | `[predicates]` | `installed`, `file`, `file-contains`, `mysql-option` command templates |
 | `[pm_options.<name>]` | `path`, `content`. apt: only `overwrite-conflicting-files`; rpm: none |

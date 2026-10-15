@@ -136,6 +136,22 @@ for name, mutate in {
     errs = check.check_adapter(a, "adapters/el.toml")
     print(("refused " if errs else "MISSED  ") + name + (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
     bad += not errs
+# apt mirrors land in root shell commands: a URL, or host/path through the shim, and nothing else
+for name, mutate in {
+    "an apt mirror with shell in it": lambda a: a["releases"].update(archive="http://x.org/debian;reboot"),
+    "an apt mirror that isn't http(s)": lambda a: a["releases"].update(current="ftp://ftp.debian.org/debian"),
+    "a host/path apt mirror with no shim to go through": lambda a: a.pop("mirror"),
+}.items():
+    a = copy.deepcopy(adapters["debian"])
+    mutate(a)
+    errs = check.check_adapter(a, "adapters/debian.toml")
+    print(("refused " if errs else "MISSED  ") + name + (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
+    bad += not errs
+a = copy.deepcopy(adapters["debian"])  # an apt cache on its own port is a mirror like any other
+a["releases"]["current"] = "http://apt-cache.internal:3142/debian"
+errs = check.check_adapter(a, "adapters/debian.toml")
+print(("passed  " if not errs else "WRONG   ") + "an apt mirror URL with a port" + (f" ({errs})" if errs else ""))
+bad += bool(errs)
 # a release's driver table is pinned: other bytes under its name, or none, fail the atlas
 a = copy.deepcopy(adapters["el"])
 a["hardware"]["alma9"]["drivers"] = "sha256:" + "0" * 64

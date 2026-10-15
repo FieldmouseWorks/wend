@@ -21,13 +21,30 @@ jobs:
     # Every commit in the PR carries a Signed-off-by line (Developer Certificate of Origin).
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0 }
       # The PR's own commits, merge commits included, not the synthetic merge commit Actions checks out by default.
-      - run: |
-          bad=$(git log --format='%H %(trailers:key=Signed-off-by,valueonly,separator=;)' \
-                origin/${{ github.base_ref }}..${{ github.event.pull_request.head.sha }} | awk 'NF<2{print $1}')
-          [ -z "$bad" ] || { echo "commits without a DCO sign-off (use git commit -s):"; echo "$bad"; exit 1; }
+      # Dependabot can't sign off. On a PR GitHub says Dependabot opened (only Dependabot can), an unsigned commit passes
+      # only if GitHub itself made it for Dependabot: authored and committed as dependabot[bot] (or committed by GitHub's
+      # web-flow), and carrying a signature GitHub verifies. Git's author and committer lines alone can be forged; a
+      # verified signature for those identities can't, so a commit anyone else pushes to that PR still needs a sign-off.
+      - env:
+          GH_TOKEN: "${{ github.token }}"
+          REPO: "${{ github.repository }}"
+          DEPENDABOT_PR: "${{ github.event.pull_request.user.login == 'dependabot[bot]' }}"
+        run: |
+          unsigned=$(git log --format='%H %(trailers:key=Signed-off-by,valueonly,separator=;)' \
+                     origin/${{ github.base_ref }}..${{ github.event.pull_request.head.sha }} | awk 'NF<2{print $1}')
+          bot='49699333+dependabot[bot]@users.noreply.github.com'
+          bad=
+          for c in $unsigned; do
+            if [ "$DEPENDABOT_PR" = true ] && [ "$(gh api "repos/$REPO/commits/$c" --jq \
+                 "(.commit.author.email == \"$bot\") and (.commit.committer.email == \"$bot\" or .commit.committer.email == \"noreply@github.com\") and .commit.verification.verified")" = true ]; then
+              continue
+            fi
+            bad="$bad $c"
+          done
+          [ -z "$bad" ] || { echo "commits without a DCO sign-off (use git commit -s):"; printf '%s\n' $bad; exit 1; }
 
   schema:
     runs-on: ubuntu-24.04
@@ -35,9 +52,9 @@ jobs:
       contents: read
       attestations: read           # runs land only from CI, below
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { path: pr }
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { ref: "${{ github.base_ref }}", path: base }
       - name: base branch tools judge the PR's data
         run: |
@@ -67,9 +84,9 @@ jobs:
     outputs:
       matrix: ${{ steps.m.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0 }
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { ref: "${{ github.base_ref }}", path: .base }
       - id: m
         run: |
@@ -91,8 +108,8 @@ jobs:
       id-token: write              # for the run attestation
       attestations: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { ref: "${{ github.base_ref }}", path: .base }
       - run: rm -rf tools adapters prompts wend && cp -r .base/tools .base/adapters .base/prompts .base/wend . && rm -rf .base
       - name: host packages
@@ -105,7 +122,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/local/share/boost
           df -h /
       - name: box cache (built boxes are keyed by the box file, the adapter and the base's sandbox, which builds them)
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /var/tmp/wend/boxes
           key: box-${{ matrix.box }}-${{ hashFiles(format('boxes/{0}/box.toml', matrix.box), 'adapters/*.toml', 'tools/sandbox.py') }}
@@ -116,15 +133,15 @@ jobs:
           sudo -E python3 -B wend replay "${{ matrix.route }}" "${{ matrix.box }}" --out "$GITHUB_WORKSPACE/run.json"
       # attestations need a public repo (or a paid plan); skipped while the repo is private
       - if: ${{ !github.event.repository.private }}
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with: { subject-path: run.json }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: run-${{ strategy.job-index }}
           path: run.json
       # docs/archive.md "Capture": what the replay downloaded, with the metadata's bytes, which live repos replace within
       # days. remi ingests it for the runs that land; it's never filed in runs/ and never trusted beyond their pins.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fetched-${{ strategy.job-index }}
           path: run.fetched
@@ -142,10 +159,10 @@ jobs:
         run: |
           echo "plan or a replay did not pass: plan=${{ needs.plan.result }} replay=${{ needs.replay.result }}"
           exit 1
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { ref: "${{ github.base_ref }}", path: .base }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { path: new-runs, pattern: "run-*" }
       - run: |
           rm -rf tools adapters && cp -r .base/tools .base/adapters . && rm -rf .base

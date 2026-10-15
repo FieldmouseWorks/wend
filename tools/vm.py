@@ -589,8 +589,9 @@ def build(box_id):
             srv.httpd.server_close()
     else:  # debian-installer: netboot from the start release's mirror, the preseed and post_install() in its initrd
         mirror = backends.of(a).hop_vars(a, box_doc["release"])["mirror"]
-        for f in ("linux", "initrd.gz"):
-            fetch(f"{mirror}/{inst['netboot']}/{f}", os.path.join(d, f))
+        host_mirror = backends.Apt().hop_vars(load(f"adapters/{fam}.toml"), box_doc["release"])["mirror"]
+        for f in ("linux", "initrd.gz"):  # fetched on the host: a mirror through the shim is the host's 127.0.0.1
+            fetch(f"{host_mirror}/{inst['netboot']}/{f}", os.path.join(d, f))
         u = urllib.parse.urlsplit(mirror)
         proxy = (PocketProxy(f"{u.scheme}://{u.netloc}", box_doc.get("vm", {}).get("pockets", []))
                  if inst.get("release_pocket_only") else None)

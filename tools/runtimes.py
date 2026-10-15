@@ -35,7 +35,7 @@ def upstream(version):
 
 
 def apt_python2(adapter, release):
-    mirror = backends.Apt().hop_vars(adapter, release)["mirror"]
+    mirror = backends.Apt().origin(adapter, release)
     found = set()
     for comp in COMPONENTS[adapter["family"]]:
         base = f"{mirror}/dists/{release}/{comp}/binary-amd64/Packages"

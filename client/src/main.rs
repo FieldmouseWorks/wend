@@ -382,8 +382,9 @@ struct WalkOpts {
     live: bool,
 }
 
-/// The adapter with its repos pointed at the proxy: apt's mirrors become <proxy>/<host>/<path>, and the rpm shim is
-/// the proxy itself (it speaks plain http to the box and fetches https, as the shim does).
+/// The adapter with its repos pointed at the proxy: apt's mirrors become <proxy>/<host>/<path>, and the shim is the
+/// proxy itself (it speaks plain http to the box and fetches https, as the shim does), so a host/path mirror, which
+/// goes through the shim, stays as it is.
 fn proxied_adapter(a: &Doc, base: &str) -> Result<Doc, String> {
     let mut a = a.clone();
     if let Some(m) = a.get_mut("mirror").and_then(Value::as_object_mut) {
@@ -395,7 +396,7 @@ fn proxied_adapter(a: &Doc, base: &str) -> Result<Doc, String> {
             .and_then(Value::as_object_mut)
             .ok_or("the adapter has no [releases]")?;
         for k in ["archive", "current"] {
-            if let Some(Value::String(u)) = r.get(k) {
+            if let Some(Value::String(u)) = r.get(k).filter(|u| u.as_str().is_some_and(|u| u.contains("://"))) {
                 let rest = u
                     .split_once("://")
                     .map(|x| x.1)

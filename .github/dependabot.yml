@@ -1,0 +1,16 @@
+# Keeps the toolchain from going stale: one batched PR a week per ecosystem. Actions stay pinned by commit SHA (Dependabot
+# moves the SHA and its "# vX.Y.Z" comment together). The Rust toolchain itself (client/rust-toolchain.toml) is bumped
+# by hand. Claude reviews these like any PR and flags anything that changes the MSRV, the static musl build, or what
+# gate.yml copies from the base branch.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }
+  - package-ecosystem: cargo
+    directory: /client
+    schedule: { interval: weekly }
+    groups:
+      cargo: { patterns: ["*"] }
