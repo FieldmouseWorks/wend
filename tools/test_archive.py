@@ -118,6 +118,8 @@ check(v.returncode == 0, "verify passes a good store")
 open(blob, "wb").write(b"rot")
 v = subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", "verify", f"{w}/store"], capture_output=True, text=True)
 check(v.returncode == 1 and f"WRONG   {u}/Packages/a-1.rpm" in v.stdout, "verify names a blob that rotted")
+ingest("--fetched", f"{w}/fetched")
+check(open(blob, "rb").read() == used_rpm, "an ingest that finds good bytes elsewhere replaces a rotted blob")
 # wheezy: a plain index pinned uncompressed, served only as .gz; and a primary in a compression nothing reads
 plain = b"Package: x\nFilename: pool/x.deb\nSHA256: " + sha(b"x").encode() + b"\n"
 wheezy = "archive.example.org/debian/dists/wheezy/main/binary-amd64/Packages"

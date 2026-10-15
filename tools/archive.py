@@ -180,6 +180,7 @@ class Store:
             self.index = {"schema": "wend.archive/0", "files": {}}
         self.stamp = now()
         self.added, self.found = [], set()
+        self.rotted = set()  # store blobs get() found not hashing to their name: keep() rewrites them
         self.missing = []  # (url, digest, depth, parent, why)
         self.unreadable = []  # (url, why)
         self.kept = {}  # (url, digest) -> "sha256:<hex>"
@@ -238,6 +239,8 @@ class Store:
                 continue
             if hexof(alg, data) == want:
                 return data, ""
+            if path and path.startswith(f"{self.path}/blob/") and hexof("sha256", data) != path.rsplit("/", 1)[1]:
+                self.rotted.add(path)
             if src:
                 why = f"{src}: different bytes now"
         return None, why or "no source has it"
@@ -245,7 +248,7 @@ class Store:
     def keep(self, url, data):
         h = hexof("sha256", data)
         p = self.blob(h)
-        if not os.path.exists(p):
+        if not os.path.exists(p) or p in self.rotted:
             os.makedirs(os.path.dirname(p), exist_ok=True)
             tmp = f"{p}.tmp{os.getpid()}"
             with open(tmp, "wb") as f:
