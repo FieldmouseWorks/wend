@@ -1,9 +1,9 @@
 """VM replays side by side (tools/vm.py), by behaviour, the parts that don't need KVM: two guests started at once get
 ssh forwards on different host ports and both run; a guest whose port another process takes first asks again for
-another one; the mirror shim can't be stopped while a run uses it (shim-stop); a second run that needs a box another run is installing waits for it; and the box cache key follows what
-the install runs, not the whole file (build_source). QEMU is a stand-in that binds its hostfwd port as QEMU does and
-says what QEMU says when it can't. It runs the PR's own vm.py, so the gate's schema job doesn't run it: the client job
-does.
+another one; the mirror shim can't be stopped while a run uses it, whatever its WEND_WORK (shim-stop); a second run
+that needs a box another run is installing waits for it; and the box cache key follows what the install runs, not the
+whole file (build_source). QEMU is a stand-in that binds its hostfwd port as QEMU does and says what QEMU says when
+it can't. It runs the PR's own vm.py, so the gate's schema job doesn't run it: the client job does.
 python3 tools/test_vm_parallel.py"""
 import os
 import re
@@ -111,10 +111,13 @@ try:
     open(fake, "w").write("import time\ntime.sleep(60)\n")
     for f in ("vm.py", "sandbox.py"):
         open(os.path.join(os.path.dirname(fake), f), "w").close()
-    shim = subprocess.Popen([sys.executable, fake])
+    port = str(vm.free_port())  # a port no real shim uses, so its lock is this test's alone
+    shim = subprocess.Popen([sys.executable, fake, port, os.path.join(tmp, "cache")])
+    # the run holds the port's lock under another WEND_WORK than shim-stop's: the lock follows the port
     run = subprocess.Popen([sys.executable, "-B", "-c", "import sys, time; sys.path.insert(0, sys.argv[1]); import vm; "
-                            "vm.use_shim(); print('holding', flush=True); time.sleep(60)", os.path.join(ROOT, "tools")],
-                           stdout=subprocess.PIPE, text=True)
+                            "vm.use_shim([int(sys.argv[2])]); print('holding', flush=True); time.sleep(60)",
+                            os.path.join(ROOT, "tools"), port], stdout=subprocess.PIPE, text=True,
+                           env={**os.environ, "WEND_WORK": os.path.join(tmp, "other-work")})
     run.stdout.readline()
     stop = lambda pid: subprocess.run([sys.executable, "-B", os.path.join(ROOT, "tools", "vm.py"), "shim-stop", str(pid)],
                                       capture_output=True, text=True)  # noqa: E731
@@ -131,13 +134,14 @@ try:
     os.makedirs(os.path.dirname(elsewhere))
     shutil.copyfile(fake, elsewhere)
     for what, argv in [("a process that isn't the shim", ["-c", "import time; time.sleep(60)"]),
-                       ("another program's mirror.py", [elsewhere])]:
+                       ("another program's mirror.py", [elsewhere, port])]:
         other = subprocess.Popen([sys.executable, *argv])
         p = stop(other.pid)
         say(p.returncode == 2 and other.poll() is None, f"shim-stop refuses {what}",
             f"rc {p.returncode}: {p.stdout}{p.stderr}")
         other.kill()
     shim.kill()
+    os.remove(os.path.join(vm.SHIM_LOCKS, f"wend-shim-{port}.users"))
 
     # the cache key: what the install runs, and nothing it doesn't
     src = open(os.path.join(ROOT, "tools", "vm.py")).read()

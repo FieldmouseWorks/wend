@@ -35,8 +35,10 @@ Networking is QEMU user mode: nothing on the host changes. The guest reaches the
 ssh is forwarded to a free port on 127.0.0.1 of its own, so one host runs several VM replays side by side (each guest
 takes 2 CPUs and 3 GB); they share the mirror shim and the installed boxes. A box is installed once per cache key
 (the box file, the adapter, and the part of this file the install runs: build_source), and a run that needs a box
-another run is installing waits for it. A run holds a shared lock on $WEND_WORK/mirror.users for as long as it lives,
-so the shim isn't stopped under it: stop the shim only with `shim-stop`, which refuses while any run holds it.
+another run is installing waits for it. A run holds a shared lock on /var/tmp/wend-shim-<port>.users for each shim
+port the adapters name, for as long as it lives, so the shim isn't stopped under it: stop the shim only with
+`shim-stop`, which refuses while any run holds its port's lock. The lock follows the port, not $WEND_WORK: runs with
+different work directories still share the one shim listening there.
 Disks go under $WEND_WORK/vm (default /var/tmp/wend/vm, which the chroot
 harness, run as root, may own: point WEND_WORK somewhere the user can write). Every run records the commit it ran
 (run.json "head"), so a run on a stale head shows as one.
@@ -175,37 +177,44 @@ class Locked:
         self.f.close()  # closing the file drops the lock
 
 
-SHIM_USERS = os.path.join(sandbox.WORK, "mirror.users")  # every VM run holds a shared flock on it while it runs
-HOLDING = []  # this run's own hold on SHIM_USERS
+# Where the shim locks live: one per port, the same for every run on the host whatever its $WEND_WORK, since the
+# port is what runs share (the first run's shim serves them all). Read-only opens, so runs as different users share it.
+SHIM_LOCKS = "/var/tmp"
+HOLDING = []  # this run's own holds
 
 
-def shim_fd():
-    """An open file for flocks on SHIM_USERS; read-only, so a run as another user than the one that made it can lock it
-    too."""
-    os.makedirs(sandbox.WORK, exist_ok=True)
-    return os.open(SHIM_USERS, os.O_RDONLY | os.O_CREAT, 0o644)
+def shim_lock(port):
+    return os.open(os.path.join(SHIM_LOCKS, f"wend-shim-{int(port)}.users"), os.O_RDONLY | os.O_CREAT, 0o644)
 
 
-def use_shim():
-    """Hold a shared lock on SHIM_USERS until this process exits (the kernel drops it then, however it ends), before
-    anything starts or reads the shim. Waits while a shim-stop holds it exclusively."""
+def shim_ports():
+    """The ports of every adapter's [mirror] shim."""
+    out = set()
+    for f in sorted(os.listdir(os.path.join(ROOT, "adapters"))):
+        if f.endswith(".toml"):
+            a = load(f"adapters/{f}")
+            if "mirror" in a:
+                out.add(int(a["mirror"]["shim"].rsplit(":", 1)[1]))
+    return sorted(out)
+
+
+def use_shim(ports=None):
+    """Hold a shared lock for each shim port (shim_ports) until this process exits (the kernel drops them then,
+    however it ends), before anything starts or reads a shim. Waits while a shim-stop holds one exclusively."""
     if not HOLDING:
-        fd = shim_fd()
-        fcntl.flock(fd, fcntl.LOCK_SH)
-        HOLDING.append(fd)
+        for port in shim_ports() if ports is None else ports:
+            fd = shim_lock(port)
+            fcntl.flock(fd, fcntl.LOCK_SH)
+            HOLDING.append(fd)
 
 
 def shim_stop(pid):
-    """Stop the mirror shim running as pid, only while no VM run holds SHIM_USERS: the exclusive lock is held through
-    the kill, so a run that starts meanwhile waits for it and then starts its own shim. 0 stopped (or wasn't running),
-    3 in use and left running, 2 pid isn't a mirror shim, 1 it didn't exit."""
-    fd = shim_fd()
+    """Stop the mirror shim running as pid, only while no VM run holds the lock of the port it listens on (from its
+    own command line): the exclusive lock is held through the kill, so a run that starts meanwhile waits for it and
+    then starts its own shim. 0 stopped (or wasn't running), 3 in use and left running, 2 pid isn't a mirror shim,
+    1 it didn't exit."""
+    fd = None
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            print(f"the mirror shim is in use by a VM run; left running (pid {pid})")
-            return 3
         # a pidfd names this process, not its number: if it exits and the number is reused, signals through it fail
         # instead of reaching the newcomer. /proc/<pid> is read after it's open and before the first signal, while
         # the pidfd says the process is still alive, so the files read are that process's.
@@ -224,11 +233,20 @@ def shim_stop(pid):
                 return 0
             # a wend checkout's tools/mirror.py (a tools/ directory with vm.py and sandbox.py beside it), not any
             # mirror.py
-            shim = [os.path.dirname(os.path.join(cwd, a)) for a in cmd[1:3] if os.path.basename(a) == "mirror.py"]
-            if not any(os.path.basename(t) == "tools" and all(os.path.exists(os.path.join(t, f)) for f in
-                                                              ("vm.py", "sandbox.py")) for t in shim):
+            # mirror.py, then its PORT and CACHE_DIR
+            at = next((i for i in (1, 2) if i < len(cmd) and os.path.basename(cmd[i]) == "mirror.py"), None)
+            t = os.path.dirname(os.path.join(cwd, cmd[at])) if at else ""
+            if not (at and os.path.basename(t) == "tools" and
+                    all(os.path.exists(os.path.join(t, f)) for f in ("vm.py", "sandbox.py")) and
+                    at + 1 < len(cmd) and cmd[at + 1].isdigit()):
                 print(f"process {pid} isn't a wend checkout's tools/mirror.py: {' '.join(cmd)[:200]}")
                 return 2
+            fd = shim_lock(cmd[at + 1])
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                print(f"the mirror shim on port {cmd[at + 1]} is in use by a VM run; left running (pid {pid})")
+                return 3
             for sig, wait, said in ((signal.SIGTERM, 10, "stopped"),
                                     (signal.SIGKILL, 10, "killed (it ignored SIGTERM)")):
                 try:
@@ -243,7 +261,8 @@ def shim_stop(pid):
         finally:
             os.close(pfd)
     finally:
-        os.close(fd)
+        if fd is not None:
+            os.close(fd)
 
 
 def head():
