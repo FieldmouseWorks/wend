@@ -106,9 +106,11 @@ try:
     say(order == ["first done", "second in"], "a run waits while another installs the same box", str(order))
 
     # the shim: shim-stop refuses while a run holds it, stops it once none does, and stops nothing else
-    fake = os.path.join(tmp, "fake", "mirror.py")
+    fake = os.path.join(tmp, "checkout", "tools", "mirror.py")  # a checkout's shim: vm.py and sandbox.py beside it
     os.makedirs(os.path.dirname(fake))
     open(fake, "w").write("import time\ntime.sleep(60)\n")
+    for f in ("vm.py", "sandbox.py"):
+        open(os.path.join(os.path.dirname(fake), f), "w").close()
     shim = subprocess.Popen([sys.executable, fake])
     run = subprocess.Popen([sys.executable, "-B", "-c", "import sys, time; sys.path.insert(0, sys.argv[1]); import vm; "
                             "vm.use_shim(); print('holding', flush=True); time.sleep(60)", os.path.join(ROOT, "tools")],
@@ -125,11 +127,16 @@ try:
     time.sleep(0.5)
     say(p.returncode == 0 and shim.poll() is not None, "shim-stop stops the shim once no run uses it",
         f"rc {p.returncode}: {p.stdout}{p.stderr}")
-    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-    p = stop(other.pid)
-    say(p.returncode == 2 and other.poll() is None, "shim-stop refuses a process that isn't the shim",
-        f"rc {p.returncode}: {p.stdout}{p.stderr}")
-    other.kill()
+    elsewhere = os.path.join(tmp, "srv", "mirror.py")  # a mirror.py that isn't a wend checkout's
+    os.makedirs(os.path.dirname(elsewhere))
+    shutil.copyfile(fake, elsewhere)
+    for what, argv in [("a process that isn't the shim", ["-c", "import time; time.sleep(60)"]),
+                       ("another program's mirror.py", [elsewhere])]:
+        other = subprocess.Popen([sys.executable, *argv])
+        p = stop(other.pid)
+        say(p.returncode == 2 and other.poll() is None, f"shim-stop refuses {what}",
+            f"rc {p.returncode}: {p.stdout}{p.stderr}")
+        other.kill()
     shim.kill()
 
     # the cache key: what the install runs, and nothing it doesn't

@@ -206,12 +206,16 @@ def shim_stop(pid):
             print(f"the mirror shim is in use by a VM run; left running (pid {pid})")
             return 3
         try:
-            cmd = open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0")
+            cmd = [a.decode(errors="replace") for a in open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0")]
+            cwd = os.readlink(f"/proc/{pid}/cwd")
         except FileNotFoundError:
             print(f"no process {pid}: nothing to stop")
             return 0
-        if not any(os.path.basename(a) == b"mirror.py" for a in cmd):
-            print(f"process {pid} isn't tools/mirror.py: {b' '.join(cmd).decode(errors='replace')[:200]}")
+        # a wend checkout's tools/mirror.py (a tools/ directory with vm.py and sandbox.py beside it), not any mirror.py
+        shim = [os.path.dirname(os.path.join(cwd, a)) for a in cmd[1:3] if os.path.basename(a) == "mirror.py"]
+        if not any(os.path.basename(t) == "tools" and all(os.path.exists(os.path.join(t, f)) for f in
+                                                          ("vm.py", "sandbox.py")) for t in shim):
+            print(f"process {pid} isn't a wend checkout's tools/mirror.py: {' '.join(cmd)[:200]}")
             return 2
         os.kill(pid, signal.SIGTERM)
         for _ in range(50):
@@ -794,13 +798,14 @@ def install(box_id, box_doc, d):
     if failed:
         raise RuntimeError(f"box {box_id} fails its own checks in the VM: {sorted(failed)}\n" +
                            "\n".join(f"{n}: {o[-600:]}" for n, o in failed.items()))
+    # base.qcow2 last: a run that sees it (build(), without the lock) finds its extra disks and NVRAM beside it
     for x, b in zip(extras(disk), extras(base)):
         os.rename(x, b)
         sandbox.host(f"chmod a-w {b}")
-    os.rename(disk, base)
-    sandbox.host(f"chmod a-w {base}")
     if FIRMWARE == "uefi":
         os.rename(nvram(disk), nvram(base))
+    os.rename(disk, base)
+    sandbox.host(f"chmod a-w {base}")
 
 
 def pocket_sources(release, pockets):
