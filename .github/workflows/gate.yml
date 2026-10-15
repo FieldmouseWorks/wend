@@ -24,9 +24,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0 }
       # The PR's own commits, merge commits included, not the synthetic merge commit Actions checks out by default.
-      - run: |
-          bad=$(git log --format='%H %(trailers:key=Signed-off-by,valueonly,separator=;)' \
-                origin/${{ github.base_ref }}..${{ github.event.pull_request.head.sha }} | awk 'NF<2{print $1}')
+      # Dependabot can't sign off. On a PR GitHub says Dependabot opened (only Dependabot can), its own commits are
+      # exempt; anyone else's commit on that PR still needs a sign-off.
+      - env: { BOT: "${{ github.event.pull_request.user.login == 'dependabot[bot]' && '49699333+dependabot[bot]@users.noreply.github.com' || '' }}" }
+        run: |
+          bad=$(git log --format='%H %ae %(trailers:key=Signed-off-by,valueonly,separator=;)' \
+                origin/${{ github.base_ref }}..${{ github.event.pull_request.head.sha }} |
+                awk -v bot="$BOT" 'NF<3 && !(bot != "" && $2 == bot){print $1}')
           [ -z "$bad" ] || { echo "commits without a DCO sign-off (use git commit -s):"; echo "$bad"; exit 1; }
 
   schema:
