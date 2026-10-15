@@ -165,7 +165,7 @@ def walk(repo, route_path, packages, data=None, own=None, streams=()):
         gone, origin = {}, {}  # origin: a successor this hop installed -> the box package it stands for
         for e in events:
             ins = [p["name"] for p in e["in"]]
-            have = [p["name"] for p in e["in"] if p["name"] in pkgs and in_stream(p, mods)]
+            have = list(dict.fromkeys(p["name"] for p in e["in"] if p["name"] in pkgs and in_stream(p, mods)))
             if not have or (e["action"] != "merged" and len(have) < len(ins)):
                 continue
             if e["action"] == "deprecated":
@@ -191,7 +191,7 @@ def walk(repo, route_path, packages, data=None, own=None, streams=()):
                     if p["name"] == n and "repo" not in o and "streams" not in o:
                         continue
                     step["becomes"].append(o)
-                    if p["name"] in kept:
+                    if p["name"] in kept and p["name"] not in pkgs:  # one the box already had stands for itself
                         origin[p["name"]] = root
                 g["becomes"] = [o for o in g["becomes"] if o["name"] != n] + \
                     [o for o in step["becomes"] if o not in g["becomes"]]
@@ -289,7 +289,11 @@ def main(repo, rest):
                 if d["family"] == bd["family"] and bd["release"] == d["from"] and os.path.isdir(f"{DATA}/{d['family']}")]
     elif len(rest) == 3 and rest[1] == "--packages" and route_path(repo, rest[0]):
         f = rest[2]
-        given = open(f).read().split()
+        try:
+            given = open(f).read().split()
+        except OSError as e:
+            print(f"{f}: {e.strerror}")
+            return 2
         odd = [n for n in given if not leappdata.NAME.fullmatch(n)]
         if odd:
             print(f"{f}: not package names, one per line: {odd[:5]}")
