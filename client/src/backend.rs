@@ -79,9 +79,11 @@ fn ere(name: &str) -> String {
     name.replace('.', "[.]").replace('+', "[+]")
 }
 
+/// Shell that writes content to path. The content goes through %b, never as the format itself, so content that
+/// starts with "-" (an armoured key) isn't read as an option, and % is literal. Only \\ and \\n are escapes in it.
 fn printf(content: &str, path: &str) -> String {
     format!(
-        "printf '{}' > {path}",
+        "printf '%b' '{}' > {path}",
         content.replace('\\', "\\\\").replace('\n', "\\n")
     )
 }

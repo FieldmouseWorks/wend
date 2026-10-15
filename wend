@@ -269,7 +269,8 @@ def main(argv):
         e = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_esm_pins.py"]).returncode
         r = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_relocate.py"]).returncode
         p = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_pesgaps.py"]).returncode
-        return a or b or u or g or n or i or k or e or r or p
+        f = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_printf.py"]).returncode
+        return a or b or u or g or n or i or k or e or r or p or f
     if c == "list":
         return cmd_list()
     if c == "replay":

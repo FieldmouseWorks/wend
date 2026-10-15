@@ -415,9 +415,12 @@ def post_install(box_doc, key_pub, before="", shim=None):
     """What every installer runs in the new system at the end: the harness's ssh key, then the box's own setup (after
     `before`). shim = (the mirror shim as the host sees it, as the guest does): a box's customize names the first."""
     custom = box_doc["customize"].replace(*shim) if shim else box_doc["customize"]
+    # a broken `before` (the release's set_release) must stop the build where it broke, on the console too, not let
+    # the box's setup carry on without its repos and fail somewhere unrelated
+    stop = "{ echo 'wend: the release setup (set_release) failed, the box is not built' | tee /dev/console; exit 1; }"
     return "\n".join(["set -x", "mkdir -p /root/.ssh && chmod 700 /root/.ssh",
                       f"echo '{key_pub}' > /root/.ssh/authorized_keys", "chmod 600 /root/.ssh/authorized_keys",
-                      before, custom, box_doc.get("start_hook", ""), ""])
+                      f"{{ {before}\n}} || {stop}" if before else "", custom, box_doc.get("start_hook", ""), ""])
 
 
 def preseed(box_doc, adapter, inst, proxy=None):

@@ -49,6 +49,9 @@ jobs:
           tar xzf "$RUNNER_TEMP/bash-4.2.tar.gz" -C "$RUNNER_TEMP"
           (cd "$RUNNER_TEMP/bash-4.2" && ./configure -q --without-bash-malloc >/dev/null && make -s -j4 >/dev/null 2>&1)
           WEND_EL7_BASH="$RUNNER_TEMP/bash-4.2/bash" python3 -B tools/test_relocate.py
+      - name: the harness's printf() and the EL keys it writes, by behaviour in sh, bash and EL7's bash 4.2 (runs the PR's own backends.py, so not in the gate)
+        working-directory: .
+        run: WEND_EL7_BASH="$RUNNER_TEMP/bash-4.2/bash" python3 -B tools/test_printf.py
       - name: the EL op net.ifcfg-to-keyfile, by behaviour (runs the PR's own converter, so not in the gate)
         working-directory: .
         run: python3 -B tools/test_net_ifcfg.py
