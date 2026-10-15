@@ -1,6 +1,7 @@
 """The archive's store by behaviour (docs/archive.md): offline, on a made-up repo. Only bytes that hash right
 against a passing run's pins go in, only what a download list names comes along, and verify catches a bad blob.
 python3 tools/test_archive.py"""
+import bz2
 import gzip
 import hashlib
 import json
@@ -126,6 +127,9 @@ check(open(blob, "rb").read() == used_rpm, "an ingest that finds good bytes else
 plain = b"Package: x\nFilename: pool/x.deb\nSHA256: " + sha(b"x").encode() + b"\n"
 wheezy = "archive.example.org/debian/dists/wheezy/main/binary-amd64/Packages"
 put(f"{wheezy}.gz", gzip.compress(plain))
+tr = b"Package: x\nDescription-md5: 0\nDescription-en: x\n"
+buster = "archive.example.org/debian/dists/buster/main/i18n/Translation-en"
+put(f"{buster}.bz2", bz2.compress(tr))
 zck = b"(zchunk bytes)"
 repomd3 = (f'<repomd><data type="primary"><checksum type="sha256">{sha(zck)}</checksum>'
            f'<location href="repodata/primary.xml.zck"/></data></repomd>').encode()
@@ -134,11 +138,14 @@ put("new.example.org/10/repodata/primary.xml.zck", zck)
 os.makedirs(f"{w}/runs2")
 json.dump({"result": "pass", "box": "x", "started": "4", "hops": [{"sources": {
     f"http://{wheezy}": f"sha256:{sha(plain)}",
+    f"http://{buster}": f"sha256:{sha(tr)}",
     "https://new.example.org/10/repodata/repomd.xml": f"sha256:{sha(repomd3)}"}}]}, open(f"{w}/runs2/r.json", "w"))
 p = subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", "ingest", f"{w}/store2", "--offline", "--tree",
                     f"{w}/tree", "--runs", f"{w}/runs2"], capture_output=True, text=True)
 check(open(f"{w}/store2/blob/sha256/{sha(plain)[:2]}/{sha(plain)}", "rb").read() == plain,
       "a plain index pinned uncompressed is found through the .gz a tree holds")
+check(os.path.isfile(f"{w}/store2/blob/sha256/{sha(tr)[:2]}/{sha(tr)}"),
+      "a plain index served only as .bz2 (buster's Translation-en) is found through it")
 check(p.returncode == 1 and "unreadable https://new.example.org/10/repodata/primary.xml.zck" in p.stdout,
       "an index in a compression nothing reads is reported, not silently skipped")
 # sources: an EL repo's .src.rpm from its source repo (SOURCE_REPOS), a Debian package's .dsc and files from the
@@ -213,6 +220,41 @@ p = subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", "ingest", f"{w}/
 check(f"no source https://{deb}/pool/main/x/xsrc/x_1.0-1+b1_amd64.deb" in p.stdout and
       not os.path.exists(f"{w}/store4/blob/sha256/{sha(b'evil')[:2]}/{sha(b'evil')}"),
       "a source file that doesn't hash to what Sources lists is refused")
+# wheezy: a run pins only a package index, no Release. The suite's live Release is read for its Sources only when it
+# lists that pinned index at the pinned digest; and a lenny-era source listed only by md5 is stored by it
+md5 = lambda b: hashlib.md5(b).hexdigest()
+obin, odsc, ebin = b"!<arch> o", b"Format: 1.0\n", b"!<arch> e"
+opk = f"Package: o\nVersion: 1\nFilename: pool/main/o/o/o_1_amd64.deb\nSHA256: {sha(obin)}\n".encode()
+epk = f"Package: e\nVersion: 1\nFilename: pool/main/e/e/e_1_amd64.deb\nSHA256: {sha(ebin)}\n".encode()
+osrc = gzip.compress(f"Package: o\nVersion: 1\nDirectory: pool/main/o/o\nFiles:\n {md5(odsc)} {len(odsc)} o_1.dsc\n".encode())
+put(f"{deb}/dists/old/main/binary-amd64/Packages", opk)
+put(f"{deb}/dists/old/main/source/Sources.gz", osrc)
+put(f"{deb}/dists/old/Release", (f"SHA256:\n {sha(opk)} {len(opk)} main/binary-amd64/Packages\n"
+                                 f" {sha(osrc)} {len(osrc)} main/source/Sources.gz\n").encode())
+put(f"{deb}/pool/main/o/o/o_1_amd64.deb", obin)
+put(f"{deb}/pool/main/o/o/o_1.dsc", odsc)
+put(f"{deb}/dists/else/main/binary-amd64/Packages", epk)
+put(f"{deb}/dists/else/main/source/Sources.gz", osrc)
+put(f"{deb}/dists/else/Release", (f"SHA256:\n {sha(b'newer')} 5 main/binary-amd64/Packages\n"
+                                  f" {sha(osrc)} {len(osrc)} main/source/Sources.gz\n").encode())
+put(f"{deb}/pool/main/e/e/e_1_amd64.deb", ebin)
+os.makedirs(f"{w}/runsw")
+os.makedirs(f"{w}/fetchedw/r.fetched")
+open(f"{w}/fetchedw/r.fetched/fetched.txt", "w").write(f"https://{deb}/pool/main/o/o/o_1_amd64.deb sha256:{sha(obin)} 1\n"
+                                                       f"https://{deb}/pool/main/e/e/e_1_amd64.deb sha256:{sha(ebin)} 1\n")
+json.dump({"result": "pass", "box": "w", "started": "6", "hops": [{"sources": {
+    f"https://{deb}/dists/old/main/binary-amd64/Packages": f"sha256:{sha(opk)}",
+    f"https://{deb}/dists/else/main/binary-amd64/Packages": f"sha256:{sha(epk)}"}}]}, open(f"{w}/runsw/r.json", "w"))
+p = subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", "ingest", f"{w}/storew", "--offline", "--tree",
+                    f"{w}/tree", "--runs", f"{w}/runsw", "--fetched", f"{w}/fetchedw"], capture_output=True, text=True)
+idx = json.load(open(f"{w}/storew/index/latest.json"))["files"]
+check(idx[f"https://{deb}/pool/main/o/o/o_1_amd64.deb"][f"sha256:{sha(obin)}"]["source"] ==
+      {"url": f"https://{deb}/pool/main/o/o/o_1.dsc", "digest": f"sha256:{sha(odsc)}"} and
+      [(e["live"], e["runs"]) for e in idx[f"https://{deb}/dists/old/Release"].values()] == [(True, ["w@6"])],
+      "a suite with only its package index pinned gets its sources through the live Release that lists that index")
+check(f"no source https://{deb}/pool/main/e/e/e_1_amd64.deb (its suite's Release lists no Sources)" in p.stdout and
+      f"https://{deb}/dists/else/Release" not in idx,
+      "a live Release that doesn't list the pinned index at its digest is not used, nor stored")
 # a point release: two runs pin the same Release url at two digests, each listing its own Packages and Sources; a
 # universe binary built from a main source; a package a run pins directly
 def put5(rel, data):
