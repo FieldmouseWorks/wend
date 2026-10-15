@@ -220,35 +220,57 @@ def package_names(base, out):
             f"{{ echo 'no package list from {base}'; exit 1; }}")
 
 
-# Where an RPM's header+payload signature (tag 1002) sits, read from od's bytes after the 96-byte lead: "<signature
-# offset> <length> <signed data offset>", or nothing if it isn't an RPM or has no such signature
+# From od's bytes after an RPM's 96-byte lead: "<tag 1002 offset> <length> <tag 268 offset> <length> <main header
+# offset>", a length 0 for a signature that isn't there; nothing if it isn't an RPM. 1002 signs the main header and
+# the payload, 268 the main header only.
 RPM_SIG = ("function be(p) { return ((b[p] * 256 + b[p + 1]) * 256 + b[p + 2]) * 256 + b[p + 3] } "
            "{ for (i = 1; i <= NF; i++) b[n++] = $i } "
            "END { if (n < 16 || b[0] != 142 || b[1] != 173 || b[2] != 232) exit; il = be(8); s = 16 + 16 * il; "
-           "for (e = 0; e < il; e++) if (be(16 + 16 * e) == 1002) { o = be(24 + 16 * e); c = be(28 + 16 * e) } "
-           "if (!c) exit; x = 96 + s + be(12); x += (8 - x % 8) % 8; print 96 + s + o, c, x }")
+           "o = c = p = d = 0; for (e = 0; e < il; e++) { t = be(16 + 16 * e); "
+           "if (t == 1002) { o = be(24 + 16 * e); c = be(28 + 16 * e) } if (t == 268) { p = be(24 + 16 * e); d = be(28 + 16 * e) } } "
+           "x = 96 + s + be(12); x += (8 - x % 8) % 8; print 96 + s + o, c, 96 + s + p, d, x }")
+# From od's bytes of an RPM's main header: "<payload digest algorithm> <hex digest>" (tags 5093 and 5092), or nothing
+RPM_PAYLOAD = ("function be(p) { return ((b[p] * 256 + b[p + 1]) * 256 + b[p + 2]) * 256 + b[p + 3] } "
+               "{ for (i = 1; i <= NF; i++) b[n++] = $i } "
+               "END { if (n < 16 || b[0] != 142 || b[1] != 173 || b[2] != 232) exit; il = be(8); s = 16 + 16 * il; "
+               "a = h = -1; for (e = 0; e < il; e++) { t = be(16 + 16 * e); if (t == 5093) a = be(s + be(24 + 16 * e)); "
+               "if (t == 5092) h = s + be(24 + 16 * e) } if (a < 0 || h < 0) exit; "
+               "for (q = h; q < n && b[q] != 0; q++) { v = b[q]; if (v < 48 || v > 102 || (v > 57 && v < 97)) exit; "
+               "x = x sprintf(\"%c\", v) } print a, x }")
 
 
 def checksig(adapter, release, k, files):
     """SPEC "Signed packages": shell that checks files (RPMs fetched outside the package manager, or by one that can't
     check them) against the release's keys and its add-ons', and refuses any not signed by them. "" when the release
-    names no keys. gpgv checks each package's header+payload signature, not rpm: EL7's rpm 4.11 can't use signing
-    subkeys, which AlmaLinux 8 signs with, and gpgv works the same on every release."""
+    names no keys. gpgv checks the signatures, not rpm: EL7's rpm 4.11 can't use signing subkeys, which AlmaLinux 8
+    signs with, and gpgv works the same on every release. A header+payload signature (1002) covers everything; a
+    header-only one (268, newer EPEL builds) covers the header, whose sha256 payload digest (5092) then covers the
+    payload. Its variables all start with _w, so it leaves the caller's ($f, $r, ...) alone."""
     keys = adapter["releases"][release].get("gpgkeys", [])
     if not keys:
         return ""
     keys = keys + [a["gpgkeys"][release] for a in adapter.get("addons", {}).values() if release in a.get("gpgkeys", {})]
-    return (f"rm -rf {k}; mkdir -m 700 -p {k}; G=$(command -v gpg2 || command -v gpg); V=$(command -v gpgv2 || command -v gpgv); "
-            "[ -n \"$G\" ] && [ -n \"$V\" ] || { echo 'refusing: no gpg and gpgv to check signatures with'; exit 1; }; "
+    v = f"\"$_wv\" --homedir {k} --keyring {k}/ring {k}/sig"
+    return (f"rm -rf {k}; mkdir -m 700 -p {k}; _wg=$(command -v gpg2 || command -v gpg); "
+            "_wv=$(command -v gpgv2 || command -v gpgv); "
+            "[ -n \"$_wg\" ] && [ -n \"$_wv\" ] || { echo 'refusing: no gpg and gpgv to check signatures with'; exit 1; }; "
             # one key block per file (AlmaLinux 8's holds two), each into a binary keyring; one that won't read refuses
             f"awk '/BEGIN PGP/ {{n++}} {{print > (\"{k}/key.\" n)}}' " + " ".join(f"{KEYS}/{n}" for n in keys) + "; "
-            f"for f in {k}/key.*; do \"$G\" --homedir {k} --batch --dearmor < $f >> {k}/ring || "
-            "{ echo \"refusing: can't read key $f\"; exit 1; }; done; "
-            f"B=; for r in {files}; do set -- $(od -An -v -tu1 -j96 -N65536 $r 2>/dev/null | awk '{RPM_SIG}'); "
-            f"if [ $# -eq 3 ] && tail -c +$(($1 + 1)) $r | head -c $2 > {k}/sig && tail -c +$(($3 + 1)) $r > {k}/data && "
-            f"\"$V\" --homedir {k} --keyring {k}/ring {k}/sig {k}/data >/dev/null 2>&1; then :; else B=\"$B $r\"; fi; done; "
-            f"rm -f {k}/data; [ -z \"$B\" ] || {{ echo \"refusing, not signed by the release's keys:\"; "
-            "printf '%s\\n' $B | head -n 20; exit 1; }")
+            f"for _wk in {k}/key.*; do \"$_wg\" --homedir {k} --batch --dearmor < $_wk >> {k}/ring || "
+            "{ echo \"refusing: can't read key $_wk\"; exit 1; }; done; "
+            f"_wbad=; for _wr in {files}; do _ws=$(od -An -v -tu1 -j96 -N65536 $_wr 2>/dev/null | awk '{RPM_SIG}'); "
+            "_wok=; if [ -n \"$_ws\" ]; then set -- $_ws; "
+            f"if [ $2 -gt 0 ]; then tail -c +$(($1 + 1)) $_wr | head -c $2 > {k}/sig && "
+            f"tail -c +$(($5 + 1)) $_wr > {k}/data && {v} {k}/data >/dev/null 2>&1 && _wok=1; "
+            f"elif [ $4 -gt 0 ]; then _wx=$5; tail -c +$(($3 + 1)) $_wr | head -c $4 > {k}/sig && "
+            f"_wl=$(od -An -v -tu1 -j$((_wx + 8)) -N8 $_wr | awk '{{print 16 + 16 * ((($1 * 256 + $2) * 256 + $3) * 256 + $4) "
+            "+ (($5 * 256 + $6) * 256 + $7) * 256 + $8}') && "
+            f"tail -c +$((_wx + 1)) $_wr | head -c $_wl > {k}/hdr && {v} {k}/hdr >/dev/null 2>&1 && "
+            f"_wd=$(od -An -v -tu1 {k}/hdr | awk '{RPM_PAYLOAD}') && [ \"${{_wd%% *}}\" = 8 ] && "
+            f"[ \"$(tail -c +$((_wx + _wl + 1)) $_wr | sha256sum | cut -d' ' -f1)\" = \"${{_wd#* }}\" ] && _wok=1; fi; fi; "
+            "[ -n \"$_wok\" ] || _wbad=\"$_wbad $_wr\"; done; "
+            f"rm -f {k}/data {k}/hdr; [ -z \"$_wbad\" ] || {{ echo \"refusing, not signed by the release's keys:\"; "
+            "printf '%s\\n' $_wbad | head -n 20; exit 1; }")
 
 
 def transit_checksig(adapter, release, b):

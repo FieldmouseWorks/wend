@@ -477,9 +477,12 @@ Packages that reach the box any other way are checked by `CHECKSIG` before anyth
 keys: `rpm.transit`'s download (EL7's dnf and rpm 4.11 can't use signing subkeys, which AlmaLinux 8 signs with, so it
 downloads with `--nogpgcheck`) and `rpm.swap-release`'s package (fetched with curl). `CHECKSIG` splits the release's
 keys and its add-ons' keys for that release into one block each, reads them into a scratch keyring with the box's
-`gpg2` (or `gpg`), and checks each package's header+payload signature (signature header tag 1002, over every byte from
-the main header to the end) with `gpgv2` (or `gpgv`). It refuses, naming them, every file that isn't an RPM, has no
-such signature, or isn't signed by one of those keys, and refuses outright if a key won't read or there is no gpg.
+`gpg2` (or `gpg`), and checks each package with `gpgv2` (or `gpgv`): its header+payload signature (signature header
+tag 1002, over every byte from the main header to the end) if it has one, else its header-only signature (tag 268,
+over the main header; newer EPEL 8 builds carry only this) and then the payload's sha256 against the signed header's
+payload digest (tags 5092 and 5093, which must say sha256). It refuses, naming them, every file that isn't an RPM, has
+neither signature, or doesn't check out against those keys, and refuses outright if a key won't read or there is no
+gpg. Its shell variables all start with `_w`, so it leaves the op's own alone.
 Releases that list none keep `gpgcheck=0`:
 on EL, CentOS 5 to 8, whose keys can't check what later releases ship or whose rpm can't read the newer signatures.
 With `wend walk --run` every byte is checked against the run's pins anyway; signatures are what protects `--live`

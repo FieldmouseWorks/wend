@@ -386,18 +386,15 @@ fn repo_file(adapter: &Doc, release: &str, shim: &str) -> Result<String, String>
         .collect())
 }
 
-/// Where an RPM's header+payload signature (tag 1002) sits, read from od's bytes after the 96-byte lead: "<signature
-/// offset> <length> <signed data offset>", or nothing if it isn't an RPM or has no such signature.
-const RPM_SIG: &str = "function be(p) { return ((b[p] * 256 + b[p + 1]) * 256 + b[p + 2]) * 256 + b[p + 3] } \
-     { for (i = 1; i <= NF; i++) b[n++] = $i } \
-     END { if (n < 16 || b[0] != 142 || b[1] != 173 || b[2] != 232) exit; il = be(8); s = 16 + 16 * il; \
-     for (e = 0; e < il; e++) if (be(16 + 16 * e) == 1002) { o = be(24 + 16 * e); c = be(28 + 16 * e) } \
-     if (!c) exit; x = 96 + s + be(12); x += (8 - x % 8) % 8; print 96 + s + o, c, x }";
-
 /// SPEC "Signed packages": shell that checks files (RPMs fetched outside the package manager, or by one that can't
-/// check them) against the release's keys and its add-ons', and refuses any not signed by them. None when the
-/// release names no keys. gpgv checks each package's header+payload signature, not rpm: EL7's rpm 4.11 can't use
-/// signing subkeys, which AlmaLinux 8 signs with, and gpgv works the same on every release.
+/// check them) against the release's keys and its add-ons', and refuses any not signed by them. gpgv checks the
+/// signatures, not rpm: EL7's rpm 4.11 can't use signing subkeys, which AlmaLinux 8 signs with. A header+payload
+/// signature (tag 1002) covers everything; a header-only one (268, newer EPEL builds) covers the header, whose sha256
+/// payload digest (5092) then covers the payload. Its variables all start with _w, so it leaves the caller's alone.
+/// @K@ is the scratch dir, @KEYFILES@ the key files, @FILES@ the RPMs. tools/backends.py builds the same text.
+const CHECKSIG: &str = r#"rm -rf @K@; mkdir -m 700 -p @K@; _wg=$(command -v gpg2 || command -v gpg); _wv=$(command -v gpgv2 || command -v gpgv); [ -n "$_wg" ] && [ -n "$_wv" ] || { echo 'refusing: no gpg and gpgv to check signatures with'; exit 1; }; awk '/BEGIN PGP/ {n++} {print > ("@K@/key." n)}' @KEYFILES@; for _wk in @K@/key.*; do "$_wg" --homedir @K@ --batch --dearmor < $_wk >> @K@/ring || { echo "refusing: can't read key $_wk"; exit 1; }; done; _wbad=; for _wr in @FILES@; do _ws=$(od -An -v -tu1 -j96 -N65536 $_wr 2>/dev/null | awk 'function be(p) { return ((b[p] * 256 + b[p + 1]) * 256 + b[p + 2]) * 256 + b[p + 3] } { for (i = 1; i <= NF; i++) b[n++] = $i } END { if (n < 16 || b[0] != 142 || b[1] != 173 || b[2] != 232) exit; il = be(8); s = 16 + 16 * il; o = c = p = d = 0; for (e = 0; e < il; e++) { t = be(16 + 16 * e); if (t == 1002) { o = be(24 + 16 * e); c = be(28 + 16 * e) } if (t == 268) { p = be(24 + 16 * e); d = be(28 + 16 * e) } } x = 96 + s + be(12); x += (8 - x % 8) % 8; print 96 + s + o, c, 96 + s + p, d, x }'); _wok=; if [ -n "$_ws" ]; then set -- $_ws; if [ $2 -gt 0 ]; then tail -c +$(($1 + 1)) $_wr | head -c $2 > @K@/sig && tail -c +$(($5 + 1)) $_wr > @K@/data && "$_wv" --homedir @K@ --keyring @K@/ring @K@/sig @K@/data >/dev/null 2>&1 && _wok=1; elif [ $4 -gt 0 ]; then _wx=$5; tail -c +$(($3 + 1)) $_wr | head -c $4 > @K@/sig && _wl=$(od -An -v -tu1 -j$((_wx + 8)) -N8 $_wr | awk '{print 16 + 16 * ((($1 * 256 + $2) * 256 + $3) * 256 + $4) + (($5 * 256 + $6) * 256 + $7) * 256 + $8}') && tail -c +$((_wx + 1)) $_wr | head -c $_wl > @K@/hdr && "$_wv" --homedir @K@ --keyring @K@/ring @K@/sig @K@/hdr >/dev/null 2>&1 && _wd=$(od -An -v -tu1 @K@/hdr | awk 'function be(p) { return ((b[p] * 256 + b[p + 1]) * 256 + b[p + 2]) * 256 + b[p + 3] } { for (i = 1; i <= NF; i++) b[n++] = $i } END { if (n < 16 || b[0] != 142 || b[1] != 173 || b[2] != 232) exit; il = be(8); s = 16 + 16 * il; a = h = -1; for (e = 0; e < il; e++) { t = be(16 + 16 * e); if (t == 5093) a = be(s + be(24 + 16 * e)); if (t == 5092) h = s + be(24 + 16 * e) } if (a < 0 || h < 0) exit; for (q = h; q < n && b[q] != 0; q++) { v = b[q]; if (v < 48 || v > 102 || (v > 57 && v < 97)) exit; x = x sprintf("%c", v) } print a, x }') && [ "${_wd%% *}" = 8 ] && [ "$(tail -c +$((_wx + _wl + 1)) $_wr | sha256sum | cut -d' ' -f1)" = "${_wd#* }" ] && _wok=1; fi; fi; [ -n "$_wok" ] || _wbad="$_wbad $_wr"; done; rm -f @K@/data @K@/hdr; [ -z "$_wbad" ] || { echo "refusing, not signed by the release's keys:"; printf '%s\n' $_wbad | head -n 20; exit 1; }"#;
+
+/// CHECKSIG for a release's keys and its add-ons'; None when the release names no keys.
 fn checksig(adapter: &Doc, release: &str, k: &str, files: &str) -> Result<Option<String>, String> {
     let mut keys = release_keys(release_of(adapter, release)?);
     if keys.is_empty() {
@@ -414,20 +411,12 @@ fn checksig(adapter: &Doc, release: &str, k: &str, files: &str) -> Result<Option
         }
     }
     let key_files: Vec<String> = keys.iter().map(|n| format!("{KEYS}/{n}")).collect();
-    let key_files = key_files.join(" ");
-    // one key block per file (AlmaLinux 8's holds two), each into a binary keyring; one that won't read refuses
-    Ok(Some(format!(
-        "rm -rf {k}; mkdir -m 700 -p {k}; G=$(command -v gpg2 || command -v gpg); V=$(command -v gpgv2 || command -v gpgv); \
-         [ -n \"$G\" ] && [ -n \"$V\" ] || {{ echo 'refusing: no gpg and gpgv to check signatures with'; exit 1; }}; \
-         awk '/BEGIN PGP/ {{n++}} {{print > (\"{k}/key.\" n)}}' {key_files}; \
-         for f in {k}/key.*; do \"$G\" --homedir {k} --batch --dearmor < $f >> {k}/ring || \
-         {{ echo \"refusing: can't read key $f\"; exit 1; }}; done; \
-         B=; for r in {files}; do set -- $(od -An -v -tu1 -j96 -N65536 $r 2>/dev/null | awk '{RPM_SIG}'); \
-         if [ $# -eq 3 ] && tail -c +$(($1 + 1)) $r | head -c $2 > {k}/sig && tail -c +$(($3 + 1)) $r > {k}/data && \
-         \"$V\" --homedir {k} --keyring {k}/ring {k}/sig {k}/data >/dev/null 2>&1; then :; else B=\"$B $r\"; fi; done; \
-         rm -f {k}/data; [ -z \"$B\" ] || {{ echo \"refusing, not signed by the release's keys:\"; \
-         printf '%s\\n' $B | head -n 20; exit 1; }}"
-    )))
+    Ok(Some(
+        CHECKSIG
+            .replace("@KEYFILES@", &key_files.join(" "))
+            .replace("@FILES@", files)
+            .replace("@K@", k),
+    ))
 }
 
 /// SPEC "Add-on repositories": shell that appends each add-on's repo for `release` to `file`, as
