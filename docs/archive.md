@@ -176,9 +176,12 @@ Each one a small PR.
 7. **Box inputs.** A box build records the sources it read, as a hop does, and the store ingests them.
 8. **Signing, then public.** `tools/archive.py sign STORE --key KEY` (built) writes `<index>.sig` beside every index
    file, and `r2push.py` sends each just before its index. `verify` checks them against `archive/allowed_signers`
-   once it's committed. remi generates the key (a root-only file; the private half never leaves remi), and its
-   public half goes into `archive/allowed_signers` in its own PR. Then the bucket gets public read. It stays
-   private until this step.
+   (committed). The key was made on remi (a root-only file; the private half never leaves remi), and remi's push
+   wrapper signs before every push. Then the bucket gets public read. It stays private until this step.
+9. **Gate artifacts** (built). `tools/gate_fetched.py DIR` downloads every unexpired `fetched-N` artifact not yet
+   seen (a read-only Actions token; GitHub wants one even on a public repo) and unpacks each under `DIR/<id>/`;
+   `archive.py ingest STORE --fetched DIR` then takes what passing runs on main pin. Artifacts from runs that never
+   landed are read and ignored.
 
 ## Refused
 

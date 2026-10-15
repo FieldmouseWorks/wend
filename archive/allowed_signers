@@ -1,0 +1,4 @@
+# The wend archive's index signing key (docs/archive.md, step 8): tools/archive.py verify checks every
+# index/*.json.sig against it. The private half lives only on remi, root-only, at /root/.config/wend/archive-signing.
+# Check a signature yourself: ssh-keygen -Y verify -f archive/allowed_signers -I wend-archive -n wend-archive -s latest.json.sig < latest.json
+wend-archive namespaces="wend-archive" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILqAPjdPB2xbvcpM5G0Eq74OGvVXYAC7QNsHa/EC2z93 wend-archive

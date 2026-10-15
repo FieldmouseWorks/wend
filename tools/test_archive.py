@@ -12,6 +12,7 @@ import sys
 import tempfile
 
 sys.dont_write_bytecode = True
+os.environ["WEND_ARCHIVE_SIGNERS"] = ""  # these made-up stores aren't signed by the archive's key
 HERE = os.path.dirname(os.path.abspath(__file__))
 w = tempfile.mkdtemp(prefix="wend-test-archive-")
 sha = lambda b: hashlib.sha256(b).hexdigest()

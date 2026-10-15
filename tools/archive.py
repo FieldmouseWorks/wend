@@ -723,17 +723,18 @@ def main(argv):
         else:
             print(__doc__)
             return 2
+        # $WEND_ARCHIVE_SIGNERS overrides the default ("" for none: the tests' own made-up stores)
+        default = os.environ.get("WEND_ARCHIVE_SIGNERS", f"{ROOT}/archive/allowed_signers")
+        default = default if default and os.path.isfile(default) else None
         if argv[0] == "verify":
-            default = f"{ROOT}/archive/allowed_signers"
-            return verify(argv[1], arg or (default if os.path.isfile(default) else None))
+            return verify(argv[1], arg or default)
         if not arg:
             print(__doc__)
             return 2
         lock = lock_store(argv[1], "sign")
         if not lock:
             return 2
-        default = f"{ROOT}/archive/allowed_signers"
-        return sign(argv[1], arg, default if os.path.isfile(default) else None)
+        return sign(argv[1], arg, default)
     opts = {"--fetched": [], "--blobs": [], "--tree": [], "--runs": [f"{ROOT}/runs"]}
     rest, offline = argv[2:], False
     while rest:
