@@ -143,7 +143,7 @@ class Store:
         except FileNotFoundError:
             self.index = {"schema": "wend.archive/0", "files": {}}
         self.stamp = now()
-        self.added, self.missing = [], []
+        self.added, self.missing, self.found = [], [], set()  # missing: (url, digest, depth)
 
     def blob(self, hexdigest):
         return f"{self.path}/blob/sha256/{hexdigest[:2]}/{hexdigest}"
@@ -196,6 +196,7 @@ class Store:
         e = self.index["files"].setdefault(url, {}).setdefault(
             f"sha256:{h}", {"size": len(data), "first": self.stamp, "runs": []})
         e["runs"] = sorted(set(e["runs"]) | set(runs))
+        self.found.add(url)
         return h
 
     def alias(self, digest, h):
@@ -219,7 +220,7 @@ class Store:
             seen.add((url, d))
             data = self.get(url, d)
             if data is None:
-                self.missing.append(url)
+                self.missing.append((url, d, depth))
                 continue
             self.alias(d, self.keep(url, data, runs))
             if url.endswith(PACKAGES):
@@ -233,10 +234,13 @@ class Store:
                     todo.append((child, cd, runs, depth + 1))
 
     def unfound(self):
-        """Referenced files no source had. An index counts as found when any compressed form of it was."""
+        """Referenced files no source had at their digest. The one exception: an index a top file lists in several
+        compressed forms counts as found when this ingest found another form of it (a repo serves one or two). An
+        older digest at the same url never counts: a newer run's pin is its own file."""
         stem = lambda u: re.sub(r"\.(gz|xz|bz2|lzma)$", "", u)
-        have = {stem(u) for u, _, _ in self.added} | {stem(u) for u in self.index["files"]}
-        return sorted({u for u in self.missing if u.endswith(PACKAGES) or stem(u) not in have})
+        siblings = {stem(u) for u in self.found}
+        return sorted({u for u, _, depth in self.missing
+                       if depth == 0 or u.endswith(PACKAGES) or stem(u) not in siblings or u in self.found})
 
     def write_index(self):
         os.makedirs(f"{self.path}/index", exist_ok=True)

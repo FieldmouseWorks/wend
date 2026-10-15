@@ -68,6 +68,12 @@ check(sorted(idx) == sorted([f"{u}/repodata/repomd.xml", f"{u}/repodata/{sha(pri
 check(list(idx[f"{u}/repodata/repomd.xml"]) == [f"sha256:{sha(repomd)}"] and
       idx[f"{u}/Packages/a-1.rpm"][f"sha256:{sha(used_rpm)}"]["runs"] == ["el/x@1"],
       "the index maps each url to its digest and the passing runs that reference it")
+# a later passing run pins a newer repomd at the same url, and no source has it: still missing, despite the old one
+json.dump({**run("pass", sha(b"<repomd>vanished</repomd>")), "started": "2"}, open(f"{w}/runs/later.json", "w"))
+p = ingest("--fetched", f"{w}/fetched")
+check(f"missing {u}/repodata/repomd.xml" in p.stdout,
+      "a newer pin no source has is missing, though an older digest at its url is stored")
+os.remove(f"{w}/runs/later.json")
 blob = f"{w}/store/blob/sha256/{sha(used_rpm)[:2]}/{sha(used_rpm)}"
 check(open(blob, "rb").read() == used_rpm, "a blob is the upstream bytes, under blob/sha256/<2 hex>/<64 hex>")
 v = subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", "verify", f"{w}/store"], capture_output=True, text=True)

@@ -59,7 +59,9 @@ Only files that proven routes and boxes reference. Never a mirror of a whole dis
    top file lists. These are what make an old `repomd.xml` useful: without its `primary` it vouches for nothing.
 3. **Every package a passing run downloaded**, at the digest its index lists.
 4. **What a box build downloaded**: debootstrap's and the installer's files (etch's udebs), and the start release's
-   packages, so a box can still be built once its vault rots.
+   packages, so a box can still be built once its vault rots. Not yet: a box build pins nothing today (runs pin
+   only their hops' sources, and CI reuses cached boxes), so there is no chain to check these against. Boxes have to
+   record their own sources first (see Order of work).
 5. **The matching source packages.** The archive will be public, and redistributing GPL binaries means offering their
    source. For each binary, the archive keeps the source it names: the `.src.rpm` (vault.centos.org `Source/`,
    AlmaLinux `Source/`, EPEL `source/tree/`) or the `.dsc` and the files it lists. They are found through the same
@@ -155,7 +157,8 @@ Each one a small PR.
 4. **Sources.** Source packages for everything ingested.
 5. **R2 push.** Upload new blobs and the index (S3 API, standard library only), checking each upload's digest.
 6. **Client.** The archive as a by-digest source, in the default chain.
-7. **Signing, then public.** The index signature and `archive/allowed_signers`; then the bucket gets public read.
+7. **Box inputs.** A box build records the sources it read, as a hop does, and the store ingests them.
+8. **Signing, then public.** The index signature and `archive/allowed_signers`; then the bucket gets public read.
    It stays private until this step.
 
 ## Refused
