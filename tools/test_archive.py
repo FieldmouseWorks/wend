@@ -27,10 +27,12 @@ def put(rel, data):
 
 
 repo = "vault.example.org/7/os/x86_64"
-used_rpm, other_rpm = b"\xed\xab\xee\xdb used", b"\xed\xab\xee\xdb not used"
+used_rpm, other_rpm, old_rpm = b"\xed\xab\xee\xdb used", b"\xed\xab\xee\xdb not used", b"\xed\xab\xee\xdb sha1"
+sha1 = lambda b: hashlib.sha1(b).hexdigest()
 primary = gzip.compress(("<metadata>" + "".join(
-    f'<package type="rpm"><checksum type="sha256" pkgid="YES">{sha(b)}</checksum><location href="Packages/{n}"/>'
-    f'</package>' for n, b in (("a-1.rpm", used_rpm), ("b-1.rpm", other_rpm))) + "</metadata>").encode())
+    f'<package type="rpm"><checksum type="{t}" pkgid="YES">{h(b)}</checksum><location href="Packages/{n}"/>'
+    f'</package>' for n, b, t, h in (("a-1.rpm", used_rpm, "sha256", sha), ("b-1.rpm", other_rpm, "sha256", sha),
+                                     ("c-1.rpm", old_rpm, "sha", sha1))) + "</metadata>").encode())
 filelists = gzip.compress(b"<filelists/>")
 repomd = (f'<repomd><data type="primary"><checksum type="sha256">{sha(primary)}</checksum>'
           f'<location href="repodata/{sha(primary)}-primary.xml.gz"/></data>'
@@ -42,11 +44,13 @@ put(f"{repo}/repodata/{sha(primary)}-primary.xml.gz", primary)
 put(f"{repo}/repodata/{sha(filelists)}-filelists.xml.gz", filelists)
 put(f"{repo}/Packages/a-1.rpm", used_rpm)
 put(f"{repo}/Packages/b-1.rpm", other_rpm)
+put(f"{repo}/Packages/c-1.rpm", old_rpm)  # CentOS 5 style: its index names it only by SHA-1
 os.makedirs(f"{w}/fetched/run.fetched/blobs")
 open(f"{w}/fetched/run.fetched/blobs/{sha(repomd)}", "wb").write(repomd)
 u = f"https://{repo}"
 open(f"{w}/fetched/run.fetched/fetched.txt", "w").write(
-    f"{u}/repodata/repomd.xml sha256:{sha(repomd)} {len(repomd)}\n{u}/Packages/a-1.rpm sha256:{sha(used_rpm)} 9\n")
+    f"{u}/repodata/repomd.xml sha256:{sha(repomd)} {len(repomd)}\n{u}/Packages/a-1.rpm sha256:{sha(used_rpm)} 9\n"
+    f"{u}/Packages/c-1.rpm sha256:{sha(old_rpm)} 9\n")
 os.makedirs(f"{w}/runs")
 run = lambda result, digest: {"result": result, "box": "el/x", "started": "1",
                               "hops": [{"sources": {f"{u}/repodata/repomd.xml": f"sha256:{digest}"}}]}
@@ -63,7 +67,7 @@ p = ingest("--fetched", f"{w}/fetched")
 idx = json.load(open(f"{w}/store/index/latest.json"))["files"]
 check(p.returncode == 0 and "0 referenced files not found" in p.stdout, "with the download list, the whole chain is found")
 check(sorted(idx) == sorted([f"{u}/repodata/repomd.xml", f"{u}/repodata/{sha(primary)}-primary.xml.gz",
-                             f"{u}/Packages/a-1.rpm"]),
+                             f"{u}/Packages/a-1.rpm", f"{u}/Packages/c-1.rpm"]),
       "stored: the pin, its package index and the package the walk used; not filelists or unused packages")
 check(list(idx[f"{u}/repodata/repomd.xml"]) == [f"sha256:{sha(repomd)}"] and
       idx[f"{u}/Packages/a-1.rpm"][f"sha256:{sha(used_rpm)}"]["runs"] == ["el/x@1"],
@@ -74,6 +78,11 @@ p = ingest("--fetched", f"{w}/fetched")
 check(f"missing {u}/repodata/repomd.xml" in p.stdout,
       "a newer pin no source has is missing, though an older digest at its url is stored")
 os.remove(f"{w}/runs/later.json")
+check(open(f"{w}/store/alias/sha1/{sha1(old_rpm)}").read() == f"sha256:{sha(old_rpm)}\n",
+      "a package its index names by SHA-1 gets an alias naming its blob")
+os.remove(f"{w}/tree/{repo}/Packages/c-1.rpm")
+p = ingest("--fetched", f"{w}/fetched")
+check("0 referenced files not found" in p.stdout, "a later ingest finds a SHA-1-named package through its alias")
 blob = f"{w}/store/blob/sha256/{sha(used_rpm)[:2]}/{sha(used_rpm)}"
 check(open(blob, "rb").read() == used_rpm, "a blob is the upstream bytes, under blob/sha256/<2 hex>/<64 hex>")
 v = subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", "verify", f"{w}/store"], capture_output=True, text=True)

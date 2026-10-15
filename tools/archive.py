@@ -155,6 +155,13 @@ class Store:
             yield self.blob(want), None
             for d in self.blob_dirs:
                 yield f"{d}/{want}", None
+        else:  # stored through a SHA-1 link before: its alias names the blob, which get() still checks by SHA-1
+            try:
+                line = open(f"{self.path}/alias/{alg}/{want}").read().strip()
+            except OSError:
+                line = ""
+            if re.fullmatch(r"sha256:[0-9a-f]{64}", line):
+                yield self.blob(line[7:]), None
         host_path = re.sub(r"^[a-z]+://", "", url)
         for t in self.trees:
             yield f"{t}/{host_path}", None
