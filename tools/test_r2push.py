@@ -2,6 +2,7 @@
 R2, refuses a body that doesn't hash to its x-amz-content-sha256. The signer is checked against AWS's own SigV4
 example. python3 tools/test_r2push.py"""
 import datetime
+import fcntl
 import hashlib
 import http.server
 import os
@@ -75,6 +76,10 @@ os.chmod(creds, 0o600)
 p = subprocess.run([sys.executable, "-B", f"{HERE}/r2push.py", store, "--endpoint", "http://127.0.0.1:1", "--bucket",
                     "b", "--credentials", creds], capture_output=True, text=True)
 check(p.returncode == 2 and "https" in p.stdout, "an endpoint that isn't https is refused")
+with open(f"{store}/.lock", "w") as held:
+    fcntl.flock(held, fcntl.LOCK_EX)
+    p = run()
+check(p.returncode == 2 and "running" in p.stdout, "a push is refused while an ingest holds the store's lock")
 bucket = r2push.Bucket(f"http://127.0.0.1:{srv.server_address[1]}", "wend-archive", *r2push.credentials(creds))
 r2push.push(store, bucket)
 keys = [k for k, _ in got]

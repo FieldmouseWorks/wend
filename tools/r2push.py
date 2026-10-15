@@ -5,7 +5,8 @@
 STORE is what tools/archive.py ingest writes. Every blob and alias goes up first, then the stamped index, then
 index/latest.json, so the index R2 serves never names a blob R2 doesn't have. Each PUT carries the body's sha256 in
 x-amz-content-sha256, and R2 refuses a body that doesn't hash to it, so what lands is checked on the way in. What's
-already up is skipped: STORE/.pushed lists every key pushed (and a blob or alias never changes under its key).
+already up is skipped: STORE/.pushed lists every key pushed (and a blob or alias never changes under its key). It
+holds the store's lock (STORE/.lock, the one ingest takes), so an ingest can't add blobs under an index mid-push.
 
 The endpoint is the account's S3 API endpoint (https://<account>.r2.cloudflarestorage.com). FILE holds two lines,
 access_key_id=... and secret_access_key=... (an R2 API token with Object Read & Write on this bucket). It should be
@@ -13,6 +14,7 @@ readable by its owner only; this refuses one that isn't. Neither value is ever p
 key, never a header.
 """
 import datetime
+import fcntl
 import glob
 import hashlib
 import hmac
@@ -156,6 +158,12 @@ def main(argv):
         print("r2push: the endpoint must be https")
         return 2
     access_key, secret_key = credentials(opts["--credentials"])
+    lock = open(f"{store}/.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("r2push: an ingest or another push is running on this store")
+        return 2
     try:
         push(store, Bucket(opts["--endpoint"], opts["--bucket"], access_key, secret_key))
     except RuntimeError as e:
