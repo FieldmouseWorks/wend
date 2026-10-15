@@ -154,9 +154,24 @@ NAMES = "awk '{sub(/-[^-]*-[^-]*$/, \"\"); print}'"
 SOURCES = "/var/lib/wend/sources"  # <hop>/<repo id>.repomd.xml: metadata an op fetched through repos the hop then drops
 
 
+KEYS = "/etc/wend/keys"  # SPEC "Signed packages": the adapter's [keys], written there by every hop's {keys}
+
+
+def gpg(names):
+    """A repo section's signature lines: gpgcheck=1 against the named keys, or gpgcheck=0 when it names none."""
+    return f"gpgcheck=1\ngpgkey={' '.join(f'file://{KEYS}/{k}' for k in names)}\n" if names else "gpgcheck=0\n"
+
+
+def write_keys(adapter):
+    """Shell that writes every key in the adapter's [keys] under KEYS ("true" if it has none)."""
+    ks = adapter.get("keys", {})
+    return " && ".join([f"mkdir -p {KEYS}"] + [printf(a, f"{KEYS}/{n}") for n, a in ks.items()]) if ks else "true"
+
+
 def repo_file(adapter, release, shim):
-    return "".join(f"[{release}-{n}]\nname={release}-{n}\nbaseurl={shim}/{u}/\ngpgcheck=0\nenabled=1\n\n"
-                   for n, u in adapter["releases"][release]["repos"].items())
+    r = adapter["releases"][release]
+    return "".join(f"[{release}-{n}]\nname={release}-{n}\nbaseurl={shim}/{u}/\n{gpg(r.get('gpgkeys', []))}enabled=1\n\n"
+                   for n, u in r["repos"].items())
 
 
 def addon_repos(adapter, release, shim, file):
@@ -166,7 +181,9 @@ def addon_repos(adapter, release, shim, file):
     for n, a in adapter.get("addons", {}).items():
         if release in a["repos"]:
             rid = f"{release}-{n}"
-            body = f"[{rid}]\\nname={rid}\\nbaseurl={shim}/{a['repos'][release]}/\\ngpgcheck=0\\nenabled=1\\n\\n"
+            k = [a["gpgkeys"][release]] if release in a.get("gpgkeys", {}) else []
+            body = f"[{rid}]\\nname={rid}\\nbaseurl={shim}/{a['repos'][release]}/\\n" + \
+                gpg(k).replace("\n", "\\n") + "enabled=1\\n\\n"
             out.append(f"if rpm -q {a['marker']} >/dev/null 2>&1; then printf '{body}' >> {file}; fi")
     return " && ".join(out)  # each `if` is true when its marker is absent
 
@@ -199,6 +216,21 @@ def package_names(base, out):
             f"grep -o '<name>[^<]*</name>' {out}.x | sed 's/<[^>]*>//g' > {out}.one && test -s {out}.one && "
             f"cat {out}.one >> {out} && rm -f {out}.z {out}.x {out}.one || "
             f"{{ echo 'no package list from {base}'; exit 1; }}")
+
+
+def transit_checksig(adapter, release, b, ld, rpm):
+    """SPEC "Signed packages": rpm.transit's download skips dnf's signature check (--downloadonly), so the staged rpm
+    checks every downloaded package against the release's keys and its add-ons' before any is installed. No step
+    when the release names no keys."""
+    keys = adapter["releases"][release].get("gpgkeys", [])
+    if not keys:
+        return []
+    keys = keys + [a["gpgkeys"][release] for a in adapter.get("addons", {}).values() if release in a.get("gpgkeys", {})]
+    k = f"{b}/keydb"
+    return [f"rm -rf {k}; mkdir -p {k}; {ld} {rpm} --dbpath {k} --initdb; "
+            + "".join(f"{ld} {rpm} --dbpath {k} --import {KEYS}/{n}; " for n in keys)
+            + f"B=$({ld} {rpm} --dbpath {k} -K *.rpm 2>&1 | grep -v ': digests signatures OK$' || true); "
+            "[ -z \"$B\" ] || { echo \"refusing, not signed by the release's keys:\"; echo \"$B\" | head -n 20; exit 1; }"]
 
 
 def bootstrap_pins(adapter, release):
@@ -266,7 +298,7 @@ class Rpm:
         return {"release": release, "major": r["major"], "shim": shim,
                 "repofile": repo_file(adapter, release, shim).replace("\n", "\\n"),
                 "addons": addon_repos(adapter, release, shim, "/etc/yum.repos.d/ladder.repo") or "true",
-                "pm": "$(command -v dnf || command -v yum)", "clean_repos": CLEAN_REPOS,
+                "pm": "$(command -v dnf || command -v yum)", "clean_repos": CLEAN_REPOS, "keys": write_keys(adapter),
                 "dnf_opts": f"--releasever={r['major']} --allowerasing --setopt=install_weak_deps=False "
                             "--setopt=protected_packages="}
 
@@ -431,6 +463,7 @@ class Rpm:
             f"test -n \"$f\"; curl -sf -o {b}/pkgs/$f {base}/Packages/$f; }}",
             f"for r in *.rpm; do rpm2cpio $r | (cd {b}/stage && cpio -idmu --quiet 2>/dev/null) || {{ echo EXTRACTFAIL $r; exit 1; }}; done",
             f"{ld} {rpmS} --version",
+            *transit_checksig(adapter, target, b, ld, rpmS),
             f"rpm -e --nodeps --noscripts {s['remove']}",
             f"{ld} {rpmS} -Uvh --nodeps --replacefiles --replacepkgs --oldpackage --nosignature --nodigest {b}/pkgs/*.rpm "
             f"> {b}/rpm.log 2>&1 || {{ grep -iE 'error|fail' {b}/rpm.log | head -n 20; }}",

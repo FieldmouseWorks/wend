@@ -192,6 +192,7 @@ pub fn hop_vars(adapter: &Doc, release: &str) -> Result<Vars, String> {
                 }),
                 ("pm".into(), "$(command -v dnf || command -v yum)".into()),
                 ("clean_repos".into(), CLEAN_REPOS.into()),
+                ("keys".into(), write_keys(adapter)),
                 (
                     "dnf_opts".into(),
                     format!(
@@ -344,14 +345,73 @@ fn first_repo(rel: &Value) -> Result<String, String> {
         .ok_or("a release with no repos".into())
 }
 
+/// SPEC "Signed packages": the adapter's [keys], written there by every hop's {keys}.
+const KEYS: &str = "/etc/wend/keys";
+
+/// A repo section's signature lines: gpgcheck=1 against the named keys, or gpgcheck=0 when it names none.
+fn gpg(names: &[String]) -> String {
+    if names.is_empty() {
+        return "gpgcheck=0\n".into();
+    }
+    let files: Vec<String> = names.iter().map(|k| format!("file://{KEYS}/{k}")).collect();
+    format!("gpgcheck=1\ngpgkey={}\n", files.join(" "))
+}
+
+/// Shell that writes every key in the adapter's [keys] under KEYS ("true" if it has none).
+fn write_keys(adapter: &Doc) -> String {
+    match get(adapter, "keys").and_then(Value::as_object) {
+        Some(ks) if !ks.is_empty() => std::iter::once(format!("mkdir -p {KEYS}"))
+            .chain(ks.iter().map(|(n, a)| printf(&scalar(a), &format!("{KEYS}/{n}"))))
+            .collect::<Vec<_>>()
+            .join(" && "),
+        _ => "true".into(),
+    }
+}
+
+fn release_keys(rel: &Value) -> Vec<String> {
+    get(rel, "gpgkeys").and_then(strings).unwrap_or_default()
+}
+
 fn repo_file(adapter: &Doc, release: &str, shim: &str) -> Result<String, String> {
-    Ok(table(release_of(adapter, release)?, "repos")?
+    let rel = release_of(adapter, release)?;
+    let g = gpg(&release_keys(rel));
+    Ok(table(rel, "repos")?
         .iter()
         .map(|(n, u)| {
             let u = scalar(u);
-            format!("[{release}-{n}]\nname={release}-{n}\nbaseurl={shim}/{u}/\ngpgcheck=0\nenabled=1\n\n")
+            format!("[{release}-{n}]\nname={release}-{n}\nbaseurl={shim}/{u}/\n{g}enabled=1\n\n")
         })
         .collect())
+}
+
+/// SPEC "Signed packages": rpm.transit's download skips dnf's signature check (--downloadonly), so the staged rpm
+/// checks every downloaded package against the release's keys and its add-ons' before any is installed. None when
+/// the release names no keys.
+fn transit_checksig(adapter: &Doc, release: &str, b: &str, ld: &str, rpm: &str) -> Result<Option<String>, String> {
+    let mut keys = release_keys(release_of(adapter, release)?);
+    if keys.is_empty() {
+        return Ok(None);
+    }
+    for a in get(adapter, "addons")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .map(|(_, a)| a)
+    {
+        if let Some(k) = get(a, "gpgkeys").and_then(|g| get(g, release)) {
+            keys.push(scalar(k));
+        }
+    }
+    let k = format!("{b}/keydb");
+    let imports: String = keys
+        .iter()
+        .map(|n| format!("{ld} {rpm} --dbpath {k} --import {KEYS}/{n}; "))
+        .collect();
+    Ok(Some(format!(
+        "rm -rf {k}; mkdir -p {k}; {ld} {rpm} --dbpath {k} --initdb; {imports}\
+         B=$({ld} {rpm} --dbpath {k} -K *.rpm 2>&1 | grep -v ': digests signatures OK$' || true); \
+         [ -z \"$B\" ] || {{ echo \"refusing, not signed by the release's keys:\"; echo \"$B\" | head -n 20; exit 1; }}"
+    )))
 }
 
 /// SPEC "Add-on repositories": shell that appends each add-on's repo for `release` to `file`, as
@@ -364,8 +424,14 @@ fn addon_repos(adapter: &Doc, release: &str, shim: &str, file: &str) -> String {
             let marker = get(a, "marker").map(scalar).unwrap_or_default();
             out.push(format!(
                 "if rpm -q {marker} >/dev/null 2>&1; then printf '[{rid}]\\nname={rid}\\nbaseurl={shim}/{}/\\n\
-                 gpgcheck=0\\nenabled=1\\n\\n' >> {file}; fi",
-                scalar(u)
+                 {}enabled=1\\n\\n' >> {file}; fi",
+                scalar(u),
+                gpg(&get(a, "gpgkeys")
+                    .and_then(|g| get(g, release))
+                    .map(scalar)
+                    .into_iter()
+                    .collect::<Vec<_>>())
+                .replace('\n', "\\n")
             ));
         }
     }
@@ -789,7 +855,10 @@ fn transit(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
         format!(
             "for r in *.rpm; do rpm2cpio $r | (cd {b}/stage && cpio -idmu --quiet 2>/dev/null) || {{ echo EXTRACTFAIL $r; exit 1; }}; done"
         ),
-        format!("{ld} {rpm_s} --version"),
+        match transit_checksig(adapter, target, b, &ld, &rpm_s)? {
+            Some(c) => format!("{ld} {rpm_s} --version\n{c}"),
+            None => format!("{ld} {rpm_s} --version"),
+        },
         format!("rpm -e --nodeps --noscripts {remove}"),
         format!(
             "{ld} {rpm_s} -Uvh --nodeps --replacefiles --replacepkgs --oldpackage --nosignature --nodigest {b}/pkgs/*.rpm \

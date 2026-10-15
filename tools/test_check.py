@@ -117,6 +117,15 @@ for name, mutate in {
     "a relocate table with a step tools/vm.py doesn't run": lambda a: a["relocate"].update(extra=["true"]),
     "a relocate step that's one command, not a list": lambda a: a["relocate"].update(place="true"),
     "a relocate step with no commands": lambda a: a["relocate"].update(copy=[]),
+    "a signing key that would break out of the harness's printf (SPEC \"Signed packages\")": lambda a: a["keys"].update(
+        {"RPM-GPG-KEY-x": "-----BEGIN PGP PUBLIC KEY BLOCK-----\n'; rm -rf /; '\n-----END PGP PUBLIC KEY BLOCK-----\n"}),
+    "a signing key that isn't an armoured public key": lambda a: a["keys"].update({"RPM-GPG-KEY-x": "hello"}),
+    "a release checked against a key the adapter doesn't have": lambda a: a["releases"]["alma9"].update(
+        gpgkeys=["RPM-GPG-KEY-nobody"]),
+    "an add-on key for a release the add-on has no repo for": lambda a: a["addons"]["epel"]["gpgkeys"].update(
+        centos5="RPM-GPG-KEY-EPEL-8"),
+    "signing keys the hops never write": lambda a: a["hop"].update(
+        set_release=a["hop"]["set_release"].replace("{keys} && ", "")),
 }.items():
     a = copy.deepcopy(adapters["el"])
     mutate(a)

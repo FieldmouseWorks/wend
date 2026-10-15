@@ -449,8 +449,9 @@ packages, EPEL: `Fedora Project`) and `repos` (release id = host/path, through t
 - Every hop's `set_release` appends `{addons}`: for each add-on with a repo for the release being entered, the add-on's
   repo goes into the harness's repo file as `[<release>-<name>]` if its marker is installed at that moment. A box
   without the marker never sees the repo: no hop's repos or `rpm.transit`'s `new` repos ship a marker, so no fix can
-  pull add-on packages onto it. On a box with the marker, a fix's `install` can pull any of the add-on's packages
-  (unsigned, like the vendor's: `gpgcheck=0` behind the shim).
+  pull add-on packages onto it. On a box with the marker, a fix's `install` can pull any of the add-on's packages,
+  checked against the add-on's key for that release when `addons.<name>.gpgkeys` names one (see "Signed packages"),
+  else unchecked (`gpgcheck=0` behind the shim).
 - `rpm.transit` lets the add-on vendor's packages through its refusal when the marker is installed, and then requires,
   before it changes anything, that each of them has a package of the same name in the release's repos or the
   release's add-on repos (renames don't count). Anything without one is named and the op fails: a fix on the same hop
@@ -462,6 +463,19 @@ packages, EPEL: `Fedora Project`) and `repos` (release id = host/path, through t
 - An adapter with `[addons]` must put `{addons}` in `hop.set_release`, or it would carry an add-on through the
   transit and then drop it from the hops after.
 - Software Collections, vendor SIG repos and other third-party repos are not add-ons: `rpm.transit` still refuses them.
+
+#### Signed packages
+
+The adapter's `[keys]` table holds vendors' signing keys, ASCII-armoured, by name (no `'`, `%` or backslash, since
+they're written with `printf`). Every hop's `set_release` starts with `{keys}`, which writes each one to
+`/etc/wend/keys/<name>` (the files stay on the machine afterwards). A release that lists keys in
+`releases.<id>.gpgkeys` gets `gpgcheck=1` and `gpgkey=file:///etc/wend/keys/<name> ...` in each of its repo
+sections, so its package manager refuses packages they don't sign (dnf imports them with `-y`). An add-on's
+`gpgkeys` table (release id = key name) does the same for its repo for that release. `rpm.transit`'s download is
+`--downloadonly`, which skips dnf's signature check, so when its release lists keys it checks every downloaded package
+itself (step 4) before installing any. Releases that list none keep `gpgcheck=0`: on EL, CentOS 5 to 8, whose keys
+can't check what later releases ship or whose rpm can't read the newer signatures. With `wend walk --run` every byte
+is checked against the run's pins anyway; signatures are what protects `--live` walks and CI replays.
 
 ## Op reference
 
@@ -658,7 +672,10 @@ repos kept in private `reposdir`s so `/etc/yum.repos.d` stays the harness's:
    `rpm`, `rpm-libs`, `glibc`, `dnf` or `python3-dnf` wasn't downloaded, or any of the add-on packages wasn't (as
    with the first five, EL7's dnf is still installed when that fails). Also fetch `transit.release_package` from
    `PKGLIST(BASE)` if the sync didn't.
-4. `rpm -e dnf` (the EL7 one), rebuild the database, and unpack every downloaded package into a staging dir.
+4. `rpm -e dnf` (the EL7 one), rebuild the database, and unpack every downloaded package into a staging dir. When
+   `release` lists `gpgkeys`: import them and its add-ons' keys for `release` into a fresh database in the work dir
+   with the staged rpm, and refuse, naming them, if `rpm -K` doesn't say `digests signatures OK` for every
+   downloaded package, before step 5 touches the old release.
 5. `rpm -e --nodeps --noscripts {remove}` (the old release package), then run the staged rpm through the staged
    `ld-linux-x86-64.so.2 --library-path <stage>/usr/lib64` with `-Uvh --nodeps --replacefiles --replacepkgs
    --oldpackage --nosignature --nodigest` over every downloaded package. Its exit code is ignored and its errors are
@@ -876,7 +893,9 @@ other brace syntax is touched, so `${...}` and `%{...}` pass through). Values fo
 
 - apt: `{mirror}` (archive or current, see `[releases]`), `{release}`.
 - rpm: `{release}`, `{major}`, `{shim}`, `{repofile}` (a yum repo file with one section `[<release>-<name>]` per repo,
-  `baseurl=SHIM/<repo>/`, `gpgcheck=0`, newlines as `\n` for printf), `{addons}` (the shell that appends each installed
+  `baseurl=SHIM/<repo>/`, `gpgcheck=1` and `gpgkey=` for a release with `gpgkeys`, else `gpgcheck=0`, newlines as
+  `\n` for printf), `{keys}` (the shell that writes the adapter's `[keys]` to `/etc/wend/keys/`; `true` if it has
+  none), `{addons}` (the shell that appends each installed
   add-on's repo for the release to `/etc/yum.repos.d/ladder.repo`; `true` if none has one), `{pm}` (`dnf` if installed, else `yum`),
   `{clean_repos}` (`CLEAN_REPOS`), `{dnf_opts}` (`--releasever={major} --allowerasing
   --setopt=install_weak_deps=False --setopt=protected_packages=`).
@@ -1753,7 +1772,8 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
     - **Order of work.** Done: the harness and the client record `sources`, the client walks through a verifying
       cache (`wend walk --run`, with `--source` and `--offline`), and refuses an unpinned walk unless `--live`. Next:
       CI uploads the download list, then the archive (wend#19). Until runs carry `sources`, integrity rests on TLS to the
-      mirrors and the shim's cache: EL repos run with `gpgcheck=0` (CentOS 5's keys can't check what comes later), and the shim
+      mirrors and the shim's cache: EL releases from AlmaLinux 8 on, and EPEL for them, check signatures ("Signed
+      packages"); older EL releases run with `gpgcheck=0` (CentOS 5's keys can't check what comes later), and the shim
       keeps only complete downloads and checks hash-named metadata against its name.
 13. **A machine the route can't carry in place.** Some machines can't take a route on their own disk: CentOS 7
     installed from 7.0 to 7.2 media has XFS v4 everywhere, which AlmaLinux 10's kernel can't mount and nothing

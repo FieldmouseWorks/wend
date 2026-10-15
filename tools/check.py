@@ -40,7 +40,7 @@ SAFE_VALUE = r"[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*"
 REPO_URL = r"[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)+"
 ADAPTER_KEYS = {"schema", "family", "backend", "release_file", "ladder", "may_skip", "harness_owned", "writable",
                 "managed", "force", "releases", "mirror", "hop", "predicates", "pm_options", "box", "ops", "checks",
-                "kv", "hardware", "addons", "runtimes", "relocate"}
+                "kv", "hardware", "addons", "runtimes", "relocate", "keys"}
 CPU_LEVELS = ("x86-64", "x86-64-v2", "x86-64-v3")  # SPEC "Hardware preflight"
 HARDWARE_KEYS = {"cpu", "ram_mib", "disk_mib", "boot_mib", "drivers", "note"}
 OLD_KERNELS = ("running", "autoremove")
@@ -126,7 +126,8 @@ def check_adapter(a, where):
     for n, ad in a.get("addons", {}).items():  # SPEC "Add-on repositories": their values land in root shell commands
         rels = a.get("releases", {})
         if a.get("backend") != "rpm" or not re.fullmatch(r"[a-z0-9]+", n) or not isinstance(ad, dict) or \
-                set(ad) != {"marker", "vendor", "repos"} or not isinstance(ad["marker"], str) or \
+                not {"marker", "vendor", "repos"} <= set(ad) <= {"marker", "vendor", "repos", "gpgkeys"} or \
+                not isinstance(ad["marker"], str) or \
                 not re.fullmatch(PKG, ad["marker"]) or not isinstance(ad["vendor"], str) or \
                 not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 .,-]*", ad["vendor"]) or not isinstance(ad["repos"], dict) or \
                 not ad["repos"] or not all(r in rels and isinstance(u, str) and re.fullmatch(REPO_URL, u) and
@@ -138,7 +139,36 @@ def check_adapter(a, where):
     for k in ("kernel_before", "kernel_after"):
         if k in a.get("hop", {}) and not (isinstance(a["hop"][k], list) and all(isinstance(c, str) for c in a["hop"][k])):
             errs.append(f"{where}: hop.{k} must be a list of commands")
+    errs += check_keys(a, where)
     errs += check_relocate(a, where)
+    return errs
+
+
+def armor_ok(t):
+    """An ASCII-armoured public key that is safe inside the harness's printf '...': printable ASCII and newlines,
+    no quote, % or backslash."""
+    return isinstance(t, str) and t.startswith("-----BEGIN PGP PUBLIC KEY BLOCK-----\n") and \
+        t.rstrip("\n").endswith("\n-----END PGP PUBLIC KEY BLOCK-----") and \
+        all(c == "\n" or " " <= c <= "~" for c in t) and not any(c in t for c in "'%\\")
+
+
+def check_keys(a, where):
+    """SPEC "Signed packages": [keys], releases.*.gpgkeys and addons.*.gpgkeys."""
+    errs, keys = [], a.get("keys", {})
+    if not isinstance(keys, dict) or keys and a.get("backend") != "rpm" or \
+            not all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]*", n) and armor_ok(t) for n, t in keys.items()):
+        return [f"{where}: keys must map plain names to ASCII-armoured public keys (no ', % or \\), on the rpm backend"]
+    if keys and "{keys}" not in str(a.get("hop", {}).get("set_release", "")):
+        errs.append(f"{where}: an adapter with keys must put {{keys}} in hop.set_release")
+    for r, rel in a.get("releases", {}).items():
+        g = rel.get("gpgkeys", []) if isinstance(rel, dict) else []
+        if not (isinstance(g, list) and all(isinstance(k, str) and k in keys for k in g)):
+            errs.append(f"{where}: releases.{r}.gpgkeys must list names from [keys]")
+    for n, ad in a.get("addons", {}).items() if isinstance(a.get("addons", {}), dict) else ():
+        g = ad.get("gpgkeys", {}) if isinstance(ad, dict) else {}
+        if not (isinstance(g, dict) and all(r in ad.get("repos", {}) and isinstance(k, str) and k in keys
+                                            for r, k in g.items())):
+            errs.append(f"{where}: addons.{n}.gpgkeys must map releases the add-on has a repo for to names from [keys]")
     return errs
 
 
