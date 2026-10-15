@@ -386,6 +386,8 @@ See `adapters/debian.toml`. Notes that matter:
   before bullseye come from one dated snapshot.debian.org tree, whose `Release` files are archive.debian.org's byte
   for byte. It answers with redirects, which apt before 0.7.21 (etch, lenny) can't follow, so it goes through the
   mirror shim (see Enterprise Linux below). Runs pin it by its origin URL, `https://snapshot.debian.org/...`.
+- The harness owns `sources.list.d` too. Each hop sets third-party sources aside as `*.wend-disabled`: one built for
+  the old release would pull packages across the hop, and one marked `trusted=yes` would get around a signed hop.
 
 ### Ubuntu (`ubuntu`, apt backend)
 
@@ -499,6 +501,19 @@ neither signature, or doesn't check out against those keys, and refuses outright
 gpg. Its shell variables all start with `_w`, so it leaves the op's own alone.
 Releases that list none keep `gpgcheck=0`:
 on EL, CentOS 5 to 8, whose keys can't check what later releases ship or whose rpm can't read the newer signatures.
+
+On apt, a release marked `signed = true` is one whose archive signature still verifies against the keyring the
+release before it ships (Debian from buster on, every Ubuntu release from xenial on, checked with `gpgv` against each
+predecessor's keyring). Every hop's `set_release` starts with `{apt_conf}`, which writes the harness's apt config
+for that hop: `hop.apt_conf` always, plus `hop.apt_unsigned` (unauthenticated installs and insecure repos allowed)
+only on a hop into a release that isn't `signed`. So apt refuses packages the archive's signed index doesn't vouch
+for from buster and xenial on, and older hops, whose keys have expired or were never shipped to the release before,
+keep working unauthenticated. On a signed hop `{apt_conf}` also writes `/etc/apt/apt.conf.d/zzzz-wend-signed`, which
+turns `AllowUnauthenticated`, `force-yes`, `AllowInsecureRepositories` and `AllowDowngradeToInsecureRepositories`
+off after the box's own fragments, and stops the hop if `apt-config dump` still shows any of them on (set in
+`/etc/apt/apt.conf`, which apt reads last); an unsigned hop removes that file. Box builds still use
+`debootstrap --no-check-gpg`.
+
 With `wend walk --run` every byte is checked against the run's pins anyway; signatures are what protects `--live`
 walks and CI replays.
 
@@ -898,10 +913,10 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `writable`, `managed` | the allowlists (globs) named by `write-file` (`writable`) and the `rpm.*` file ops (`managed`). Nothing under `/etc/wend/` is ever on either |
 | `[kv."<path>"]` | the files `kv.*` may touch: `keys` (the only keys it may set or unset; never one that grants access) and `set` (false for files with sections, which only take `kv.unset`) |
 | `force` | required: the `force-remove` flags this family allows, a subset of its backend's (apt: `depends`, `remove-essential`; rpm: `depends`, `scripts`) |
-| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`; each an http(s) URL, or host/path through the `[mirror]` shim), and optional `releases.<id>.upgrade` like rpm's. rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader"). apt: a start release may have `releases.<id>.install` too |
+| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`; each an http(s) URL, or host/path through the `[mirror]` shim), and optional `releases.<id>.upgrade` like rpm's. rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader"). apt: a start release may have `releases.<id>.install` too, and any release `signed` (see "Signed packages") |
 | `[addons.<name>]` | rpm: `marker`, `vendor`, `repos` (see "Add-on repositories") |
 | `[mirror]` | `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts): every rpm repo, and an apt mirror given as host/path |
-| `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), `autoremove`, `obsolete`, `installed_list`, `kernel_newest` (the VM tier's newest-kernel query); apt also `apt_conf`, the harness's apt config |
+| `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), `autoremove`, `obsolete`, `installed_list`, `kernel_newest` (the VM tier's newest-kernel query); apt also `apt_conf`, the harness's apt config, and `apt_unsigned`, the lines added on hops into unsigned releases |
 | `[predicates]` | `installed`, `file`, `file-contains`, `mysql-option` command templates |
 | `[pm_options.<name>]` | `path`, `content`. apt: only `overwrite-conflicting-files`; rpm: none |
 | `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear. Whatever a `pattern`, `list` or `table` says, every value a fix passes through one must also match `[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*`: no quote, whitespace, backslash, glob character, `%`, any of `` $`;&|<>(){}~ ``, or leading `-` |
@@ -916,7 +931,8 @@ allowlists, hop commands or package lists: those are reviewed as spec changes, a
 Templates in `[hop]`, `releases.*.upgrade` and `[predicates]` use `{name}` placeholders, replaced literally (no
 other brace syntax is touched, so `${...}` and `%{...}` pass through). Values for a hop:
 
-- apt: `{mirror}` (archive or current, see `[releases]`), `{release}`.
+- apt: `{mirror}` (archive or current, see `[releases]`), `{release}`, `{apt_conf}` (the shell that writes
+  `hop.apt_conf`, plus `hop.apt_unsigned` unless the release is `signed`, to `/etc/apt/apt.conf.d/00wend`).
 - rpm: `{release}`, `{major}`, `{shim}`, `{repofile}` (a yum repo file with one section `[<release>-<name>]` per repo,
   `baseurl=SHIM/<repo>/`, `gpgcheck=1` and `gpgkey=` for a release with `gpgkeys`, else `gpgcheck=0`, newlines as
   `\n` for printf), `{keys}` (the shell that writes the adapter's `[keys]` to `/etc/wend/keys/`; `true` if it has

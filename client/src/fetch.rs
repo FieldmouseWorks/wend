@@ -18,6 +18,10 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+/// wend's own archive (docs/archive.md): the public copy remi pushes to, read by digest. `wend walk --run` asks it after
+/// any --source and --archive, before the origin.
+pub const ARCHIVE: &str = "https://archive.fieldmouseworks.com";
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Digest {
     /// "sha256" or "sha1": every Debian Release has SHA256; EL5's repomd and primary.xml only SHA-1

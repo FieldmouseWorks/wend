@@ -68,7 +68,8 @@ Only files that proven routes and boxes reference. Never a mirror of a whole dis
    - **Debian, Ubuntu:** the `.dsc` and every file it lists, from the `<comp>/source/Sources` index the pinned
      `Release` lists, so the chain runs from the run's pin as the binaries' does. The binary's `Source:` field names
      the source and its version.
-   - **EL:** the `.src.rpm` its `primary.xml` names (`<rpm:sourcerpm>`), from the repo's source repo, checked against
+   - **EL:** the `.src.rpm` its `primary.xml` names (`<rpm:sourcerpm>`), or for a package a run pins directly (old
+     EPEL 5 builds no repo serves) the one its own RPM header names, from the repo's source repo, checked against
      that repo's own metadata. Source repos aren't pinned by any run, so their `repomd.xml` is taken live and recorded
      in the index, marked `"live": true`; the index signature (step 8) is what vouches for it. Where each repo's sources live is a table in
      `tools/archive.py` (`SOURCE_REPOS`): `vault.centos.org/<v>/<repo>/Source/` (`SRPMS/` for CentOS 5), AlmaLinux's
@@ -169,13 +170,23 @@ Each one a small PR.
    the index R2 serves never names a blob it lacks (S3 API, SigV4, standard library only). Each PUT carries the
    body's sha256, and R2 refuses a body that doesn't match. `STORE/.pushed` remembers what's up. The credentials are
    an Object Read & Write token for this bucket, in a file only its owner can read; nothing prints them.
-6. **Client** (built, as an option). `wend walk --run RUN.json --archive URL|DIR` asks each archive by digest,
-   after the `--source`s and before the origin. An alias is only a pointer: the blob it names is still checked
-   against the digest the chain gave, so a wrong alias is a refusal. The archive joins the default chain (no flag
-   needed) once the bucket is public, at step 8.
+6. **Client** (built). `wend walk --run RUN.json` asks wend's archive, `https://archive.fieldmouseworks.com`, by
+   digest, after the `--source`s and any `--archive URL|DIR` and before the origin (not with `--offline` or
+   `--no-archive`). An alias is only a pointer: the blob it names is still checked against the digest the chain
+   gave, so a wrong alias is a refusal.
 7. **Box inputs.** A box build records the sources it read, as a hop does, and the store ingests them.
-8. **Signing, then public.** The index signature and `archive/allowed_signers`; then the bucket gets public read.
-   It stays private until this step.
+8. **Signing, then public.** `tools/archive.py sign STORE --key KEY` (built) writes `<index>.sig` beside every index
+   file, and `r2push.py` sends each just before its index. `verify` checks them against `archive/allowed_signers`
+   (committed). The key was made on remi (a root-only file; the private half never leaves remi), and remi's push
+   wrapper signs before every push. Public since 2026-10-15 at `https://archive.fieldmouseworks.com` (R2 custom
+   domain; no listing, no r2.dev). Check it yourself:
+   `curl -sO https://archive.fieldmouseworks.com/index/latest.json{,.sig}` then
+   `ssh-keygen -Y verify -f archive/allowed_signers -I wend-archive -n wend-archive -s latest.json.sig < latest.json`.
+   `r2push.py` marks an index `no-cache` and a blob or alias immutable, so an edge cache can't serve a stale index.
+9. **Gate artifacts** (built). `tools/gate_fetched.py DIR` downloads every unexpired `fetched-N` artifact not yet
+   seen (a read-only Actions token; GitHub wants one even on a public repo) and unpacks each under `DIR/<id>/`;
+   `archive.py ingest STORE --fetched DIR` then takes what passing runs on main pin. Artifacts from runs that never
+   landed are read and ignored.
 
 ## Refused
 

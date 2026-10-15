@@ -90,6 +90,9 @@ jobs:
       - name: the archive's push to R2, by behaviour against a stand-in S3 endpoint (runs the PR's own tools, so not in the gate)
         working-directory: .
         run: python3 -B tools/test_r2push.py
+      - name: downloading the gate's fetched-N artifacts for the archive, by behaviour against a stand-in GitHub API (runs the PR's own tools, so not in the gate)
+        working-directory: .
+        run: python3 -B tools/test_gate_fetched.py
       - name: primary metadata however it's compressed (gz, EPEL 9's xz, EPEL 10's zst), by behaviour (runs the PR's own tools, so not in the gate)
         working-directory: .
         run: WEND_ALL_DECODERS=1 python3 -B tools/test_primary.py

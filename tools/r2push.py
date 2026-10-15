@@ -3,11 +3,12 @@
   python3 tools/r2push.py STORE --endpoint URL --bucket NAME --credentials FILE
 
 STORE is what tools/archive.py ingest writes. Every blob and alias goes up first, then the stamped index, then
-index/latest.json, so the index R2 serves never names a blob R2 doesn't have. Each PUT carries the body's sha256 in
-x-amz-content-sha256, and R2 refuses a body that doesn't hash to it, so what lands is checked on the way in. What's
-already up is skipped: STORE/.pushed lists every key pushed (a blob or alias never changes under its key; a stamped
-index is listed with its sha256, so one rewritten in place goes up again). It
-holds the store's lock (STORE/.lock, the one ingest takes), so an ingest can't add blobs under an index mid-push.
+index/latest.json, each index just after its .sig when tools/archive.py sign made one, so the index R2 serves never
+names a blob R2 doesn't have. Each PUT carries the body's sha256 in x-amz-content-sha256, and R2 refuses a body that
+doesn't hash to it, so what lands is checked on the way in. What's already up is skipped: STORE/.pushed lists every
+key pushed (a blob or alias never changes under its key; a stamped index or signature is listed with its sha256, so
+one rewritten in place goes up again). It holds the store's lock (STORE/.lock, the one ingest takes), so an ingest
+can't add blobs under an index mid-push.
 
 The endpoint is the account's S3 API endpoint (https://<account>.r2.cloudflarestorage.com). FILE holds two lines,
 access_key_id=... and secret_access_key=... (an R2 API token with Object Read & Write on this bucket). It should be
@@ -88,8 +89,10 @@ class Bucket:
         url = f"{self.base}/{key}"
         for attempt in range(3):
             size = os.path.getsize(path)
-            h = signed_headers("PUT", url, {"content-type": content_type, "content-length": size}, payload,
-                               self.access_key, self.secret_key)
+            # a blob or alias never changes under its key; an index or its signature changes on every push
+            cache = "no-cache" if key.startswith("index/") else "public, max-age=31536000, immutable"
+            h = signed_headers("PUT", url, {"content-type": content_type, "content-length": size,
+                                            "cache-control": cache}, payload, self.access_key, self.secret_key)
             try:
                 with open(path, "rb") as body:
                     req = urllib.request.Request(url, data=body, method="PUT", headers=h)
@@ -125,10 +128,15 @@ def pending(store, pushed):
             out.append((os.path.relpath(p, store), p, "text/plain"))
     out = [x for x in out if x[0] not in pushed]
     # a stamped index is only seconds-unique (two ingests in one second rewrite it), so it's skipped by key and content
+    # each index's signature (tools/archive.py sign) goes up just before it
     stamped = sorted(p for p in glob.glob(f"{store}/index/*.json") if not p.endswith("/latest.json"))
-    out += [(mark(store, p), p, "application/json") for p in stamped if mark(store, p) not in pushed]
-    if os.path.exists(f"{store}/index/latest.json"):
-        out.append(("index/latest.json", f"{store}/index/latest.json", "application/json"))  # always: it changes
+    for p in stamped:
+        for f, ctype in ((f"{p}.sig", "text/plain"), (p, "application/json")):
+            if os.path.isfile(f) and mark(store, f) not in pushed:
+                out.append((mark(store, f), f, ctype))
+    for f, ctype in ((f"{store}/index/latest.json.sig", "text/plain"), (f"{store}/index/latest.json", "application/json")):
+        if os.path.exists(f):
+            out.append((os.path.relpath(f, store), f, ctype))  # always: they change
     return out
 
 
@@ -142,7 +150,7 @@ def push(store, bucket):
     with open(f"{store}/.pushed", "a") as log:
         for entry, path, ctype in todo:
             bucket.put(key(entry), path, ctype)
-            if entry != "index/latest.json":
+            if not entry.startswith("index/latest.json"):
                 log.write(entry + "\n")
                 log.flush()
             done += 1

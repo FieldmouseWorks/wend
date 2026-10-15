@@ -27,6 +27,9 @@ writable = [
 archive = "http://old-releases.ubuntu.com/ubuntu"
 current = "http://archive.ubuntu.com/ubuntu"
 current_from = "trusty"
+# `signed`: the hop into the release checks the archive's signatures (SPEC "Signed packages"). Checked with gpgv
+# against the keyring the box has on the release before (ubuntu-keyring in its release pocket): every Release from
+# xenial to resolute has a good signature by a key the box already trusts.
 
 [releases.trusty]
 # tools/vm.py installs a VM box with trusty's own debian-installer: its netboot kernel and initrd under the mirror.
@@ -50,6 +53,7 @@ install = { netboot = "dists/trusty/main/installer-amd64/current/images/netboot/
 ], late = "in-target sed -i 's/^GRUB_CMDLINE_LINUX=\"/GRUB_CMDLINE_LINUX=\"console=tty0 console=ttyS0,115200 /' /etc/default/grub; in-target update-grub" }
 
 [releases.xenial]
+signed = true
 # mysql-server-5.7's postinst runs mysql_upgrade against the server it has just started, then stops it, runs an init
 # file through a bootstrap server, and starts it again. On a real machine the init script does all that; in the
 # sandbox policy-rc.d keeps every daemon down, so the configure fails. Only then, and only for MySQL, the harness
@@ -83,6 +87,7 @@ rm -f /tmp/wend-policy-rc.d
 }''', "apt-get autoremove --purge"]
 
 [releases.jammy]
+signed = true
 # Noble needs a merged /usr: its libc6 preinst diverts /lib64 and fails ("cannot divert directories") while /lib64
 # is still a real directory, and every box that came up the ladder from trusty has one. Noble no longer ships
 # usrmerge, so the merge happens on arrival at jammy, with jammy's own usrmerge, like do-release-upgrade's quirk.
@@ -95,10 +100,22 @@ upgrade = ["apt-get dist-upgrade", "apt-get autoremove --purge", "apt-get instal
 # runner's) only links it for lunar and later. Named explicitly, so building a trusty box doesn't depend on the host.
 debootstrap_script = "gutsy"
 
+[releases.bionic]
+signed = true
+
+[releases.focal]
+signed = true
+
+[releases.noble]
+signed = true
+
+[releases.resolute]
+signed = true
+
 [hop]
 # Third-party sources (PPAs) are set aside, not deleted, the way do-release-upgrade disables them: a PPA built for the
 # old release would pull packages across the hop. They stay in sources.list.d as *.wend-disabled for the admin.
-set_release = "printf 'deb {mirror} {release} main restricted universe multiverse\\n' > /etc/apt/sources.list && for f in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do [ ! -f \"$f\" ] || mv \"$f\" \"$f.wend-disabled\" || exit 1; done"
+set_release = "{apt_conf} && printf 'deb {mirror} {release} main restricted universe multiverse\\n' > /etc/apt/sources.list && for f in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do [ ! -f \"$f\" ] || mv \"$f\" \"$f.wend-disabled\" || exit 1; done"
 refresh = "apt-get update"
 upgrade = ["apt-get dist-upgrade", "apt-get autoremove --purge"]
 verify = "grep -qx 'DISTRIB_CODENAME={release}' /etc/lsb-release"
@@ -124,11 +141,18 @@ installed_list = "dpkg-query -W -f '${Status} ${Package}\\n' | awk '$3==\"instal
 # linux-image-unsigned-*, which the pattern leaves out.
 kernel_newest = "dpkg-query -W -f '${Status} ${Package}\\n' 'linux-image-[0-9]*' 2>/dev/null | awk '$3 == \"installed\" && $4 !~ /-dbg$/ {v = $4; sub(/^linux-image-/, \"\", v); split(v, n, /[.-]/); k = sprintf(\"%05d%05d%05d%05d\", n[1], n[2], n[3], n[4]); if (k > best) {best = k; out = v}} END {if (out != \"\") print out}'"
 apt_conf = """APT::Get::Assume-Yes "true";
-APT::Get::force-yes "true";
-APT::Get::AllowUnauthenticated "true";
+APT::Get::allow-downgrades "true";
+APT::Get::allow-remove-essential "true";
+APT::Get::allow-change-held-packages "true";
 Acquire::Check-Valid-Until "false";
-Acquire::AllowInsecureRepositories "true";
 Dpkg::Options { "--force-confdef"; "--force-confold"; };
+"""
+# SPEC "Signed packages": appended to apt_conf on a hop into a release that isn't `signed`, whose archive signatures
+# the box's keyring can't check any more (expired keys). force-yes also lets apt install what it couldn't
+# authenticate, so it lives here too; apt from 1.1 on reads the allow-* options above instead.
+apt_unsigned = """APT::Get::force-yes "true";
+APT::Get::AllowUnauthenticated "true";
+Acquire::AllowInsecureRepositories "true";
 """
 
 [predicates]
