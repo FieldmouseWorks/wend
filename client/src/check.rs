@@ -467,6 +467,16 @@ fn check_keys(a: &Doc, wh: &str) -> Vec<String> {
         if !ok {
             errs.push(format!("{wh}: releases.{r}.gpgkeys must list names from [keys]"));
         }
+        let ok = match get(rel, "drop_keys") {
+            None => true,
+            Some(Value::Array(d)) => d.iter().all(|k| k.as_str().is_some_and(|k| full("[0-9a-f]{8}", k))),
+            Some(_) => false,
+        };
+        if !ok {
+            errs.push(format!(
+                "{wh}: releases.{r}.drop_keys must list short key ids (8 lowercase hex digits)"
+            ));
+        }
     }
     for (n, ad) in get(a, "addons").and_then(Value::as_object).into_iter().flatten() {
         let ok = match get(ad, "gpgkeys") {

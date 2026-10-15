@@ -122,6 +122,8 @@ for name, mutate in {
     "a signing key that isn't an armoured public key": lambda a: a["keys"].update({"RPM-GPG-KEY-x": "hello"}),
     "a release checked against a key the adapter doesn't have": lambda a: a["releases"]["alma9"].update(
         gpgkeys=["RPM-GPG-KEY-nobody"]),
+    "a release that drops a key by something other than its short id": lambda a: a["releases"]["alma9"].update(
+        drop_keys=["3ABB34F8; rm -rf /"]),
     "an add-on key for a release the add-on has no repo for": lambda a: a["addons"]["epel"]["gpgkeys"].update(
         centos5="RPM-GPG-KEY-EPEL-8"),
     "signing keys the hops never write": lambda a: a["hop"].update(

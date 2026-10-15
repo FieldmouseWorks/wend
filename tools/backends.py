@@ -164,10 +164,14 @@ def gpg(names):
     return f"gpgcheck=1\ngpgkey={' '.join(f'file://{KEYS}/{k}' for k in names)}\n" if names else "gpgcheck=0\n"
 
 
-def write_keys(adapter):
-    """Shell that writes every key in the adapter's [keys] under KEYS ("true" if it has none)."""
-    ks = adapter.get("keys", {})
-    return " && ".join([f"mkdir -p {KEYS}"] + [printf(a, f"{KEYS}/{n}") for n, a in ks.items()]) if ks else "true"
+def write_keys(adapter, release):
+    """Shell that writes every key in the adapter's [keys] under KEYS, then removes the gpg-pubkey entries the release
+    lists in drop_keys from the rpm database ("true" if there is nothing to do)."""
+    ks, drop = adapter.get("keys", {}), adapter["releases"][release].get("drop_keys", [])
+    steps = ([f"mkdir -p {KEYS}"] + [printf(a, f"{KEYS}/{n}") for n, a in ks.items()] if ks else []) + \
+        ([f"{{ _wd=$(for _wk in {' '.join(drop)}; do rpm -q gpg-pubkey-$_wk >/dev/null 2>&1 && echo gpg-pubkey-$_wk; "
+          'done); [ -z "$_wd" ] || rpm -e --allmatches $_wd; }'] if drop else [])
+    return " && ".join(steps) or "true"
 
 
 def repo_file(adapter, release, shim):
@@ -345,7 +349,7 @@ class Rpm:
         return {"release": release, "major": r["major"], "shim": shim,
                 "repofile": repo_file(adapter, release, shim).replace("\n", "\\n"),
                 "addons": addon_repos(adapter, release, shim, "/etc/yum.repos.d/ladder.repo") or "true",
-                "pm": "$(command -v dnf || command -v yum)", "clean_repos": CLEAN_REPOS, "keys": write_keys(adapter),
+                "pm": "$(command -v dnf || command -v yum)", "clean_repos": CLEAN_REPOS, "keys": write_keys(adapter, release),
                 "dnf_opts": f"--releasever={r['major']} --allowerasing --setopt=install_weak_deps=False "
                             "--setopt=protected_packages="}
 

@@ -117,6 +117,10 @@ major = 9
 pm = "dnf"
 repos = { baseos = "repo.almalinux.org/almalinux/9/BaseOS/x86_64/os", appstream = "repo.almalinux.org/almalinux/9/AppStream/x86_64/os" }
 gpgkeys = ["RPM-GPG-KEY-AlmaLinux-9"]
+# AlmaLinux 8's and EPEL 8's keys, which dnf imported on the alma8 hop, leave the rpm database before EL9's rpm reads
+# it: AlmaLinux 8's 2021 key 3abb34f8 is self-signed with SHA-1, which EL9's rpm can't load, so every rpm -V warns
+# about it and the pkgdb check fails (remi, wend#103). Short key ids, as rpm names them gpg-pubkey-<id>.
+drop_keys = ["3abb34f8", "ced7258b", "2f86d6a1"]
 # EL8 module streams don't exist on EL9: reset them, and tell dnf which platform it is on (a chroot has no os-release
 # it trusts yet). EL9's rpm only reads EL8's Berkeley DB read-only, so the database is rebuilt (as sqlite) before any
 # fix installs anything.
@@ -150,6 +154,7 @@ major = 10
 pm = "dnf"
 repos = { baseos = "repo.almalinux.org/almalinux/10/BaseOS/x86_64/os", appstream = "repo.almalinux.org/almalinux/10/AppStream/x86_64/os" }
 gpgkeys = ["RPM-GPG-KEY-AlmaLinux-10"]
+drop_keys = ["b86b3716", "3228467c"]
 # download first, with retries: 1100 packages from a live mirror; the second attempt only fetches what's missing
 upgrade = ["rm -f /etc/dnf/modules.d/*.module",
            "{clean_repos}; O='{dnf_opts} --nobest --setopt=module_platform_id=platform:el10 --setopt=retries=10'; dnf -y $O --downloadonly distro-sync >/tmp/wend-dl.log 2>&1 || dnf -y $O --downloadonly distro-sync",

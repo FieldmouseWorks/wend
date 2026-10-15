@@ -164,6 +164,9 @@ def check_keys(a, where):
         g = rel.get("gpgkeys", []) if isinstance(rel, dict) else []
         if not (isinstance(g, list) and all(isinstance(k, str) and k in keys for k in g)):
             errs.append(f"{where}: releases.{r}.gpgkeys must list names from [keys]")
+        d = rel.get("drop_keys", []) if isinstance(rel, dict) else []
+        if not (isinstance(d, list) and all(isinstance(k, str) and re.fullmatch(r"[0-9a-f]{8}", k) for k in d)):
+            errs.append(f"{where}: releases.{r}.drop_keys must list short key ids (8 lowercase hex digits)")
     for n, ad in a.get("addons", {}).items() if isinstance(a.get("addons", {}), dict) else ():
         g = ad.get("gpgkeys", {}) if isinstance(ad, dict) else {}
         if not (isinstance(g, dict) and all(r in ad.get("repos", {}) and isinstance(k, str) and k in keys
