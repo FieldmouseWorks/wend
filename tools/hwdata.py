@@ -139,7 +139,7 @@ def apt_index(mirror, release):
 
 def apt_kernel(adapter, release):
     """[(package, url, sha256)]: the flavour metapackage's kernel image and its module packages."""
-    mirror = backends.Apt().hop_vars(adapter, release)["mirror"]
+    mirror = backends.Apt().origin(adapter, release)
     pkgs = apt_index(mirror, release)
     if adapter["family"] == "ubuntu":
         meta = "linux-image-generic"

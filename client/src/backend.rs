@@ -162,10 +162,17 @@ pub fn hop_vars(adapter: &Doc, release: &str) -> Result<Vars, String> {
                     .position(|y| y == x)
                     .ok_or(format!("{x} is not on the ladder"))
             };
-            let mirror = if idx(release)? >= idx(str_of(r, "current_from")?)? {
+            let m = if idx(release)? >= idx(str_of(r, "current_from")?)? {
                 str_of(r, "current")?
             } else {
                 str_of(r, "archive")?
+            };
+            // a host/path mirror goes through the [mirror] shim, as rpm repos do
+            let mirror = if m.contains("://") {
+                m.to_string()
+            } else {
+                let shim = get(adapter, "mirror").ok_or("the adapter has no [mirror]")?;
+                format!("{}/{m}", str_of(shim, "shim")?)
             };
             // the room the release's kernel needs in /boot (0: none known)
             let boot_mib = get(adapter, "hardware")
@@ -174,7 +181,7 @@ pub fn hop_vars(adapter: &Doc, release: &str) -> Result<Vars, String> {
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
             Ok(vec![
-                ("mirror".into(), mirror.into()),
+                ("mirror".into(), mirror),
                 ("release".into(), release.into()),
                 ("boot_mib".into(), boot_mib.to_string()),
             ])

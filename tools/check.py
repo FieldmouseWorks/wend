@@ -38,6 +38,7 @@ UNSAFE = ["%", "'", '"', " ", "\t", "\n", "$", "`", ";", "&", "|", "<", ">", "("
 # metacharacters, no printf %, and no leading - (it would read as an option).
 SAFE_VALUE = r"[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*"
 REPO_URL = r"[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)+"
+APT_URL = r"https?://[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)*"
 ADAPTER_KEYS = {"schema", "family", "backend", "release_file", "ladder", "may_skip", "harness_owned", "writable",
                 "managed", "force", "releases", "mirror", "hop", "predicates", "pm_options", "box", "ops", "checks",
                 "kv", "hardware", "addons", "runtimes", "relocate", "keys"}
@@ -119,6 +120,12 @@ def check_adapter(a, where):
         t = rel.get("transit") if isinstance(rel, dict) else None  # SPEC "Hardware preflight": its kernel in /boot
         if t is not None and not (isinstance(t, dict) and type(t.get("boot_mib")) is int and t["boot_mib"] > 0):
             errs.append(f"{where}: releases.{r}.transit.boot_mib must be the MiB its kernel takes in /boot")
+    if a.get("backend") == "apt":  # SPEC "Adapter format": the mirrors land in root shell commands as {mirror}
+        for k in ("archive", "current"):
+            u = a.get("releases", {}).get(k)
+            if not (isinstance(u, str) and (re.fullmatch(APT_URL, u) or re.fullmatch(REPO_URL, u) and
+                                            isinstance(a.get("mirror", {}).get("shim"), str))):
+                errs.append(f"{where}: releases.{k} must be an http(s) URL, or host/path through [mirror].shim")
     errs += check_hardware(a, where)
     errs += check_runtimes(a, where)
     if not isinstance(a.get("addons", {}), dict):

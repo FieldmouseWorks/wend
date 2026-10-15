@@ -74,8 +74,8 @@ class Apt:
     def sources(self, root, adapter, release):
         """SPEC.md "Pinned sources": the Release/InRelease file apt read for this hop, by its origin URL."""
         root = os.path.realpath(root)
-        url = f"{self.hop_vars(adapter, release)['mirror']}/dists/{release}"
-        stem = re.sub(r"^[a-z]+://", "", url).replace("/", "_")
+        url = f"{self.origin(adapter, release)}/dists/{release}"  # apt names its lists after the URL it fetched
+        stem = re.sub(r"^[a-z]+://", "", f"{self.hop_vars(adapter, release)['mirror']}/dists/{release}").replace("/", "_")
         lists = f"{root}/var/lib/apt/lists"
         found = {f"{url}/{n}": file_sha256(root, f"{lists}/{stem}_{n}") for n in ("InRelease", "Release")}
         found = {u: h for u, h in found.items() if h}
@@ -88,9 +88,20 @@ class Apt:
                     found[f"{url}/{n[len(stem) + 1:].replace('_', '/')}"] = h
         return dict(sorted(found.items()))
 
-    def hop_vars(self, adapter, release):
+    @staticmethod
+    def release_mirror(adapter, release):
+        """The adapter's mirror for the release: a URL, or host/path, which goes through the [mirror] shim."""
         lad, r = adapter["ladder"], adapter["releases"]
-        mirror = r["current"] if lad.index(release) >= lad.index(r["current_from"]) else r["archive"]
+        return r["current"] if lad.index(release) >= lad.index(r["current_from"]) else r["archive"]
+
+    def origin(self, adapter, release):
+        """The release's mirror by its origin URL (a host/path one is fetched from https://<host>/<path>)."""
+        m = self.release_mirror(adapter, release)
+        return m if "://" in m else f"https://{m}"
+
+    def hop_vars(self, adapter, release):
+        m = self.release_mirror(adapter, release)
+        mirror = m if "://" in m else f"{adapter['mirror']['shim']}/{m}"
         hw = adapter.get("hardware", {}).get(release)  # the room the release's kernel needs in /boot (0: none known)
         return {"mirror": mirror, "release": release,
                 "boot_mib": str(hw.get("boot_mib", 0) if isinstance(hw, dict) else 0)}

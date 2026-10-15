@@ -1,6 +1,8 @@
-"""A small caching http -> https shim for EL boxes, from dep-lab's centos/mirror.py.
+"""A small caching http -> https shim for old boxes, from dep-lab's centos/mirror.py.
 
 CentOS 5's yum (python 2.4, 2007's openssl) can't speak today's TLS, and vault.centos.org redirects http to https.
+Debian's archived releases come from a dated snapshot.debian.org tree, which answers with redirects that etch's and
+lenny's apt (before 0.7.21) can't follow; this follows them.
 A chroot shares the host's network, so the box points at http://127.0.0.1:<port>/<host>/<path> and this fetches
 https://<host>/<path> once and serves it from disk after that. Only the hosts below are reachable through it.
 Started by tools/sandbox.py when an adapter has a [mirror] table. Standard library only.
@@ -18,7 +20,7 @@ import urllib.error
 import urllib.request
 
 ALLOWED = {"vault.centos.org", "repo.almalinux.org", "vault.almalinux.org", "archives.fedoraproject.org",
-           "dl.fedoraproject.org"}
+           "dl.fedoraproject.org", "snapshot.debian.org"}
 CACHE = sys.argv[2] if len(sys.argv) > 2 else "/var/tmp/wend/mirror"
 
 
