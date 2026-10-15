@@ -1,7 +1,8 @@
 """The wend archive's store (docs/archive.md). Runs on remi, the only writer. Standard library only.
 
   python3 tools/archive.py ingest STORE [--fetched DIR]... [--blobs DIR]... [--tree DIR]... [--offline] [--runs DIR]
-  python3 tools/archive.py verify STORE
+  python3 tools/archive.py verify STORE [--signers FILE]
+  python3 tools/archive.py sign STORE --key KEY
 
 ingest trusts nothing but the run files on main (runs/, result "pass"). Each hop's `sources` pins a top metadata file
 by sha256; the top file lists its indexes' checksums; an index lists its packages'. A file goes into the store only
@@ -29,6 +30,12 @@ evicted. verify rehashes every blob and alias and checks the index against them.
 
 ingest exits 1 when a referenced file wasn't found or couldn't be read, so a cron job notices. One ingest at a time:
 a second one exits 2 rather than wait.
+
+sign signs each index file (index/<stamp>.json, index/latest.json) with ssh-keygen -Y sign, ed25519, namespace
+wend-archive, into <file>.sig beside it: what says which URLs the archive saw upstream serve, and when. KEY is the
+private key, readable by its owner only. A stamped index whose .sig still verifies is left alone; latest.json is
+signed every time. verify checks every index's .sig against FILE (default archive/allowed_signers in this checkout,
+when it exists): a missing or bad signature is bad.
 """
 import datetime
 import glob
@@ -615,9 +622,55 @@ def pins_on_main(runs_dir):
     return pins
 
 
-def verify(path):
+SIG_NS = "wend-archive"
+
+
+def check_sig(signers, path):
+    """Does path.sig verify against the allowed signers file, as wend-archive?"""
+    if not os.path.isfile(f"{path}.sig"):
+        return False
+    with open(path, "rb") as f:
+        r = subprocess.run(["ssh-keygen", "-Y", "verify", "-f", signers, "-I", SIG_NS, "-n", SIG_NS,
+                            "-s", f"{path}.sig"], stdin=f, capture_output=True)
+    return r.returncode == 0
+
+
+def sign(path, key, signers=None):
+    """Sign every index file that needs it: latest.json always, a stamped one when its .sig is missing or (with
+    signers) doesn't verify, or the index was rewritten after it. Each .sig is written whole, then renamed into place."""
+    st = os.stat(key)
+    if st.st_mode & 0o077:
+        print(f"sign: {key} is readable by others than its owner; chmod 600 it first")
+        return 2
+    n = 0
+    for p in sorted(glob.glob(f"{path}/index/*.json")):
+        latest = p.endswith("/latest.json")
+        fresh = os.path.isfile(f"{p}.sig") and os.path.getmtime(f"{p}.sig") >= os.path.getmtime(p)
+        if not latest and fresh and (not signers or check_sig(signers, p)):
+            continue
+        with open(p, "rb") as f:
+            r = subprocess.run(["ssh-keygen", "-q", "-Y", "sign", "-f", key, "-n", SIG_NS], stdin=f,
+                               capture_output=True)
+        if r.returncode != 0 or not r.stdout.startswith(b"-----BEGIN SSH SIGNATURE-----"):
+            print(f"sign: ssh-keygen couldn't sign {p} (exit {r.returncode})")
+            return 1
+        tmp = f"{p}.sig.tmp{os.getpid()}"
+        with open(tmp, "wb") as f:
+            f.write(r.stdout)
+        os.replace(tmp, f"{p}.sig")
+        n += 1
+    print(f"signed {n} index files")
+    return 0
+
+
+def verify(path, signers=None):
     index = json.load(open(f"{path}/index/latest.json"))
     bad = 0
+    if signers:
+        for p in sorted(glob.glob(f"{path}/index/*.json")):
+            if not check_sig(signers, p):
+                print(f"UNSIGNED {os.path.relpath(p, path)} (no .sig, or not by a key in {signers})")
+                bad += 1
     for url, digests in index["files"].items():
         for d, e in digests.items():
             p = f"{path}/blob/sha256/{d[7:9]}/{d[7:]}"
@@ -642,16 +695,45 @@ def verify(path):
             print(f"ALIAS   {alg}:{other} -> {line}")
             bad += 1
     print(f"{'ok' if not bad else 'BAD'}: {sum(len(v) for v in index['files'].values())} entries, "
-          f"{len(aliases)} aliases, {bad} bad")
+          f"{len(aliases)} aliases, {bad} bad{', signatures checked' if signers else ''}")
     return 1 if bad else 0
 
 
+def lock_store(path, what):
+    os.makedirs(path, exist_ok=True)
+    lock = open(f"{path}/.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(f"{what}: an ingest, sign or push is running on this store")
+        return None
+    return lock
+
+
 def main(argv):
-    if len(argv) < 2 or argv[0] not in ("ingest", "verify"):
+    if len(argv) < 2 or argv[0] not in ("ingest", "verify", "sign"):
         print(__doc__)
         return 2
-    if argv[0] == "verify":
-        return verify(argv[1])
+    if argv[0] in ("verify", "sign"):
+        flag = "--signers" if argv[0] == "verify" else "--key"
+        if len(argv) == 4 and argv[2] == flag:
+            arg = argv[3]
+        elif len(argv) == 2:
+            arg = None
+        else:
+            print(__doc__)
+            return 2
+        if argv[0] == "verify":
+            default = f"{ROOT}/archive/allowed_signers"
+            return verify(argv[1], arg or (default if os.path.isfile(default) else None))
+        if not arg:
+            print(__doc__)
+            return 2
+        lock = lock_store(argv[1], "sign")
+        if not lock:
+            return 2
+        default = f"{ROOT}/archive/allowed_signers"
+        return sign(argv[1], arg, default if os.path.isfile(default) else None)
     opts = {"--fetched": [], "--blobs": [], "--tree": [], "--runs": [f"{ROOT}/runs"]}
     rest, offline = argv[2:], False
     while rest:
@@ -663,12 +745,8 @@ def main(argv):
         else:
             print(f"ingest: {a!r} isn't an option, or has no value\n{__doc__}")
             return 2
-    os.makedirs(argv[1], exist_ok=True)
-    lock = open(f"{argv[1]}/.lock", "w")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        print("ingest: another ingest is running on this store")
+    lock = lock_store(argv[1], "ingest")
+    if not lock:
         return 2
     s = Store(argv[1], opts["--fetched"], opts["--blobs"], opts["--tree"], offline)
     try:

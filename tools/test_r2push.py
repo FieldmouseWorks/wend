@@ -95,6 +95,12 @@ got.clear()
 r2push.push(store, bucket)
 check([k for k, _ in got] == ["index/20261015-000000.json", "index/latest.json"],
       "a stamped index rewritten in place (two ingests in one second) goes up again")
+for f in ("index/20261015-000000.json.sig", "index/latest.json.sig"):
+    open(f"{store}/{f}", "wb").write(b"-----BEGIN SSH SIGNATURE-----\n")
+got.clear()
+r2push.push(store, bucket)
+check([k for k, _ in got] == ["index/20261015-000000.json.sig", "index/latest.json.sig", "index/latest.json"],
+      "each index's signature goes up just before it (tools/archive.py sign)")
 os.makedirs(f"{store}/blob/sha256/12")
 open(f"{store}/blob/sha256/12/" + "12" * 32, "wb").write(b"new")
 fail.add("blob/sha256/12/" + "12" * 32)
