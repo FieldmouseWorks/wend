@@ -16,8 +16,11 @@ when it hashes right against that chain, wherever its bytes came from:
   (--runs DIR reads the run files from DIR instead of this checkout's runs/: for tests)
 
 What goes in: every top file a passing run pins; under it, each index some download list names, and always each
-package index (primary, Packages: the files that vouch for packages); and each package a download list names. Never
-the rest of a repo. Blobs are kept as upstream served them, under blob/sha256/<2 hex>/<64 hex>. index/latest.json
+package index (primary, Packages: the files that vouch for packages), in one form unless a walk used others; each
+package a download list names; and each stored package's source (a .src.rpm from its repo's source repo, or a .dsc
+and its files from the Sources index its Release lists), checked against that metadata. A package whose source
+can't be found is listed as a gap, not a failure. Never the rest of a repo. Indexes compressed with zstd (EPEL 10)
+need Python 3.14 or the zstd command. Blobs are kept as upstream served them, under blob/sha256/<2 hex>/<64 hex>. index/latest.json
 maps each url to every digest the store has for it, with its size, when it was first stored and the runs that
 reference it. A file a chain names only by another hash (CentOS 5's SHA-1) also gets alias/<alg>/<hex>, one line
 naming its blob. One exception to "as upstream served them": an index a run pins uncompressed (wheezy, whose Release
@@ -37,12 +40,13 @@ import bz2
 import fcntl
 import os
 import re
+import subprocess
 import sys
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGES = (".rpm", ".deb", ".udeb")
-UNREADABLE = (".zst", ".zck", ".lzma", ".lz4")  # compressions the client can't read either: reported, never skipped
+UNREADABLE = (".zck", ".lzma", ".lz4")  # compressions nothing here reads: reported, never skipped
 MAX_PLAIN = 1 << 30  # a .gz decompressed before it can be checked stops here
 PACKAGE_INDEX = re.compile(r"(^|/)(primary\.xml(\.[a-z0-9]+)?|[0-9a-f]{40,64}-primary\.xml(\.[a-z0-9]+)?|"
                            r"binary-amd64/Packages(\.[a-z0-9]+)?)$")
@@ -67,11 +71,25 @@ def digest(alg, hexdigest):
 
 def plain_index(url):
     """An index pinned uncompressed (the client's `plain` rule): upstream may serve only its .gz."""
-    return "/dists/" in url and not url.endswith(("Release", ".gz", ".xz", ".bz2") + UNREADABLE)
+    return "/dists/" in url and not url.endswith(("Release", ".gz", ".xz", ".bz2", ".zst") + UNREADABLE)
+
+
+def unzstd(data):
+    """EPEL 10 serves its primary only as .zst: Python's own decoder (3.14+), else the zstd command."""
+    try:
+        from compression import zstd
+        return zstd.decompress(data)
+    except ImportError:
+        pass
+    try:
+        p = subprocess.run(["zstd", "-dc"], input=data, capture_output=True, check=True)
+    except (OSError, subprocess.CalledProcessError) as e:
+        raise ValueError(f"can't decompress .zst here (no zstd: {e})")
+    return p.stdout
 
 
 def decompress(name, data):
-    for ext, f in ((".gz", gzip.decompress), (".xz", lzma.decompress), (".bz2", bz2.decompress)):
+    for ext, f in ((".gz", gzip.decompress), (".xz", lzma.decompress), (".bz2", bz2.decompress), (".zst", unzstd)):
         if name.endswith(ext):
             return f(data)
     return data
@@ -130,7 +148,7 @@ def children(url, data):
     """(url, (alg, hex)) for everything a trusted metadata file vouches for. Raises ValueError for a file it can't
     read (a compression the client can't read either, a url the chain can't be joined to)."""
     if url.endswith(UNREADABLE):
-        raise ValueError("a compression neither the archive nor the client reads")
+        raise ValueError("a compression nothing here reads")
     text = decompress(url, data).decode("utf-8", "replace")
     if url.endswith("/repomd.xml"):
         base = url[:url.index("repodata/")]
@@ -145,6 +163,79 @@ def children(url, data):
         base = url[:url.index("repodata/")]
         return [(base + href, d) for href, d in primary_entries(text)]
     return []
+
+
+# Where each EL repo's source packages live. Data, not logic (docs/archive.md, "Source packages"): a source repo is
+# matched by its binary repo's base. Debian and Ubuntu need none: a pinned Release lists <comp>/source/Sources.
+SOURCE_REPOS = (
+    (r"^(https://vault\.centos\.org/5\.[^/]+/[^/]+/)x86_64/$", r"\1SRPMS/"),
+    (r"^(https://vault\.centos\.org/[67]\.[^/]+/[^/]+/)x86_64/$", r"\1Source/"),
+    (r"^(https://vault\.centos\.org/8\.[^/]+/[^/]+/)x86_64/os/$", r"\1Source/"),
+    (r"^https://repo\.almalinux\.org/almalinux/(\d+)/([^/]+)/x86_64/os/$", r"https://vault.almalinux.org/\1/\2/Source/"),
+    (r"^(https://vault\.almalinux\.org/[^/]+/[^/]+/)x86_64/os/$", r"\1Source/"),
+    (r"^(https://dl\.fedoraproject\.org/pub/epel/\d+/Everything/)x86_64/$", r"\1source/tree/"),
+    (r"^(https://archives\.fedoraproject\.org/pub/archive/epel/\d+/)x86_64/$", r"\1SRPMS/"),
+)
+
+
+def source_repo(base):
+    for pattern, to in SOURCE_REPOS:
+        if re.match(pattern, base):
+            return re.sub(pattern, to, base)
+    return None
+
+
+def source_names(url, data):
+    """{package url: what it was built from} for a trusted package index: ("rpm", "<name>.src.rpm", repo base) from
+    a primary, ("deb", source name, version, mirror, "<.../dists/X>/<comp>") from a Packages file."""
+    text = decompress(url, data).decode("utf-8", "replace")
+    out = {}
+    if "binary-" in url:
+        mirror = url[:url.index("/dists/")]
+        comp = re.match(r"(.*/dists/[^/]+/.+?)(/debian-installer)?/binary-", url)[1]  # udebs' sources are comp's
+        for stanza in text.split("\n\n"):
+            f = {}
+            for line in stanza.splitlines():
+                k, colon, v = line.partition(":")
+                if colon and not line.startswith(" "):
+                    f.setdefault(k, v.strip())
+            if "Filename" in f and "Package" in f and "Version" in f:
+                m = re.fullmatch(r"(\S+)(?:\s+\((\S+)\))?", f.get("Source", f["Package"]))
+                if m:
+                    out[f"{mirror}/{f['Filename']}"] = ("deb", m[1], m[2] or f["Version"], mirror, comp)
+        return out
+    base = url[:url.index("repodata/")]
+    for block in text.split("<package ")[1:]:
+        loc = re.search(r'<location (?:xml:base="[^"]*" )?href="([^"]+)"', block)
+        src = re.search(r"<rpm:sourcerpm>([^<]+)</rpm:sourcerpm>", block)
+        if loc and src:
+            out[base + loc[1]] = ("rpm", src[1], base)
+    return out
+
+
+def sources_entries(text):
+    """A Sources index: {(package, version): [(directory/name, digest)]}, by Checksums-Sha256, else Checksums-Sha1.
+    A stanza with only md5 sums (etch's) vouches for nothing."""
+    out = {}
+    for stanza in text.split("\n\n"):
+        f, cur = {}, None
+        for line in stanza.splitlines():
+            if line.startswith(" "):
+                if cur and isinstance(f[cur], list):
+                    f[cur].append(line.split())
+                continue
+            k, colon, v = line.partition(":")
+            if colon:
+                cur = k
+                f[k] = v.strip() if v.strip() else []
+        files = []
+        for field, alg in (("Checksums-Sha256", "sha256"), ("Checksums-Sha1", "sha1")):
+            if isinstance(f.get(field), list):
+                files = [(f"{f.get('Directory', '')}/{x[2]}", digest(alg, x[0])) for x in f[field] if len(x) == 3]
+                break
+        if files and all(d for _, d in files) and isinstance(f.get("Package"), str):
+            out[(f["Package"], f.get("Version"))] = files
+    return out
 
 
 def stem(u):
@@ -186,6 +277,9 @@ class Store:
         self.kept = {}  # (url, digest) -> "sha256:<hex>"
         self.edges = {}  # (url, digest) -> [(child url, child digest)]
         self.found_under = set()  # (parent, stem): a form of an index its parent lists that this ingest found
+        self.built_from = {}  # (package url, digest) -> source_names() value, for every package stored
+        self.deb_sources = {}  # "<.../dists/X>/<comp>" -> [(Sources url, digest)] a pinned Release lists
+        self.no_source = {}  # package url -> why no source was stored
 
     def blob(self, hexdigest):
         return f"{self.path}/blob/sha256/{hexdigest[:2]}/{hexdigest}"
@@ -279,6 +373,8 @@ class Store:
             url, d, depth, parent = todo.pop()
             if (url, d) in seen:
                 continue
+            if parent and url not in self.used and (parent, stem(url)) in self.found_under:
+                continue  # another form of this index, already stored: one vouches as well as three
             seen.add((url, d))
             data, why = self.get(url, d)
             if data is None:
@@ -296,7 +392,19 @@ class Store:
             except Exception as e:
                 self.unreadable.append((url, str(e)))
                 continue
-            for child, cd in listed:
+            try:
+                names = source_names(url, data) if PACKAGE_INDEX.search(url) else {}
+            except Exception:  # its packages still go in; their sources show up as gaps
+                names = {}
+            if url.endswith(("/Release", "/InRelease")):
+                for child, cd in listed:
+                    m = re.match(r"(.*/dists/[^/]+)/(.+)/source/Sources(\.[a-z0-9]+)?$", child)
+                    if m:
+                        self.deb_sources.setdefault(f"{m[1]}/{m[2]}", []).append((child, cd))
+            rank = lambda c: next((i for i, ext in enumerate((".bz2", ".gz", ".xz")) if c[0].endswith(ext)), -1)
+            for child, cd in sorted(listed, key=rank):  # popped last-in first: .xz, .gz, .bz2, then plain
+                if child in names:
+                    self.built_from[(child, cd)] = names[child]
                 if child.endswith(PACKAGES):
                     wanted = child in self.used
                 else:  # an index: the package indexes always, the rest when a walk used them
@@ -315,6 +423,103 @@ class Store:
                     e = self.index["files"][k[0]][self.kept[k]]
                     e["runs"] = sorted(set(e["runs"]) | set(runs))
                 stack.extend(self.edges.get(k, []))
+
+    def live(self, url):
+        """A file no pin names (a source repo's repomd.xml): from a tree, else the origin. The index records it, and
+        everything under it is checked against it; the archive's signature is what vouches for it."""
+        host_path = re.sub(r"^[a-z]+://", "", url)
+        for t in self.trees:
+            if os.path.isfile(f"{t}/{host_path}"):
+                return open(f"{t}/{host_path}", "rb").read()
+        if self.offline:
+            return None
+        try:
+            with urllib.request.urlopen(url, timeout=300) as r:
+                return r.read()
+        except Exception:
+            return None
+
+    def sources(self):
+        """Store the source of every package stored: the .src.rpm its primary names, from its source repo
+        (SOURCE_REPOS), or the .dsc and files its Sources stanza lists, from the Sources index its pinned Release
+        lists. Every source file is checked against that metadata. A package whose source can't be found gets
+        "source": {"missing": why} in the index; that's a gap to fill before the archive goes public, not a failure."""
+        wanted = {}  # group key -> {package key: what}
+        for key, what in self.built_from.items():
+            if key not in self.kept:
+                continue
+            if what[0] == "rpm":
+                group = source_repo(what[2])
+            else:
+                group = ("deb", what[3], what[4]) if what[4] in self.deb_sources else None
+            if not group:
+                self.no_source[key[0]] = "no source repo known for its repo"
+                continue
+            wanted.setdefault(group, {})[key] = what
+        for group, packages in sorted(wanted.items(), key=lambda g: str(g[0])):
+            found = self.rpm_sources(group) if isinstance(group, str) else self.deb_source_index(*group[1:])
+            for key, what in packages.items():
+                files = found.get(what[1] if what[0] == "rpm" else (what[1], what[2]))
+                if not files:
+                    self.no_source[key[0]] = "its source isn't in the source metadata now"
+                    continue
+                stored = []
+                for u, d in files:
+                    data, why = self.get(u, d)
+                    if data is None:
+                        self.no_source[key[0]] = f"{u}: {why}"
+                        break
+                    h = self.keep(u, data)
+                    self.alias(d, h)
+                    stored.append((u, f"sha256:{h}"))
+                else:
+                    runs = self.index["files"][key[0]][self.kept[key]]["runs"]
+                    for u, hd in stored:
+                        e = self.index["files"][u][hd]
+                        e["runs"] = sorted(set(e["runs"]) | set(runs))
+                    main = next((x for x in stored if x[0].endswith((".dsc", ".src.rpm"))), stored[0])
+                    self.index["files"][key[0]][self.kept[key]]["source"] = {"url": main[0], "digest": main[1]}
+        for u, why in self.no_source.items():
+            for hd in self.index["files"].get(u, {}).values():
+                hd.setdefault("source", {"missing": why})
+
+    def rpm_sources(self, base):
+        """{"<name>.src.rpm": [(url, digest)]} from a source repo's live metadata."""
+        url = f"{base}repodata/repomd.xml"
+        data = self.live(url)
+        if data is None:
+            return {}
+        self.keep(url, data)
+        try:
+            listed = children(url, data)
+        except ValueError as e:
+            self.unreadable.append((url, str(e)))
+            return {}
+        rank = lambda c: next((i for i, ext in enumerate((".gz", ".xz", ".zst")) if c[0].endswith(ext)), 9)
+        for child, cd in sorted((c for c in listed if PACKAGE_INDEX.search(c[0])), key=rank):
+            primary, _ = self.get(child, cd)
+            if primary is None:
+                continue
+            try:
+                entries = children(child, primary)
+            except ValueError as e:  # a .zst with no decoder here: try the next form
+                self.unreadable.append((child, str(e)))
+                continue
+            self.alias(cd, self.keep(child, primary))
+            return {u.rsplit("/", 1)[1]: [(u, d)] for u, d in entries}
+        return {}
+
+    def deb_source_index(self, mirror, comp):
+        """{(package, version): [(url, digest)]} from the Sources index a pinned Release lists for comp, any form."""
+        rank = lambda f: next((i for i, ext in enumerate((".xz", ".gz", ".bz2", "/Sources")) if f[0].endswith(ext)), 9)
+        for u, d in sorted(self.deb_sources[comp], key=rank):
+            data, _ = self.get(u, d)
+            if data is None:
+                continue
+            self.alias(d, self.keep(u, data))
+            entries = sources_entries(decompress(u, data).decode("utf-8", "replace"))
+            return {k: [(f"{mirror}/{name}", fd) for name, fd in files] for k, files in entries.items()}
+        return {}
 
     def unfound(self):
         """{url: why} for referenced files no source had at their digest. The one exception: an index its parent lists
@@ -412,6 +617,7 @@ def main(argv):
     s = Store(argv[1], opts["--fetched"], opts["--blobs"], opts["--tree"], offline)
     try:
         s.ingest(pins_on_main(opts["--runs"][-1]))
+        s.sources()
     finally:
         s.write_index()  # what was stored before a crash is indexed all the same
     size = sum(n for _, _, n in s.added)
@@ -421,6 +627,10 @@ def main(argv):
         print(f"  missing {u} ({why})")
     for u, why in s.unreadable:
         print(f"  unreadable {u} ({why})")
+    if s.no_source:
+        print(f"{len(s.no_source)} stored packages have no source stored yet (gaps to fill before going public):")
+        for u, why in sorted(s.no_source.items()):
+            print(f"  no source {u} ({why})")
     return 1 if missing or s.unreadable else 0
 
 
