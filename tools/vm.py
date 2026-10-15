@@ -50,6 +50,7 @@ import http.server
 import json
 import os
 import re
+import select
 import shlex
 import shutil
 import signal
@@ -197,7 +198,7 @@ def use_shim():
 def shim_stop(pid):
     """Stop the mirror shim running as pid, only while no VM run holds SHIM_USERS: the exclusive lock is held through
     the kill, so a run that starts meanwhile waits for it and then starts its own shim. 0 stopped (or wasn't running),
-    3 in use and left running, 2 pid isn't a mirror shim."""
+    3 in use and left running, 2 pid isn't a mirror shim, 1 it didn't exit."""
     fd = shim_fd()
     try:
         try:
@@ -205,27 +206,42 @@ def shim_stop(pid):
         except BlockingIOError:
             print(f"the mirror shim is in use by a VM run; left running (pid {pid})")
             return 3
+        # a pidfd names this process, not its number: if it exits and the number is reused, signals through it fail
+        # instead of reaching the newcomer. /proc/<pid> is read after it's open and before the first signal, while
+        # the pidfd says the process is still alive, so the files read are that process's.
         try:
-            cmd = [a.decode(errors="replace") for a in open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0")]
-            cwd = os.readlink(f"/proc/{pid}/cwd")
-        except FileNotFoundError:
+            pfd = os.pidfd_open(pid)
+        except ProcessLookupError:
             print(f"no process {pid}: nothing to stop")
             return 0
-        # a wend checkout's tools/mirror.py (a tools/ directory with vm.py and sandbox.py beside it), not any mirror.py
-        shim = [os.path.dirname(os.path.join(cwd, a)) for a in cmd[1:3] if os.path.basename(a) == "mirror.py"]
-        if not any(os.path.basename(t) == "tools" and all(os.path.exists(os.path.join(t, f)) for f in
-                                                          ("vm.py", "sandbox.py")) for t in shim):
-            print(f"process {pid} isn't a wend checkout's tools/mirror.py: {' '.join(cmd)[:200]}")
-            return 2
-        os.kill(pid, signal.SIGTERM)
-        for _ in range(50):
-            if not os.path.exists(f"/proc/{pid}") or open(f"/proc/{pid}/stat").read().split(") ")[-1][:1] == "Z":
-                print(f"stopped the mirror shim (pid {pid})")
+        try:
+            try:
+                cmd = [a.decode(errors="replace") for a in open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0")]
+                cwd = os.readlink(f"/proc/{pid}/cwd")
+                signal.pidfd_send_signal(pfd, 0)
+            except (FileNotFoundError, ProcessLookupError):
+                print(f"no process {pid}: nothing to stop")
                 return 0
-            time.sleep(0.2)
-        os.kill(pid, signal.SIGKILL)
-        print(f"killed the mirror shim (pid {pid}) after it ignored SIGTERM")
-        return 0
+            # a wend checkout's tools/mirror.py (a tools/ directory with vm.py and sandbox.py beside it), not any
+            # mirror.py
+            shim = [os.path.dirname(os.path.join(cwd, a)) for a in cmd[1:3] if os.path.basename(a) == "mirror.py"]
+            if not any(os.path.basename(t) == "tools" and all(os.path.exists(os.path.join(t, f)) for f in
+                                                              ("vm.py", "sandbox.py")) for t in shim):
+                print(f"process {pid} isn't a wend checkout's tools/mirror.py: {' '.join(cmd)[:200]}")
+                return 2
+            for sig, wait, said in ((signal.SIGTERM, 10, "stopped"),
+                                    (signal.SIGKILL, 10, "killed (it ignored SIGTERM)")):
+                try:
+                    signal.pidfd_send_signal(pfd, sig)
+                except ProcessLookupError:  # gone already
+                    sig = None
+                if sig is None or select.select([pfd], [], [], wait)[0]:  # a pidfd reads ready once its process exits
+                    print(f"{said if sig else 'stopped'} the mirror shim (pid {pid})")
+                    return 0
+            print(f"the mirror shim (pid {pid}) didn't exit after SIGKILL")
+            return 1
+        finally:
+            os.close(pfd)
     finally:
         os.close(fd)
 
