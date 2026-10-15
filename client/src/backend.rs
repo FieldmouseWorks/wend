@@ -79,9 +79,11 @@ fn ere(name: &str) -> String {
     name.replace('.', "[.]").replace('+', "[+]")
 }
 
+/// Shell that writes content to path. The content goes through %b, never as the format itself, so content that
+/// starts with "-" (an armoured key) isn't read as an option, and % is literal. Only \\ and \\n are escapes in it.
 fn printf(content: &str, path: &str) -> String {
     format!(
-        "printf '{}' > {path}",
+        "printf '%b' '{}' > {path}",
         content.replace('\\', "\\\\").replace('\n', "\\n")
     )
 }
@@ -192,6 +194,8 @@ pub fn hop_vars(adapter: &Doc, release: &str) -> Result<Vars, String> {
                 }),
                 ("pm".into(), "$(command -v dnf || command -v yum)".into()),
                 ("clean_repos".into(), CLEAN_REPOS.into()),
+                ("keys".into(), write_keys(adapter)),
+                ("drop_keys".into(), drop_keys(adapter, release)),
                 (
                     "dnf_opts".into(),
                     format!(
@@ -344,14 +348,94 @@ fn first_repo(rel: &Value) -> Result<String, String> {
         .ok_or("a release with no repos".into())
 }
 
+/// SPEC "Signed packages": the adapter's [keys], written there by every hop's {keys}.
+const KEYS: &str = "/etc/wend/keys";
+
+/// A repo section's signature lines: gpgcheck=1 against the named keys, or gpgcheck=0 when it names none.
+fn gpg(names: &[String]) -> String {
+    if names.is_empty() {
+        return "gpgcheck=0\n".into();
+    }
+    let files: Vec<String> = names.iter().map(|k| format!("file://{KEYS}/{k}")).collect();
+    format!("gpgcheck=1\ngpgkey={}\n", files.join(" "))
+}
+
+/// Shell that writes every key in the adapter's [keys] under KEYS ("true" if it has none).
+fn write_keys(adapter: &Doc) -> String {
+    match get(adapter, "keys").and_then(Value::as_object) {
+        Some(ks) if !ks.is_empty() => std::iter::once(format!("mkdir -p {KEYS}"))
+            .chain(ks.iter().map(|(n, a)| printf(&scalar(a), &format!("{KEYS}/{n}"))))
+            .collect::<Vec<_>>()
+            .join(" && "),
+        _ => "true".into(),
+    }
+}
+
+/// Shell that removes the gpg-pubkey entries the release lists in drop_keys from the rpm database, those the box
+/// has ("true" if it lists none).
+fn drop_keys(adapter: &Doc, release: &str) -> String {
+    let drop = get(adapter, "releases")
+        .and_then(|r| get(r, release))
+        .and_then(|r| get(r, "drop_keys"))
+        .and_then(strings)
+        .unwrap_or_default();
+    if drop.is_empty() {
+        return "true".into();
+    }
+    format!(
+        "{{ _wd=$(for _wk in {}; do rpm -q gpg-pubkey-$_wk >/dev/null 2>&1 && echo gpg-pubkey-$_wk; done); \
+         [ -z \"$_wd\" ] || rpm -e --allmatches $_wd; }}",
+        drop.join(" ")
+    )
+}
+
+fn release_keys(rel: &Value) -> Vec<String> {
+    get(rel, "gpgkeys").and_then(strings).unwrap_or_default()
+}
+
 fn repo_file(adapter: &Doc, release: &str, shim: &str) -> Result<String, String> {
-    Ok(table(release_of(adapter, release)?, "repos")?
+    let rel = release_of(adapter, release)?;
+    let g = gpg(&release_keys(rel));
+    Ok(table(rel, "repos")?
         .iter()
         .map(|(n, u)| {
             let u = scalar(u);
-            format!("[{release}-{n}]\nname={release}-{n}\nbaseurl={shim}/{u}/\ngpgcheck=0\nenabled=1\n\n")
+            format!("[{release}-{n}]\nname={release}-{n}\nbaseurl={shim}/{u}/\n{g}enabled=1\n\n")
         })
         .collect())
+}
+
+/// SPEC "Signed packages": shell that checks files (RPMs fetched outside the package manager, or by one that can't
+/// check them) against the release's keys and its add-ons', and refuses any not signed by them. gpgv checks the
+/// signatures, not rpm: EL7's rpm 4.11 can't use signing subkeys, which AlmaLinux 8 signs with. A header+payload
+/// signature (tag 1002) covers everything; a header-only one (268, newer EPEL builds) covers the header, whose sha256
+/// payload digest (5092) then covers the payload. Its variables all start with _w, so it leaves the caller's alone.
+/// @K@ is the scratch dir, @KEYFILES@ the key files, @FILES@ the RPMs. tools/backends.py builds the same text.
+const CHECKSIG: &str = r#"rm -rf @K@; mkdir -m 700 -p @K@; _wg=$(command -v gpg2 || command -v gpg); _wv=$(command -v gpgv2 || command -v gpgv); [ -n "$_wg" ] && [ -n "$_wv" ] || { echo 'refusing: no gpg and gpgv to check signatures with'; exit 1; }; awk '/BEGIN PGP/ {n++} {print > ("@K@/key." n)}' @KEYFILES@; for _wk in @K@/key.*; do "$_wg" --homedir @K@ --batch --dearmor < $_wk >> @K@/ring || { echo "refusing: can't read key $_wk"; exit 1; }; done; _wbad=; for _wr in @FILES@; do _ws=$(od -An -v -tu1 -j96 -N65536 $_wr 2>/dev/null | awk 'function be(p) { return ((b[p] * 256 + b[p + 1]) * 256 + b[p + 2]) * 256 + b[p + 3] } { for (i = 1; i <= NF; i++) b[n++] = $i } END { if (n < 16 || b[0] != 142 || b[1] != 173 || b[2] != 232) exit; il = be(8); s = 16 + 16 * il; o = c = p = d = 0; for (e = 0; e < il; e++) { t = be(16 + 16 * e); if (t == 1002) { o = be(24 + 16 * e); c = be(28 + 16 * e) } if (t == 268) { p = be(24 + 16 * e); d = be(28 + 16 * e) } } x = 96 + s + be(12); x += (8 - x % 8) % 8; print 96 + s + o, c, 96 + s + p, d, x }'); _wok=; if [ -n "$_ws" ]; then set -- $_ws; if [ $2 -gt 0 ]; then tail -c +$(($1 + 1)) $_wr | head -c $2 > @K@/sig && tail -c +$(($5 + 1)) $_wr > @K@/data && "$_wv" --homedir @K@ --keyring @K@/ring @K@/sig @K@/data >/dev/null 2>&1 && _wok=1; elif [ $4 -gt 0 ]; then _wx=$5; tail -c +$(($3 + 1)) $_wr | head -c $4 > @K@/sig && _wl=$(od -An -v -tu1 -j$((_wx + 8)) -N8 $_wr | awk '{print 16 + 16 * ((($1 * 256 + $2) * 256 + $3) * 256 + $4) + (($5 * 256 + $6) * 256 + $7) * 256 + $8}') && tail -c +$((_wx + 1)) $_wr | head -c $_wl > @K@/hdr && "$_wv" --homedir @K@ --keyring @K@/ring @K@/sig @K@/hdr >/dev/null 2>&1 && _wd=$(od -An -v -tu1 @K@/hdr | awk 'function be(p) { return ((b[p] * 256 + b[p + 1]) * 256 + b[p + 2]) * 256 + b[p + 3] } { for (i = 1; i <= NF; i++) b[n++] = $i } END { if (n < 16 || b[0] != 142 || b[1] != 173 || b[2] != 232) exit; il = be(8); s = 16 + 16 * il; a = h = -1; for (e = 0; e < il; e++) { t = be(16 + 16 * e); if (t == 5093) a = be(s + be(24 + 16 * e)); if (t == 5092) h = s + be(24 + 16 * e) } if (a < 0 || h < 0) exit; for (q = h; q < n && b[q] != 0; q++) { v = b[q]; if (v < 48 || v > 102 || (v > 57 && v < 97)) exit; x = x sprintf("%c", v) } print a, x }') && [ "${_wd%% *}" = 8 ] && [ "$(tail -c +$((_wx + _wl + 1)) $_wr | sha256sum | cut -d' ' -f1)" = "${_wd#* }" ] && _wok=1; fi; fi; [ -n "$_wok" ] || _wbad="$_wbad $_wr"; done; rm -f @K@/data @K@/hdr; [ -z "$_wbad" ] || { echo "refusing, not signed by the release's keys:"; printf '%s\n' $_wbad | head -n 20; exit 1; }"#;
+
+/// CHECKSIG for a release's keys and its add-ons'; None when the release names no keys.
+fn checksig(adapter: &Doc, release: &str, k: &str, files: &str) -> Result<Option<String>, String> {
+    let mut keys = release_keys(release_of(adapter, release)?);
+    if keys.is_empty() {
+        return Ok(None);
+    }
+    for a in get(adapter, "addons")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .map(|(_, a)| a)
+    {
+        if let Some(k) = get(a, "gpgkeys").and_then(|g| get(g, release)) {
+            keys.push(scalar(k));
+        }
+    }
+    let key_files: Vec<String> = keys.iter().map(|n| format!("{KEYS}/{n}")).collect();
+    Ok(Some(
+        CHECKSIG
+            .replace("@KEYFILES@", &key_files.join(" "))
+            .replace("@FILES@", files)
+            .replace("@K@", k),
+    ))
 }
 
 /// SPEC "Add-on repositories": shell that appends each add-on's repo for `release` to `file`, as
@@ -364,8 +448,14 @@ fn addon_repos(adapter: &Doc, release: &str, shim: &str, file: &str) -> String {
             let marker = get(a, "marker").map(scalar).unwrap_or_default();
             out.push(format!(
                 "if rpm -q {marker} >/dev/null 2>&1; then printf '[{rid}]\\nname={rid}\\nbaseurl={shim}/{}/\\n\
-                 gpgcheck=0\\nenabled=1\\n\\n' >> {file}; fi",
-                scalar(u)
+                 {}enabled=1\\n\\n' >> {file}; fi",
+                scalar(u),
+                gpg(&get(a, "gpgkeys")
+                    .and_then(|g| get(g, release))
+                    .map(scalar)
+                    .into_iter()
+                    .collect::<Vec<_>>())
+                .replace('\n', "\\n")
             ));
         }
     }
@@ -471,7 +561,7 @@ fn rpm_step(s: &Value, adapter: &Doc, release: &str) -> Result<String, String> {
             out + &packages(s)?
         }
         "write-file" => printf(str_of(s, "content")?, str_of(s, "path")?),
-        "rpm.swap-release" => swap_release(s, &v, release_of(adapter, release)?)?,
+        "rpm.swap-release" => swap_release(s, adapter, release, &v)?,
         "rpm.drop-arch" => drop_arch(s)?,
         "rpm.drop-unneeded" => format!(
             "P=; for p in {}; do ! rpm -q $p >/dev/null 2>&1 || P=\"$P $p\"; done; \
@@ -578,16 +668,21 @@ fn rpm_step(s: &Value, adapter: &Doc, release: &str) -> Result<String, String> {
 }
 
 /// Replace the release package by hand. EL5's centos-release has epoch 10, so yum won't "upgrade" it to EL6's
-/// epoch-0 one, and a vendor switch (CentOS -> AlmaLinux) isn't an upgrade at all.
-fn swap_release(s: &Value, v: &Vars, rel: &Value) -> Result<String, String> {
+/// epoch-0 one, and a vendor switch (CentOS -> AlmaLinux) isn't an upgrade at all. The package is fetched with
+/// curl, so it is checked against the release's keys (when it names any) before the old one goes.
+fn swap_release(s: &Value, adapter: &Doc, release: &str, v: &Vars) -> Result<String, String> {
+    let rel = release_of(adapter, release)?;
     let base = format!("{}/{}", var(v, "shim"), first_repo(rel)?);
     let (install, remove) = (ere(str_of(s, "install")?), str_of(s, "remove")?);
+    let check = checksig(adapter, release, "/tmp/wend-keydb", "/tmp/$f")?
+        .map(|c| c + "; ")
+        .unwrap_or_default();
     Ok(format!(
         "set -e; cd /tmp; {}; \
          f=$(grep -E '^{install}-[0-9][^/]*(x86_64|noarch)\\.rpm$' /tmp/wend-pkglist | head -n1); \
          test -n \"$f\"; curl -sf -o /tmp/$f {base}/Packages/$f; \
-         rpm -e --nodeps --noscripts {remove}; rpm -ivh --nodeps --noscripts /tmp/$f; \
-         rm -f /tmp/$f /tmp/wend-pkglist; {CLEAN_REPOS}",
+         {check}rpm -e --nodeps --noscripts {remove}; rpm -ivh --nodeps --noscripts /tmp/$f; \
+         rm -rf /tmp/$f /tmp/wend-pkglist /tmp/wend-keydb; {CLEAN_REPOS}",
         primary_list(&base, "/tmp/wend-pkglist")
     ))
 }
@@ -767,7 +862,7 @@ fn transit(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
         repo_lines,
         format!("yum -y --setopt=reposdir={b}/old install dnf"),
         format!(
-            "dnf -y {o} --setopt=best=False --setopt=deltarpm=false --downloadonly --destdir={b}/pkgs distro-sync \
+            "dnf -y {o} --setopt=best=False --setopt=deltarpm=false --nogpgcheck --downloadonly --destdir={b}/pkgs distro-sync \
              > {b}/dl.log 2>&1 || tail -n 20 {b}/dl.log"
         ),
         [
@@ -787,7 +882,8 @@ fn transit(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
             primary_list(&base, &format!("{b}/list"))
         ),
         format!(
-            "for r in *.rpm; do rpm2cpio $r | (cd {b}/stage && cpio -idmu --quiet 2>/dev/null) || {{ echo EXTRACTFAIL $r; exit 1; }}; done"
+            "{}for r in *.rpm; do rpm2cpio $r | (cd {b}/stage && cpio -idmu --quiet 2>/dev/null) || {{ echo EXTRACTFAIL $r; exit 1; }}; done",
+            checksig(adapter, target, &format!("{b}/keydb"), "*.rpm")?.map(|c| c + "\n").unwrap_or_default()
         ),
         format!("{ld} {rpm_s} --version"),
         format!("rpm -e --nodeps --noscripts {remove}"),

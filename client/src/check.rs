@@ -9,7 +9,7 @@ use crate::atlas::{get, strings, Atlas, Doc};
 use crate::backend::caps;
 use crate::canon::{content_id, sha256_hex};
 use regex::Regex;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Mutex;
 
@@ -78,6 +78,7 @@ const ADAPTER_KEYS: &[&str] = &[
     "addons",
     "runtimes",
     "relocate",
+    "keys",
 ];
 /// SPEC "Hardware preflight"
 pub const CPU_LEVELS: &[&str] = &["x86-64", "x86-64-v2", "x86-64-v3"];
@@ -336,7 +337,10 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
             });
             let ok = b.name == "rpm"
                 && full("[a-z0-9]+", n)
-                && fields == Some(BTreeSet::from(["marker", "repos", "vendor"]))
+                && fields.as_ref().is_some_and(|f| {
+                    BTreeSet::from(["marker", "repos", "vendor"]).is_subset(f)
+                        && f.is_subset(&BTreeSet::from(["gpgkeys", "marker", "repos", "vendor"]))
+                })
                 && get(ad, "marker").is_some_and(|m| full_v(PKG, m))
                 && get(ad, "vendor").is_some_and(|v| full_v("[A-Za-z0-9][A-Za-z0-9 .,-]*", v))
                 && repos_ok;
@@ -406,6 +410,106 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
     }
     errs.extend(check_hardware(a, wh));
     errs.extend(check_runtimes(a, wh));
+    errs.extend(check_keys(a, wh));
+    errs
+}
+
+/// An ASCII-armoured public key that is safe inside the harness's printf '...': printable ASCII and newlines, no
+/// quote, % or backslash.
+fn armor_ok(t: &Value) -> bool {
+    t.as_str().is_some_and(|t| {
+        t.starts_with("-----BEGIN PGP PUBLIC KEY BLOCK-----\n")
+            && t.trim_end_matches('\n')
+                .ends_with("\n-----END PGP PUBLIC KEY BLOCK-----")
+            && t.chars().all(|c| c == '\n' || (' '..='~').contains(&c))
+            && !t.contains(['\'', '%', '\\'])
+    })
+}
+
+/// SPEC "Signed packages": [keys], releases.*.gpgkeys and addons.*.gpgkeys.
+fn check_keys(a: &Doc, wh: &str) -> Vec<String> {
+    let empty = Map::new();
+    let keys = match get(a, "keys") {
+        None => &empty,
+        Some(Value::Object(k)) => k,
+        Some(_) => {
+            return vec![format!(
+                "{wh}: keys must map plain names to ASCII-armoured public keys (no ', % or \\), on the rpm backend"
+            )]
+        }
+    };
+    if !keys.is_empty() && get(a, "backend").and_then(Value::as_str) != Some("rpm")
+        || !keys
+            .iter()
+            .all(|(n, t)| full("[A-Za-z0-9][A-Za-z0-9.-]*", n) && armor_ok(t))
+    {
+        return vec![format!(
+            "{wh}: keys must map plain names to ASCII-armoured public keys (no ', % or \\), on the rpm backend"
+        )];
+    }
+    let mut errs = vec![];
+    if !keys.is_empty()
+        && !get(a, "hop")
+            .and_then(|h| get(h, "set_release"))
+            .and_then(Value::as_str)
+            .is_some_and(|s| s.contains("{keys}"))
+    {
+        errs.push(format!(
+            "{wh}: an adapter with keys must put {{keys}} in hop.set_release"
+        ));
+    }
+    for (r, rel) in get(a, "releases").and_then(Value::as_object).into_iter().flatten() {
+        let ok = match get(rel, "gpgkeys") {
+            None => true,
+            Some(Value::Array(g)) => g.iter().all(|k| k.as_str().is_some_and(|k| keys.contains_key(k))),
+            Some(_) => false,
+        };
+        if !ok {
+            errs.push(format!("{wh}: releases.{r}.gpgkeys must list names from [keys]"));
+        }
+        let ok = match get(rel, "drop_keys") {
+            None => true,
+            Some(Value::Array(d)) => d.iter().all(|k| k.as_str().is_some_and(|k| full("[0-9a-f]{8}", k))),
+            Some(_) => false,
+        };
+        if !ok {
+            errs.push(format!(
+                "{wh}: releases.{r}.drop_keys must list short key ids (8 lowercase hex digits)"
+            ));
+        }
+    }
+    let drops = get(a, "releases")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .any(|(_, rel)| {
+            get(rel, "drop_keys")
+                .and_then(Value::as_array)
+                .is_some_and(|d| !d.is_empty())
+        });
+    if drops
+        && !get(a, "hop")
+            .and_then(|h| get(h, "after"))
+            .is_some_and(|x| x.to_string().contains("{drop_keys}"))
+    {
+        errs.push(format!(
+            "{wh}: an adapter whose releases drop keys must put {{drop_keys}} in hop.after"
+        ));
+    }
+    for (n, ad) in get(a, "addons").and_then(Value::as_object).into_iter().flatten() {
+        let ok = match get(ad, "gpgkeys") {
+            None => true,
+            Some(Value::Object(g)) => g.iter().all(|(r, k)| {
+                get(ad, "repos").and_then(|x| get(x, r)).is_some() && k.as_str().is_some_and(|k| keys.contains_key(k))
+            }),
+            Some(_) => false,
+        };
+        if !ok {
+            errs.push(format!(
+                "{wh}: addons.{n}.gpgkeys must map releases the add-on has a repo for to names from [keys]"
+            ));
+        }
+    }
     errs
 }
 

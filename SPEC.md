@@ -449,8 +449,9 @@ packages, EPEL: `Fedora Project`) and `repos` (release id = host/path, through t
 - Every hop's `set_release` appends `{addons}`: for each add-on with a repo for the release being entered, the add-on's
   repo goes into the harness's repo file as `[<release>-<name>]` if its marker is installed at that moment. A box
   without the marker never sees the repo: no hop's repos or `rpm.transit`'s `new` repos ship a marker, so no fix can
-  pull add-on packages onto it. On a box with the marker, a fix's `install` can pull any of the add-on's packages
-  (unsigned, like the vendor's: `gpgcheck=0` behind the shim).
+  pull add-on packages onto it. On a box with the marker, a fix's `install` can pull any of the add-on's packages,
+  checked against the add-on's key for that release when `addons.<name>.gpgkeys` names one (see "Signed packages"),
+  else unchecked (`gpgcheck=0` behind the shim).
 - `rpm.transit` lets the add-on vendor's packages through its refusal when the marker is installed, and then requires,
   before it changes anything, that each of them has a package of the same name in the release's repos or the
   release's add-on repos (renames don't count). Anything without one is named and the op fails: a fix on the same hop
@@ -462,6 +463,34 @@ packages, EPEL: `Fedora Project`) and `repos` (release id = host/path, through t
 - An adapter with `[addons]` must put `{addons}` in `hop.set_release`, or it would carry an add-on through the
   transit and then drop it from the hops after.
 - Software Collections, vendor SIG repos and other third-party repos are not add-ons: `rpm.transit` still refuses them.
+
+#### Signed packages
+
+The adapter's `[keys]` table holds vendors' signing keys, ASCII-armoured, by name (no `'`, `%` or backslash, since
+they're written with `printf`). Every hop's `set_release` starts with `{keys}`, which writes each one to
+`/etc/wend/keys/<name>` (the files stay on the machine afterwards). A release that lists keys in
+`releases.<id>.gpgkeys` gets `gpgcheck=1` and `gpgkey=file:///etc/wend/keys/<name> ...` in each of its repo
+sections, so its package manager refuses packages they don't sign (dnf imports them with `-y`). An add-on's
+`gpgkeys` table (release id = key name) does the same for its repo for that release. `{drop_keys}` in `hop.after`
+removes from the rpm database the keys dnf imported for earlier releases that `releases.<id>.drop_keys` names, by
+short key id (8 lowercase hex digits, as in `gpg-pubkey-<id>`), with `rpm -e --allmatches`; a key the box doesn't
+have is skipped. It runs in `hop.after` because a step of the hop can import them (`rpm.transit`'s dnf does). A newer rpm can refuse to load an older release's key (EL9's rpm can't load AlmaLinux 8's SHA-1
+self-signed 2021 key) and warns about it on every verify, which fails the pkgdb check.
+
+Packages that reach the box any other way are checked by `CHECKSIG` before anything uses them, when the release lists
+keys: `rpm.transit`'s download (EL7's dnf and rpm 4.11 can't use signing subkeys, which AlmaLinux 8 signs with, so it
+downloads with `--nogpgcheck`) and `rpm.swap-release`'s package (fetched with curl). `CHECKSIG` splits the release's
+keys and its add-ons' keys for that release into one block each, reads them into a scratch keyring with the box's
+`gpg2` (or `gpg`), and checks each package with `gpgv2` (or `gpgv`): its header+payload signature (signature header
+tag 1002, over every byte from the main header to the end) if it has one, else its header-only signature (tag 268,
+over the main header; newer EPEL 8 builds carry only this) and then the payload's sha256 against the signed header's
+payload digest (tags 5092 and 5093, which must say sha256). It refuses, naming them, every file that isn't an RPM, has
+neither signature, or doesn't check out against those keys, and refuses outright if a key won't read or there is no
+gpg. Its shell variables all start with `_w`, so it leaves the op's own alone.
+Releases that list none keep `gpgcheck=0`:
+on EL, CentOS 5 to 8, whose keys can't check what later releases ship or whose rpm can't read the newer signatures.
+With `wend walk --run` every byte is checked against the run's pins anyway; signatures are what protects `--live`
+walks and CI replays.
 
 ## Op reference
 
@@ -595,8 +624,9 @@ parse on a real box.
 manager, because an epoch drop (CentOS 5's `centos-release` has epoch 10, EL6's has none) or a vendor switch isn't an
 upgrade to yum. Effect: `remove` is gone from the database (its scriptlets don't run), and the first
 `install-<digit>...` package for x86_64 or noarch listed in `BASE`'s metadata is installed (a release's base repo
-carries exactly one; CentOS 5's `sort` has no `-V` to pick among several). Fails if there is no such package.
-Reference: find it in `PKGLIST(BASE)`, download it, `rpm -e --nodeps --noscripts {remove}`,
+carries exactly one; CentOS 5's `sort` has no `-V` to pick among several). Fails if there is no such package, or,
+when the release lists `gpgkeys`, if `CHECKSIG` (see "Signed packages") refuses it; `remove` is still installed then.
+Reference: find it in `PKGLIST(BASE)`, download it, `CHECKSIG` it, `rpm -e --nodeps --noscripts {remove}`,
 `rpm -ivh --nodeps --noscripts` the file, `CLEAN_REPOS`.
 
 **`rpm.drop-arch`** `arches` (list of `i[3-6]86`, at least one). Removes every installed package built for one of
@@ -653,12 +683,14 @@ repos kept in private `reposdir`s so `/etc/yum.repos.d` stays the harness's:
    and refuse, naming them, if any of those packages has no package of the same name there. Only the work dir has
    changed at that point.
 2. `yum install dnf` from `old` (CentOS 7 extras ships an EL7 dnf).
-3. With that dnf and `new`: `--downloadonly` distro-sync into the work dir, `--releasever` = the release's major,
+3. With that dnf and `new`: `--nogpgcheck --downloadonly` distro-sync into the work dir, `--releasever` = the release's major,
    `--allowerasing --setopt=best=False` (EL7's dnf 4.0 has no `--nobest`), no weak deps, no protected packages. Its exit code is ignored; the step fails if
    `rpm`, `rpm-libs`, `glibc`, `dnf` or `python3-dnf` wasn't downloaded, or any of the add-on packages wasn't (as
    with the first five, EL7's dnf is still installed when that fails). Also fetch `transit.release_package` from
    `PKGLIST(BASE)` if the sync didn't.
-4. `rpm -e dnf` (the EL7 one), rebuild the database, and unpack every downloaded package into a staging dir.
+4. `rpm -e dnf` (the EL7 one) and rebuild the database. When `release` lists `gpgkeys`: `CHECKSIG` (see "Signed
+   packages") over every downloaded package. Nothing downloaded is unpacked or run before this check. Then unpack
+   every downloaded package into a staging dir.
 5. `rpm -e --nodeps --noscripts {remove}` (the old release package), then run the staged rpm through the staged
    `ld-linux-x86-64.so.2 --library-path <stage>/usr/lib64` with `-Uvh --nodeps --replacefiles --replacepkgs
    --oldpackage --nosignature --nodigest` over every downloaded package. Its exit code is ignored and its errors are
@@ -876,7 +908,9 @@ other brace syntax is touched, so `${...}` and `%{...}` pass through). Values fo
 
 - apt: `{mirror}` (archive or current, see `[releases]`), `{release}`.
 - rpm: `{release}`, `{major}`, `{shim}`, `{repofile}` (a yum repo file with one section `[<release>-<name>]` per repo,
-  `baseurl=SHIM/<repo>/`, `gpgcheck=0`, newlines as `\n` for printf), `{addons}` (the shell that appends each installed
+  `baseurl=SHIM/<repo>/`, `gpgcheck=1` and `gpgkey=` for a release with `gpgkeys`, else `gpgcheck=0`, newlines as
+  `\n` for printf), `{keys}` (the shell that writes the adapter's `[keys]` to `/etc/wend/keys/`; `true` if it has
+  none), `{addons}` (the shell that appends each installed
   add-on's repo for the release to `/etc/yum.repos.d/ladder.repo`; `true` if none has one), `{pm}` (`dnf` if installed, else `yum`),
   `{clean_repos}` (`CLEAN_REPOS`), `{dnf_opts}` (`--releasever={major} --allowerasing
   --setopt=install_weak_deps=False --setopt=protected_packages=`).
@@ -1753,7 +1787,8 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
     - **Order of work.** Done: the harness and the client record `sources`, the client walks through a verifying
       cache (`wend walk --run`, with `--source` and `--offline`), and refuses an unpinned walk unless `--live`. Next:
       CI uploads the download list, then the archive (wend#19). Until runs carry `sources`, integrity rests on TLS to the
-      mirrors and the shim's cache: EL repos run with `gpgcheck=0` (CentOS 5's keys can't check what comes later), and the shim
+      mirrors and the shim's cache: EL releases from AlmaLinux 8 on, and EPEL for them, check signatures ("Signed
+      packages"); older EL releases run with `gpgcheck=0` (CentOS 5's keys can't check what comes later), and the shim
       keeps only complete downloads and checks hash-named metadata against its name.
 13. **A machine the route can't carry in place.** Some machines can't take a route on their own disk: CentOS 7
     installed from 7.0 to 7.2 media has XFS v4 everywhere, which AlmaLinux 10's kernel can't mount and nothing

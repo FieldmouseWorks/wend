@@ -58,7 +58,9 @@ def ere(name):
 
 
 def printf(content, path):
-    return "printf '" + content.replace("\\", "\\\\").replace("\n", "\\n") + f"' > {path}"
+    """Shell that writes content to path. The content goes through %b, never as the format itself, so content that
+    starts with "-" (an armoured key) isn't read as an option, and % is literal. Only \\ and \\n are escapes in it."""
+    return "printf '%b' '" + content.replace("\\", "\\\\").replace("\n", "\\n") + f"' > {path}"
 
 
 class Apt:
@@ -154,9 +156,32 @@ NAMES = "awk '{sub(/-[^-]*-[^-]*$/, \"\"); print}'"
 SOURCES = "/var/lib/wend/sources"  # <hop>/<repo id>.repomd.xml: metadata an op fetched through repos the hop then drops
 
 
+KEYS = "/etc/wend/keys"  # SPEC "Signed packages": the adapter's [keys], written there by every hop's {keys}
+
+
+def gpg(names):
+    """A repo section's signature lines: gpgcheck=1 against the named keys, or gpgcheck=0 when it names none."""
+    return f"gpgcheck=1\ngpgkey={' '.join(f'file://{KEYS}/{k}' for k in names)}\n" if names else "gpgcheck=0\n"
+
+
+def write_keys(adapter):
+    """Shell that writes every key in the adapter's [keys] under KEYS ("true" if it has none)."""
+    ks = adapter.get("keys", {})
+    return " && ".join([f"mkdir -p {KEYS}"] + [printf(a, f"{KEYS}/{n}") for n, a in ks.items()]) if ks else "true"
+
+
+def drop_keys(adapter, release):
+    """Shell that removes the gpg-pubkey entries the release lists in drop_keys from the rpm database, those the box
+    has ("true" if it lists none)."""
+    drop = adapter["releases"][release].get("drop_keys", [])
+    return (f"{{ _wd=$(for _wk in {' '.join(drop)}; do rpm -q gpg-pubkey-$_wk >/dev/null 2>&1 && echo gpg-pubkey-$_wk; "
+            'done); [ -z "$_wd" ] || rpm -e --allmatches $_wd; }') if drop else "true"
+
+
 def repo_file(adapter, release, shim):
-    return "".join(f"[{release}-{n}]\nname={release}-{n}\nbaseurl={shim}/{u}/\ngpgcheck=0\nenabled=1\n\n"
-                   for n, u in adapter["releases"][release]["repos"].items())
+    r = adapter["releases"][release]
+    return "".join(f"[{release}-{n}]\nname={release}-{n}\nbaseurl={shim}/{u}/\n{gpg(r.get('gpgkeys', []))}enabled=1\n\n"
+                   for n, u in r["repos"].items())
 
 
 def addon_repos(adapter, release, shim, file):
@@ -166,7 +191,9 @@ def addon_repos(adapter, release, shim, file):
     for n, a in adapter.get("addons", {}).items():
         if release in a["repos"]:
             rid = f"{release}-{n}"
-            body = f"[{rid}]\\nname={rid}\\nbaseurl={shim}/{a['repos'][release]}/\\ngpgcheck=0\\nenabled=1\\n\\n"
+            k = [a["gpgkeys"][release]] if release in a.get("gpgkeys", {}) else []
+            body = f"[{rid}]\\nname={rid}\\nbaseurl={shim}/{a['repos'][release]}/\\n" + \
+                gpg(k).replace("\n", "\\n") + "enabled=1\\n\\n"
             out.append(f"if rpm -q {a['marker']} >/dev/null 2>&1; then printf '{body}' >> {file}; fi")
     return " && ".join(out)  # each `if` is true when its marker is absent
 
@@ -199,6 +226,66 @@ def package_names(base, out):
             f"grep -o '<name>[^<]*</name>' {out}.x | sed 's/<[^>]*>//g' > {out}.one && test -s {out}.one && "
             f"cat {out}.one >> {out} && rm -f {out}.z {out}.x {out}.one || "
             f"{{ echo 'no package list from {base}'; exit 1; }}")
+
+
+# From od's bytes after an RPM's 96-byte lead: "<tag 1002 offset> <length> <tag 268 offset> <length> <main header
+# offset>", a length 0 for a signature that isn't there; nothing if it isn't an RPM. 1002 signs the main header and
+# the payload, 268 the main header only.
+RPM_SIG = ("function be(p) { return ((b[p] * 256 + b[p + 1]) * 256 + b[p + 2]) * 256 + b[p + 3] } "
+           "{ for (i = 1; i <= NF; i++) b[n++] = $i } "
+           "END { if (n < 16 || b[0] != 142 || b[1] != 173 || b[2] != 232) exit; il = be(8); s = 16 + 16 * il; "
+           "o = c = p = d = 0; for (e = 0; e < il; e++) { t = be(16 + 16 * e); "
+           "if (t == 1002) { o = be(24 + 16 * e); c = be(28 + 16 * e) } if (t == 268) { p = be(24 + 16 * e); d = be(28 + 16 * e) } } "
+           "x = 96 + s + be(12); x += (8 - x % 8) % 8; print 96 + s + o, c, 96 + s + p, d, x }")
+# From od's bytes of an RPM's main header: "<payload digest algorithm> <hex digest>" (tags 5093 and 5092), or nothing
+RPM_PAYLOAD = ("function be(p) { return ((b[p] * 256 + b[p + 1]) * 256 + b[p + 2]) * 256 + b[p + 3] } "
+               "{ for (i = 1; i <= NF; i++) b[n++] = $i } "
+               "END { if (n < 16 || b[0] != 142 || b[1] != 173 || b[2] != 232) exit; il = be(8); s = 16 + 16 * il; "
+               "a = h = -1; for (e = 0; e < il; e++) { t = be(16 + 16 * e); if (t == 5093) a = be(s + be(24 + 16 * e)); "
+               "if (t == 5092) h = s + be(24 + 16 * e) } if (a < 0 || h < 0) exit; "
+               "for (q = h; q < n && b[q] != 0; q++) { v = b[q]; if (v < 48 || v > 102 || (v > 57 && v < 97)) exit; "
+               "x = x sprintf(\"%c\", v) } print a, x }")
+
+
+def checksig(adapter, release, k, files):
+    """SPEC "Signed packages": shell that checks files (RPMs fetched outside the package manager, or by one that can't
+    check them) against the release's keys and its add-ons', and refuses any not signed by them. "" when the release
+    names no keys. gpgv checks the signatures, not rpm: EL7's rpm 4.11 can't use signing subkeys, which AlmaLinux 8
+    signs with, and gpgv works the same on every release. A header+payload signature (1002) covers everything; a
+    header-only one (268, newer EPEL builds) covers the header, whose sha256 payload digest (5092) then covers the
+    payload. Its variables all start with _w, so it leaves the caller's ($f, $r, ...) alone."""
+    keys = adapter["releases"][release].get("gpgkeys", [])
+    if not keys:
+        return ""
+    keys = keys + [a["gpgkeys"][release] for a in adapter.get("addons", {}).values() if release in a.get("gpgkeys", {})]
+    v = f"\"$_wv\" --homedir {k} --keyring {k}/ring {k}/sig"
+    return (f"rm -rf {k}; mkdir -m 700 -p {k}; _wg=$(command -v gpg2 || command -v gpg); "
+            "_wv=$(command -v gpgv2 || command -v gpgv); "
+            "[ -n \"$_wg\" ] && [ -n \"$_wv\" ] || { echo 'refusing: no gpg and gpgv to check signatures with'; exit 1; }; "
+            # one key block per file (AlmaLinux 8's holds two), each into a binary keyring; one that won't read refuses
+            f"awk '/BEGIN PGP/ {{n++}} {{print > (\"{k}/key.\" n)}}' " + " ".join(f"{KEYS}/{n}" for n in keys) + "; "
+            f"for _wk in {k}/key.*; do \"$_wg\" --homedir {k} --batch --dearmor < $_wk >> {k}/ring || "
+            "{ echo \"refusing: can't read key $_wk\"; exit 1; }; done; "
+            f"_wbad=; for _wr in {files}; do _ws=$(od -An -v -tu1 -j96 -N65536 $_wr 2>/dev/null | awk '{RPM_SIG}'); "
+            "_wok=; if [ -n \"$_ws\" ]; then set -- $_ws; "
+            f"if [ $2 -gt 0 ]; then tail -c +$(($1 + 1)) $_wr | head -c $2 > {k}/sig && "
+            f"tail -c +$(($5 + 1)) $_wr > {k}/data && {v} {k}/data >/dev/null 2>&1 && _wok=1; "
+            f"elif [ $4 -gt 0 ]; then _wx=$5; tail -c +$(($3 + 1)) $_wr | head -c $4 > {k}/sig && "
+            f"_wl=$(od -An -v -tu1 -j$((_wx + 8)) -N8 $_wr | awk '{{print 16 + 16 * ((($1 * 256 + $2) * 256 + $3) * 256 + $4) "
+            "+ (($5 * 256 + $6) * 256 + $7) * 256 + $8}') && "
+            f"tail -c +$((_wx + 1)) $_wr | head -c $_wl > {k}/hdr && {v} {k}/hdr >/dev/null 2>&1 && "
+            f"_wd=$(od -An -v -tu1 {k}/hdr | awk '{RPM_PAYLOAD}') && [ \"${{_wd%% *}}\" = 8 ] && "
+            f"[ \"$(tail -c +$((_wx + _wl + 1)) $_wr | sha256sum | cut -d' ' -f1)\" = \"${{_wd#* }}\" ] && _wok=1; fi; fi; "
+            "[ -n \"$_wok\" ] || _wbad=\"$_wbad $_wr\"; done; "
+            f"rm -f {k}/data {k}/hdr; [ -z \"$_wbad\" ] || {{ echo \"refusing, not signed by the release's keys:\"; "
+            "printf '%s\\n' $_wbad | head -n 20; exit 1; }")
+
+
+def transit_checksig(adapter, release, b):
+    """rpm.transit downloads with EL7's dnf, which can't check these signatures (--nogpgcheck): check every
+    downloaded package before any is unpacked or run. No step when the release names no keys."""
+    c = checksig(adapter, release, f"{b}/keydb", "*.rpm")
+    return [c] if c else []
 
 
 def bootstrap_pins(adapter, release):
@@ -266,7 +353,7 @@ class Rpm:
         return {"release": release, "major": r["major"], "shim": shim,
                 "repofile": repo_file(adapter, release, shim).replace("\n", "\\n"),
                 "addons": addon_repos(adapter, release, shim, "/etc/yum.repos.d/ladder.repo") or "true",
-                "pm": "$(command -v dnf || command -v yum)", "clean_repos": CLEAN_REPOS,
+                "pm": "$(command -v dnf || command -v yum)", "clean_repos": CLEAN_REPOS, "keys": write_keys(adapter), "drop_keys": drop_keys(adapter, release),
                 "dnf_opts": f"--releasever={r['major']} --allowerasing --setopt=install_weak_deps=False "
                             "--setopt=protected_packages="}
 
@@ -307,13 +394,15 @@ class Rpm:
 
     def op_rpm_swap_release(self, s, adapter, release, v, rel):
         """Replace the release package by hand. EL5's centos-release has epoch 10, so yum won't "upgrade" it to EL6's
-        epoch-0 one, and a vendor switch (CentOS -> AlmaLinux) isn't an upgrade at all."""
+        epoch-0 one, and a vendor switch (CentOS -> AlmaLinux) isn't an upgrade at all. The package is fetched with
+        curl, so it is checked against the release's keys (when it names any) before the old one goes."""
         base = f"{v['shim']}/{next(iter(rel['repos'].values()))}"
         return (f"set -e; cd /tmp; {primary_list(base, '/tmp/wend-pkglist')}; "
                 f"f=$(grep -E '^{ere(s['install'])}-[0-9][^/]*(x86_64|noarch)\\.rpm$' /tmp/wend-pkglist | head -n1); "
                 f"test -n \"$f\"; curl -sf -o /tmp/$f {base}/Packages/$f; "
+                + "".join(f"{c}; " for c in [checksig(adapter, release, "/tmp/wend-keydb", "/tmp/$f")] if c) +
                 f"rpm -e --nodeps --noscripts {s['remove']}; rpm -ivh --nodeps --noscripts /tmp/$f; "
-                f"rm -f /tmp/$f /tmp/wend-pkglist; {CLEAN_REPOS}")
+                f"rm -rf /tmp/$f /tmp/wend-pkglist /tmp/wend-keydb; {CLEAN_REPOS}")
 
     def op_rpm_drop_unneeded(self, s, adapter, release, v, rel):
         """Remove these packages, together, only if nothing else installed still requires them; otherwise keep them
@@ -419,7 +508,7 @@ class Rpm:
             f"yum -y --setopt=reposdir={b}/old install dnf",
             # EL7's dnf 4.0 has no --nobest. rc ignored, as in the lab: what matters is that the new rpm, glibc and
             # dnf were fetched (checked next)
-            f"dnf -y {o} --setopt=best=False --setopt=deltarpm=false --downloadonly --destdir={b}/pkgs distro-sync "
+            f"dnf -y {o} --setopt=best=False --setopt=deltarpm=false --nogpgcheck --downloadonly --destdir={b}/pkgs distro-sync "
             f"> {b}/dl.log 2>&1 || tail -n 20 {b}/dl.log",
             f"cd {b}/pkgs; for n in rpm rpm-libs glibc dnf python3-dnf; do ls | grep -qE \"^$n-[0-9]\" || "
             "{ echo \"not downloaded: $n\"; exit 1; }; done",
@@ -429,6 +518,7 @@ class Rpm:
             f"ls | grep -qE '^{boot['release_package']}-' || {{ {primary_list(base, f'{b}/list')}; "
             f"f=$(grep -E '^{boot['release_package']}-{t['major']}[^/]*x86_64\\.rpm$' {b}/list | sort -V | tail -n1); "
             f"test -n \"$f\"; curl -sf -o {b}/pkgs/$f {base}/Packages/$f; }}",
+            *transit_checksig(adapter, target, b),
             f"for r in *.rpm; do rpm2cpio $r | (cd {b}/stage && cpio -idmu --quiet 2>/dev/null) || {{ echo EXTRACTFAIL $r; exit 1; }}; done",
             f"{ld} {rpmS} --version",
             f"rpm -e --nodeps --noscripts {s['remove']}",
