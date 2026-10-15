@@ -3,11 +3,14 @@ EPEL 10 only as .zst, while the EL repos still have .gz. Covers backends.primary
 sandbox's bootstrap depsolver and shelter's repo reader use) and rpm.transit's on-box add-on package list
 (backends.package_names), run in sh against file:// repos made from the client's EPEL fixtures (client/testdata). It
 runs the PR's own tools, so the gate's schema job (which judges a PR with the base branch's tools and never runs the
-PR's code) doesn't run it: `wend check` and the client job do. Needs xz and zstd.
+PR's code) doesn't run it: `wend check` and the client job do. A host without the xz or zstd command (neither is in
+AGENTS.md's requirements) skips what needs it and says so; the client job sets WEND_ALL_DECODERS=1, so there a missing
+one fails instead.
 python3 tools/test_primary.py"""
 import gzip
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -18,6 +21,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import backends  # noqa: E402
 
 FIX = os.path.join(ROOT, "client", "testdata")
+STRICT = os.environ.get("WEND_ALL_DECODERS") == "1"
 bad = 0
 
 
@@ -25,6 +29,23 @@ def check(name, ok):
     global bad
     print(("ok   " if ok else "FAIL ") + name)
     bad += not ok
+
+
+def have(tool, pymod=None):
+    """Whether this host can decode with tool (or, for unpack, Python's own pymod), skipping loudly if not."""
+    if shutil.which(tool):
+        return True
+    if pymod:
+        try:
+            __import__(pymod)
+            return True
+        except ImportError:
+            pass
+    if STRICT:
+        check(f"{tool} is installed (WEND_ALL_DECODERS=1)", False)
+    else:
+        print(f"skip {tool} isn't installed here, so what needs it isn't checked")
+    return False
 
 
 def repomd(href, data):
@@ -37,11 +58,12 @@ def repomd(href, data):
 
 
 xml9 = backends.unpack("x.xz", open(os.path.join(FIX, "epel9-primary.xml.xz"), "rb").read())
-xml10 = backends.unpack("x.zst", open(os.path.join(FIX, "epel10-primary.xml.zst"), "rb").read())
 check("EPEL 9's .xz primary unpacks to its two packages",
       xml9.count(b"<package ") == 2 and b"3cpio-0.14.0-1.el9.x86_64.rpm" in xml9)
-check("EPEL 10's .zst primary unpacks to its two packages",
-      xml10.count(b"<package ") == 2 and b"3proxy-1.0.0-1.el10_3.x86_64.rpm" in xml10)
+if have("zstd", "compression.zstd"):
+    xml10 = backends.unpack("x.zst", open(os.path.join(FIX, "epel10-primary.xml.zst"), "rb").read())
+    check("EPEL 10's .zst primary unpacks to its two packages",
+          xml10.count(b"<package ") == 2 and b"3proxy-1.0.0-1.el10_3.x86_64.rpm" in xml10)
 check("a .gz unpacks as before", backends.unpack("x.gz", gzip.compress(xml9)) == xml9)
 check("an uncompressed file is as it is", backends.unpack("primary.xml", xml9) == xml9)
 try:
@@ -62,6 +84,8 @@ with tempfile.TemporaryDirectory() as tmp:
         open(f"{repo}/repodata/repomd.xml", "w").write(repomd(href, data))
         check(f"primary_href finds the .{label} primary, not the sqlite",
               backends.primary_href(open(f"{repo}/repodata/repomd.xml").read()) == href)
+        if not have({"gz": "gzip", "xz": "xz", "zst": "zstd"}[label]):
+            continue
         open(out, "w").close()
         p = subprocess.run(["sh", "-c", backends.package_names(f"file://{repo}", out)], capture_output=True, text=True)
         names = open(out).read().split()
