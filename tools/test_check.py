@@ -672,4 +672,64 @@ _ok = (_vm.net_read(_G(_with, "podman1 10.90.0.1 \n"), {"billing": {}}) == _star
        _vm.net_read(_G(_with, ""), {"billing": {}}) != _start and _vm.net_read(_G(_with, "podman1 10.90.0.1"), {}) != _start)
 print(("passed  " if _ok else "WRONG   ") + "the network comparison drops the shelter's own bridge and nothing else")
 bad += not _ok
+
+# the leapp-data extract (SPEC "Package evolution data"): the pinned bytes, parsed strictly, or check refuses it
+import hashlib as _hl  # noqa: E402
+import json as _js  # noqa: E402
+import shutil as _sh  # noqa: E402
+import tempfile as _tf  # noqa: E402
+
+_t = _tf.mkdtemp()
+_sh.copytree(os.path.join(check.ROOT, "adapters", "leapp"), os.path.join(_t, "adapters", "leapp"))
+_d = os.path.join(_t, "adapters", "leapp", "el")
+_man, _ext = open(os.path.join(_d, "manifest.toml")).read(), open(os.path.join(_d, "almalinux.jsonl")).read()
+_ok = check.pes_errors(_t) == []
+print(("passed  " if _ok else f"WRONG   {check.pes_errors(_t)[:2]} ") + "the committed leapp-data extract is the pinned one")
+bad += not _ok
+
+
+def _pes_case(name, man=None, ext=None, extra=None, repin=True):
+    """Write a tampered manifest or extract (repinned to its new sha256 unless repin is False), check, restore."""
+    global bad
+    if ext is not None:
+        open(os.path.join(_d, "almalinux.jsonl"), "w").write(ext)
+        if repin:
+            old = "sha256:" + _hl.sha256(_ext.encode()).hexdigest()
+            man = (man or _man).replace(old, "sha256:" + _hl.sha256(ext.encode()).hexdigest())
+    if man is not None:
+        open(os.path.join(_d, "manifest.toml"), "w").write(man)
+    if extra:
+        open(os.path.join(_d, "extra.jsonl"), "w").write(_ext)
+    errs = check.pes_errors(_t)
+    print(("refused " if errs else "MISSED  ") + name + (f"  ({errs[0][:110]})" if errs else ""))
+    bad += not errs
+    open(os.path.join(_d, "manifest.toml"), "w").write(_man)
+    open(os.path.join(_d, "almalinux.jsonl"), "w").write(_ext)
+    if extra:
+        os.unlink(os.path.join(_d, "extra.jsonl"))
+
+
+_lines = _ext.splitlines(keepends=True)
+_ev = _js.loads(_lines[1])
+
+
+def _with(**kw):
+    return "".join([_lines[0], _js.dumps(_ev | kw, sort_keys=True, separators=(",", ":")) + "\n", *_lines[2:]])
+
+
+_pes_case("a leapp-data extract edited to hide a gap, not repinned", ext=_ext.replace(_lines[1], ""), repin=False)
+_pes_case("a leapp-data pin moved to a branch name", man=_man.replace(_js.loads(_lines[0])["commit"], "main"))
+_pes_case("a leapp-data extract whose header names another commit than the manifest",
+          man=_man.replace(_js.loads(_lines[0])["commit"], "f" * 40))
+_pes_case("a shell command as a leapp-data package name, repinned",
+          ext=_with(**{"in": [{"name": "x; rm -rf /", "repo": "base"}]}))
+_pes_case("a URL as a leapp-data repo, repinned", ext=_with(out=[{"name": "x", "repo": "https://evil/repo"}]))
+_pes_case("an unknown key in a leapp-data event, repinned", ext=_with(run="sh"))
+_pes_case("an unknown leapp-data action, repinned", ext=_with(action="install"))
+_pes_case("a leapp-data package set past its size cap, repinned",
+          ext=_with(out=[{"name": f"p{i}", "repo": "base"} for i in range(300)]))
+_pes_case("a leapp-data extract in the directory but not pinned", extra=True)
+_pes_case("a leapp-data source dropped from the manifest and the directory",
+          man=_man[:_man.index("[files.epel]")], ext=None)
+_sh.rmtree(_t)
 sys.exit(1 if bad else 0)

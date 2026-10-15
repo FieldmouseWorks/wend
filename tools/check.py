@@ -240,6 +240,55 @@ def driver_table_errors(fam, a, where):
     return errs
 
 
+def pes_errors(root=None):
+    """SPEC "Package evolution data": each family's leapp-data extract is the pinned one and parses strictly."""
+    import leappdata
+    root = root or ROOT
+    errs = [f"adapters/leapp/{fam}/manifest.toml: missing" for fam in leappdata.FAMILIES
+            if not os.path.isfile(f"{root}/adapters/leapp/{fam}/manifest.toml")]
+    for d in sorted(glob.glob(f"{root}/adapters/leapp/*/")):
+        fam = os.path.basename(d.rstrip("/"))
+        where = f"adapters/leapp/{fam}/manifest.toml"
+        try:
+            m = tomllib.load(open(f"{d}manifest.toml", "rb"))
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            errs.append(f"{where}: unreadable ({e})")
+            continue
+        files = m.get("files")
+        if not (set(m) == {"upstream", "commit", "files"} and m["upstream"] == leappdata.UPSTREAM
+                and isinstance(m["commit"], str) and re.fullmatch(r"[0-9a-f]{40}", m["commit"])
+                and isinstance(files, dict) and set(files) == set(leappdata.SOURCES)):
+            errs.append(f"{where}: must name leapp-data's upstream, a full commit id and [files.<source>] for every "
+                        f"source, {sorted(leappdata.SOURCES)}")
+            continue
+        extra = {os.path.basename(p)[:-len(".jsonl")] for p in glob.glob(f"{d}*.jsonl")} - set(files)
+        if extra:
+            errs.append(f"{where}: {sorted(extra)} are in the directory but not pinned")
+        for s, f in files.items():
+            sha = re.compile(r"sha256:[0-9a-f]{64}")
+            if not (isinstance(f, dict) and set(f) == {"path", "upstream_sha256", "sha256"}
+                    and f["path"] == leappdata.SOURCES[s] and all(isinstance(f[k], str) and sha.fullmatch(f[k])
+                                                                  for k in ("upstream_sha256", "sha256"))):
+                errs.append(f"{where}: files.{s} must be path, upstream_sha256 and sha256 (sha256:<64 hex>)")
+                continue
+            p = f"{d}{s}.jsonl"
+            raw = open(p, "rb").read() if os.path.isfile(p) else None
+            got = None if raw is None else "sha256:" + hashlib.sha256(raw).hexdigest()
+            if got != f["sha256"]:
+                errs.append(f"{where}: files.{s}: adapters/leapp/{fam}/{s}.jsonl "
+                            f"{'is missing' if got is None else 'has sha256 ' + got[7:19] + '...'}, not the pinned one")
+                continue
+            try:
+                head, _ = leappdata.parse(raw.decode(), f"adapters/leapp/{fam}/{s}.jsonl")
+            except (ValueError, UnicodeDecodeError) as e:
+                errs.append(str(e))
+                continue
+            if (head["commit"], head["source"], "sha256:" + head["sha256"]) != (m["commit"], s, f["upstream_sha256"]):
+                errs.append(f"adapters/leapp/{fam}/{s}.jsonl: its header names another commit, source or upstream "
+                            f"sha256 than {where}")
+    return errs
+
+
 def check_when(w, adapter, where, errs):
     if not isinstance(w, dict) or len(w) != 1:
         return errs.append(f"{where}: a predicate is a table with exactly one key, got {w!r}")
@@ -723,6 +772,7 @@ def main(argv):
     for fam, a in adapters.items():
         errs += check_adapter(a, f"adapters/{fam}.toml")
         errs += driver_table_errors(fam, a, f"adapters/{fam}.toml")
+    errs += pes_errors()
     by_id = {}
     for p, d in fixes.items():
         rel = os.path.relpath(p, ROOT)

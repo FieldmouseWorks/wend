@@ -8,6 +8,9 @@
   ./wend discover FAMILY FROM TO BOX        walk FROM->TO on BOX; a model fills in hops that break   (root, WEND_MODEL)
   ./wend report RUN.json [--redact WORD]    a route broke and you won't fix it yourself: build a scrubbed gap report,
                                             show it, print a prefilled issue link. Sends nothing.
+  ./wend gaps ROUTE BOX | --packages FILE | --all
+                                            what AlmaLinux's leapp-data says changes on the box at each hop that no
+                                            fix in the route names. Report only (tools/pesgaps.py)   (root, but not --packages)
   ./wend verify [--base REF | --all]        exactly what CI runs: check, replay what changed where it starts, decoys
                                             writes .wend/pr-evidence.md for the PR body                 (root)
 
@@ -263,7 +266,8 @@ def main(argv):
         k = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_kernels_apt.py"]).returncode
         e = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_esm_pins.py"]).returncode
         r = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_relocate.py"]).returncode
-        return a or b or u or g or n or i or k or e or r
+        p = 0 if rest else subprocess.run([sys.executable, "-B", f"{ROOT}/tools/test_pesgaps.py"]).returncode
+        return a or b or u or g or n or i or k or e or r or p
     if c == "list":
         return cmd_list()
     if c == "replay":
@@ -273,6 +277,11 @@ def main(argv):
     if c == "report":
         import report
         return report.main(rest[0], [rest[i + 1] for i, x in enumerate(rest) if x == "--redact"])
+    if c == "gaps":
+        import pesgaps
+        if "--packages" not in rest:
+            need_root(["el"])
+        return pesgaps.main(Repo(), rest)
     if c == "verify":
         return cmd_verify(opt("--base"), "--all" in rest, int(opt("--jobs", 2)))
     print(__doc__)

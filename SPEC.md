@@ -1141,6 +1141,38 @@ script of its own; a Python 2 an add-on repository ships (EPEL's `python26` on E
 owner's own code (an rpm or deb the owner built counts as the distro's); a Python 2 built from source, whose shared
 libraries the hop may take away even though its files stay; and runtimes other than Python 2 (PHP 5, Java 6).
 
+## Package evolution data (leapp-data)
+
+AlmaLinux's [leapp-data](https://github.com/AlmaLinux/leapp-data) (Apache-2.0) is the data ELevate's Leapp reads.
+Its Package Evolution Service events say, for about 18,000 EL packages, which ones are removed, renamed, replaced,
+split, merged, moved to another repo or deprecated at each release from CentOS 7 to AlmaLinux 10, plus EPEL's in its
+vendor data. That is far more coverage than wend's routes have. It knows nothing about whether a machine's services
+still work afterwards, which is what wend's checks are for. So wend reads it as one input to a report and nothing
+more: it never picks, changes, gates or refuses a route, and nothing in it becomes an op, a package name in a shell
+command or a URL to fetch.
+
+**Pinned, never fetched.** `adapters/leapp/el/` holds an extract of two leapp-data files at one commit
+(`files/almalinux/pes-events.json`, `vendors.d/epel_pes.json_template`): the x86_64 events that change something and
+name real package names, one per line, behind a header naming the commit, the file and its sha256. `manifest.toml`
+pins the commit and, per file, the upstream file's sha256 and the extract's. `wend check` refuses an extract that
+isn't the pinned one, a header that disagrees with the manifest, or an extract outside its strict schema (exact keys,
+known actions, package names as in "Preconditions", repo ids and module streams by pattern, capped sizes). It lives
+under `adapters/`, so the gate judges every PR by the base branch's copy. `tools/leappdata.py COMMIT` is the only
+way to refresh it: a maintainer PR, with the changed events (the tool prints them) in its body. No bot bumps it. (The Rust client's `wend check` doesn't read leapp-data and doesn't check it yet.)
+`tools/leappdata.py --check` downloads the pinned files again and confirms the extract rebuilds byte for byte. The
+attribution is in `adapters/leapp/NOTICE` and the license in `adapters/leapp/LICENSE`.
+
+**The gap check.** `wend gaps ROUTE BOX` (or `--packages FILE` for a real machine's `rpm -qa --qf '%{NAME}\n'`, or
+`--all`) walks the route as a model: from the box's packages and enabled module streams it applies, hop by hop, the
+events between the two releases, in release order, and the package steps of the route's fixes for that hop whose
+`installed` preconditions hold. An event applies when the box has every package it starts from in a matching stream
+(`merged`: any of them). A package goes when an event doesn't carry its name on, or carries it to a repo the route
+doesn't enable (CRB, PowerTools). Per hop it lists the box's own packages that go (box.toml's `packages`), with what
+leapp-data says each becomes and the route's fixes for that hop whose steps name it or its successor; then, in one
+line, the dependencies that go; then what is deprecated there. A package with no fix naming it is a lead for a route
+author, not a verdict: the replay and the box's checks decide. Hops before EL7 aren't checked, since leapp-data starts
+at EL7. Whether it should ever stop a preflight is open question 14.
+
 ## Sheltering an app (draft: chroot tier built)
 
 This section designs the **shelter** choice that runtime preflight offers. The chroot (CI) tier is built in the
@@ -1719,3 +1751,8 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
     root onto a fresh filesystem, flip the boot with a one-shot trial, keep the old root as rollback, then walk the
     existing route), with state movers for a fresh target root second. Design in `docs/rebuild-and-carry.md`; each
     piece moves into this document in the PR that builds it.
+14. **leapp-data as a gate.** `wend gaps` only reports ("Package evolution data"). Should a client's preflight warn, or
+    refuse, when one of a machine's own packages goes at a hop and no fix names it? And should route authors' PRs
+    show the report beside the replay? Not decided; the data is advisory until then. Its driver deprecation data and
+    repo maps aren't used: wend's driver tables come from the kernels themselves ("Hardware preflight"), and the
+    route's own repo lists say which repos it enables.
