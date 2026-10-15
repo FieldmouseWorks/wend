@@ -11,7 +11,9 @@ publish = false
 [dependencies]
 flate2 = "1"
 libc = "0.2.190"
+lzma-rs = "0.3"
 regex = "1"
+ruzstd = "0.8"
 serde_json = { version = "1", features = ["preserve_order"] }
 sha1 = "0.10"
 sha2 = "0.10"
