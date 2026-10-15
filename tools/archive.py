@@ -514,24 +514,25 @@ class Store:
         meta.append((url, f"sha256:{h}"))
         try:
             listed = children(url, data)
-        except ValueError as e:
-            self.unreadable.append((url, str(e)))
+        except ValueError as e:  # a gap, not a failure: unreadable fails an ingest only for what runs pin
             return {}, f"{url}: {e}"
         rank = lambda c: next((i for i, ext in enumerate((".gz", ".xz", ".zst")) if c[0].endswith(ext)), 9)
+        why = f"no readable primary under {url}"
         for child, cd in sorted((c for c in listed if PACKAGE_INDEX.search(c[0])), key=rank):
-            primary, _ = self.get(child, cd)
+            primary, err = self.get(child, cd)
             if primary is None:
+                why = f"{child}: {err}"
                 continue
             try:
                 entries = children(child, primary)
             except ValueError as e:  # a .zst with no decoder here: try the next form
-                self.unreadable.append((child, str(e)))
+                why = f"{child}: {e}"
                 continue
             h = self.keep(child, primary)
             self.alias(cd, h)
             meta.append((child, f"sha256:{h}"))
             return {u.rsplit("/", 1)[1]: [(u, d)] for u, d in entries}, ""
-        return {}, f"no readable primary under {url}"
+        return {}, why
 
     def deb_lookup(self, mirror, suite, wanted, meta):
         """A function from a package's what to its source files, reading the Sources indexes the pinned Releases list:
@@ -551,8 +552,7 @@ class Store:
                     continue
                 try:
                     entries = sources_entries(decompress(u, data).decode("utf-8", "replace"))
-                except Exception as e:
-                    self.unreadable.append((u, str(e)))
+                except Exception:  # try another form; its packages are gaps if none reads
                     continue
                 h = self.keep(u, data)
                 self.alias(d, h)

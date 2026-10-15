@@ -268,6 +268,17 @@ check("missing" in src("https://pkgs.example.org/p-1.rpm")[0] and "no source htt
       "a package a run pins directly is a listed gap, not silently sourceless")
 check(any(e.get("live") for e in json.load(open(f"{w}/store3/index/latest.json"))["files"][
     f"https://{el}/Source/repodata/repomd.xml"].values()), "a source repo's repomd.xml, pinned by no run, is marked live")
+# a source repo whose only primary is in a form nothing reads: its packages are gaps, and the ingest still passes
+shutil.rmtree(f"{w}/tree/{el}/Source/repodata")
+zck = b"(zchunk primary)"
+put(f"{el}/Source/repodata/repomd.xml", (f'<repomd><data type="primary"><checksum type="sha256">{sha(zck)}</checksum>'
+                                         f'<location href="repodata/primary.xml.zck"/></data></repomd>').encode())
+put(f"{el}/Source/repodata/primary.xml.zck", zck)
+p = subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", "ingest", f"{w}/store6", "--offline", "--tree",
+                    f"{w}/tree", "--runs", f"{w}/runs3", "--fetched", f"{w}/fetched3"], capture_output=True, text=True)
+check(p.returncode == 0 and "unreadable" not in p.stdout and
+      f"no source https://{el}/x86_64/Packages/t-1.rpm" in p.stdout,
+      "unreadable source metadata leaves gaps, never a failed ingest")
 import shutil as sh  # noqa: E402
 if sh.which("zstd"):  # EPEL 10 serves its primary only as .zst; CI's runners have zstd, not every laptop does
     sys.path.insert(0, HERE)
