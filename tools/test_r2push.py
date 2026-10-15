@@ -43,11 +43,11 @@ class S3(http.server.BaseHTTPRequestHandler):
         key = self.path.split("/", 2)[2]
         ok = (hashlib.sha256(body).hexdigest() == self.headers["x-amz-content-sha256"] and
               self.headers["Authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKID/") and key not in fail)
+        if ok:  # before the reply, so the push can't return ahead of the record
+            got.append((key, body))
         self.send_response(200 if ok else 400)
         self.send_header("Content-Length", "0")
         self.end_headers()
-        if ok:
-            got.append((key, body))
 
     def log_message(self, *a):
         pass
@@ -90,6 +90,11 @@ check(all(body == files[k] for k, body in got), "each file lands byte for byte")
 got.clear()
 r2push.push(store, bucket)
 check([k for k, _ in got] == ["index/latest.json"], "a second push sends only latest.json")
+open(f"{store}/index/20261015-000000.json", "wb").write(b'{"rewritten": 1}')
+got.clear()
+r2push.push(store, bucket)
+check([k for k, _ in got] == ["index/20261015-000000.json", "index/latest.json"],
+      "a stamped index rewritten in place (two ingests in one second) goes up again")
 os.makedirs(f"{store}/blob/sha256/12")
 open(f"{store}/blob/sha256/12/" + "12" * 32, "wb").write(b"new")
 fail.add("blob/sha256/12/" + "12" * 32)

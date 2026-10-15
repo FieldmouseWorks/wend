@@ -5,7 +5,8 @@
 STORE is what tools/archive.py ingest writes. Every blob and alias goes up first, then the stamped index, then
 index/latest.json, so the index R2 serves never names a blob R2 doesn't have. Each PUT carries the body's sha256 in
 x-amz-content-sha256, and R2 refuses a body that doesn't hash to it, so what lands is checked on the way in. What's
-already up is skipped: STORE/.pushed lists every key pushed (and a blob or alias never changes under its key). It
+already up is skipped: STORE/.pushed lists every key pushed (a blob or alias never changes under its key; a stamped
+index is listed with its sha256, so one rewritten in place goes up again). It
 holds the store's lock (STORE/.lock, the one ingest takes), so an ingest can't add blobs under an index mid-push.
 
 The endpoint is the account's S3 API endpoint (https://<account>.r2.cloudflarestorage.com). FILE holds two lines,
@@ -104,8 +105,17 @@ class Bucket:
             time.sleep(2 ** attempt)
 
 
+def mark(store, path):
+    """What .pushed records for a stamped index: its key and its sha256, so a rewritten one goes up again."""
+    return f"{os.path.relpath(path, store)}@{sha256_file(path)}"
+
+
+def key(entry):
+    return entry.partition("@")[0]
+
+
 def pending(store, pushed):
-    """(key, path, content type) still to push: blobs and aliases first, then the stamped indexes, then latest.json."""
+    """(.pushed entry, path, content type) still to push: blobs and aliases first, then the stamped indexes, then latest.json."""
     out = []
     for p in sorted(glob.glob(f"{store}/blob/sha256/*/*")):
         if ".tmp" not in os.path.basename(p):  # archive.py writes <blob>.tmp<pid>, then renames it
@@ -114,8 +124,9 @@ def pending(store, pushed):
         if ".tmp" not in os.path.basename(p):
             out.append((os.path.relpath(p, store), p, "text/plain"))
     out = [x for x in out if x[0] not in pushed]
+    # a stamped index is only seconds-unique (two ingests in one second rewrite it), so it's skipped by key and content
     stamped = sorted(p for p in glob.glob(f"{store}/index/*.json") if not p.endswith("/latest.json"))
-    out += [(os.path.relpath(p, store), p, "application/json") for p in stamped if os.path.relpath(p, store) not in pushed]
+    out += [(mark(store, p), p, "application/json") for p in stamped if mark(store, p) not in pushed]
     if os.path.exists(f"{store}/index/latest.json"):
         out.append(("index/latest.json", f"{store}/index/latest.json", "application/json"))  # always: it changes
     return out
@@ -129,10 +140,10 @@ def push(store, bucket):
     todo = pending(store, pushed)
     done = size = 0
     with open(f"{store}/.pushed", "a") as log:
-        for key, path, ctype in todo:
-            bucket.put(key, path, ctype)
-            if key != "index/latest.json":
-                log.write(key + "\n")
+        for entry, path, ctype in todo:
+            bucket.put(key(entry), path, ctype)
+            if entry != "index/latest.json":
+                log.write(entry + "\n")
                 log.flush()
             done += 1
             size += os.path.getsize(path)
