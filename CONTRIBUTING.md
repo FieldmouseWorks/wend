@@ -93,6 +93,22 @@ Only after every required check is green **and** the Claude review has signed of
 the same: a red check, an unresolved review finding, or no review at all means no merge. Nobody, human or bot, can
 push to `main` directly.
 
+## How runs land
+
+A run's `sources` pin the exact bytes a route installs, and the client trusts them (`wend walk --run`). Nobody can
+review a sha256 by eye, so `runs/` takes only what CI wrote. Each gate replay attests its `run.json` (GitHub artifact
+attestations, Sigstore). Once a PR's replays pass, whoever drives it downloads that gate run's artifacts and files
+them unchanged, in a commit on the same PR:
+
+```
+gh run download <gate run id> -R FieldmouseWorks/wend -D new-runs
+python3 tools/file_runs.py new-runs && rm -rf new-runs
+```
+
+The schema check runs `gh attestation verify` on every run file the PR adds or changes and refuses any that the gate
+didn't attest. A run file that only changes runs/ needs no new replay. Runs filed before this rule (their `runner` is
+`local`) are left as they are; new CI runs of the same routes replace them as evidence.
+
 ## What a good fix looks like
 
 - **Small.** One problem per fix. If you remove packages and then repair, keep both. The repair can be load-bearing.

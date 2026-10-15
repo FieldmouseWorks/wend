@@ -70,7 +70,7 @@ routes/<family>/<from>-to-<to>.toml
 boxes/<family>/<name>/box.toml            CI fixtures, trusted test code, never shipped
   debian/etch-web/  debian/etch-db/
   el/centos5-web/   el/centos5-dns/
-runs/<family>/<route>/<box>/<stamp>.json  written by CI only
+runs/<family>/<route>/<box>/<stamp>.json  written by CI only: the gate refuses a run it didn't attest
 tools/
   check.py           schema check, content ids, decoy check, --repin, --compile
   backends.py        what each typed op compiles to: apt (Debian) and rpm (EL)
