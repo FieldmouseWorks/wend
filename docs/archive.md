@@ -100,10 +100,17 @@ small. A blob a later run no longer references can be swept once there are numbe
 
 ## Size
 
-To be measured on remi before anything is built (the first numbers go here). Known so far: a cold `wend walk` of
-centos5-to-alma10 filled a 1.5 GB cache. Routes share most of their packages, so the merged routes and boxes should
-come to tens of GB, plus their source packages, which tend to be as big as the binaries again. R2 charges about
-$0.015 per GB-month past a free 10 GB, so even 200 GB costs a few dollars a month.
+Measured on remi, 2026-10-15. Its mirror shim cache holds everything every EL run there has fetched, old package
+versions and all: 7.9 GB in 4614 files (repo.almalinux.org 4.4 GB, vault.centos.org 3.3 GB, dl.fedoraproject.org
+148 MB, archives.fedoraproject.org 25 MB). That's an upper bound for the EL routes' binaries, since the archive keeps
+only what a passing run referenced. apt fetches straight from the mirrors, not through the shim, so Debian and Ubuntu
+have no such number yet (remi's Debian installer cache is 99 MB). A cold `wend walk` of centos5-to-alma10 filled
+1.5 GB. Source packages tend to be as big as the binaries again. Call it 20-40 GB to start. remi has 1.9 TB free on
+`/data`, and R2 charges about $0.015 per GB-month past a free 10 GB, so storage is not the constraint for a long time.
+
+Salvage: of the 27 EL8+ digests runs pin, remi's caches still hold 4 (Alma 9 and 10 BaseOS and AppStream, all from
+one centos5-web run, whose Alma 8 and EPEL pins are gone). No run already on main can be made to replay pinned
+again. Fresh CI replays, once capture is in, replace them. That's cheaper than digging older bytes out of VM disks.
 
 ## Order of work
 
@@ -112,8 +119,8 @@ Each one a small PR.
 1. This document.
 2. **Capture.** The harness writes the download list and keeps the metadata it read; the shim keeps old
    `repomd.xml` versions by digest; the gate replay job uploads both as an artifact. This stops the rot for every run
-   from then on. Runs already on main whose EL pins are gone can't be saved unless remi's caches still hold their
-   bytes. If they can't, they get replaced by fresh CI replays, which this PR makes archivable.
+   from then on. Runs already on main whose EL pins are gone get replaced by fresh CI replays, which this makes
+   archivable.
 3. **The store.** `tools/archive.py` on remi: ingest a download list (or a run file), fetch what's missing, verify
    the chain, store blobs, write the index. Measures as it goes.
 4. **Sources.** Source packages for everything ingested.
