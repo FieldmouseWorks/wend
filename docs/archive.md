@@ -59,7 +59,9 @@ Only files that proven routes and boxes reference. Never a mirror of a whole dis
    top file lists. These are what make an old `repomd.xml` useful: without its `primary` it vouches for nothing.
 3. **Every package a passing run downloaded**, at the digest its index lists.
 4. **What a box build downloaded**: debootstrap's and the installer's files (etch's udebs), and the start release's
-   packages, so a box can still be built once its vault rots.
+   packages, so a box can still be built once its vault rots. Not yet: a box build pins nothing today (runs pin
+   only their hops' sources, and CI reuses cached boxes), so there is no chain to check these against. Boxes have to
+   record their own sources first (see Order of work).
 5. **The matching source packages.** The archive will be public, and redistributing GPL binaries means offering their
    source. For each binary, the archive keeps the source it names: the `.src.rpm` (vault.centos.org `Source/`,
    AlmaLinux `Source/`, EPEL `source/tree/`) or the `.dsc` and the files it lists. They are found through the same
@@ -106,6 +108,21 @@ small. A blob a later run no longer references can be swept once there are numbe
   becomes local cache → `--source`s (an org cache) → the wend archive → origin → mirrors and vaults. A pinned file gone
   from all of them still refuses, as decided on 2026-10-11. `--live` stays the explicit escape.
 
+## Where old files go (the vaults at the end of the chain)
+
+The archive is the guarantee for proven routes. This table is the cheap fallback for a route's first trip, before
+anything is archived, and for a file the archive misses. It is data, not prediction logic: one more place the chain
+asks, after the origin. Every file is still checked against its pin, so a fallback can only fail to have the bytes,
+never hand over wrong ones. Checked 2026-10-15.
+
+| Origin | Where its old files go | Byte-exact? |
+|---|---|---|
+| repo.almalinux.org `<major>/` | vault.almalinux.org `<major>.<minor>/` once the next minor ships (every minor from 8.3 on is there today) | Packages yes. Metadata: only each minor's final `repomd.xml`, never the daily ones in between |
+| deb.debian.org, archive.debian.org | snapshot.debian.org, by date (#106 pins etch there) | Yes, every file Debian ever published |
+| archive.ubuntu.com | old-releases.ubuntu.com once a release leaves the archive (precise is there; trusty, still on ESM, isn't) | Yes, the same files moved |
+| dl.fedoraproject.org EPEL | **Nowhere usable.** Fedora's build system (kojipkgs.fedoraproject.org) keeps every build, but only the *unsigned* RPM. The signed copy EPEL shipped (`data/signed/<key>/`) is kept only while the build is current: fail2ban 1.0.2-3.el8 (current) has it, 1.0.2-7.el9 and 1.0.2-12.el9 (superseded) don't. Unsigned bytes don't hash to the pin | No. The archive is EPEL's only byte-exact copy, which is why capture keeps EPEL's packages |
+| vault.centos.org | It is the vault | Yes |
+
 ## Size
 
 Measured on remi, 2026-10-15. Its mirror shim cache holds everything every EL run there has fetched, old package
@@ -134,12 +151,14 @@ Each one a small PR.
    `/var/lib/apt/lists` can't stand in for that: apt stores indexes decompressed or recompressed (lz4), not the
    `Packages.xz` whose hash the `Release` lists. Less urgent: of apt's pins only the current Debian releases' change
    (at point releases).
-3. **The store.** `tools/archive.py` on remi: ingest a download list (or a run file), fetch what's missing, verify
-   the chain, store blobs, write the index. Measures as it goes.
+3. **The store** (built). `tools/archive.py ingest` on remi walks every passing run's pins down their chains,
+   takes bytes from download lists, the shim's store or cache, or the origin, verifies each against the chain, and
+   writes blobs, aliases and the index. `tools/archive.py verify` rehashes the store.
 4. **Sources.** Source packages for everything ingested.
 5. **R2 push.** Upload new blobs and the index (S3 API, standard library only), checking each upload's digest.
 6. **Client.** The archive as a by-digest source, in the default chain.
-7. **Signing, then public.** The index signature and `archive/allowed_signers`; then the bucket gets public read.
+7. **Box inputs.** A box build records the sources it read, as a hop does, and the store ingests them.
+8. **Signing, then public.** The index signature and `archive/allowed_signers`; then the bucket gets public read.
    It stays private until this step.
 
 ## Refused

@@ -70,6 +70,9 @@ jobs:
       - name: the mirror shim's download log and store, and the replay's download list, by behaviour (runs the PR's own tools, so not in the gate)
         working-directory: .
         run: python3 -B tools/test_fetched.py
+      - name: the archive's store, by behaviour on a made-up repo (runs the PR's own tools, so not in the gate)
+        working-directory: .
+        run: python3 -B tools/test_archive.py
       - name: the atlas passes the client's own check
         working-directory: .
         run: client/target/x86_64-unknown-linux-musl/release/wend check
