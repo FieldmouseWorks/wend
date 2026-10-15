@@ -33,6 +33,11 @@ A content-addressed blob store plus a signed index. Nothing fancier.
   routes comes free, because routes share most packages and the digest is already the key. No chunking: packages are
   already compressed, so chunk dedup would save little, and it would add a reassembler (one more place to get integrity
   wrong) and lose the property that any blob checks with stock `rpm -K`, `gpgv` or `sha256sum`.
+- **Aliases.** Some chains name a file by another hash: CentOS 5's `primary.xml` gives packages only a SHA-1, and old
+  `Release` files only SHA-1 too. A client that knows only that digest can't name the blob. So for every blob stored
+  through such a link, `alias/<alg>/<hex>` holds one line, `sha256:<hex>`, naming the blob. The client fetches the
+  alias, then the blob, and still checks the blob against the digest it expected, so a wrong alias costs a refusal,
+  never trust.
 - **Index.** `index/<stamp>.json`, plus `index/latest.json` naming the newest one. It maps each origin URL to every
   digest the archive holds for it (one URL, many snapshots: a `repomd.xml` changes, its pins don't), with size, when it
   was first archived, and the runs that reference it. It is signed with `ssh-keygen -Y sign` (ed25519, namespace
@@ -84,8 +89,7 @@ small. A blob a later run no longer references can be swept once there are numbe
   touches remi's network, kernel or bootloader. The R2 credentials are a root-only file; nothing logs or prints them.
 - **CI captures, remi archives.** A gate replay runs on a throwaway runner, which is the only place the metadata it
   pinned exists at that moment. So the harness writes a download list (every file the hop fetched: origin URL, sha256,
-  size; for rpm the mirror shim logs what it served, for apt the box's `/var/lib/apt/lists` and `/var/cache/apt/archives`
-  before they're cleaned), and the replay job uploads it as an artifact together with the metadata bytes it read
+  size, as the mirror shim logged what it served), and the replay job uploads it as an artifact together with the metadata bytes it read
   (tens of MB; packages stay out, since they don't rot that fast). remi downloads the artifacts of every gate run whose
   run files land on main, well inside GitHub's 90-day retention.
 - **The mirror shim stops forgetting.** Today it overwrites a live repo's `repomd.xml` in place. It keeps every
@@ -94,7 +98,8 @@ small. A blob a later run no longer references can be swept once there are numbe
   stays up. remi's `/data` copy is the second copy, and the one that can rebuild R2.
 - **Reading.** The client already fetches each file by its expected digest from an ordered list of sources and keeps
   the first bytes that hash right (`wend walk --run`, `--source`). The archive is one more source, of a new kind: it
-  is addressed by digest, not by `host/path`, so the client asks for `blob/sha256/<hex>` directly. The default chain
+  is addressed by digest, not by `host/path`, so the client asks for `blob/sha256/<hex>` directly (or for
+  `alias/<alg>/<hex>` first, when the chain gave it another hash). The default chain
   becomes local cache → `--source`s (an org cache) → the wend archive → origin → mirrors and vaults. A pinned file gone
   from all of them still refuses, as decided on 2026-10-11. `--live` stays the explicit escape.
 
@@ -121,8 +126,11 @@ Each one a small PR.
    `wend replay --out` writes the download list and the metadata bytes beside the run; the gate uploads them. This
    stops the rot for every EL run from then on. Runs already on main whose EL pins are gone get replaced by fresh CI
    replays. remi's shim is a long-running process, so it has to be restarted once this lands.
-   **Capture, apt.** The same from the box's own `/var/lib/apt/lists` and `/var/cache/apt/archives`, since apt doesn't
-   go through the shim. Less urgent: of apt's pins only the current Debian releases' change (at point releases).
+   **Capture, apt.** apt goes through the same shim (its mirror becomes `http://127.0.0.1:<port>/<host>/<path>`,
+   as EL's repos are), so the shim logs and keeps the indexes' bytes exactly as the archive served them.
+   `/var/lib/apt/lists` can't stand in for that: apt stores indexes decompressed or recompressed (lz4), not the
+   `Packages.xz` whose hash the `Release` lists. Less urgent: of apt's pins only the current Debian releases' change
+   (at point releases).
 3. **The store.** `tools/archive.py` on remi: ingest a download list (or a run file), fetch what's missing, verify
    the chain, store blobs, write the index. Measures as it goes.
 4. **Sources.** Source packages for everything ingested.
