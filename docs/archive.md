@@ -68,7 +68,8 @@ Only files that proven routes and boxes reference. Never a mirror of a whole dis
    - **Debian, Ubuntu:** the `.dsc` and every file it lists, from the `<comp>/source/Sources` index the pinned
      `Release` lists, so the chain runs from the run's pin as the binaries' does. The binary's `Source:` field names
      the source and its version.
-   - **EL:** the `.src.rpm` its `primary.xml` names (`<rpm:sourcerpm>`), from the repo's source repo, checked against
+   - **EL:** the `.src.rpm` its `primary.xml` names (`<rpm:sourcerpm>`), or for a package a run pins directly (old
+     EPEL 5 builds no repo serves) the one its own RPM header names, from the repo's source repo, checked against
      that repo's own metadata. Source repos aren't pinned by any run, so their `repomd.xml` is taken live and recorded
      in the index, marked `"live": true`; the index signature (step 8) is what vouches for it. Where each repo's sources live is a table in
      `tools/archive.py` (`SOURCE_REPOS`): `vault.centos.org/<v>/<repo>/Source/` (`SRPMS/` for CentOS 5), AlmaLinux's
@@ -176,9 +177,12 @@ Each one a small PR.
 7. **Box inputs.** A box build records the sources it read, as a hop does, and the store ingests them.
 8. **Signing, then public.** `tools/archive.py sign STORE --key KEY` (built) writes `<index>.sig` beside every index
    file, and `r2push.py` sends each just before its index. `verify` checks them against `archive/allowed_signers`
-   once it's committed. remi generates the key (a root-only file; the private half never leaves remi), and its
-   public half goes into `archive/allowed_signers` in its own PR. Then the bucket gets public read. It stays
-   private until this step.
+   (committed). The key was made on remi (a root-only file; the private half never leaves remi), and remi's push
+   wrapper signs before every push. Then the bucket gets public read. It stays private until this step.
+9. **Gate artifacts** (built). `tools/gate_fetched.py DIR` downloads every unexpired `fetched-N` artifact not yet
+   seen (a read-only Actions token; GitHub wants one even on a public repo) and unpacks each under `DIR/<id>/`;
+   `archive.py ingest STORE --fetched DIR` then takes what passing runs on main pin. Artifacts from runs that never
+   landed are read and ignored.
 
 ## Refused
 
