@@ -134,8 +134,9 @@ Each one a small PR.
    `/var/lib/apt/lists` can't stand in for that: apt stores indexes decompressed or recompressed (lz4), not the
    `Packages.xz` whose hash the `Release` lists. Less urgent: of apt's pins only the current Debian releases' change
    (at point releases).
-3. **The store.** `tools/archive.py` on remi: ingest a download list (or a run file), fetch what's missing, verify
-   the chain, store blobs, write the index. Measures as it goes.
+3. **The store** (built). `tools/archive.py ingest` on remi walks every passing run's pins down their chains,
+   takes bytes from download lists, the shim's store or cache, or the origin, verifies each against the chain, and
+   writes blobs, aliases and the index. `tools/archive.py verify` rehashes the store.
 4. **Sources.** Source packages for everything ingested.
 5. **R2 push.** Upload new blobs and the index (S3 API, standard library only), checking each upload's digest.
 6. **Client.** The archive as a by-digest source, in the default chain.
