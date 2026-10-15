@@ -11,7 +11,7 @@ extract's. `./wend check` refuses an extract that doesn't match it or doesn't pa
 
   python3 tools/leappdata.py COMMIT     pin a new commit: download, write the extracts and the manifest, and print
                                         what changed against the old extract (for the PR body: refresh only by PR)
-  python3 tools/leappdata.py --check    download the pinned files again; fail unless they hash as pinned and the
+  python3 tools/leappdata.py --check    download the files the manifest pins again; fail unless they hash as pinned and the
                                         extracts come out byte for byte as committed
 
 The data is untrusted input. It is only ever read as data for a report: never an op, never a package name handed to
@@ -154,11 +154,6 @@ def manifest(fam="el"):
     return tomllib.load(open(p, "rb")) if os.path.isfile(p) else None
 
 
-def pinned():
-    """{source: header} from the committed extracts."""
-    return {s: json.loads(open(os.path.join(DIR, f"{s}.jsonl")).readline()) for s in SOURCES}
-
-
 def changes(old, new):
     """What a refresh changes, for the PR body: events added and dropped, by action."""
     key = lambda e: json.dumps(e, sort_keys=True)
@@ -188,7 +183,18 @@ def main(argv):
         print(__doc__)
         return 2
     check = argv[0] == "--check"
-    heads = pinned() if check else {s: {"commit": argv[0]} for s in SOURCES}
+    if check:  # the manifest is the pin: verify against it, never against the extracts' own headers
+        m = manifest()
+        files = (m or {}).get("files", {})
+        if not m or set(files) != set(SOURCES) or not re.fullmatch(r"[0-9a-f]{40}", str(m.get("commit", ""))) or \
+                any(files[s].get("path") != SOURCES[s] for s in SOURCES):
+            print(f"{os.path.relpath(os.path.join(DIR, 'manifest.toml'), ROOT)} is missing or doesn't pin every "
+                  "source at one full commit")
+            return 1
+        heads = {s: {"commit": m["commit"], "sha256": files[s]["upstream_sha256"].removeprefix("sha256:"),
+                     "extract": files[s]["sha256"].removeprefix("sha256:")} for s in SOURCES}
+    else:
+        heads = {s: {"commit": argv[0]} for s in SOURCES}
     if not check and not re.fullmatch(r"[0-9a-f]{40}", argv[0]):
         print("COMMIT is a full 40-character commit id, never a branch or tag: the pin must not move")
         return 2
@@ -201,7 +207,9 @@ def main(argv):
         parse(text, s)
         out = os.path.join(DIR, f"{s}.jsonl")
         if check:
-            ok = hashlib.sha256(data).hexdigest() == heads[s]["sha256"] and open(out).read() == text
+            ok = hashlib.sha256(data).hexdigest() == heads[s]["sha256"] and \
+                hashlib.sha256(text.encode()).hexdigest() == heads[s]["extract"] and \
+                os.path.isfile(out) and open(out).read() == text
             print(f"{s}: {'ok' if ok else 'MISMATCH'} ({path} at {commit[:12]})")
             bad |= not ok
             continue
