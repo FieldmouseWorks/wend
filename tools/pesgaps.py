@@ -178,11 +178,13 @@ def walk(repo, route_path, packages, data=None, own=None, streams=()):
                 rivals.setdefault((e["to"], p["name"]), []).append(e)
         gone, origin, done = {}, {}, set()  # origin: a successor this hop installed -> the box package it stands for
         for e in events:
-            if any((e["to"], p["name"]) in done for p in e["in"]):
-                continue
-            ins = [p["name"] for p in e["in"]]
+            ins = set(p["name"] for p in e["in"])
             have = list(dict.fromkeys(p["name"] for p in e["in"] if p["name"] in pkgs and in_stream(p, mods)))
             if not have or (e["action"] != "merged" and len(have) < len(ins)):
+                continue
+            # a package an earlier mapping at this release already took isn't taken again; the rest of a merge still is
+            have = [n for n in have if (e["to"], n) not in done]
+            if not have:
                 continue
             if e["action"] == "deprecated":
                 h["deprecated"] += [n for n in have if n not in h["deprecated"]]
@@ -201,8 +203,14 @@ def walk(repo, route_path, packages, data=None, own=None, streams=()):
                                            "becomes": [], "steps": [], "events": []})
                 g["events"].append(e["id"])
                 step = {"package": n, "action": e["action"], "at": e["to"], "becomes": []}
-                alt = [{"action": r["action"], "becomes": [p["name"] for p in r["out"]]}
-                       for r in rivals[(e["to"], n)] if r is not e]
+                same = (e["action"], sorted(p["name"] for p in e["out"]))
+                alt = []
+                for r in rivals[(e["to"], n)]:
+                    a = {"action": r["action"], "becomes": sorted(p["name"] for p in r["out"])}
+                    if r is e or r["action"] == "deprecated" or (a["action"], a["becomes"]) == same or a in alt or \
+                            not any(p["name"] == n and in_stream(p, mods) for p in r["in"]):
+                        continue
+                    alt.append(a)
                 if alt:
                     step["also"] = alt  # leapp-data maps it another way too
                 g["steps"].append(step)
