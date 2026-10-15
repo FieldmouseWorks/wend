@@ -86,6 +86,7 @@ tools/
   tomlw.py           writes TOML (tomllib only reads)
   port_oldlinux.py   one-off import of the dep-lab Debian results, with a lossless round-trip proof
 docs/validation/     the first end-to-end test: verify on both boxes, and Opus refilling a deleted fix
+docs/archive.md      design: the wend archive (wend#19), every byte proven routes reference, by sha256
 client/              the Rust client (client/README.md): reads, checks and compiles the atlas exactly as
                      tools/ does (client/parity.py proves it). Next: walk a route, roll back on red. No AI.
 .github/

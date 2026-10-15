@@ -382,6 +382,10 @@ See `adapters/debian.toml`. Notes that matter:
 - The `services` check needs "explicitly installed". apt has it in `/var/lib/apt/extended_states`.
 - `current`: every binary a service runs comes from a package that the release in sources.list still ships
   (`apt-cache madison`). This closed the "PHP 5 still serving on trixie" hole, without per-release version tables.
+- archive.debian.org has lost files (in 2026, some of every archived release's packages answer 404), so releases
+  before bullseye come from one dated snapshot.debian.org tree, whose `Release` files are archive.debian.org's byte
+  for byte. It answers with redirects, which apt before 0.7.21 (etch, lenny) can't follow, so it goes through the
+  mirror shim (see Enterprise Linux below). Runs pin it by its origin URL, `https://snapshot.debian.org/...`.
 
 ### Ubuntu (`ubuntu`, apt backend)
 
@@ -420,7 +424,13 @@ See `adapters/el.toml`. Notes that matter:
   dead mirrors). After each hop it also rebuilds the rpm database and, on EL10, moves it to `/usr/lib/sysimage/rpm`.
 - CentOS 5's yum can't speak today's TLS, so repos go through a mirror shim the harness runs on the host
   (`[mirror]` in the adapter): plain http on 127.0.0.1, fetching `https://<host>/<path>` for
-  `http://127.0.0.1:<port>/<host>/<path>`, for a fixed list of hosts, and caching what it fetched.
+  `http://127.0.0.1:<port>/<host>/<path>`, for a fixed list of hosts, and caching what it fetched. It also keeps
+  every file it fetched under its sha256 (`.sha256/<hex>` in its cache, which no request can reach) and logs every
+  file it serves (`.fetched.log`: `<https url> sha256:<hex> <size>`). A live repo's `repomd.xml` is refetched each
+  time, so the store is the only place an older one survives. `wend replay --out RUN.json` turns the lines the
+  replay added to the log into a download list beside the run, `RUN.fetched/`: `fetched.txt` (each distinct file,
+  sorted) and `blobs/<hex>` (the bytes of every file in it that isn't a package, and of live EPEL's packages, which
+  go when they're updated). The gate uploads it for the archive (`docs/archive.md`, "Capture").
 - No EL release has an in-place path through a chroot (Leapp and redhat-upgrade-tool reboot), so every hop is a plain
   transaction plus fixes.
 - On a live box the hop to EL9 runs its transaction offline, as a chroot does, and out of reach of PID 1. Otherwise
@@ -901,9 +911,9 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `writable`, `managed` | the allowlists (globs) named by `write-file` (`writable`) and the `rpm.*` file ops (`managed`). Nothing under `/etc/wend/` is ever on either |
 | `[kv."<path>"]` | the files `kv.*` may touch: `keys` (the only keys it may set or unset; never one that grants access) and `set` (false for files with sections, which only take `kv.unset`) |
 | `force` | required: the `force-remove` flags this family allows, a subset of its backend's (apt: `depends`, `remove-essential`; rpm: `depends`, `scripts`) |
-| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`), and optional `releases.<id>.upgrade` like rpm's. rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader"). apt: a start release may have `releases.<id>.install` too, and any release `signed` (see "Signed packages") |
+| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`; each an http(s) URL, or host/path through the `[mirror]` shim), and optional `releases.<id>.upgrade` like rpm's. rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader"). apt: a start release may have `releases.<id>.install` too, and any release `signed` (see "Signed packages") |
 | `[addons.<name>]` | rpm: `marker`, `vendor`, `repos` (see "Add-on repositories") |
-| `[mirror]` | rpm: `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts) |
+| `[mirror]` | `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts): every rpm repo, and an apt mirror given as host/path |
 | `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), `autoremove`, `obsolete`, `installed_list`, `kernel_newest` (the VM tier's newest-kernel query); apt also `apt_conf`, the harness's apt config, and `apt_unsigned`, the lines added on hops into unsigned releases |
 | `[predicates]` | `installed`, `file`, `file-contains`, `mysql-option` command templates |
 | `[pm_options.<name>]` | `path`, `content`. apt: only `overwrite-conflicting-files`; rpm: none |
@@ -1783,7 +1793,7 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
     our own sha256.
     - **Archive.** CI keeps, keyed by sha256, every metadata file a passing run pinned and every package it
       downloaded. That's the pinned tier of the vision doc: never evicted while a proven route references it. The
-      download list is a CI artifact, not part of the run file.
+      download list is a CI artifact, not part of the run file. Design in `docs/archive.md`.
     - **Fallback chain.** A client fetches each file by its expected hash from a list of sources in order: local
       cache, an org cache, the wend archive, the origin, then mirrors. The first bytes that hash right win. A source
       that serves wrong bytes is skipped, not trusted.
@@ -1799,8 +1809,9 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
       snapshot rare (the archive and the fallback chain), not making the client looser. Today that's not rare: a run
       pinning live AlmaLinux or EPEL repos goes stale as soon as they publish new metadata, often within a day.
     - **Order of work.** Done: the harness and the client record `sources`, the client walks through a verifying
-      cache (`wend walk --run`, with `--source` and `--offline`), and refuses an unpinned walk unless `--live`. Next:
-      CI uploads the download list, then the archive (wend#19). Until runs carry `sources`, integrity rests on TLS to the
+      cache (`wend walk --run`, with `--source` and `--offline`), and refuses an unpinned walk unless `--live`, and
+      the gate uploads an EL replay's download list with its metadata bytes (the mirror shim's log). Next: the same
+      for apt, then the archive (wend#19). Until runs carry `sources`, integrity rests on TLS to the
       mirrors and the shim's cache: EL releases from AlmaLinux 8 on, and EPEL for them, check signatures ("Signed
       packages"); older EL releases run with `gpgcheck=0` (CentOS 5's keys can't check what comes later), and the shim
       keeps only complete downloads and checks hash-named metadata against its name.

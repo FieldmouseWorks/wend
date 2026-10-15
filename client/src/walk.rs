@@ -4,7 +4,7 @@
 //! stops there. The run it writes has the same shape as the Python harness's (tools/walk.py).
 
 use crate::atlas::{get, list_of, str_of, Doc};
-use crate::backend::{backend_of, bootstrap_pins, fill, hop_vars, pred_sh, step, SOURCES};
+use crate::backend::{apt_origin, backend_of, bootstrap_pins, fill, hop_vars, pred_sh, step, SOURCES};
 use crate::canon::{canonical, content_id, sha256_hex};
 use crate::hop::{hop_plan, pinned};
 use crate::sandbox::{host, tail, Root};
@@ -371,7 +371,7 @@ impl<'a> Walk<'a> {
                         .map(|(_, v)| v)
                         .unwrap_or_default())
                 };
-                let url = format!("{}/dists/{hop}", mirror(self.sources_adapter)?);
+                let url = format!("{}/dists/{hop}", apt_origin(self.sources_adapter, hop)?);
                 let used = format!("{}/dists/{hop}", mirror(self.adapter)?);
                 let bare = used
                     .split_once("://")

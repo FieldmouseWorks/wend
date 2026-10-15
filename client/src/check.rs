@@ -54,6 +54,7 @@ const UNSAFE: &[&str] = &[
 /// metacharacters, no printf %, and no leading - (it would read as an option).
 const SAFE_VALUE: &str = r"[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*";
 const REPO_URL: &str = r"[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)+";
+const APT_URL: &str = r"https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._-]+)*";
 const ADAPTER_KEYS: &[&str] = &[
     "schema",
     "family",
@@ -404,6 +405,20 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
             if !get(t, "boot_mib").and_then(Value::as_u64).is_some_and(|m| m > 0) {
                 errs.push(format!(
                     "{wh}: releases.{r}.transit.boot_mib must be the MiB its kernel takes in /boot"
+                ));
+            }
+        }
+    }
+    // SPEC "Adapter format": the mirrors land in root shell commands as {mirror}
+    if get(a, "backend").and_then(Value::as_str) == Some("apt") {
+        let shim = get(a, "mirror")
+            .and_then(|m| get(m, "shim"))
+            .is_some_and(Value::is_string);
+        for k in ["archive", "current"] {
+            let u = get(a, "releases").and_then(|r| get(r, k));
+            if !u.is_some_and(|u| full_v(APT_URL, u) || full_v(REPO_URL, u) && shim) {
+                errs.push(format!(
+                    "{wh}: releases.{k} must be an http(s) URL, or host/path through [mirror].shim"
                 ));
             }
         }
