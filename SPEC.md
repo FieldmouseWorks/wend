@@ -425,8 +425,8 @@ See `adapters/el.toml`. Notes that matter:
   file it serves (`.fetched.log`: `<https url> sha256:<hex> <size>`). A live repo's `repomd.xml` is refetched each
   time, so the store is the only place an older one survives. `wend replay --out RUN.json` turns the lines the
   replay added to the log into a download list beside the run, `RUN.fetched/`: `fetched.txt` (each distinct file,
-  sorted) and `blobs/<hex>` (the bytes of every file in it that isn't a package). The gate uploads it for the
-  archive (`docs/archive.md`, "Capture").
+  sorted) and `blobs/<hex>` (the bytes of every file in it that isn't a package, and of live EPEL's packages, which
+  go when they're updated). The gate uploads it for the archive (`docs/archive.md`, "Capture").
 - No EL release has an in-place path through a chroot (Leapp and redhat-upgrade-tool reboot), so every hop is a plain
   transaction plus fixes.
 - On a live box the hop to EL9 runs its transaction offline, as a chroot does, and out of reach of PID 1. Otherwise

@@ -5,9 +5,11 @@ notes where the log ends before it starts (mark) and, once its run is saved, wri
 the run file, in <run>.fetched/:
 
   fetched.txt         one "<https url> sha256:<hex> <size>" per distinct file, sorted
-  blobs/<hex>         the bytes of every metadata file in it (anything that isn't a package). Live repos replace
-                      their metadata within days, so these are taken now; packages last, and the archive fetches
-                      them later by url and digest.
+  blobs/<hex>         the bytes of every metadata file in it (anything that isn't a package), and of every package
+                      from a repo that keeps only each package's latest build (live EPEL). Live repos replace their
+                      metadata daily, so these are taken now; other packages last (AlmaLinux keeps every version of
+                      a minor release, then moves it to its vault whole), and the archive fetches them later by url
+                      and digest.
 
 The shim is shared, so a walk that runs beside another (`wend verify` runs several, remi a VM run) also lists the
 other's files, an apt walk included, and a VM's installer images with them. That's harmless: the archive keeps only
@@ -21,6 +23,7 @@ import shutil
 import sandbox
 
 PACKAGES = (".rpm", ".deb", ".udeb")
+LATEST_ONLY = ("https://dl.fedoraproject.org/pub/epel/",)  # live repos whose packages vanish when updated
 
 
 def cache():
@@ -59,7 +62,7 @@ def collect(since, out):
     os.makedirs(f"{out}/blobs")
     missing = []
     for url, digest, _ in sorted(seen):
-        if url.endswith(PACKAGES):
+        if url.endswith(PACKAGES) and not url.startswith(LATEST_ONLY):
             continue
         hexdigest = digest[7:]
         src, dst = f"{cache()}/.sha256/{hexdigest}", f"{out}/blobs/{hexdigest}"

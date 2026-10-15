@@ -24,8 +24,7 @@ gone. **The archive's first job is to keep metadata at the moment a run reads it
 AlmaLinux keeps every package version within a minor release and moves the whole tree, bytes unchanged, to
 vault.almalinux.org when the next minor ships, so they can be fetched afterwards by digest. EPEL is the exception:
 its live repos keep only the latest build of each package, so an EPEL package a run used is gone as soon as it's
-updated. Capture has to cover those too (a later step; Fedora's build system keeps old builds, which may serve as
-a source). Vaults rot too, more slowly: archive.debian.org now 404s 10 of etch's 251 installer udebs.
+updated, so capture takes those packages' bytes too. Vaults rot too, more slowly: archive.debian.org now 404s 10 of etch's 251 installer udebs.
 
 ## What it is
 
@@ -92,9 +91,10 @@ small. A blob a later run no longer references can be swept once there are numbe
   touches remi's network, kernel or bootloader. The R2 credentials are a root-only file; nothing logs or prints them.
 - **CI captures, remi archives.** A gate replay runs on a throwaway runner, which is the only place the metadata it
   pinned exists at that moment. So the harness writes a download list (every file the hop fetched: origin URL, sha256,
-  size, as the mirror shim logged what it served), and the replay job uploads it as an artifact together with the metadata bytes it read
-  (tens of MB; packages stay out, since they don't rot that fast). remi downloads the artifacts of every gate run whose
-  run files land on main, well inside GitHub's 90-day retention.
+  size, as the mirror shim logged what it served), and the replay job uploads it as an artifact together with the
+  metadata bytes it read (tens of MB). Packages stay out, since they don't rot that fast, except live EPEL's, which
+  do. remi downloads the artifacts of every gate run whose run files land on main, well inside GitHub's 90-day
+  retention.
 - **The mirror shim stops forgetting.** Today it overwrites a live repo's `repomd.xml` in place. It keeps every
   version under its digest instead, which is what lets remi's own runs feed the archive the same way.
 - **R2 is the public copy.** No egress fees, so CI and users can read as much as they like. If remi dies, the archive

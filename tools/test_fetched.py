@@ -21,7 +21,8 @@ import fetched  # noqa: E402
 
 cache = f"{work}/mirror"
 files = {"vault.centos.org/7.9.2009/os/x86_64/repodata/repomd.xml": b"<repomd/>\n",
-         "vault.centos.org/7.9.2009/os/x86_64/Packages/bash-4.2.46-34.el7.x86_64.rpm": b"\xed\xab\xee\xdb" + b"x" * 5000}
+         "vault.centos.org/7.9.2009/os/x86_64/Packages/bash-4.2.46-34.el7.x86_64.rpm": b"\xed\xab\xee\xdb" + b"x" * 5000,
+         "dl.fedoraproject.org/pub/epel/9/Everything/x86_64/Packages/f/fail2ban-1.1.0-6.el9.noarch.rpm": b"\xed\xab\xee\xdb epel"}
 for rel, data in files.items():
     os.makedirs(os.path.dirname(f"{cache}/{rel}"), exist_ok=True)
     with open(f"{cache}/{rel}", "wb") as f:
@@ -54,13 +55,15 @@ try:
         except OSError:
             time.sleep(0.1)
     since = fetched.mark()
-    rpm, md = sorted(files)[1], sorted(files)[0]
-    rpm, md = (rpm, md) if rpm.endswith(".rpm") else (md, rpm)
-    check(get(md) == files[md] and get(rpm, "bytes=0-3") == files[rpm][:4] and get(rpm) == files[rpm],
+    md = next(r for r in files if r.endswith(".xml"))
+    rpm = next(r for r in files if r.startswith("vault") and r.endswith(".rpm"))
+    epel = next(r for r in files if r.startswith("dl.fedoraproject.org"))
+    check(get(md) == files[md] and get(rpm, "bytes=0-3") == files[rpm][:4] and get(rpm) == files[rpm] and
+          get(epel) == files[epel],
           "the shim serves cached files whole and by range")
     log = open(f"{cache}/.fetched.log").read().splitlines()
     want = {f"https://{rel} sha256:{sha[rel]} {len(files[rel])}" for rel in files}
-    check(set(log) == want and len(log) == 3, "every GET is logged as <https url> sha256:<hex> <size>")
+    check(set(log) == want and len(log) == 4, "every GET is logged as <https url> sha256:<hex> <size>")
     check(all(os.path.samefile(f"{cache}/.sha256/{sha[rel]}", f"{cache}/{rel}") for rel in files),
           "files cached before the store existed are hard-linked under .sha256/ when first served")
     try:
@@ -77,9 +80,10 @@ try:
     check(open(f"{work}/target").read() == "untouched" and not os.path.exists(f"{out}/blobs/junk"),
           "an existing download list is replaced, and its symlinks aren't followed")
     listed = open(f"{out}/fetched.txt").read().splitlines()
-    check(n == 2 and listed == sorted(want), "collect lists each distinct file once, sorted")
-    check(os.listdir(f"{out}/blobs") == [sha[md]] and open(f"{out}/blobs/{sha[md]}", "rb").read() == files[md],
-          "collect copies the metadata's bytes and leaves packages to the archive")
+    check(n == 3 and listed == sorted(want), "collect lists each distinct file once, sorted")
+    check(sorted(os.listdir(f"{out}/blobs")) == sorted([sha[md], sha[epel]]) and
+          open(f"{out}/blobs/{sha[md]}", "rb").read() == files[md],
+          "collect copies the metadata's and live EPEL packages' bytes, and leaves other packages to the archive")
     os.makedirs(f"{work}/nothing")
     check(fetched.collect(fetched.mark(), f"{work}/nothing") == 0 and not os.path.exists(f"{work}/nothing"),
           "a walk that fetched nothing writes nothing, and leaves no stale list")
