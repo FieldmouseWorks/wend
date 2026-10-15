@@ -260,7 +260,9 @@ whenever a health check objects. It's defined by the harness, not by fixes.
 
 ## Run
 
-Written by CI. JSON, because no human edits it.
+Written by CI. JSON, because no human edits it. A run in `runs/` is a gate replay's artifact, byte for byte, with
+a GitHub artifact attestation from `gate.yml`; the gate refuses any new or changed run file without one
+(CONTRIBUTING.md, "How runs land"). Runs a contributor makes locally are evidence for the PR, never filed.
 
 ```json
 {

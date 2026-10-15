@@ -22,6 +22,7 @@ import contextlib
 import glob
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -78,7 +79,8 @@ def save_run(run, out=None):
     route_name = next((os.path.basename(p)[:-5] for p, d in Repo().routes.items()
                        if check.content_id(d) == run["route"]), run["route"][7:19])
     fam, box = run["box"].split("/")
-    out = os.path.abspath(out) if out else f"{ROOT}/runs/{fam}/{route_name}/{box}/{run['started']}.json"
+    # runs/ holds only CI's attested runs (CONTRIBUTING.md, "How runs land"): a local run is evidence, kept under .wend/
+    out = os.path.abspath(out) if out else f"{ROOT}/.wend/runs/{fam}/{route_name}/{box}/{run['started']}.json"
     os.makedirs(os.path.dirname(out), exist_ok=True)
     json.dump(run, open(out, "w"), indent=1)
     open(out, "a").write("\n")
@@ -198,6 +200,7 @@ def cmd_verify(base=None, all_=False, jobs=2):
     if not matrix:
         print("nothing to replay: the change touches no route, fix, box or adapter")
         return 0
+    shutil.rmtree(f"{ROOT}/.wend/verify", ignore_errors=True)  # only this verify's runs count as its evidence
     os.makedirs(f"{ROOT}/.wend/verify", exist_ok=True)
     print(f"replaying {len(matrix)} route x box pairs, {jobs} at a time (about 15 min each)")
     results, queue, running = [], list(matrix), []
@@ -218,10 +221,9 @@ def cmd_verify(base=None, all_=False, jobs=2):
         if running:
             import time
             time.sleep(5)
-    for m, out, run in results:
-        if run:
-            save_run(run)
-    rc = subprocess.run([sys.executable, "-B", f"{ROOT}/tools/check.py"]).returncode  # now includes the decoy check
+    # the decoy check over these fresh runs too; they stay in .wend/ (runs/ takes only CI's attested runs)
+    rc = subprocess.run([sys.executable, "-B", f"{ROOT}/tools/check.py", "--also-runs",
+                         f"{ROOT}/.wend/verify"]).returncode
     ok = rc == 0 and all(r and r["result"] == "pass" for _, _, r in results)
     lines = ["## Evidence (from `./wend verify`)", "", "| route | box | result | reached | fixes fired | minutes |",
              "|---|---|---|---|---|---|"]

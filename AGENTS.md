@@ -17,7 +17,8 @@ The proof is a run that CI reproduces from scratch.
    satisfy "a module is loaded" are the known examples.
 3. **Don't edit other people's fixes.** The one exception: adding your box to an existing fix's `meta.fires_on`,
    which `./wend discover` does for you. If an existing fix is wrong, open a separate PR for it.
-4. **Never hand-edit runs.** Runs are written by `./wend`, and CI rewrites them anyway.
+4. **Never commit your own runs.** `./wend` writes yours under `.wend/runs/` as evidence. `runs/` takes only CI's
+   attested run files, and the gate refuses anything else there.
 5. **Gate installs on what they replace.** A fix with `install` must be gated on
    `{ installed = "<the package it replaces>" }`, not on a config file.
 6. **One route per PR.** Keep the diff about one path.
@@ -94,7 +95,7 @@ sudo -E python3 wend discover debian etch trixie debian/etch-web
 The harness walks the route one release at a time, applying every existing fix whose precondition holds. When a hop
 breaks, it rolls the box back, shows the model exactly what failed, and asks for a fix. The proposal goes through the
 same schema check as a PR, it must hold on this box, and then it's tried in the sandbox. Kept fixes are written to
-`fixes/`, pinned in the route, and the run is saved to `runs/`.
+`fixes/`, pinned in the route, and the run is saved under `.wend/runs/`.
 
 It ends with `PASS` or `FAIL`. On `FAIL`, read the last run's `final.failed_logs`, then either rerun (a fresh attempt
 often finds another way) or stop and open an issue describing the wall you hit. A clear "here's where it breaks" is
@@ -132,7 +133,8 @@ Don't open a PR until it says `VERIFIED`.
 - Title: `route: debian etch -> trixie on etch-mail (3 new fixes)`
 - Body: the PR template. Paste `.wend/pr-evidence.md` into it and fill in the model and the self-review answers.
 - Commits are signed off (`git commit -s`). That's the DCO, and the human running you is the one signing off.
-- Commit the new and changed `fixes/`, `routes/` and `runs/` files. Don't commit `.wend/`.
+- Commit the new and changed `fixes/` and `routes/` files. Don't commit `.wend/`, and don't put runs in `runs/`.
 
-Then CI replays everything again from scratch. A Claude reviewer reads it for check gaming and loose gates, and once
+Then CI replays everything again from scratch. Its run files are the ones that land: once the replays pass, the
+maintainer or Claude files them (CONTRIBUTING.md, "How runs land"). A Claude reviewer reads it for check gaming and loose gates, and once
 every check is green and the review signs off, the maintainer or Claude merges. If CI fails, read the failing job's run file, fix, and push. Don't open a new PR.

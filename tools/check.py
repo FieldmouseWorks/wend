@@ -4,6 +4,7 @@
   python3 tools/check.py --ids           also print each fix's and route's content id
   python3 tools/check.py --repin         after editing fixes, point every route at their new ids (matched by name)
   python3 tools/check.py --compile FILE  print the shell commands a fix compiles to on its family's adapter
+  python3 tools/check.py --also-runs DIR  also hold the runs under DIR (./wend verify's local ones) to the decoy check
 
 Standard library only (Python 3.11+ for tomllib). Exit status 1 on any error. The rules live in SPEC.md; this file
 is the executable copy of them, and when the two disagree this file is the bug.
@@ -741,18 +742,21 @@ def compile_fix(doc, adapter):
 
 # ---------- main ----------
 
-def load_all():
+def load_all(also_runs=None):
     adapters = load_adapters()
     fixes = {p: tomllib.load(open(p, "rb")) for p in sorted(glob.glob(f"{ROOT}/fixes/*/*/*.toml"))}
     routes = {p: tomllib.load(open(p, "rb")) for p in sorted(glob.glob(f"{ROOT}/routes/*/*.toml"))}
     boxes = {os.path.relpath(os.path.dirname(p), f"{ROOT}/boxes"): tomllib.load(open(p, "rb"))
              for p in sorted(glob.glob(f"{ROOT}/boxes/*/*/box.toml"))}
     runs = {p: json.load(open(p)) for p in sorted(glob.glob(f"{ROOT}/runs/**/*.json", recursive=True))}
+    if also_runs:  # ./wend verify's fresh local runs: decoy evidence, never filed (CONTRIBUTING.md, "How runs land")
+        runs.update({p: json.load(open(p)) for p in sorted(glob.glob(f"{also_runs}/**/*.json", recursive=True))})
     return adapters, fixes, routes, boxes, runs
 
 
 def main(argv):
-    adapters, fixes, routes, boxes, runs = load_all()
+    adapters, fixes, routes, boxes, runs = load_all(
+        os.path.abspath(argv[argv.index("--also-runs") + 1]) if "--also-runs" in argv else None)
     if "--compile" in argv:
         p = os.path.abspath(argv[argv.index("--compile") + 1])
         print(json.dumps(compile_fix(fixes[p], adapters[fixes[p]["family"]]), indent=1))

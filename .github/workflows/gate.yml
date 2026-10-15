@@ -31,6 +31,9 @@ jobs:
 
   schema:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      attestations: read           # runs land only from CI, below
     steps:
       - uses: actions/checkout@v4
         with: { path: pr }
@@ -41,6 +44,22 @@ jobs:
           rm -rf pr/tools pr/adapters && cp -r base/tools base/adapters pr/
           python3 -B pr/tools/check.py --ids
           python3 -B pr/tools/test_check.py
+      # A run's pinned sources are what the client trusts (`wend walk --run`), and nobody can review a sha256 by eye.
+      # So every run the PR adds or changes must be a gate replay's artifact, byte for byte: the replay job attests
+      # each run.json it writes, and tools/file_runs.py files them unchanged. Runs already on the base are left alone.
+      - name: runs land only from CI
+        env: { GH_TOKEN: "${{ github.token }}", REPO: "${{ github.repository }}" }
+        run: |
+          bad=0
+          while IFS= read -r -d '' f; do
+            b="base/${f#pr/}"
+            if [ -f "$b" ] && cmp -s "$f" "$b"; then continue; fi
+            if ! out=$(gh attestation verify "$f" --repo "$REPO" --signer-workflow "$REPO/.github/workflows/gate.yml" 2>&1); then
+              echo "${f#pr/}: not a run CI attested (file CI's artifacts with tools/file_runs.py): $(echo "$out" | tail -n 1)"
+              bad=1
+            fi
+          done < <(find pr/runs -name '*.json' -print0 2>/dev/null)
+          exit $bad
 
   plan:
     needs: schema
