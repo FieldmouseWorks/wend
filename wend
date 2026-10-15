@@ -115,7 +115,11 @@ def cmd_replay(route_path, box, out=None, keep=False, steps=None):
         if steps and w:
             json.dump(w.steps, open(steps, "w"), indent=1)
     p = save_run(run, out)
-    n = fetched.collect(since, p[:-len(".json")] + ".fetched")  # docs/archive.md "Capture"
+    try:  # docs/archive.md "Capture": never changes a replay's outcome
+        n = fetched.collect(since, p[:-len(".json")] + ".fetched")
+    except Exception as e:
+        n = 0
+        print(f"warning: no download list written: {e}", file=sys.stderr)
     print(summary(run), "\nrun:", os.path.relpath(p, ROOT) + (f" (and {n} fetched files listed beside it)" if n else ""))
     return 0 if run["result"] == "pass" else 1
 

@@ -69,13 +69,34 @@ try:
     except urllib.error.HTTPError as e:
         check(e.code == 403, "the store isn't reachable through the shim")
     out = f"{work}/run.fetched"
+    os.makedirs(f"{out}/blobs")  # a stale or planted one: junk, and a symlink out of the directory
+    open(f"{out}/blobs/junk", "w").write("old")
+    open(f"{work}/target", "w").write("untouched")
+    os.symlink(f"{work}/target", f"{out}/fetched.txt")
     n = fetched.collect(since, out)
+    check(open(f"{work}/target").read() == "untouched" and not os.path.exists(f"{out}/blobs/junk"),
+          "an existing download list is replaced, and its symlinks aren't followed")
     listed = open(f"{out}/fetched.txt").read().splitlines()
     check(n == 2 and listed == sorted(want), "collect lists each distinct file once, sorted")
     check(os.listdir(f"{out}/blobs") == [sha[md]] and open(f"{out}/blobs/{sha[md]}", "rb").read() == files[md],
           "collect copies the metadata's bytes and leaves packages to the archive")
+    os.makedirs(f"{work}/nothing")
     check(fetched.collect(fetched.mark(), f"{work}/nothing") == 0 and not os.path.exists(f"{work}/nothing"),
-          "a walk that fetched nothing writes nothing")
+          "a walk that fetched nothing writes nothing, and leaves no stale list")
+    sys.path.insert(0, HERE)
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("shim", f"{HERE}/mirror.py")
+    shim_mod = importlib.util.module_from_spec(spec)
+    sys.argv[1:] = ["0", f"{work}/race"]
+    spec.loader.exec_module(shim_mod)
+    os.makedirs(f"{work}/race")
+    open(f"{work}/race/old", "w").write("old")
+    st_old = os.stat(f"{work}/race/old")
+    open(f"{work}/race/new", "w").write("new")
+    os.replace(f"{work}/race/new", f"{work}/race/old")  # a refetch replaced the file that was hashed
+    shim_mod.keep(f"{work}/race/old", "ab" * 32, st_old)
+    check(not os.path.exists(f"{work}/race/.sha256/{'ab' * 32}"),
+          "a file a refetch replaced after it was hashed is never linked under the old digest")
     os.remove(f"{cache}/.sha256/{sha[md]}")
     with open(f"{cache}/.sha256/{sha[md]}", "wb") as f:
         f.write(b"tampered")

@@ -9,9 +9,10 @@ the run file, in <run>.fetched/:
                       their metadata within days, so these are taken now; packages last, and the archive fetches
                       them later by url and digest.
 
-The shim is shared, so a walk that runs beside another (`wend verify` runs several) also lists the other's files.
-That's harmless: the archive keeps only what a landed run references, and checks every byte against its pins.
-Adapters without a shim (apt) leave nothing yet.
+The shim is shared, so a walk that runs beside another (`wend verify` runs several, remi a VM run) also lists the
+other's files, an apt walk included, and a VM's installer images with them. That's harmless: the archive keeps only
+what a landed run references, and checks every byte against its pins. An apt walk alone leaves nothing yet.
+An existing <run>.fetched/ is replaced, never added to: a checkout could carry one, symlinks and all.
 """
 import hashlib
 import os
@@ -49,9 +50,13 @@ def collect(since, out):
         if len(parts) == 3 and parts[0].startswith("https://") and parts[1].startswith("sha256:") \
                 and len(parts[1]) == 71 and parts[2].isdigit():
             seen.add(tuple(parts))
+    if os.path.islink(out) or os.path.isfile(out):
+        os.remove(out)
+    elif os.path.isdir(out):
+        shutil.rmtree(out)
     if not seen:
         return 0
-    os.makedirs(f"{out}/blobs", exist_ok=True)
+    os.makedirs(f"{out}/blobs")
     missing = []
     for url, digest, _ in sorted(seen):
         if url.endswith(PACKAGES):

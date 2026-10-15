@@ -48,21 +48,24 @@ def fetch(url, local, sha256=None):
             raise OSError(f"short read: {size} of {want} bytes")
         if sha256 and h.hexdigest() != sha256:
             raise OSError("sha256 does not match the file name")
-        keep(tmp, h.hexdigest())
+        keep(tmp, h.hexdigest(), os.stat(tmp))
         os.replace(tmp, local)
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
 
 
-def keep(path, hexdigest):
-    """Hard-link a complete file under STORE by its sha256 (once), and remember its digest."""
-    st = os.stat(path)
+def keep(path, hexdigest, st):
+    """Remember a complete file's digest, and hard-link it under STORE by its sha256 (once). st is the stat of the
+    bytes that were hashed: when path names another file by now (a refetch replaced it), nothing is linked.
+    Capture never stops a file being served: a store or log that can't be written is skipped."""
     DIGESTS[(st.st_ino, st.st_mtime_ns, st.st_size)] = hexdigest
-    os.makedirs(STORE, exist_ok=True)
     try:
+        if os.stat(path).st_ino != st.st_ino:
+            return
+        os.makedirs(STORE, exist_ok=True)
         os.link(path, os.path.join(STORE, hexdigest))
-    except FileExistsError:
+    except OSError:  # FileExistsError: already kept
         pass
 
 
@@ -76,16 +79,21 @@ def digest_of(f, local):
             h.update(chunk)
         f.seek(0)
         hexdigest = h.hexdigest()
-        keep(local, hexdigest)
+        keep(local, hexdigest, st)
     return hexdigest, st.st_size
 
 
 def log_served(url, hexdigest, size):
     line = f"{url} sha256:{hexdigest} {size}\n".encode()
     with LOG_LOCK:
-        fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        except OSError:
+            return
         try:
             os.write(fd, line)
+        except OSError:
+            pass
         finally:
             os.close(fd)
 
