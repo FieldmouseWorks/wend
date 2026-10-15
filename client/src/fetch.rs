@@ -2,8 +2,9 @@
 //! point here, and it serves only bytes that hash right. A run pins each hop's top metadata file (`Release`,
 //! `repomd.xml`) by sha256. Every file those list (indexes) is trusted at the hash they list, and every package an
 //! index lists at the hash the index gives. Anything else is refused. Bytes come from the cache, then each
-//! `--source` in order, then the origin (unless offline): the first bytes that hash right win, and stay in the cache
-//! under their hash, so a second walk needs no network at all.
+//! `--source` in order, then each `--archive` (wend's archive, docs/archive.md: by digest, not by host/path), then the
+//! origin (unless offline): the first bytes that hash right win, and stay in the cache under their hash, so a second
+//! walk needs no network at all.
 //!
 //! Fetching shells out to curl (proxies, CA bundles and TLS are the host's). Indexes are parsed in memory.
 
@@ -16,6 +17,10 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
+/// wend's own archive (docs/archive.md): the public copy remi pushes to, read by digest. `wend walk --run` asks it after
+/// any --source and --archive, before the origin.
+pub const ARCHIVE: &str = "https://archive.fieldmouseworks.com";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Digest {
@@ -63,6 +68,8 @@ struct State {
     pins: Mutex<HashMap<String, Pin>>,
     cache: PathBuf,
     sources: Vec<String>,
+    /// wend archives (docs/archive.md): a URL or directory holding blob/sha256/<2>/<hex> and alias/<alg>/<hex>
+    archives: Vec<String>,
     offline: bool,
     refused: Mutex<Vec<String>>,
     /// the run's own pins, for learning every index once when a package turns up unknown
@@ -81,7 +88,13 @@ fn key_of(url: &str) -> Option<&str> {
 
 impl Proxy {
     /// Pins from every hop's `sources` in a run file; listens on a free port on 127.0.0.1.
-    pub fn start(run: &Value, cache: &Path, sources: Vec<String>, offline: bool) -> Result<Proxy, String> {
+    pub fn start(
+        run: &Value,
+        cache: &Path,
+        sources: Vec<String>,
+        archives: Vec<String>,
+        offline: bool,
+    ) -> Result<Proxy, String> {
         let mut pins = HashMap::new();
         for h in run.get("hops").and_then(Value::as_array).into_iter().flatten() {
             for (url, d) in h.get("sources").and_then(Value::as_object).into_iter().flatten() {
@@ -120,6 +133,7 @@ impl Proxy {
             pins: Mutex::new(pins),
             cache: cache.to_path_buf(),
             sources,
+            archives,
             offline,
             refused: Mutex::new(vec![]),
         });
@@ -373,18 +387,57 @@ fn cached(s: &State, d: &Digest) -> PathBuf {
     s.cache.join(d.alg).join(&d.hex)
 }
 
-/// Every place to try for a "host/path", in order: each --source (a directory or URL laid out host/path), then the
-/// origin.
-fn candidates(s: &State, key: &str, origin: &str) -> Vec<String> {
-    let mut v: Vec<String> = s
+/// A place to try: a URL or file laid out host/path (a --source, or the origin), or a wend archive, asked by digest.
+enum Src {
+    At(String),
+    Archive(String),
+}
+
+/// Every place to try for a "host/path", in order: each --source (a directory or URL laid out host/path), each
+/// --archive, then the origin.
+fn candidates(s: &State, key: &str, origin: &str) -> Vec<Src> {
+    let mut v: Vec<Src> = s
         .sources
         .iter()
-        .map(|b| format!("{}/{key}", b.trim_end_matches('/')))
+        .map(|b| Src::At(format!("{}/{key}", b.trim_end_matches('/'))))
         .collect();
+    v.extend(
+        s.archives
+            .iter()
+            .map(|a| Src::Archive(a.trim_end_matches('/').to_string())),
+    );
     if !s.offline {
-        v.push(origin.to_string());
+        v.push(Src::At(origin.to_string()));
     }
     v
+}
+
+/// The bytes at a place to try, for a digest: a host/path source by its name, an archive by the digest (through its
+/// alias when the digest isn't a sha256). Nothing here is trusted: the caller checks the bytes against the digest.
+fn get_from(src: &Src, d: &Digest) -> Result<Vec<u8>, String> {
+    let base = match src {
+        Src::At(url) => return download(url),
+        Src::Archive(base) => base,
+    };
+    let hex = if d.alg == "sha256" {
+        d.hex.clone()
+    } else {
+        let alias = download(&format!("{base}/alias/{}/{}", d.alg, d.hex))?;
+        let alias = String::from_utf8_lossy(&alias);
+        alias
+            .trim()
+            .strip_prefix("sha256:")
+            .and_then(|h| Digest::parse("sha256", h))
+            .ok_or(format!("{base}/alias/{}/{}: not an alias", d.alg, d.hex))?
+            .hex
+    };
+    download(&format!("{base}/blob/sha256/{}/{hex}", &hex[..2]))
+}
+
+fn name(src: &Src) -> &str {
+    match src {
+        Src::At(s) | Src::Archive(s) => s,
+    }
 }
 
 fn download(src: &str) -> Result<Vec<u8>, String> {
@@ -470,9 +523,9 @@ fn fetch(s: &State, key: &str, p: &Pin) -> Result<PathBuf, (u16, String)> {
     }
     let mut tried = vec![];
     for src in candidates(s, key, &p.origin) {
-        match download(&src) {
+        match get_from(&src, &p.digest) {
             Ok(b) if Digest::of(p.digest.alg, &b) == p.digest => return keep(s, &p.digest, &b),
-            Ok(_) => tried.push(format!("{src}: wrong bytes")),
+            Ok(_) => tried.push(format!("{}: wrong bytes", name(&src))),
             Err(e) => tried.push(e),
         }
     }
@@ -504,13 +557,18 @@ fn fetch_plain(s: &State, key: &str, p: &Pin, gz: bool) -> Result<PathBuf, (u16,
             break;
         }
         for src in candidates(s, &k, &origin) {
-            match download(&src) {
-                Ok(b) => match if zipped { gunzip(&b) } else { Some(b) } {
+            // an archive keeps the pinned bytes themselves, whatever form upstream served: asked once, as they are
+            let archive = matches!(src, Src::Archive(_));
+            if archive && !zipped {
+                continue;
+            }
+            match get_from(&src, &p.digest) {
+                Ok(b) => match if zipped && !archive { gunzip(&b) } else { Some(b) } {
                     Some(x) if ok(&x) => {
                         plain = Some(x);
                         break 'found;
                     }
-                    _ => tried.push(format!("{src}: wrong bytes")),
+                    _ => tried.push(format!("{}: wrong bytes", name(&src))),
                 },
                 Err(e) => tried.push(e),
             }
@@ -553,6 +611,8 @@ fn passthrough(s: &State, origin: &str) -> Result<PathBuf, (u16, String)> {
     let key = key_of(origin).unwrap_or(origin);
     let mut tried = vec![];
     for src in candidates(s, key, origin) {
+        // an archive holds only what something pinned, and this vouches for nothing
+        let Src::At(src) = src else { continue };
         match download(&src) {
             Ok(b) => return keep_named(s, key, &b),
             Err(e) => tried.push(e),
@@ -568,7 +628,7 @@ fn passthrough(s: &State, origin: &str) -> Result<PathBuf, (u16, String)> {
 /// What every source said, or why there were none to ask.
 fn why(tried: &[String]) -> String {
     if tried.is_empty() {
-        "offline, no --source, and no cached copy hashes right".into()
+        "offline, no --source or --archive, and no cached copy hashes right".into()
     } else {
         tried.join("; ")
     }
@@ -840,6 +900,7 @@ mod tests {
             &run,
             &dir.join("cache"),
             vec![dir.join("src").display().to_string()],
+            vec![],
             true,
         )
         .unwrap();
@@ -933,6 +994,7 @@ mod tests {
                 &run,
                 &dir.join("cache"),
                 vec![dir.join("src").display().to_string()],
+                vec![],
                 true,
             )
             .unwrap();
@@ -982,6 +1044,7 @@ mod tests {
             &run,
             &dir.join("cache"),
             vec![dir.join("src").display().to_string()],
+            vec![],
             true,
         )
         .unwrap();
@@ -999,6 +1062,85 @@ mod tests {
     }
 
     #[test]
+    fn archive_serves_by_digest_through_aliases() {
+        let dir = std::env::temp_dir().join(format!("wend-archive-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let arch = dir.join("archive");
+        let blob = |b: &[u8]| {
+            let h = sha256_hex(b);
+            let d = arch.join("blob/sha256").join(&h[..2]);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join(&h), b).unwrap();
+        };
+        let alias = |b: &[u8], to: &str| {
+            let d = arch.join("alias/sha1");
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join(Digest::of("sha1", b).hex), format!("sha256:{to}\n")).unwrap();
+        };
+        // EL5: repomd lists primary by SHA-1 and primary lists packages by SHA-1, so both go through an alias
+        let (a, b) = (b"rpm a".to_vec(), b"rpm b".to_vec());
+        let primary = format!(
+            r#"<package type="rpm"><checksum type="sha" pkgid="YES">{}</checksum><location href="a.rpm"/></package>
+<package type="rpm"><checksum type="sha" pkgid="YES">{}</checksum><location href="b.rpm"/></package>"#,
+            Digest::of("sha1", &a).hex,
+            Digest::of("sha1", &b).hex
+        );
+        let mut z = flate2::write::GzEncoder::new(vec![], flate2::Compression::default());
+        z.write_all(primary.as_bytes()).unwrap();
+        let pz = z.finish().unwrap();
+        let repomd = format!(
+            r#"<repomd><data type="primary"><checksum type="sha">{}</checksum><location href="repodata/primary.xml.gz"/></data></repomd>"#,
+            Digest::of("sha1", &pz).hex
+        );
+        for x in [repomd.as_bytes(), &pz, &a, b"not rpm b"] {
+            blob(x);
+        }
+        alias(&pz, &sha256_hex(&pz));
+        alias(&a, &sha256_hex(&a));
+        // a wrong alias: names a blob that isn't b
+        alias(&b, &sha256_hex(b"not rpm b"));
+        let run = serde_json::json!({"hops": [{"sources": {
+            "http://h.test/el5/repodata/repomd.xml": format!("sha256:{}", sha256_hex(repomd.as_bytes()))}}]});
+        let px = Proxy::start(&run, &dir.join("cache"), vec![], vec![arch.display().to_string()], true).unwrap();
+        px.ensure_pinned().unwrap();
+        assert_eq!(get(px.port, "GET", "/h.test/el5/a.rpm"), (200, a));
+        // the alias is only a pointer: the blob it names still has to hash to the digest the index gave
+        assert_eq!(get(px.port, "GET", "/h.test/el5/b.rpm").0, 502);
+        assert_eq!(get(px.port, "GET", "/h.test/el5/c.rpm").0, 403);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn archive_serves_an_index_pinned_uncompressed() {
+        let dir = std::env::temp_dir().join(format!("wend-archive-plain-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let pinned = b"Package: a\nFilename: pool/a.deb\nSHA256: 00\n\n".to_vec();
+        let h = sha256_hex(&pinned);
+        let d = dir.join("archive/blob/sha256").join(&h[..2]);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join(&h), &pinned).unwrap();
+        let run = serde_json::json!({"hops": [{"sources": {
+            "http://h.test/debian/dists/wheezy/main/binary-amd64/Packages": format!("sha256:{h}")}}]});
+        let px = Proxy::start(
+            &run,
+            &dir.join("cache"),
+            vec![],
+            vec![dir.join("archive").display().to_string()],
+            true,
+        )
+        .unwrap();
+        // the archive keeps the plain bytes; apt asks for the .gz and gets a gzip of exactly them
+        let (code, body) = get(
+            px.port,
+            "GET",
+            "/h.test/debian/dists/wheezy/main/binary-amd64/Packages.gz",
+        );
+        assert_eq!(code, 200);
+        assert_eq!(gunzip(&body).unwrap(), pinned);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_vanished_snapshot_refuses_before_the_walk() {
         let dir = std::env::temp_dir().join(format!("wend-pinned-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1011,6 +1153,7 @@ mod tests {
             &run,
             &dir.join("cache"),
             vec![dir.join("src").display().to_string()],
+            vec![],
             true,
         )
         .unwrap();

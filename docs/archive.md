@@ -62,12 +62,23 @@ Only files that proven routes and boxes reference. Never a mirror of a whole dis
    packages, so a box can still be built once its vault rots. Not yet: a box build pins nothing today (runs pin
    only their hops' sources, and CI reuses cached boxes), so there is no chain to check these against. Boxes have to
    record their own sources first (see Order of work).
-5. **The matching source packages.** The archive will be public, and redistributing GPL binaries means offering their
-   source. For each binary, the archive keeps the source it names: the `.src.rpm` (vault.centos.org `Source/`,
-   AlmaLinux `Source/`, EPEL `source/tree/`) or the `.dsc` and the files it lists. They are found through the same
-   repos' source metadata and checked against it. When upstream no longer has a source (a rotted vault), the archive
-   records that in the index rather than inventing one, and the gap is a reason to keep the archive private for that
-   release until snapshot.debian.org or another source fills it.
+5. **The matching source packages** (built). The archive will be public, and redistributing GPL binaries means
+   offering their source. For each binary stored, the archive keeps the source it was built from, and the binary's
+   index entry names it (`"source": {"url", "digest"}`):
+   - **Debian, Ubuntu:** the `.dsc` and every file it lists, from the `<comp>/source/Sources` index the pinned
+     `Release` lists, so the chain runs from the run's pin as the binaries' does. The binary's `Source:` field names
+     the source and its version.
+   - **EL:** the `.src.rpm` its `primary.xml` names (`<rpm:sourcerpm>`), or for a package a run pins directly (old
+     EPEL 5 builds no repo serves) the one its own RPM header names, from the repo's source repo, checked against
+     that repo's own metadata. Source repos aren't pinned by any run, so their `repomd.xml` is taken live and recorded
+     in the index, marked `"live": true`; the index signature (step 8) is what vouches for it. Where each repo's sources live is a table in
+     `tools/archive.py` (`SOURCE_REPOS`): `vault.centos.org/<v>/<repo>/Source/` (`SRPMS/` for CentOS 5), AlmaLinux's
+     current sources under `vault.almalinux.org/<major>/<repo>/Source/`, EPEL's `source/tree/`.
+
+   When upstream no longer has a source (a rotted vault, an EPEL build since replaced, etch's md5-only `Sources`,
+   wheezy whose `Release` is gone), the index records `"source": {"missing": why}` rather than inventing one, and
+   `ingest` lists the gaps. They don't fail an ingest. They are what has to be filled (from snapshot.debian.org,
+   Koji's source RPMs, or a minor-release vault) before that release goes public.
 
 "Referenced" means: by a run file on main whose `result` is `pass`, or by a box file on main. The archive never
 evicts a blob that such a file references. No eviction at all in the first version: storage is cheap and the set is
@@ -103,7 +114,7 @@ small. A blob a later run no longer references can be swept once there are numbe
   stays up. remi's `/data` copy is the second copy, and the one that can rebuild R2.
 - **Reading.** The client already fetches each file by its expected digest from an ordered list of sources and keeps
   the first bytes that hash right (`wend walk --run`, `--source`). The archive is one more source, of a new kind: it
-  is addressed by digest, not by `host/path`, so the client asks for `blob/sha256/<hex>` directly (or for
+  is addressed by digest, not by `host/path`, so the client asks for `blob/sha256/<2>/<hex>` directly (or for
   `alias/<alg>/<hex>` first, when the chain gave it another hash). The default chain
   becomes local cache → `--source`s (an org cache) → the wend archive → origin → mirrors and vaults. A pinned file gone
   from all of them still refuses, as decided on 2026-10-11. `--live` stays the explicit escape.
@@ -154,12 +165,28 @@ Each one a small PR.
 3. **The store** (built). `tools/archive.py ingest` on remi walks every passing run's pins down their chains,
    takes bytes from download lists, the shim's store or cache, or the origin, verifies each against the chain, and
    writes blobs, aliases and the index. `tools/archive.py verify` rehashes the store.
-4. **Sources.** Source packages for everything ingested.
-5. **R2 push.** Upload new blobs and the index (S3 API, standard library only), checking each upload's digest.
-6. **Client.** The archive as a by-digest source, in the default chain.
+4. **Sources** (built). Source packages for everything ingested, by `ingest` itself.
+5. **R2 push** (built). `tools/r2push.py` uploads new blobs and aliases, then the index, `latest.json` last, so
+   the index R2 serves never names a blob it lacks (S3 API, SigV4, standard library only). Each PUT carries the
+   body's sha256, and R2 refuses a body that doesn't match. `STORE/.pushed` remembers what's up. The credentials are
+   an Object Read & Write token for this bucket, in a file only its owner can read; nothing prints them.
+6. **Client** (built). `wend walk --run RUN.json` asks wend's archive, `https://archive.fieldmouseworks.com`, by
+   digest, after the `--source`s and any `--archive URL|DIR` and before the origin (not with `--offline` or
+   `--no-archive`). An alias is only a pointer: the blob it names is still checked against the digest the chain
+   gave, so a wrong alias is a refusal.
 7. **Box inputs.** A box build records the sources it read, as a hop does, and the store ingests them.
-8. **Signing, then public.** The index signature and `archive/allowed_signers`; then the bucket gets public read.
-   It stays private until this step.
+8. **Signing, then public.** `tools/archive.py sign STORE --key KEY` (built) writes `<index>.sig` beside every index
+   file, and `r2push.py` sends each just before its index. `verify` checks them against `archive/allowed_signers`
+   (committed). The key was made on remi (a root-only file; the private half never leaves remi), and remi's push
+   wrapper signs before every push. Public since 2026-10-15 at `https://archive.fieldmouseworks.com` (R2 custom
+   domain; no listing, no r2.dev). Check it yourself:
+   `curl -sO https://archive.fieldmouseworks.com/index/latest.json{,.sig}` then
+   `ssh-keygen -Y verify -f archive/allowed_signers -I wend-archive -n wend-archive -s latest.json.sig < latest.json`.
+   `r2push.py` marks an index `no-cache` and a blob or alias immutable, so an edge cache can't serve a stale index.
+9. **Gate artifacts** (built). `tools/gate_fetched.py DIR` downloads every unexpired `fetched-N` artifact not yet
+   seen (a read-only Actions token; GitHub wants one even on a public repo) and unpacks each under `DIR/<id>/`;
+   `archive.py ingest STORE --fetched DIR` then takes what passing runs on main pin. Artifacts from runs that never
+   landed are read and ignored.
 
 ## Refused
 
