@@ -100,7 +100,7 @@ import fcntl  # noqa: E402
 with open(f"{w}/store/.lock", "w") as held:
     fcntl.flock(held, fcntl.LOCK_EX)
     p = ingest("--fetched", f"{w}/fetched")
-check(p.returncode == 2 and "another ingest" in p.stdout, "a second ingest on the same store refuses to start")
+check(p.returncode == 2 and "is running on this store" in p.stdout, "a second ingest on the same store refuses to start")
 check(open(f"{w}/store/alias/sha1/{sha1(old_rpm)}").read() == f"sha256:{sha(old_rpm)}\n",
       "a package its index names by SHA-1 gets an alias naming its blob")
 os.remove(f"{w}/tree/{repo}/Packages/c-1.rpm")
@@ -280,6 +280,34 @@ check(p.returncode == 0 and "unreadable" not in p.stdout and
       f"no source https://{el}/x86_64/Packages/t-1.rpm" in p.stdout,
       "unreadable source metadata leaves gaps, never a failed ingest")
 import shutil as sh  # noqa: E402
+if sh.which("ssh-keygen"):  # the index signature (docs/archive.md, step 8)
+    a = lambda *x: subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", *x], capture_output=True, text=True)
+    for k in ("key", "other"):
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", k, "-f", f"{w}/{k}"], check=True)
+    signers = f"{w}/allowed_signers"
+    open(signers, "w").write(f'wend-archive namespaces="wend-archive" {open(f"{w}/key.pub").read()}')
+    s = f"{w}/store"
+    os.chmod(f"{w}/key", 0o644)
+    p = a("sign", s, "--key", f"{w}/key")
+    check(p.returncode == 2 and "chmod 600" in p.stdout, "a signing key others can read is refused")
+    os.chmod(f"{w}/key", 0o600)
+    p = a("verify", s, "--signers", signers)
+    check(p.returncode == 1 and "UNSIGNED index/latest.json" in p.stdout, "verify with signers: an unsigned index is bad")
+    p = a("sign", s, "--key", f"{w}/key")
+    n = len([f for f in os.listdir(f"{s}/index") if f.endswith(".json")])
+    check(p.returncode == 0 and f"signed {n} index files" in p.stdout and
+          all(os.path.isfile(f"{s}/index/{f}.sig") for f in os.listdir(f"{s}/index") if f.endswith(".json")),
+          "sign writes a .sig beside every index file")
+    p = a("verify", s, "--signers", signers)
+    check(p.returncode == 0 and "signatures checked" in p.stdout, "verify checks every index's signature")
+    p = a("sign", s, "--key", f"{w}/key")
+    check("signed 1 index files" in p.stdout, "signing again re-signs only latest.json")
+    open(f"{s}/index/latest.json", "a").write(" ")
+    p = a("verify", s, "--signers", signers)
+    check(p.returncode == 1 and "UNSIGNED index/latest.json" in p.stdout, "an index changed after signing is bad")
+    p = a("sign", s, "--key", f"{w}/other")
+    p = a("verify", s, "--signers", signers)
+    check(p.returncode == 1 and "UNSIGNED index/latest.json" in p.stdout, "a signature by a key not in signers is bad")
 if sh.which("zstd"):  # EPEL 10 serves its primary only as .zst; CI's runners have zstd, not every laptop does
     sys.path.insert(0, HERE)
     import archive  # noqa: E402
