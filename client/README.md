@@ -33,7 +33,7 @@ wend ids                                         # every fix's and route's conte
 wend compile fixes/el/alma9/el8-transit.toml     # what a fix runs, and its precondition as a test
 wend hop centos5-to-alma10 alma9                 # every command of one hop, with the fixes the route pins there
 wend hop etch-to-trixie wheezy --fired purge-stale-libdb4
-sudo wend walk etch-to-trixie --root /srv/etch --checks boxes/debian/etch-web/box.toml --out run.json
+sudo wend walk etch-to-trixie --root /srv/etch --checks boxes/debian/etch-web/box.toml --live --out run.json
 ```
 
 `walk` runs as root, copies the root to a snapshot before each hop (rsync, under `--work`, default
@@ -87,8 +87,13 @@ in meanwhile waits for it.
 Bytes come from `--cache DIR` (default `<work>/cache`, files named by their hash; held to the work directory's rules:
 owned by root, nobody else can write it, outside the root), then each `--source` in order (a
 directory or URL laid out `host/path`, like the shim's cache or an org mirror), then the origin unless `--offline`.
-The first bytes that hash right win and go into the cache. When no source has them, the request is refused and the
-hop rolls back: SPEC's default for a vanished snapshot (`--live` is wend#19). Fetching shells out to `curl`, so
+The first bytes that hash right win and go into the cache. Before the first step, the walk fetches and verifies every
+top file the run pins; if any is gone from every source (a live mirror published new metadata and no archive kept
+the old), it refuses there, having run nothing. A package that goes missing later is refused and its hop rolls back.
+
+`walk` takes `--run` or `--live`, and refuses neither. `--live` walks today's mirrors with nothing verified (the EL
+shim and apt as the harness runs them), and the run it writes says `"live": true`. A `--run` walk's run says
+`"live": false` and names the run it was pinned by. Fetching shells out to `curl`, so
 proxies and CA bundles are the host's.
 
 Proven on centos5-to-alma10 (el/centos5-web): a cold walk through the proxy passed with nothing refused and filled

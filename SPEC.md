@@ -305,6 +305,11 @@ outside any repo (`rpm.bootstrap`'s 7-Zip RPMs) is pinned by sha256 in the adapt
 the hop records it by its URL. The harness writes `sources` from the files it refreshed. A run without them proves the
 route against whatever the mirrors held that day and nothing more.
 
+A run the client writes on a machine (`wend walk`) says how far to trust its `sources`: `"live": false` with
+`"pinned_by": {"route", "box", "started"}` naming the run whose pins every download was checked against, or
+`"live": true` when it was asked to walk today's mirrors with nothing verified (see "Moved mirrors" under open
+question 12).
+
 A discovery run records which model was used and how many calls it made. Replays record `model_calls: 0`. CI only
 ever replays.
 
@@ -1737,12 +1742,15 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
       then installs only from that cache, offline, so a mirror going down mid-upgrade can't strand it.
     - **Moved mirrors.** When the pinned metadata isn't available from any source (a live mirror moved on and no
       archive holds that snapshot), the client stops before touching anything. It walks against today's mirrors only
-      when asked to (`--live`), and its run then records the new `sources`, so the mismatch is visible. Decided:
-      refuse by default. The follow-up is making a vanished snapshot rare (the archive and the fallback chain), not
-      making the client looser.
-    - **Order of work.** Done: the harness and the client record `sources`, and the client walks through a verifying
-      cache (`wend walk --run`, with `--source` and `--offline`). Next: CI uploads the download list, then the archive
-      (wend#19). Until runs carry `sources`, integrity rests on TLS to the
+      when asked to (`--live`), and its run then records `"live": true` and the new `sources`, so the mismatch is
+      visible. Decided: refuse by default. `wend walk` takes either `--run` or `--live`, never neither: before the
+      first step it fetches and verifies every top file the run pins (indexes and packages are checked as they're
+      fetched; walking a copy first is what proves they're all still there). The follow-up is making a vanished
+      snapshot rare (the archive and the fallback chain), not making the client looser. Today that's not rare: a run
+      pinning live AlmaLinux or EPEL repos goes stale as soon as they publish new metadata, often within a day.
+    - **Order of work.** Done: the harness and the client record `sources`, the client walks through a verifying
+      cache (`wend walk --run`, with `--source` and `--offline`), and refuses an unpinned walk unless `--live`. Next:
+      CI uploads the download list, then the archive (wend#19). Until runs carry `sources`, integrity rests on TLS to the
       mirrors and the shim's cache: EL repos run with `gpgcheck=0` (CentOS 5's keys can't check what comes later), and the shim
       keeps only complete downloads and checks hash-named metadata against its name.
 13. **A machine the route can't carry in place.** Some machines can't take a route on their own disk: CentOS 7
