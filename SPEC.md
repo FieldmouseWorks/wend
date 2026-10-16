@@ -2042,7 +2042,8 @@ Where the new root goes, picked by preflight from the machine's facts (the order
 3. **Nothing else.** No room for either refuses, touching nothing, and says exactly what to add: "free N GiB in volume
    group X, or attach a spare disk of N GiB and name it with --new-root-disk". N is relocate's sum (1.2 times what `/`
    and `/boot` use, plus the route's `disk_mib` and `boot_mib` over its hops and transits) plus the plan's cache. There
-   is no way past this: a machine wend can't keep an undo for isn't upgraded live.
+   is no way past this: a machine wend can't keep an undo for isn't upgraded live. The places under "Other places for
+   the undo" join this list only once remi proves them.
 
 The new root's filesystem is made by the machine's own `mkfs`, of the type its root has now (XFS made v5, as
 relocate does; ext3 stays ext3, which every kernel on the EL routes mounts and the in-place routes already keep), so
@@ -2062,6 +2063,34 @@ the old kernel can still read it. Where the new `/boot` goes depends on what the
   config with the right paths (`hop.kernel_after` takes them from the default entry; EL6's grubby from `/boot`'s
   mount), are the parts of this section with no proof yet, and the first thing step 3 of the order of work proves.
   If one of them can't be made to work, that layout is refused, not patched over.
+
+#### Other places for the undo
+
+Weighed for owners with no free extents and no spare disk, none in the first build unless its proof passes:
+
+- **The machine's own root filesystem.** Most old machines use a fraction of their disk. When `/` has room for a
+  second copy of itself plus what the route needs, the old system is copied into `/.wend-old/` on the same filesystem
+  (the old `/boot` beside it), and this time the hops walk the real root in place, as the VM tier walks it; the copy
+  is the old system. No initramfs on these routes boots a root from a subdirectory (CentOS 5's `mkinitrd` can't, and
+  GRUB legacy only loads the kernel), so rollback swaps instead: a GRUB entry boots the last kernel that booted green,
+  with `init=` the static wend binary, which as PID 1 renames the top-level directories of `/` and the old `/boot`'s
+  files back into place, keeping a journal so a power cut mid-swap finishes on the next boot, then reboots into the old
+  system. While an upgrade is under way that entry is the default and every boot of the new system is a one-shot, so a
+  power cut rolls back, as with relocate. Nothing about it is proven yet. Step 3 of the order of work proves it on
+  remi (a red made on purpose, the swap, the old system's checks green), or it's refused. If it works, it covers more
+  machines than any other place.
+- **An external disk** (a USB SSD). Turned around: the old system is relocated out onto it and boots from it through
+  the stub's entry 1, and the hops walk the internal disk in place, so production never runs from USB. Rollback boots
+  the old system from the external disk, then copies it back. Open question 2.
+- **An admin box on the same network.** The rehearsal's copy already lives there, pinned to the plan's fingerprint,
+  so keeping it as the machine's restore image costs nothing; one admin host could hold one for each machine in a
+  closet. It isn't a bootable undo: a rollback would be a boot entry whose initramfs brings up the network and pulls
+  the image back (rsync or nbd), which CentOS 5's `mkinitrd` can't do and EL6's and EL7's dracut can only with work.
+  Open question 3. Until then, the copy the rehearsal took is the backup the docs tell the owner to keep.
+- **A cloud drive.** A backup, not an undo: getting a root back from it means a rescue boot and a long download, so
+  it can't bring the old system back by itself after a panic. Not part of this design.
+
+#### Limits
 
 Relocate's own limits shrink to fit: the free-extents placement, a plain-partition root on a spare disk, and the GRUB
 legacy stub are built in this work; LUKS, `/boot` on md or LVM, and UEFI stay refused. An XFS v4 CentOS 7 machine
@@ -2281,7 +2310,8 @@ the generated checks; the rehearsal's kernel downloads. Nothing else.
 3. Relocate widened, in the VM tier first (`vm.py relocate`, then `vm.py --relocate replay`): free extents, a plain
    root on a spare disk, and GRUB legacy's stub and `/boot` on `el/centos5-web` (with `--lvm` made to work on the
    CentOS 5 kickstart), each with its trial, reset, commit and rollback, and a route walked on the copy and rolled back
-   after a red made on purpose.
+   after a red made on purpose. Alongside it, the same-filesystem copy and its swap at boot ("Other places for the
+   undo"), proved or refused.
 4. `wend rehearse`, the plan and the generated checks, proved by rehearsing VM guests from remi's host and comparing
    the walk with CI's run of the same route.
 5. `wend upgrade`, `wend rollback`, `wend commit` and `vm.py upgrade`, on `el/centos7-lamp`, then `el/centos5-web`,
@@ -2298,6 +2328,14 @@ by itself after each boot.
 1. **Shared data mounts.** `/home`, `/srv` and data disks are shared by both roots, so a rollback keeps what the new
    system wrote there. Is saying so enough, or should preflight refuse a database whose data directory is on one
    (a rollback would hand MariaDB 10.11's files to MySQL 5.0)?
+2. **An external disk as the undo.** BIOS has to boot it through GRUB on the internal disk, under a device order that
+   changes when it's unplugged, and a cheap thumb drive is too slow to run a server from even for a day. Refuse below
+   a write rate measured during the copy? How long may the old system run from it after a rollback before it's copied
+   back?
+3. **The admin box's image as the undo.** Worth building as the fallback for machines with no room, instead of
+   refusing them, only if remi proves a restore entry that brings back the old system after a hop broken on purpose,
+   with no one at the console. Which transport (rsync over ssh, nbd), and what does CentOS 5 do, whose initramfs has
+   no network?
 
 ## Open questions
 
