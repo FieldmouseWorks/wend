@@ -429,7 +429,9 @@ See `adapters/el.toml`. Notes that matter:
   `http://127.0.0.1:<port>/<host>/<path>`, for a fixed list of hosts, and caching what it fetched. It also keeps
   every file it fetched under its sha256 (`.sha256/<hex>` in its cache, which no request can reach) and logs every
   file it serves (`.fetched.log`: `<https url> sha256:<hex> <size>`). A live repo's `repomd.xml` is refetched each
-  time, so the store is the only place an older one survives. `wend replay --out RUN.json` turns the lines the
+  time, so the store is the only place an older one survives. The shim answers `/.wend-shim` with its own source's sha256, and
+  the harness reuses a shim already on the port only if that matches its own `tools/mirror.py`: one from another
+  checkout would serve with its own allow-list, so the harness stops and says to `shim-stop` it. `wend replay --out RUN.json` turns the lines the
   replay added to the log into a download list beside the run, `RUN.fetched/`: `fetched.txt` (each distinct file,
   sorted) and `blobs/<hex>` (the bytes of every file in it that isn't a package, and of live EPEL's packages, which
   go when they're updated). The gate uploads it for the archive (`docs/archive.md`, "Capture").

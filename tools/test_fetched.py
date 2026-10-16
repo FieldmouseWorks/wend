@@ -108,6 +108,31 @@ try:
     check(not os.path.exists(f"{work}/again/blobs/{sha[md]}") and
           open(f"{work}/again/missing.txt").read().split() == [f"https://{md}"],
           "a store file that doesn't hash to its name is reported missing, never copied")
+    import http.server
+    import threading
+    import sandbox
+    mine = hashlib.sha256(open(f"{HERE}/mirror.py", "rb").read()).hexdigest()
+    check(get(".wend-shim").decode() == mine, "the shim names its own source's sha256 at /.wend-shim")
+    try:
+        sandbox.ensure_mirror({"mirror": {"shim": f"http://127.0.0.1:{port}", "probe": md}})
+        check(True, "ensure_mirror reuses a running shim that is this checkout's tools/mirror.py")
+    except RuntimeError as e:
+        check(False, f"ensure_mirror refused this checkout's own shim: {e}")
+
+    class Old(http.server.BaseHTTPRequestHandler):  # a shim from before /.wend-shim: 403 for any unknown host
+        def do_GET(self):
+            self.send_error(403)
+
+        def log_message(self, *a):
+            pass
+    old = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Old)
+    threading.Thread(target=old.serve_forever, daemon=True).start()
+    try:
+        sandbox.ensure_mirror({"mirror": {"shim": f"http://127.0.0.1:{old.server_address[1]}", "probe": md}})
+        check(False, "ensure_mirror reused a shim from another checkout")
+    except RuntimeError as e:
+        check("another checkout" in str(e), "ensure_mirror refuses a shim from another checkout, naming shim-stop")
+    old.shutdown()
 finally:
     shim.terminate()
     shim.wait()
