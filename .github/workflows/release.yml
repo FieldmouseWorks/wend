@@ -1,4 +1,5 @@
-# Releases: the client a machine's owner downloads. A maintainer pushes a tag (v0.1.0); this builds the static binary
+# Releases: the client a machine's owner downloads. A maintainer pushes a tag (v0.1.0), or publishes a release with a
+# new tag in GitHub's web UI; this builds the static binary
 # from that commit, packs it with the atlas it reads (adapters and their driver tables, fixes, routes, runs), checks
 # the pack loads and passes its own check, and publishes both files on the tag's release. The asset names carry no
 # version, so releases/latest/download/wend-x86_64-linux.tar.gz always names the newest one.
@@ -37,6 +38,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+        # a release made in GitHub's web UI (Releases > Draft a new release, new tag) already exists when this runs:
+        # attach the files to it instead of creating it
         run: |
-          gh release create "$TAG" wend-x86_64-linux.tar.gz SHA256SUMS --verify-tag --title "wend $TAG" \
-            --notes "The client and the atlas it reads, built from $GITHUB_SHA. What to run, and what it does and doesn't touch: README.md inside, or docs/try-it.md."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" wend-x86_64-linux.tar.gz SHA256SUMS --clobber
+          else
+            gh release create "$TAG" wend-x86_64-linux.tar.gz SHA256SUMS --verify-tag --title "wend $TAG" \
+              --notes "The client and the atlas it reads, built from $GITHUB_SHA. What to run, and what it does and doesn't touch: README.md inside, or docs/try-it.md."
+          fi
