@@ -65,7 +65,7 @@ the loose precondition: in dep-lab, a fix gated on `/etc/mysql/my.cnf` installed
 every health check passed. If your fix is honest and the decoy is still wrong, the fix is too broad. Narrow the `when`;
 don't widen `fires_on`.
 
-### 4. Proof on remi (harness changes only)
+### 4. Proof on remi
 
 The gate judges a PR with the base branch's tools and adapters, so a PR that changes them is never exercised by CI.
 remi, the maintainer's lab machine, is where they get tested: VM replays on real installs with real reboots
@@ -78,11 +78,11 @@ verdict on its exact head commit when it:
 
 - touches `tools/`, `adapters/`, `boxes/` or `wend`;
 - adds, changes or newly pins a fix a chroot can't judge, because it works on what a chroot never boots: a `net.*` or
-  `fs.layout` op, or one that installs, removes or reinstalls a kernel, bootloader, initramfs, init or network package
-  (the workflow's `BOOTNET` list);
+  `fs.layout` op, or one that names a kernel, bootloader, initramfs, storage, init or network package or unit in any
+  argument (`install`'s packages, `rpm.transit`'s reinstall, `service.enable`'s unit: the workflow's `BOOTNET` list);
 - or is labeled `needs-remi`, which a maintainer adds to any other PR that needs a real boot.
 
-Statuses belong to a commit, so every push resets it to pending.
+Statuses belong to a commit, so every push is judged again from scratch.
 
 To record a verdict, check that the run's `run.json` `head` is the PR's current head and not dirty, then:
 

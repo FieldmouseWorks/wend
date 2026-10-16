@@ -13,8 +13,8 @@
 # remi is never reached from here, and nothing here can start a run there: remi only runs what a maintainer starts.
 #
 # A fix a chroot can't judge is one that touches what the chroot tier never boots (SPEC.md "Kernels and the
-# bootloader"): an op on networking (`net.*`) or the root's layout (`fs.layout`), or one that installs, removes or
-# reinstalls a kernel, bootloader, initramfs, init or network package (BOOTNET below). A changed route counts its newly
+# bootloader"): an op on networking (`net.*`) or the root's layout (`fs.layout`), or one that names a kernel,
+# bootloader, initramfs, storage, init or network package or unit in any argument (BOOTNET below). A changed route counts its newly
 # pinned fixes too, so an existing network fix pinned onto a new route needs remi as well.
 #
 # Trust: pull_request_target runs this file as it is on the base branch, with a token that can write statuses, so no PR
@@ -57,12 +57,14 @@ jobs:
           # what remi proves and CI can't: the harness the gate copies from base, the boxes its VM tier installs, and
           # the entry point that runs them
           HARNESS = re.compile(r"(tools/|adapters/|boxes/|wend$)")
+          # package and unit names (a prefix of the name, any case)
           BOOTNET = re.compile(
-              r"(kernel|linux-(image|headers|modules|generic|server|virtual|signed)|grub|shim|efibootmgr|os-prober"
-              r"|dracut|initramfs-tools|mkinitrd|module-init-tools|kmod|systemd-boot|sysvinit|systemd-sysv|upstart"
-              r"|udev|systemd-udev|NetworkManager|network-scripts|initscripts|ifupdown|ifenslave|netplan|resolvconf"
-              r"|systemd-networkd|systemd-resolved|isc-dhcp|dhcp3|dhclient|dhcpcd|net-tools|iproute|linux-firmware)")
-          PKG_OPS = {"install", "remove", "force-remove", "dpkg.reinstall"}
+              r"(kernel|linux-(image|headers|modules|generic|server|virtual|signed)|linux-firmware|grub|shim|efibootmgr"
+              r"|os-prober|dracut|initramfs-tools|mkinitrd|module-init-tools|kmod|lvm2|mdadm|cryptsetup|sysvinit|upstart"
+              r"|systemd($|-sysv|-boot|-udev|-networkd|-resolved)|udev|initscripts|network($|-scripts|-manager)"
+              r"|NetworkManager|netbase|ifupdown|ifenslave|netplan|resolvconf|isc-dhcp|dhcp3|dhcp-client|dhclient"
+              r"|dhcpcd|net-tools|iproute|firewalld)", re.I)
+          NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+@-]*")
 
           def api(path, method="GET", body=None, raw=False):
               req = urllib.request.Request("https://api.github.com/" + path, method=method,
@@ -92,17 +94,25 @@ jobs:
                   for v in doc:
                       yield from steps(v)
 
+          def strings(v):
+              """Every string in a step's argument, at any depth."""
+              if isinstance(v, str):
+                  yield v
+              elif isinstance(v, (list, dict)):
+                  for x in (v.values() if isinstance(v, dict) else v):
+                      yield from strings(x)
+
           def blind(doc):
               """Why a chroot can't judge this fix, or None."""
               for st in steps(doc):
                   op = st["op"]
                   if op.startswith("net.") or op == "fs.layout":
                       return op
-                  pkgs = st.get("packages")
-                  if op in PKG_OPS and isinstance(pkgs, list):
-                      hit = [p for p in pkgs if not isinstance(p, str) or BOOTNET.match(p)]
+                  # whatever the op: install's packages, rpm.transit's reinstall and remove, service.enable's unit
+                  for k, v in st.items():
+                      hit = next((n for n in strings(v) if k != "op" and NAME.fullmatch(n) and BOOTNET.match(n)), None)
                       if hit:
-                          return f"{op} {hit[0]}"
+                          return f"{op} {k} {hit}"
               return None
 
           if not re.fullmatch(r"[0-9]+", PR):
@@ -166,9 +176,10 @@ jobs:
                       name, fam = x.get("name"), route.get("family")
                       ok = all(isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", v)
                                for v in [name, fam, *route.get("hops", [])])
-                      doc = next((d for h in route.get("hops", []) if ok
-                                  for d in [toml_at(head_repo, f"fixes/{fam}/{h}/{name}.toml", sha)] if d), None)
-                      b = "unreadable" if doc is None else blind(doc)
+                      # two hops may each have a fix of that name: any of them a chroot can't judge counts
+                      docs = [d for h in route.get("hops", []) if ok
+                              for d in [toml_at(head_repo, f"fixes/{fam}/{h}/{name}.toml", sha)] if d]
+                      b = "unreadable" if not docs else next(filter(None, map(blind, docs)), None)
                       if b:
                           why.append(f"{f['filename']} pins {name}: {b}")
           if any(l["name"] == "needs-remi" for l in pr["labels"]):
@@ -185,4 +196,4 @@ jobs:
           stand_by_hand_verdict()   # again: one may have landed while this run read the PR
           api(f"repos/{REPO}/statuses/{sha}", method="POST", body={
               "state": state, "context": CONTEXT, "description": desc,
-              "target_url": f"https://github.com/{REPO}/blob/main/CONTRIBUTING.md#4-proof-on-remi-harness-changes-only"})
+              "target_url": f"https://github.com/{REPO}/blob/main/CONTRIBUTING.md#4-proof-on-remi"})
