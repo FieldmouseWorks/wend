@@ -566,7 +566,8 @@ def kickstart(box_doc, adapter, key_pub):
     whose 5.11 installer makes 100 MiB, inst["ks_end"] whether sections end with %end (EL7 on; EL5's
     anaconda doesn't know it), inst["nobase"] (default on) whether %packages takes --nobase, which EL8's installer
     no longer accepts, inst["repos"] the trees besides `tree` the install reads (EL8's AppStream, where httpd, php
-    and mariadb live), each a kickstart `repo` through the shim. On UEFI, an EFI system partition. The box's customize runs in %post after the release's
+    and mariadb live), each a kickstart `repo` through the shim, inst["packages_flags"] more %packages options (EL4's
+    anaconda stops to ask about dependencies unless it gets --resolvedeps). On UEFI, an EFI system partition. The box's customize runs in %post after the release's
     repos are set (set_release), as the chroot build runs it, with the mirror shim where the guest sees the host."""
     rel = adapter["releases"][box_doc["release"]]
     inst = rel["install"]
@@ -598,7 +599,7 @@ def kickstart(box_doc, adapter, key_pub):
         f'bootloader --location=mbr{disks[2]} --append="console=tty0 console=ttyS0,115200 {inst.get("append", "")}"'
         .replace(" \"", "\""),
         *disks[0], "zerombr", f"clearpart --all --initlabel{disks[1]}", *parts, "poweroff", "",
-        "%packages --nobase" if inst.get("nobase", True) else "%packages", "kernel", *inst.get("packages", []), *box_doc["packages"], *end, "",
+        " ".join(["%packages", *(["--nobase"] if inst.get("nobase", True) else []), *inst.get("packages_flags", [])]), "kernel", *inst.get("packages", []), *box_doc["packages"], *end, "",
         "%post --log=/root/ks-post.log",
         post_install(box_doc, key_pub, before=backends.fill(adapter["hop"]["set_release"], v),
                      shim=(load(f"adapters/{box_doc['family']}.toml")["mirror"]["shim"], adapter["mirror"]["shim"])),
