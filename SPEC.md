@@ -2054,9 +2054,15 @@ the old kernel can still read it. Where the new `/boot` goes depends on what the
   `grubenv`, and the modules under `core.img`'s prefix) has to be a plain partition that GRUB can save `grubenv` on
   and that every kernel on the route mounts, since `arm_new` writes it from the new root at every hop. The old `/boot`
   is that when it's ext4 or XFS v5 (CentOS 7.3 and later installs). An XFS v4 `/boot` (7.0 to 7.2) isn't, because Alma
-  9's kernel and later can't mount it. Then the stub's home is a new plain XFS v5 partition at the start of the spare
-  disk, `refresh` installs `core.img` onto the boot disk with that prefix (`grub2-install --boot-directory`), and
-  entry 1 finds the old `/boot` by UUID (GRUB 2 still reads v4). With free extents and no spare disk, an XFS v4
+  9's kernel and later can't mount it. Then a new step, `stub_home`, runs before `refresh`: it splits the spare disk
+  into a first partition for the stub's home, sized like the old `/boot` plus the route's `boot_mib`, made XFS v5 by
+  the running release's `mkfs.xfs` and mounted at `/run/wend/stub`, and a second partition that `place` makes the new
+  root's PV instead of the whole disk; it copies the old `/boot/grub2` (config, `grubenv`) into the home and records
+  its UUID. `refresh` then installs `core.img` onto the boot disk with the home as its prefix (`grub2-install
+  --boot-directory=/run/wend/stub`); until the flip the home's copy of the old config boots the old system as before
+  (EL7's entries find their kernel by `search --fs-uuid`), and `cleanup` after a failure before the flip runs the
+  refresh again with the old `/boot` as the prefix, so the old system's own kernel updates keep reaching its menu.
+  Entry 1 finds the old `/boot` by UUID (GRUB 2 still reads v4). With free extents and no spare disk, an XFS v4
   `/boot` is refused, naming a disk to add. `relocate.env` records the home's UUID as `STUB_UUID` (the old `/boot`'s
   own when that is the home), and every write to the stub's variables after the flip (`arm_new`, `commit_trial`,
   `rollback_next`) mounts that, never `BOOT_UUID`. The route's GRUB reinstall from EL8 on (the BIOS step
@@ -2076,13 +2082,20 @@ the old kernel can still read it. Where the new `/boot` goes depends on what the
   `mkfs.ext3`: the first partition of the spare disk, or, with free extents and no spare disk, a directory
   `/boot/wend/` on the old `/boot` partition when that partition has room for the route's kernels beside the old ones
   (CentOS 5's installer makes 100 MiB, which doesn't; CentOS 6's 500 MiB does), bind-mounted at the new root's
-  `/boot`. The old `grub.conf` becomes a stub with the same two entries and the same rules as relocate's: entry 0 loads
-  the new `/boot`'s `grub.conf` (`configfile`), entry 1 the old one, saved as `grub.conf.wend-old`; the one-shot boot is
-  `default saved` with `savedefault --once`. The copy's initramfs comes from the release's own tool (CentOS 5's
-  `mkinitrd`, CentOS 6's dracut), not host-only, so it finds the new root. This stub, and the new kernels' entries
-  landing in the new `/boot`'s config with the right paths (`hop.kernel_after` takes them from the default entry;
-  EL6's grubby from `/boot`'s mount), are the parts of this section with no proof yet, and the first thing step 3 of
-  the order of work proves. If one of them can't be made to work, that layout is refused, not patched over.
+  `/boot`. The old `grub.conf` becomes a stub with the same two entries and the same rules as relocate's: entry 0
+  loads the new `/boot`'s `grub.conf` (`configfile`), entry 1 the old one, saved as `grub.conf.wend-old`. The one-shot
+  is GRUB legacy's documented once-only boot, not `savedefault --once`: the stub says `default saved`, entry 0 carries
+  `savedefault 1` (so once it has been taken, the saved default is the old system again, whatever happens next), and
+  arming the trial is writing 0 as the saved default in the stub's home's `/boot/grub/default`, the file
+  `grub-set-default` writes. wend writes that file itself, in `grub-set-default`'s format, so it doesn't depend on the
+  route keeping the `grub` package: `arm` from the old system, `arm_new` from the new root (mounting the stub's home
+  by `STUB_UUID`, as for GRUB 2); `rollback_next` writes 1; `commit_trial` removes entry 0's `savedefault 1` and
+  writes 0, so the new root stays the default and entry 1 stays in the menu. The copy's initramfs comes from the
+  release's own tool (CentOS 5's `mkinitrd`, CentOS 6's dracut), not host-only, so it finds the new root. This stub,
+  and the new kernels' entries landing in the new `/boot`'s config with the right paths (`hop.kernel_after` takes them
+  from the default entry; EL6's grubby from `/boot`'s mount), are the parts of this section with no proof yet, and the
+  first thing step 3 of the order of work proves. If one of them can't be made to work, that layout is refused, not
+  patched over.
 
 #### Other places for the undo
 
@@ -2372,9 +2385,10 @@ is a proven start: the only C6 rung proved so far is a C5 box upgraded to C6.
 | judging a boot | `tools/vm.py` `walk_vm` (`NET`, `kernel_newest`, `FW_NOW`, the checks) |
 | gap report | `wend report`, `wend share` |
 
-New: relocate's free-extents placement, a plain-partition root on a spare disk, its GRUB legacy stub and `/boot`,
-and the new root's `arm_new` (the adapter's `[relocate]` table, reviewed as a spec change); relocate run by the
-client; the plan and the state file; the generated checks; the rehearsal's kernel downloads. Nothing else.
+New: relocate's free-extents placement, a plain-partition root on a spare disk, its GRUB legacy stub and `/boot`, the
+new root's `arm_new`, and `stub_home` for an XFS v4 `/boot` (the adapter's `[relocate]` table, reviewed as a spec
+change); relocate run by the client; the plan and the state file; the generated checks; the rehearsal's kernel
+downloads. Nothing else.
 
 ### Order of work
 
