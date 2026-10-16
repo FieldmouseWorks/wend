@@ -1,4 +1,4 @@
-# The Enterprise Linux adapter: CentOS 5 to AlmaLinux 10, everything rpm/yum/dnf-specific that fixes may not say for
+# The Enterprise Linux adapter: CentOS 4 to AlmaLinux 10, everything rpm/yum/dnf-specific that fixes may not say for
 # themselves. What each op does is in SPEC.md, "Op reference" (rpm backend). Written from dep-lab's
 # CentOS round (co.py, 2026-10-10/11), where Opus found the route and a fix library replayed it on two boxes.
 schema = "wend.adapter/0"
@@ -7,7 +7,7 @@ backend = "rpm"
 release_file = "/etc/redhat-release"
 
 # Release ids carry the vendor: the ladder crosses from CentOS to AlmaLinux at 8 (open question 5 in SPEC.md).
-ladder = ["centos5", "centos6", "centos7", "centos8", "alma8", "alma9", "alma10"]
+ladder = ["centos4", "centos5", "centos6", "centos7", "centos8", "alma8", "alma9", "alma10"]
 # A route may leave these out of its hops. EL8 is only ever a bootstrap step: rpm.transit lands the box on EL8 and
 # the same hop's transaction takes it on to EL9, so no health check ever runs on EL8. CentOS 8 is where boxes start,
 # never where a route lands (it ended in 2021): routes from EL7 and earlier step over it, and routes from it go
@@ -45,12 +45,31 @@ force = ["depends", "scripts"]
 shim = "http://127.0.0.1:8085"
 probe = "vault.centos.org/5.11/os/x86_64/repodata/repomd.xml"
 
+[releases.centos4]
+major = 4
+pm = "yum"
+repos = { base = "vault.centos.org/4.9/os/x86_64", updates = "vault.centos.org/4.9/updates/x86_64" }
+# tools/vm.py: as CentOS 5's, but EL4's anaconda stops to ask about dependencies unless %packages has --resolvedeps,
+# and at its language support screen unless the kickstart has langsupport (EL5 dropped the command).
+# 4.8 and later carry virtio drivers, so the VM tier's default virtio disk and NIC stand.
+install = { tree = "vault.centos.org/4.9/os/x86_64", pxeboot = "images/pxeboot", packages = ["grub"], packages_flags = ["--resolvedeps"], ks = ["langsupport --default=en_US.UTF-8 en_US.UTF-8"] }
+
 [releases.centos5]
 major = 5
 pm = "yum"
 repos = { base = "vault.centos.org/5.11/os/x86_64", updates = "vault.centos.org/5.11/updates/x86_64" }
 # tools/vm.py installs a VM box with the release's own installer: its tree (through the shim) and the pxeboot dir in it
 install = { tree = "vault.centos.org/5.11/os/x86_64", pxeboot = "images/pxeboot", packages = ["grub"] }
+# EL4's yum 2.4 has no distro-sync; upgrade (update with obsoletes) is what took EL4 boxes to 5. Two of the modules
+# EL5's yum needs are installed as EL4's Python 2.3 builds at a version yum won't replace: python-elementtree
+# (1.2.6-5.el4.centos sorts above EL5's 1.2.6-5) and python-sqlite (the same 1.1.7-1.2.1 in both). Left alone, EL5's
+# yum finds neither under Python 2.4 and can't start. EL4's yum imports elementtree, so the packages can't go before
+# the transaction: their records go (files kept, so EL4's yum keeps running) when their files are Python 2.3's, the
+# transaction installs EL5's builds as yum's dependencies, and the old builds' Python 2.3 files go after (only those).
+upgrade = ["L=/var/lib/wend/py23-leftovers; for p in python-elementtree python-sqlite; do rpm -q $p >/dev/null 2>&1 && rpm -ql $p | grep -q '/python2\\.3/' || continue; mkdir -p /var/lib/wend && rpm -ql $p | grep '/python2\\.3/' >> $L && rpm -e --justdb --nodeps $p && echo \"$p: EL4's Python 2.3 build, record dropped; EL5's comes with the transaction\" || exit 1; done",
+           "yum -y upgrade",
+           "L=/var/lib/wend/py23-leftovers; [ -f $L ] || exit 0; n=0; for f in $(cat $L); do [ -f \"$f\" ] && ! rpm -qf \"$f\" >/dev/null 2>&1 && rm -f \"$f\" && n=$((n+1)); done; for f in $(sort -r $L); do [ -d \"$f\" ] && rmdir \"$f\" 2>/dev/null; done; rm -f $L; echo \"removed $n Python 2.3 files the dropped records left\"",
+           "rpm -q python-elementtree python-sqlite && python -c 'import cElementTree, sqlite' && yum --version"]
 
 [releases.centos6]
 major = 6
@@ -512,11 +531,11 @@ kernel_newest = "rpm -q --qf '%{INSTALLTIME} %{VERSION}-%{RELEASE}.%{ARCH}\\n' k
 # the release it runs, as EL does when none exists. Nothing is removed unless the machine is booted from this root: in a
 # chroot of someone's disk, uname -r is the host's kernel, not the box's.
 kernel_before = [
-  "[ / -ef /proc/1/root ] || { echo \"not booted from this root: kernel records left as they are\"; exit 0; }; K=$(for p in kernel kernel-core kernel-modules kernel-modules-core kernel-modules-extra; do rpm -q $p 2>/dev/null | grep -v 'is not installed'; done); if [ -n \"$K\" ]; then mkdir -p /var/lib/wend && echo $K > /var/lib/wend/kernel-handover && rpm -e --justdb --nodeps --noscripts --notriggers $K && echo \"kernel records dropped, files kept: $K\"; fi",
+  "[ / -ef /proc/1/root ] || [ \"$WEND_CHROOT_BOX\" = 1 ] || { echo \"not booted from this root: kernel records left as they are\"; exit 0; }; K=$(for p in kernel kernel-core kernel-modules kernel-modules-core kernel-modules-extra; do rpm -q $p 2>/dev/null | grep -v 'is not installed'; done); if [ -n \"$K\" ]; then mkdir -p /var/lib/wend && echo $K > /var/lib/wend/kernel-handover && rpm -e --justdb --nodeps --noscripts --notriggers $K && echo \"kernel records dropped, files kept: $K\"; fi",
   "[ / -ef /proc/1/root ] || { echo \"not booted from this root: the running kernel isn't its own, nothing removed\"; exit 0; }; R=$(uname -r); G=/boot/grub/grub.conf; D=\"\"; [ -f $G ] && D=$(awk -F= '/^default=/ {d = $2} /^title/ {t++} t - 1 == d && $0 ~ /vmlinuz-/ {sub(/.*vmlinuz-/, \"\"); sub(/[ \\t].*/, \"\"); print; exit}' $G); E=$(sed -n 's/^GRUB_DEFAULT=//p' /etc/default/grub 2>/dev/null | tail -n1 | tr -d \"\\\"'\\r\"); S=$(sed -n 's/^saved_entry=//p' /boot/grub2/grubenv 2>/dev/null | tail -n1); case \"$E\" in ''|saved) T=${S:-'#0'};; 0) T='#0';; *) T=$E;; esac; P=; for c in /boot/grub2/grub.cfg /boot/grub2/grubenv /boot/efi/EFI/*/grub.cfg; do [ -f \"$c\" ] && P=1; done; X=; if [ -f \"/boot/loader/entries/$T.conf\" ]; then X=$(awk '$1 == \"linux\" {print $2; exit}' \"/boot/loader/entries/$T.conf\"); else for c in /boot/grub2/grub.cfg /boot/efi/EFI/*/grub.cfg; do [ -f \"$c\" ] || continue; X=$(awk -v t=\"$T\" '/^[ \\t]*menuentry[ \\t]/ {n++; q = index($0, \"\\047\"); r = substr($0, q + 1); if (t == \"#0\") m = (n == 1); else m = (q > 0 && substr(r, 1, index(r, \"\\047\") - 1) == t); next} m && $1 ~ /^linux(16|efi)?$/ {print $2; exit}' \"$c\"); [ -n \"$X\" ] && break; done; fi; K=${X##*/vmlinuz-}; case \"$K\" in */*|0-rescue-*) K=;; esac; for f in /boot/vmlinuz-*; do [ -e \"$f\" ] || continue; v=${f#/boot/vmlinuz-}; [ -n \"$v\" ] || continue; case \"$v\" in 0-rescue-*|\"$R\"|\"$D\"|\"$K\") continue;; esac; rpm -qf \"$f\" >/dev/null 2>&1 && continue; echo \"removing an old kernel no package owns: $v\"; rm -f \"/boot/vmlinuz-$v\" \"/boot/.vmlinuz-$v.hmac\" \"/boot/System.map-$v\" \"/boot/config-$v\" \"/boot/symvers-$v.gz\" \"/boot/initrd-$v.img\" \"/boot/initramfs-$v.img\" \"/boot/initramfs-${v}kdump.img\" \"/boot/initrd-${v}kdump.img\" \"/etc/ld.so.conf.d/kernel-$v.conf\"; rm -rf \"/lib/modules/$v\"; for e in /boot/loader/entries/*.conf; do [ -f \"$e\" ] || continue; k=$(awk '$1 == \"linux\" {print $2; exit}' \"$e\"); [ \"${k##*/}\" = \"vmlinuz-$v\" ] || continue; echo \"removing its boot entry: $e\"; rm -f \"$e\"; done; done; mkdir -p /etc/dracut.conf.d && echo 'dracut_rescue_image=\"no\"' > /etc/dracut.conf.d/99-wend-no-rescue.conf || exit 1; case \"$D\" in 0-rescue-*) echo \"GRUB's default is the rescue image: left as it is\";; '') if [ -f $G ]; then echo \"GRUB's default (default=saved, or no such entry) may be the rescue image: left as it is\"; else D=none; fi;; esac; if [ -n \"$P\" ] && [ -z \"$K\" ]; then echo \"GRUB 2's default ($T) isn't the menu entry of a kernel, so it may be the rescue image: left as it is\"; D=''; fi; case \"$D\" in 0-rescue-*|'') ;; *) for f in /boot/vmlinuz-0-rescue-* /boot/.vmlinuz-0-rescue-*.hmac /boot/initramfs-0-rescue-*.img /boot/loader/entries/*-0-rescue.conf; do [ -e \"$f\" ] || continue; echo \"removing the old release's rescue image: $f\"; rm -f \"$f\"; done;; esac; df -h /boot | tail -n1",
 ]
 kernel_after = [
-  "[ / -ef /proc/1/root ] || exit 0; [ -e /var/lib/wend/kernel-handover ] || exit 0; {clean_repos}; rm -f /var/lib/rpm/__db.*; rpm --rebuilddb; if command -v dnf >/dev/null 2>&1; then dnf -y {dnf_opts} install kernel; else yum -y install kernel; fi && rpm -q kernel && rm -f /var/lib/wend/kernel-handover",
+  "[ / -ef /proc/1/root ] || { [ \"$WEND_CHROOT_BOX\" != 1 ] || rm -f /var/lib/wend/kernel-handover; exit 0; }; [ -e /var/lib/wend/kernel-handover ] || exit 0; {clean_repos}; rm -f /var/lib/rpm/__db.*; rpm --rebuilddb; if command -v dnf >/dev/null 2>&1; then dnf -y {dnf_opts} install kernel; else yum -y install kernel; fi && rpm -q kernel && rm -f /var/lib/wend/kernel-handover",
   "[ / -ef /proc/1/root ] || exit 0; G=/boot/grub/grub.conf; [ -f $G ] || exit 0; V=$(rpm -q --qf '%{INSTALLTIME} %{VERSION}-%{RELEASE}.%{ARCH}\\n' kernel-core kernel 2>/dev/null | grep -v 'is not installed' | sort -n | tail -n1 | cut -d' ' -f2); [ -n \"$V\" ] || exit 0; [ -f \"/boot/vmlinuz-$V\" ] || V=${V%.*}; [ -f \"/boot/vmlinuz-$V\" ] || { echo \"no /boot/vmlinuz for the installed kernel $V\"; exit 1; }; if ! grep -q \"vmlinuz-$V[[:space:]]\" $G; then E=$(awk -F= '/^default=/ {d = $2} /^title/ {t++} $1 ~ /^[ \\t]*kernel / && $0 ~ /vmlinuz-/ {if (!f) f = $0; if (t - 1 == d) {print; x = 1; exit}} END {if (!x) print f}' $G | sed 's/^[ \\t]*//'); P=$(echo \"$E\" | awk '{sub(/vmlinuz-.*/, \"\", $2); print $2}'); A=$(echo \"$E\" | awk '{for (i = 3; i <= NF; i++) printf \"%s \", $i}'); R=$(awk -F= '/^default=/ {d = $2} /^title/ {t++; r = \"\"} $1 ~ /^[ \\t]*root[ \\t]/ {r = $0} $1 ~ /^[ \\t]*kernel / && $0 ~ /vmlinuz-/ {if (!f) {f = 1; q = r} if (t - 1 == d) {print r; x = 1; exit}} END {if (!x) print q}' $G | sed 's/^[ \\t]*//'); [ -n \"$E\" ] && [ -n \"$R\" ] || { echo \"no kernel entry in $G to copy the root and arguments from\"; exit 1; }; I=initramfs-$V.img; [ -f \"/boot/$I\" ] || I=initrd-$V.img; awk -v v=\"$V\" -v p=\"$P\" -v a=\"$A\" -v r=\"$R\" -v i=\"$I\" 'BEGIN {d = 0} /^title/ && !d {print \"title \" v; print \"\\t\" r; print \"\\tkernel \" p \"vmlinuz-\" v \" \" a; print \"\\tinitrd \" p i; d = 1} {print}' $G > $G.wend && cat $G.wend > $G && rm -f $G.wend || exit 1; fi; awk 'function flush() {if (n && keep) printf \"%s\", b; b = \"\"; n = 0; keep = 1} /^title/ {flush(); n = 1} n && $1 == \"kernel\" && $2 ~ /vmlinuz-/ {f = $2; sub(/.*vmlinuz-/, \"/boot/vmlinuz-\", f); if (system(\"test -e \" f) != 0) keep = 0} n {b = b $0 \"\\n\"; next} {print} END {flush()}' $G > $G.wend && cat $G.wend > $G && rm -f $G.wend || exit 1; D=$(awk -v v=\"vmlinuz-$V\" '/^title/ {t++} $1 == \"kernel\" && index($2, v) {print t - 1; exit}' $G); [ -n \"$D\" ] || { echo \"no entry for $V in $G\"; exit 1; }; awk -v d=\"$D\" '/^default=/ {print \"default=\" d; next} {print}' $G > $G.wend && cat $G.wend > $G && rm -f $G.wend || exit 1; grep -E '^(default|title)' $G",
 ]
 
@@ -849,6 +868,14 @@ set = false
 boot = ["bios"]
 old_kernels = "running"
 
+[hardware.centos5]
+cpu = "x86-64"
+ram_mib = 512
+disk_mib = 2048
+boot_mib = 10
+drivers = "sha256:b2614dd49e3887c8cffd0752ffabcdd7cebc89f5f414e309dcae10080627ac41"
+note = "boot_mib: the kernel package's /boot files (3.4 MiB) and an estimate for mkinitrd's initrd"
+
 [hardware.centos6]
 cpu = "x86-64"
 ram_mib = 1024
@@ -884,6 +911,10 @@ note = "AlmaLinux 10 has a separate x86_64_v2 build for older CPUs, but no wend 
 # release's library table, xz-compressed (from tools/sonames.py; kept out of git, in the wend archive at this digest and
 # in the release tarball): the sonames its packages ship, which the machine's own native programs and libraries (no
 # package owns them) are held to.
+[runtimes.centos5]
+python2 = ["2.4.3"]
+libs = "sha256:576ca44c7a59edc438fdf2d0790fdf045d808a425ae2266a81d996d05024653c"
+
 [runtimes.centos6]
 python2 = ["2.6.6"]
 libs = "sha256:3a1e18d5ee723c8e2a2662f689102c74ba1ea9ccd417e6e49d6fbc271255a38b"
