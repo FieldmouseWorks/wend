@@ -2131,8 +2131,11 @@ A directory, `wend-plan-<machine id>/`, carried to the machine (scp, or a USB st
 
 - `plan.json` (schema `wend.plan/0`): the route's content id, the run it was pinned by, the wend version, and per hop
   the fix ids that fired, the commands' seconds, and whether its kernel steps found the kernel in the cache;
-- the machine's **fingerprint** at the moment of the copy: the adapter's `installed_list` (sha256), the running
-  kernel, the release file, and the facts preflight read;
+- the machine's **fingerprint** at the moment of the copy: the adapter's `installed_list` (names, versions and
+  architectures, and their sha256), the running kernel, the release file, and which pinned fixes' preconditions hold.
+  It holds nothing particular to one machine (addresses, disks, hostnames), so another machine can match it ("Fleets");
+- the facts preflight read on the rehearsed machine, kept for the report only: every machine is judged on its own
+  facts, read when `upgrade` starts, never on these;
 - `checks.toml`, the checks, in the format a box's `[roles]` and `[vm].live` use, so `walk` and the VM tier read it
   as they read a box;
 - `cache/`, files named by their sha256, with a list of every file the walk and the kernel downloads fetched.
@@ -2140,7 +2143,7 @@ A directory, `wend-plan-<machine id>/`, carried to the machine (scp, or a USB st
 The fingerprint is checked once, when `upgrade` starts with no state file: a plan whose fingerprint isn't the
 machine's as it is then (a package installed since, a kernel update, a reboot onto another kernel) is refused, since
 the machine isn't the one rehearsed, and the answer is a fresh rehearsal. Every later `upgrade` goes by the state file
-instead ("State across reboots"), since the hops change all three on purpose.
+instead ("State across reboots"), since the hops change it on purpose.
 
 ### Checks the machine is held to
 
@@ -2241,10 +2244,10 @@ that is small on purpose: **a plan one machine's rehearsal made can be reused on
 machines, no inventory format, no scheduler: fleet orchestration is where a tool like this turns into a platform, and
 wend stays out of it.
 
-- **Reuse.** A plan made on machine A may be used on machine B when B matches it: the same `installed_list` (names,
-  versions and architectures, not only the sha256 of A's list), the same release and running kernel, the same
-  `checks.toml` when B's checks are generated (so B runs the same services, ports, vhosts, databases and cron
-  entries), and every pinned fix's precondition holding on B exactly as it did on A at the start. B's own facts must
+- **Reuse.** A plan made on machine A may be used on machine B when B matches its fingerprint ("The plan"), which
+  is the same check `upgrade` makes on A itself: the same `installed_list`, release and running kernel, every pinned
+  fix's precondition holding on B as it did on A, and the same `checks.toml` when B's checks are generated (so B runs
+  the same services, ports, vhosts, databases and cron entries). B's own facts must
   pass hardware preflight on their own; they don't have to equal A's (addresses, disks and hostnames differ). On a
   mismatch `upgrade` refuses before it touches anything, naming what differs, and B gets its own rehearsal. What a
   match can't see (a hand-edited config file the rehearsal walked on A but not on B) is what each hop's fix match, its
