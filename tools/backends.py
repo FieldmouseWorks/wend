@@ -214,23 +214,32 @@ def repo_file(adapter, release, shim):
                    for n, u in r["repos"].items())
 
 
+def addon_installed(a):
+    """SPEC "Add-on repositories": shell that is true when the add-on is on the box: its marker package is installed,
+    or, for an add-on without one, some installed package carries its vendor."""
+    if "marker" in a:
+        return f"rpm -q {a['marker']} >/dev/null 2>&1"
+    return f"rpm -qa --qf '%{{VENDOR}}\\n' 2>/dev/null | grep -qxF '{a['vendor']}'"
+
+
 def addon_repos(adapter, release, shim, file):
     """SPEC "Add-on repositories": shell that appends each add-on's repo for `release` to `file`, as
-    [<release>-<addon>], when the add-on's marker package is installed. Empty when no add-on has one."""
+    [<release>-<addon>], when the add-on is installed (addon_installed). Empty when no add-on has one."""
     out = []
     for n, a in adapter.get("addons", {}).items():
         if release in a["repos"]:
             rid = f"{release}-{n}"
             k = [a["gpgkeys"][release]] if release in a.get("gpgkeys", {}) else []
             body = f"[{rid}]\\nname={rid}\\nbaseurl={shim}/{a['repos'][release]}/\\n" + \
-                gpg(k).replace("\n", "\\n") + "enabled=1\\n\\n"
-            out.append(f"if rpm -q {a['marker']} >/dev/null 2>&1; then printf '{body}' >> {file}; fi")
-    return " && ".join(out)  # each `if` is true when its marker is absent
+                gpg(k).replace("\n", "\\n") + ("module_hotfixes=true\\n" if a.get("module_hotfixes") else "") + \
+                "enabled=1\\n\\n"
+            out.append(f"if {addon_installed(a)}; then printf '{body}' >> {file}; fi")
+    return " && ".join(out)  # each `if` is true when its add-on is absent
 
 
 def addon_vendors(adapter):
-    """Shell that sets A to |vendor|vendor|... for every add-on whose marker package is installed."""
-    return "A='|'; " + "".join(f"rpm -q {a['marker']} >/dev/null 2>&1 && A=\"${{A}}{a['vendor']}|\"; "
+    """Shell that sets A to |vendor|vendor|... for every add-on that is installed (addon_installed)."""
+    return "A='|'; " + "".join(f"{addon_installed(a)} && A=\"${{A}}{a['vendor']}|\"; "
                                for a in adapter.get("addons", {}).values())
 
 
@@ -596,6 +605,12 @@ class Rpm:
             f"dnf -y {o} install yum {reinstall}",
             f"L=$(rpm -qa --qf '%{{NAME}}-%{{VERSION}}-%{{RELEASE}}.%{{ARCH}}\\n' | grep -v '^gpg-pubkey' | grep -v '{tag}' || true); "
             "[ -z \"$L\" ] || { echo \"dropped from the rpm database (files kept): $L\"; "
+            # their %postun never runs, so the alternatives they registered stay, at the priority they had: Java 8's
+            # on EL7 outranks EL9's (priority 1), which would leave java and /usr/lib/jvm/jre on EL7's unowned tree
+            f"printf '%s\\n' $L > {b}/dropped; for a in /var/lib/alternatives/*; do [ -f \"$a\" ] || continue; "
+            "g=${a##*/}; for p in $(alternatives --display \"$g\" 2>/dev/null | awk '/^\\// && / - / {print $1}'); do "
+            f"rpm -qf --qf '%{{NAME}}-%{{VERSION}}-%{{RELEASE}}.%{{ARCH}}\\n' \"$p\" 2>/dev/null | grep -qxF -f {b}/dropped && "
+            "alternatives --remove \"$g\" \"$p\" && echo \"dropped alternative $g: $p\"; done; done; "
             "rpm -e --nodeps --noscripts --justdb $L; }",
             # the hop's refresh cleans every cache: keep the transit repos' metadata so the hop pins it (Rpm.sources)
             # (only its own repos: older releases' caches outlive their hops)

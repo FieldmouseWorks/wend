@@ -189,6 +189,7 @@ SOURCE_REPOS = (
     (r"^(https://dl\.fedoraproject\.org/pub/epel/\d+/Everything/)x86_64/$", r"\1source/tree/"),
     (r"^(https://archives\.fedoraproject\.org/pub/archive/epel/\d+/)x86_64/$", r"\1SRPMS/"),
     (r"^(https://archives\.fedoraproject\.org/pub/archive/epel/[0-9.]+/Everything/)x86_64/$", r"\1source/tree/"),
+    (r"^(https://nginx\.org/packages/(?:centos|rhel)/\d+/)x86_64/$", r"\1SRPMS/"),
 )
 
 

@@ -339,16 +339,23 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
             let ok = b.name == "rpm"
                 && full("[a-z0-9]+", n)
                 && fields.as_ref().is_some_and(|f| {
-                    BTreeSet::from(["marker", "repos", "vendor"]).is_subset(f)
-                        && f.is_subset(&BTreeSet::from(["gpgkeys", "marker", "repos", "vendor"]))
+                    BTreeSet::from(["repos", "vendor"]).is_subset(f)
+                        && f.is_subset(&BTreeSet::from([
+                            "gpgkeys",
+                            "marker",
+                            "module_hotfixes",
+                            "repos",
+                            "vendor",
+                        ]))
                 })
-                && get(ad, "marker").is_some_and(|m| full_v(PKG, m))
-                && get(ad, "vendor").is_some_and(|v| full_v("[A-Za-z0-9][A-Za-z0-9 .,-]*", v))
+                && get(ad, "marker").is_none_or(|m| full_v(PKG, m))
+                && get(ad, "module_hotfixes").is_none_or(Value::is_boolean)
+                && get(ad, "vendor").is_some_and(|v| full_v("[A-Za-z0-9][A-Za-z0-9 .,@<>-]*", v))
                 && repos_ok;
             if !ok {
                 errs.push(format!(
-                    "{wh}: addons.{n} needs a plain name, a marker package, a plain vendor, and repos (host/path) \
-                     for releases the adapter has, on the rpm backend"
+                    "{wh}: addons.{n} needs a plain name, a plain vendor, and repos (host/path) for releases \
+                     the adapter has, on the rpm backend; optionally a marker package and module_hotfixes = true"
                 ));
             }
         }
