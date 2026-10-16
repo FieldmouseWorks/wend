@@ -9,17 +9,27 @@ machine, picks a route, and walks it. At each hop it applies the fixes whose pre
 a snapshot first, and rolls back if a check fails. The client uses no model and needs no network beyond your
 distro's mirrors.
 
-Seed content: the dep-lab Debian results. 12 fixes take Debian 4.0 etch (2007) to Debian 13 trixie. Two very
-different boxes, a PHP web server and a MySQL/BIND server, each made it with no model and no rollbacks in 13–15
-minutes, and ended with zero obsolete packages.
+Five routes so far. Every box below passes its route's current version from scratch, with no model:
 
-Second route: CentOS 5.11 (2014) to AlmaLinux 10.2, crossing yum to dnf, the /usr merge, two package-manager
-bootstraps and a vendor switch. 25 fixes take a web/MySQL box and a DNS/FTP box all the way, with no model, in about
-10 minutes each (run files in `runs/el/`). Opus 5.5 found the path in all 5 of its dep-lab runs; replays are free.
-Both routes are proven in chroots: userland only. Kernels, bootloaders and reboots are not covered yet. On the EL
-route that includes boot-time services: CentOS 5's chkconfig settings don't carry over to systemd units, so after a
-real reboot the services stay down until enabled by hand (the route's note lists them). Debian's packages enable
-their own units on install.
+| Route | Fixes | Boxes | Runs |
+|---|---|---|---|
+| Debian 4.0 etch (2007) to Debian 13 trixie | 14 | `etch-web` (PHP web server), `etch-db` (MySQL/BIND) | CI |
+| CentOS 5.11 (2014) to AlmaLinux 10 | 36 | `centos5-web` (web/MySQL), `centos5-dns` (DNS/FTP) | CI for `centos5-web`, local for `centos5-dns` |
+| CentOS 7.9 to AlmaLinux 10 | 24 | `centos7-lamp`, `centos7-pyapp` (a Python 2.7 app on MariaDB) | local |
+| CentOS 8.5 to AlmaLinux 10 | 20 | `centos8-lamp` | local |
+| Ubuntu 14.04 trusty to 26.04 resolute | 8 | `trusty-web`, `trusty-web-updated`, `trusty-db` | local |
+
+CI runs are attested by the gate. Local runs were filed before that rule (CONTRIBUTING.md, "How runs land"), and CI
+replays of the same routes will replace them. The Debian route began as the dep-lab results. The CentOS 5 route
+crosses yum to dnf, the /usr merge, two package-manager bootstraps and a vendor switch; Opus 5.5 found the path in all
+5 of its dep-lab runs, and replays are free.
+
+CI replays every route in a chroot, which proves the userland only. Kernels, bootloaders and the first real boot are
+tested by the VM tier (`tools/vm.py`, SPEC.md "VM tier"), which the maintainer runs: each box is installed by its
+release's own installer in a KVM guest, and every hop ends with a real reboot and the box's checks against the live
+services. As of 2026-10-14 the Debian, Ubuntu, CentOS 5 and CentOS 7 routes have passed it from scratch on BIOS, and
+the Ubuntu route also on UEFI; CentOS 8 has no VM run yet. The results are on [wend#13](https://github.com/FieldmouseWorks/wend/issues/13),
+which stays open until the VM tier runs in CI.
 
 **Agents and contributors: start with [AGENTS.md](AGENTS.md).** Clone, plug in any model, discover a path, prove it
 with the same command CI runs, and open a PR.
@@ -49,51 +59,56 @@ Every gap that gets closed makes the map work on one more kind of machine.
 ## Layout
 
 ```
-SPEC.md                      the format: fix, route, run, box, adapters, open questions
+SPEC.md                      the format: fix, route, run, box, adapters, tiers, open questions
 AGENTS.md                    the playbook: claim, box, model, discover, self-review, verify, PR
 CLAUDE.md                    points at AGENTS.md
 CONTRIBUTING.md              the five-layer PR gate, for humans and agents
-wend                         the one command: check, list, replay, discover, verify, report
+wend                         the one command: check, list, replay, discover, report, gaps, verify
 wanted.toml                  paths people want; claim them via their issue
 prompts/discover.md          the exact question a model gets when a hop breaks
 NAMES.md                     why "wend"
 LICENSE-MIT, LICENSE-APACHE  dual license
 adapters/
-  debian.toml                ladder, mirrors, how a hop runs, predicates, writable allowlist, adapter ops, checks
-  el.toml                    Enterprise Linux: CentOS 5 to AlmaLinux 10, the rpm backend, the mirror shim
-fixes/<family>/<hop>/<name>.toml
-  debian/wheezy/purge-stale-libdb4.toml   ...12 seed fixes
-  el/alma9/el8-transit.toml               ...22 fixes for CentOS 5 -> AlmaLinux 10
-routes/<family>/<from>-to-<to>.toml
-  debian/etch-to-trixie.toml
-  el/centos5-to-alma10.toml
+  debian.toml, ubuntu.toml   apt families: ladder, mirrors, how a hop runs, predicates, writable allowlist, ops, checks
+  el.toml                    Enterprise Linux: CentOS 5, 7 and 8 to AlmaLinux 10, the rpm backend, the mirror shim
+  drivers/<family>/          each release's driver table (SPEC "Hardware preflight")
+  leapp/el/                  AlmaLinux's leapp-data, vendored (SPEC "Package evolution data")
+fixes/<family>/<hop>/<name>.toml          14 debian, 46 el, 8 ubuntu
+routes/<family>/<from>-to-<to>.toml       the five routes above
 boxes/<family>/<name>/box.toml            CI fixtures, trusted test code, never shipped
-  debian/etch-web/  debian/etch-db/
-  el/centos5-web/   el/centos5-dns/
 runs/<family>/<route>/<box>/<stamp>.json  written by CI only: the gate refuses a run it didn't attest
+archive/allowed_signers                   the archive's public signing key (docs/archive.md)
 tools/
   check.py           schema check, content ids, decoy check, --repin, --compile
-  backends.py        what each typed op compiles to: apt (Debian) and rpm (EL)
-  mirror.py          http -> https cache for EL boxes (CentOS 5's yum can't speak today's TLS)
-  test_check.py      broken fixes the gate must refuse
+  backends.py        what each typed op compiles to: apt (Debian, Ubuntu) and rpm (EL)
+  mirror.py          http -> https cache for old boxes (CentOS 5's yum can't speak today's TLS; trusty's apt has no https)
   sandbox.py         chroot boxes: build, snapshot, roll back, private /dev
   walk.py            walk a route on a box (the map walk), write the run
+  vm.py              the VM tier: replay a route on a real install in a KVM guest, a real reboot after every hop
   discover.py        a hop broke: ask the model, check the answer like a PR, try it
   report.py          a hop broke and you won't fix it: scrubbed gap report + prefilled issue link
   models.py          bring your own model: anthropic, any OpenAI-compatible server, or the agent itself
   affected.py        which routes and boxes a change must replay (CI matrix, ./wend verify)
   file_runs.py       files CI's run artifacts
+  pesgaps.py, leappdata.py   what leapp-data says changes at each EL hop, and its vendoring
+  hwdata.py, runtimes.py     build the driver and runtime tables for hardware and runtime preflight
+  shelter.py, podman_standin.sh   sheltering an app (SPEC "Sheltering an app"), chroot tier
+  net_*.py           reference implementations of the network ops
+  archive.py, fetched.py, gate_fetched.py, r2push.py   the archive: capture, store, publish (docs/archive.md)
   tomlw.py           writes TOML (tomllib only reads)
   port_oldlinux.py   one-off import of the dep-lab Debian results, with a lossless round-trip proof
+  test_*.py          the tools' own tests; test_check.py holds the broken fixes the gate must refuse
 docs/validation/     the first end-to-end test: verify on both boxes, and Opus refilling a deleted fix
 docs/archive.md      design: the wend archive (wend#19), every byte proven routes reference, by sha256
-client/              the Rust client (client/README.md): reads, checks and compiles the atlas exactly as
-                     tools/ does (client/parity.py proves it). Next: walk a route, roll back on red. No AI.
+docs/rebuild-and-carry.md  design: moving a machine whose filesystem a later kernel can't mount (old-XFS CentOS 7)
+client/              the Rust client (client/README.md): reads, checks and compiles the atlas exactly as tools/
+                     does (client/parity.py proves it), and walks a route on a root filesystem. It doesn't walk the running system yet: that
+                     needs a snapshot backend. No AI.
 .github/
   workflows/gate.yml the PR gate: dco, schema, plan, replay, decoys, claude-review
   workflows/client.yml the Rust client: build, test, parity with tools/
   workflows/gaps.yml the gap loop: dedupe reports, triaged gap -> wanted.toml PR, ping the reporter on close
-  pull_request_template.md, ISSUE_TEMPLATE/route-gap.yml, ISSUE_TEMPLATE/wanted.md
+  pull_request_template.md, ISSUE_TEMPLATE/route-gap.yml, ISSUE_TEMPLATE/wanted.md, dependabot.yml
   CODEOWNERS         a human on everything; the owner on tools/, adapters/, SPEC.md, .github/
 ```
 
