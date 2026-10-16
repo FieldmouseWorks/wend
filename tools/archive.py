@@ -77,6 +77,11 @@ def digest(alg, hexdigest):
     return None
 
 
+def md5(hexdigest):
+    """("md5", hex) for a source file a Sources index names only by md5: see sources_entries."""
+    return ("md5", hexdigest.lower()) if re.fullmatch("[0-9a-fA-F]{32}", hexdigest) else None
+
+
 def plain_index(url):
     """An index pinned uncompressed (the client's `plain` rule): upstream may serve only its .gz."""
     return "/dists/" in url and not url.endswith(("Release", ".gz", ".xz", ".bz2", ".zst") + UNREADABLE)
@@ -246,8 +251,9 @@ def source_names(url, data):
 
 
 def sources_entries(text):
-    """A Sources index: {(package, version): [(directory/name, digest)]}, by Checksums-Sha256, else Checksums-Sha1.
-    A stanza with only md5 sums (etch's) vouches for nothing."""
+    """A Sources index: {(package, version): [(directory/name, digest)]}, by Checksums-Sha256, else Checksums-Sha1,
+    else Files' md5 (lenny and squeeze still list sources uploaded before dpkg wrote sha sums). md5 is good enough
+    here and nowhere else: these are the distro's own 2000s uploads, kept for their licences and never installed."""
     out = {}
     for stanza in text.split("\n\n"):
         f, cur = {}, None
@@ -261,9 +267,10 @@ def sources_entries(text):
                 cur = k
                 f[k] = v.strip() if v.strip() else []
         files = []
-        for field, alg in (("Checksums-Sha256", "sha256"), ("Checksums-Sha1", "sha1")):
+        for field, alg in (("Checksums-Sha256", "sha256"), ("Checksums-Sha1", "sha1"), ("Files", "md5")):
             if isinstance(f.get(field), list):
-                files = [(f"{f.get('Directory', '')}/{x[2]}", digest(alg, x[0])) for x in f[field] if len(x) == 3]
+                files = [(f"{f.get('Directory', '')}/{x[2]}", md5(x[0]) if alg == "md5" else digest(alg, x[0]))
+                         for x in f[field] if len(x) == 3]
                 break
         if files and all(d for _, d in files) and isinstance(f.get("Package"), str):
             out[(f["Package"], f.get("Version"))] = files
@@ -274,9 +281,13 @@ def stem(u):
     return re.sub(r"\.(gz|xz|bz2|lzma|zst)$", "", u)
 
 
-def bounded_gunzip(f):
-    """A .gz's contents, refusing past MAX_PLAIN: these bytes aren't checked until they're whole."""
-    data = gzip.GzipFile(fileobj=f).read(MAX_PLAIN + 1)
+PLAIN_FORMS = (".gz", ".bz2", ".xz")  # jessie..buster's Translation-en: snapshot serves only the .bz2
+
+
+def bounded_unpack(f, name):
+    """A compressed index's contents, refusing past MAX_PLAIN: these bytes aren't checked until they're whole."""
+    opener = {".gz": gzip.open, ".bz2": bz2.open, ".xz": lzma.open}[name[name.rindex("."):]]
+    data = opener(f).read(MAX_PLAIN + 1)
     if len(data) > MAX_PLAIN:
         raise ValueError("decompresses past the limit")
     return data
@@ -312,6 +323,8 @@ class Store:
         self.built_from = {}  # (package url, digest) -> source_names() value, for every package stored
         self.deb_sources = {}  # "<.../dists/X>/<comp>" -> [(Sources url, digest, the Release that lists it)]
         self.no_source = {}  # (package url, digest) -> why no source was stored
+        self.deb_indexes = {}  # "<.../dists/X>" -> {(url, digest)} of the package indexes pinned under it
+        self.live_releases = {}  # "<.../dists/X>" -> [(url, "sha256:<hex>")]: a live Release read for its Sources
 
     def blob(self, hexdigest):
         return f"{self.path}/blob/sha256/{hexdigest[:2]}/{hexdigest}"
@@ -335,15 +348,15 @@ class Store:
                 for d in self.blob_dirs:
                     yield f"{d}/{h}", None
         host_path = re.sub(r"^[a-z]+://", "", url)
-        plain = plain_index(url)  # wheezy: the pin is the plain index, the archive serves only its .gz
+        forms = PLAIN_FORMS if plain_index(url) else ()  # the pin is the plain index, upstream serves it compressed
         for t in self.trees:
             yield f"{t}/{host_path}", None
-            if plain:
-                yield f"{t}/{host_path}.gz", None
+            for ext in forms:
+                yield f"{t}/{host_path}{ext}", None
         if not self.offline:
             yield None, url
-            if plain:
-                yield None, url + ".gz"
+            for ext in forms:
+                yield None, url + ext
 
     def get(self, url, digest):
         """(the verified bytes of url at digest, or None; why the origin didn't have them)."""
@@ -355,10 +368,10 @@ class Store:
                     if not os.path.isfile(path):
                         continue
                     with open(path, "rb") as f:
-                        data = bounded_gunzip(f) if plain_index(url) and path.endswith(".gz") else f.read()
+                        data = bounded_unpack(f, path) if plain_index(url) and path.endswith(PLAIN_FORMS) else f.read()
                 else:
                     with urllib.request.urlopen(src, timeout=300) as r:
-                        data = r.read() if src == url else bounded_gunzip(r)
+                        data = r.read() if src == url else bounded_unpack(r, src)
             except Exception as e:  # urllib's HTTPError, a timeout, a bad .gz: this source hasn't got it
                 if src:
                     why = f"{src}: {e}"
@@ -428,6 +441,8 @@ class Store:
                 names = source_names(url, data) if PACKAGE_INDEX.search(url) else {}
             except Exception:  # its packages still go in; their sources show up as gaps
                 names = {}
+            if "/dists/" in url and "/binary-" in url and PACKAGE_INDEX.search(url):
+                self.deb_indexes.setdefault(url[:url.index("/", url.index("/dists/") + 7)], set()).add((url, d))
             if url.endswith(("/Release", "/InRelease")):
                 for child, cd in listed:
                     m = re.match(r"(.*/dists/[^/]+)/(.+)/source/Sources(\.[a-z0-9]+)?$", child)
@@ -496,7 +511,7 @@ class Store:
                     groups.setdefault(base, {})[key] = what
                 else:
                     self.no_source[key] = f"no source repo known for {what[2]}"
-            elif any(c.rsplit("/", 1)[0] == what[4].rsplit("/", 1)[0] for c in self.deb_sources):
+            elif self.has_sources(what[4].rsplit("/", 1)[0]):
                 groups.setdefault(("deb", what[3], what[4].rsplit("/", 1)[0]), {})[key] = what
             else:
                 self.no_source[key] = "its suite's Release lists no Sources"
@@ -508,6 +523,7 @@ class Store:
                 lookup = lambda what: found.get(what[1])
             else:
                 lookup, why = self.deb_lookup(group[1], group[2], packages.values(), meta), ""
+                meta += self.live_releases.get(group[2], [])
             runs_of_group = set()
             for key, what in packages.items():
                 files = lookup(what)
@@ -537,6 +553,28 @@ class Store:
                 e["runs"] = sorted(set(e["runs"]) | runs_of_group)
         for key, why in self.no_source.items():
             self.index["files"][key[0]][self.kept[key]].setdefault("source", {"missing": why})
+
+    def has_sources(self, suite):
+        """Whether a Release lists Sources for suite. A suite whose run pinned only a package index (wheezy) gets its
+        live Release, used only when it lists that pinned index at the pinned digest: then it is the Release the
+        run's index came from, and its Sources entries vouch as a pinned Release's would."""
+        if not any(c.rsplit("/", 1)[0] == suite for c in self.deb_sources) and suite not in self.live_releases:
+            self.live_releases[suite] = []
+            url = f"{suite}/Release"
+            data = self.live(url)
+            try:
+                listed = children(url, data) if data is not None else []
+            except ValueError:
+                listed = []
+            if self.deb_indexes.get(suite, set()) & set(listed):
+                h = self.keep(url, data)
+                self.index["files"][url][f"sha256:{h}"]["live"] = True
+                self.live_releases[suite].append((url, f"sha256:{h}"))
+                for child, cd in listed:
+                    m = re.match(r"(.*/dists/[^/]+)/(.+)/source/Sources(\.[a-z0-9]+)?$", child)
+                    if m:
+                        self.deb_sources.setdefault(f"{m[1]}/{m[2]}", []).append((child, cd, (url, ("sha256", h))))
+        return any(c.rsplit("/", 1)[0] == suite for c in self.deb_sources)
 
     def rpm_sources(self, base, meta):
         """({"<name>.src.rpm": [(url, digest)]}, why it's empty) from a source repo's live metadata. Its repomd.xml

@@ -1614,7 +1614,13 @@ The rules:
   runner that a pull request can trigger. Its runs go to `.wend/vm/` (schema `wend.vmrun/0`, `runner.kind = "vm"`),
   not to `runs/`.
 - QEMU user-mode networking only: nothing on the host changes. The guest reaches the mirror shim at `10.0.2.2`, and its
-  ssh and http are forwarded to fixed ports on `127.0.0.1`, so a host runs one VM replay at a time.
+  ssh is forwarded to a free port on `127.0.0.1` of its own, so a host runs several VM replays side by side. They
+  share the mirror shim and the installed boxes: a box is installed once per cache key (the box file, the adapter,
+  and the part of `tools/vm.py` the install runs), and a run that needs a box another run is installing waits for it.
+  Every run holds a shared lock on `/var/tmp/wend-shim/<port>.users` for each shim port while it lives, whatever its
+  `$WEND_WORK` (a directory only root or the running user can write, or it's refused), and `tools/vm.py shim-stop PID`
+  stops the shim only when no run holds its port's lock.
+  Every run records the commit it ran as `head` (`commit`, and `dirty` when tracked files differ from it).
 - Box: an optional `[vm]` table with `ssh_port` (default 22), `skip` (roles that start their own daemons, which a
   running box already has) and `live` (role name to shell: the live forms of those checks; every skipped role needs
   one, so skipping never drops a check), `pockets` (`updates`, and `security` and/or `backports` beside it, once each: the box
