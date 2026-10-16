@@ -1,6 +1,5 @@
-# Releases: the client a machine's owner downloads. A maintainer pushes a tag (v0.1.0), or publishes a release with a
-# new tag in GitHub's web UI; this builds the static binary
-# from that commit, packs it with the atlas it reads (adapters and their driver tables, fixes, routes, runs), checks
+# Releases: the client a machine's owner downloads. A maintainer pushes a tag (v0.1.0), publishes a release with a new
+# tag in GitHub's web UI, or runs this workflow on main with a version; this builds the static binary from that commit, packs it with the atlas it reads (adapters and their driver tables, fixes, routes, runs), checks
 # the pack loads and passes its own check, and publishes both files on the tag's release. The asset names carry no
 # version, so releases/latest/download/wend-x86_64-linux.tar.gz always names the newest one.
 name: release
@@ -8,6 +7,13 @@ name: release
 on:
   push:
     tags: ["v*"]
+  # or from main without pushing a tag (a maintainer, or a session that can run workflows but not push tags): the
+  # release is made at main's head and gh creates the tag with it
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "the new tag, e.g. v0.1.0"
+        required: true
 
 permissions:
   contents: write
@@ -16,6 +22,21 @@ jobs:
   release:
     runs-on: ubuntu-24.04
     steps:
+      - name: the tag to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            [ "$GITHUB_REF" = refs/heads/main ] || { echo "dispatch it on main"; exit 1; }
+            echo "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "version must look like v0.1.0"; exit 1; }
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" >/dev/null 2>&1; then
+              echo "tag $VERSION already exists; push a new one or dispatch a new version"; exit 1
+            fi
+            echo "TAG=$VERSION" >> "$GITHUB_ENV"
+          else
+            echo "TAG=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup target add x86_64-unknown-linux-musl
       - name: static binary
@@ -37,13 +58,14 @@ jobs:
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
         # a release made in GitHub's web UI (Releases > Draft a new release, new tag) already exists when this runs:
         # attach the files to it instead of creating it
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" wend-x86_64-linux.tar.gz SHA256SUMS --clobber
           else
-            gh release create "$TAG" wend-x86_64-linux.tar.gz SHA256SUMS --verify-tag --title "wend $TAG" \
+            # a pushed tag must already exist; a dispatched one is made here, at the commit this run built
+            if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then where="--target $GITHUB_SHA"; else where=--verify-tag; fi
+            gh release create "$TAG" wend-x86_64-linux.tar.gz SHA256SUMS $where --title "wend $TAG" \
               --notes "The client and the atlas it reads, built from $GITHUB_SHA. What to run, and what it does and doesn't touch: README.md inside, or docs/try-it.md."
           fi
