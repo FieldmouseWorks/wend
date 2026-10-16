@@ -39,13 +39,17 @@ UUID = "0b7e1a52-36f4-4d55-9f0e-3c1d2e5a6b70"
 
 def local(script, t):
     """The script with the machine's paths moved under t (and a regular file standing for the disk)."""
-    script = script.replace("($root)/boot/grub2", "($root)/BOOT-GRUB2")  # the stub's own path, in GRUB's terms
+    script = script.replace("($root)/boot/grub2", "($root)/BOOT-GRUB2")  # the stub's own paths, in GRUB's terms
+    script = script.replace("($wend_new)/var/lib/wend", "($wend_new)/VAR-LIB-WEND")
+    script = script.replace("$N/var/lib/wend", "$N/VAR-LIB-WEND")  # the copy's, not this machine's
     for old, new in (("/run/wend/new", f"{t}/new"), ("/var/lib/wend", f"{t}/state"), ("/boot/grub2", f"{t}/grub2"),
                      ("/usr/lib/grub/i386-pc", f"{t}/i386-pc"), ("/sys/firmware/efi", f"{t}/efi"),
                      (" /etc/fstab", f" {t}/fstab"), ("/proc/mounts", f"{t}/mounts"),
                      ("/var/run/yum.pid", f"{t}/yum.pid"), ('[ -b "$D" ]', '[ -f "$D" ]')):
         script = script.replace(old, new)
-    return script.replace("($root)/BOOT-GRUB2", "($root)/boot/grub2")
+    return script.replace("($root)/BOOT-GRUB2", "($root)/boot/grub2").replace("($wend_new)/VAR-LIB-WEND",
+                                                                               "($wend_new)/var/lib/wend").replace(
+        "$N/VAR-LIB-WEND", "$N/var/lib/wend")
 
 
 def shims(t, cmds):
@@ -209,6 +213,11 @@ else:
                 ("the stub falls back to the old root unless wend_default says 0",
                  stub.rstrip().endswith("}") and 'elif [ "${wend_default}" = 0 ]; then\n  set default=0\nelse\n  set '
                  'default=1\nfi' in stub),
+                ("a rollback asked for on the new root wins over wend_default, after the one-shot boots",
+                 f"search --no-floppy --fs-uuid --set=wend_new {UUID}" in stub and
+                 "load_env -f ($wend_new)/var/lib/wend/relocate.grubenv wend_rollback" in stub and
+                 stub.index('"${wend_next}" = 1') < stub.index('"${wend_rollback}" = 1') <
+                 stub.index('"${wend_default}" = 0')),
                 ("the old root stays the default and the trial is armed, the configs' variables kept",
                  sorted(env.split("\n")) == sorted(["saved_entry=CentOS Linux 7", "wend_default=1", "wend_next=0",
                                                     ""])),
@@ -221,5 +230,47 @@ else:
     ok = "set wend_next=0" in lines[-1] and all("wend_next=0" not in line for line in lines[:-1])
     print(("passed  " if ok else "WRONG   ") + "arming the trial is the flip's last write")
     bad += not ok
+
+# rollback writes a grubenv block of its own on the new root that GRUB (and grub-editenv) reads; forward removes it
+if not shutil.which("grub-editenv"):
+    print("skipped rollback and forward: no grub-editenv here (grub-common)")
+else:
+    with tempfile.TemporaryDirectory() as t:
+        os.makedirs(f"{t}/state")
+        os.makedirs(f"{t}/new/var/lib/wend")
+        open(f"{t}/state/relocate.env", "w").write(f"VG=centos\nOLD_LV=root\nNEW_UUID={UUID}\n")
+        for on, want in (("root", False), ("wend-root", True)):
+            shims(t, {"lvs": f"echo '  {on}'", "findmnt": "echo /dev/mapper/centos-x", "xfs_io": "exit 0"})
+            rc, out = run(local(r["rollback"], t), t)
+            env = subprocess.run(["grub-editenv", f"{t}/state/relocate.grubenv", "list"], capture_output=True,
+                                 text=True).stdout if os.path.exists(f"{t}/state/relocate.grubenv") else ""
+            ok = (rc == 0 and env == "wend_rollback=1\n" and os.path.getsize(f"{t}/state/relocate.grubenv") == 1024
+                  if want else rc != 0 and "not booted from the relocated root" in out and not env)
+            print(("passed  " if ok else "WRONG   ") + ("rollback writes wend_rollback=1 in a 1024-byte grubenv block"
+                                                      if want else "rollback refuses on the old root") +
+                  ("" if ok else f"\n        rc={rc} {out[-300:]!r} {env!r}"))
+            bad += not ok
+        shutil.copy(f"{t}/state/relocate.grubenv", f"{t}/new/var/lib/wend/relocate.grubenv")
+        shims(t, {"lvchange": "exit 0", "mount": "exit 0", "umount": "exit 0"})
+        rc, out = run(local(r["forward"], t), t)
+        ok = rc == 0 and not os.path.exists(f"{t}/new/var/lib/wend/relocate.grubenv")
+        print(("passed  " if ok else "WRONG   ") + "forward removes the rollback from the new root" +
+              ("" if ok else f"\n        rc={rc} {out[-300:]!r}"))
+        bad += not ok
+
+# the room a relocated root needs for the CentOS 7 route: both hops' disk and /boot room, and EL8's transit kernel
+import vm  # noqa: E402
+route = tomllib.load(open(os.path.join(ROOT, "routes", "el", "centos7-to-alma10.toml"), "rb"))
+fixes = {}
+for dirpath, _, files in os.walk(os.path.join(ROOT, "fixes", "el")):
+    for f in files:
+        doc = tomllib.load(open(os.path.join(dirpath, f), "rb"))
+        fixes[vm.check.content_id(doc)] = doc
+hw = a["hardware"]
+want = sum(hw[h]["disk_mib"] + hw[h]["boot_mib"] for h in ("alma9", "alma10")) + a["releases"]["alma8"]["transit"]["boot_mib"]
+got = vm.route_mib(a, route, [fixes[x["id"]] for x in route["fixes"]])
+print(("passed  " if got == want else "WRONG   ") + f"route_mib for centos7-to-alma10 is {want} MiB" +
+      ("" if got == want else f" (got {got})"))
+bad += got != want
 
 sys.exit(1 if bad else 0)

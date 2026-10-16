@@ -90,4 +90,4 @@ name = "el9-centos8-swap-repos-package"
 [meta]
 name = "centos8-to-alma10"
 summary = "CentOS 8.5 to AlmaLinux 10, straight to EL9 with EL8's own dnf, proven on a LAMP box that carries EPEL"
-note = "Starts from boxes installed natively on CentOS 8.5 and carries EPEL along. CentOS 8 is never a landing release: the first hop goes straight to EL9 with EL8's own dnf distro-sync, after el9-centos8-swap-release trades the release package by hand and el9-centos8-swap-repos-package replaces CentOS's repos package. From EL9 on it reuses the CentOS 7 route's rungs. The owner's php.ini and httpd.conf changes are not carried (wend#54). Container tier only so far: no real-VM proof yet."
+note = "Starts from boxes installed natively on CentOS 8.5 and carries EPEL along. CentOS 8 is never a landing release: the first hop goes straight to EL9 with EL8's own dnf distro-sync, after el9-centos8-swap-release trades the release package by hand and el9-centos8-swap-repos-package replaces CentOS's repos package. From EL9 on it reuses the CentOS 7 route's rungs. The owner's php.ini and httpd.conf changes are not carried (wend#54). Real-VM proven on BIOS (centos8-lamp, wend#92)."

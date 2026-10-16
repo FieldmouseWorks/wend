@@ -365,7 +365,7 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
             "release",
             "cleanup",
         ];
-        const COMMANDS: &[&str] = &["booted", "arm", "commit_trial", "rollback_next"];
+        const COMMANDS: &[&str] = &["booted", "arm", "commit_trial", "rollback_next", "rollback", "forward"];
         let want: BTreeSet<&str> = STEPS.iter().chain(COMMANDS).copied().collect();
         match r.as_object() {
             Some(o) if o.keys().map(String::as_str).collect::<BTreeSet<_>>() == want => {

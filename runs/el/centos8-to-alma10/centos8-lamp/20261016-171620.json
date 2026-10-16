@@ -1,0 +1,113 @@
+{
+ "schema": "wend.run/0",
+ "route": "sha256:cb43a9c3093593f5e4babbe4ab34719663f0afa3ca6fd0ee008a2ace004e75c2",
+ "box": "el/centos8-lamp",
+ "from": "centos8",
+ "to": "alma10",
+ "result": "pass",
+ "started": "20261016-171620",
+ "wall_seconds": 289,
+ "start_fingerprint": "sha256:14359650f1430fae1fa5cd3de970ea67ab5c2158d66a51f505cb39ff4f235492",
+ "runner": {
+  "kind": "github-actions",
+  "image": "ubuntu24",
+  "run_url": "https://github.com/FieldmouseWorks/wend/actions/runs/38937943641",
+  "harness": "d09573a0ac995ca52b185a9b83517ba0f559fda4"
+ },
+ "hops": [
+  {
+   "to": "alma9",
+   "fired": [
+    "sha256:04c1cfe5d78197da808910f9afb218f53286cee79c9dba4192d772bd7ba35b40",
+    "sha256:73acc8324fd1db83504a175c1fd293e5010f183c2c48b9200dfd7903accdbcde",
+    "sha256:f8cd106d8585a364704f76301312db8bde4ebc9cc84713e2dbd3b31190b93e3c",
+    "sha256:539a3a37c796947becb310ede7def08657e2681c30ca31d69e8a03ae3710364e",
+    "sha256:a6ba72c3702a5918b725303fb0871a3a50804fb01992f1069cb5164cf37febfb",
+    "sha256:01021746715819d50c528760afd6689e3185deabbec320bffde13791cc11e56f",
+    "sha256:5ba8445d57679f7eef5794e4dda7f855a95a7ee8a6dd196e0b4720724abda483",
+    "sha256:f4341598b841b3e004c75aca526d92da77a6997f6164bc1b44423eb82f55c36a",
+    "sha256:d99088da93a73b9606892e9b835938c7598c86e33c3918d7df079664690c310a",
+    "sha256:e5628318d9da0c87e659f4d2316a01e2bb78ab5a2e4037f81e4edf2c49e1dfa5",
+    "sha256:c5de001649525a86c2727b966232869401546ceb6cd0e982e39ec46ceb3fecf9",
+    "sha256:645af92e570ed65e10a8d48297fcc9012a6a2e7723cceb4eac2084a73a27522d",
+    "sha256:556ad7e8b1bfbbabb4c90f12396901dee97680bbb101e0854b1a31e628c1783d",
+    "sha256:9875e810ba3549eeb6009d103ca01a2f302cd0a3e4d9ad7e6f59bbb7ea534e29"
+   ],
+   "fired_names": [
+    "el9-centos8-swap-release",
+    "mariadb-slow-shutdown-alma9",
+    "el9-php-fpm-stack",
+    "el9-mod-ssl",
+    "el9-php-gd",
+    "el9-php-mbstring",
+    "el9-php-xml",
+    "el9-mariadb-server",
+    "el9-ssh-host-keys",
+    "el9-mariadb-config",
+    "el9-httpd-config",
+    "el9-carry-boot-services",
+    "el9-enable-php-fpm",
+    "el9-centos8-swap-repos-package"
+   ],
+   "ok": true,
+   "seconds": 100.4,
+   "sources": {
+    "https://dl.fedoraproject.org/pub/epel/9/Everything/x86_64/repodata/repomd.xml": "sha256:63c1c9d39f19271a0b5b8e94d4b2f3795327a7f5a13b5d131274154aef6e4441",
+    "https://repo.almalinux.org/almalinux/9/AppStream/x86_64/os/repodata/repomd.xml": "sha256:362b3ea88fc9b1008ae08a21bb935b7bfe1018e7ca4fbd716d44200be40ae731",
+    "https://repo.almalinux.org/almalinux/9/BaseOS/x86_64/os/repodata/repomd.xml": "sha256:762265b3dfa0e3c3ea5648b32aaf5122dae9c35cc24f9154f98a3fa88f8425f1"
+   }
+  },
+  {
+   "to": "alma10",
+   "fired": [
+    "sha256:c1fb16715be095a9c4da5f4d1d32632118e80929ab1ef9d5e6bf9b1ccc85b768",
+    "sha256:78137ec7ec6f5a60306d6a0e9fc96233b3c27300458e41ff1e13ca6e00ddd207",
+    "sha256:9f480040978dfb8e301d1b399f32217d7ff38e0f8a2cc14c6ac08f0ea1cb613d",
+    "sha256:e149cac8858a9a4c42573ba0795f980b0154f1ab8587a9077a8011b0c04d5ee8",
+    "sha256:29a9351abc67c221a62927b21833dc85aaab6a5ac8b9d5ebdf52adf4248b1b62"
+   ],
+   "fired_names": [
+    "el10-network-keyfiles",
+    "mariadb-slow-shutdown-alma10",
+    "el10-mariadb-upgrade",
+    "el10-httpd-php-config",
+    "php81-mysqli-report-off"
+   ],
+   "ok": true,
+   "seconds": 95.4,
+   "sources": {
+    "https://dl.fedoraproject.org/pub/epel/10/Everything/x86_64/repodata/repomd.xml": "sha256:7e89844543b776022472471f8c18df7278746091793163ee048aaf306a3197df",
+    "https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/repodata/repomd.xml": "sha256:34974c81cdad5dfbf9df56b4bcab099b8d69ed0de4a40e0ad8386125ed8660e0",
+    "https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/repodata/repomd.xml": "sha256:4885c2f016e11df32ee8856cf8ffba1464ccd7650263667343834d6e8ecc3bf6"
+   }
+  }
+ ],
+ "start_services": [
+  "README"
+ ],
+ "failed_stage": "",
+ "final": {
+  "release": "AlmaLinux release 10.2 (Lavender Lion)",
+  "passed": [
+   "boot",
+   "cron",
+   "current",
+   "db",
+   "fail2ban",
+   "firewall",
+   "mail",
+   "network",
+   "php",
+   "pkgdb",
+   "python",
+   "services",
+   "site",
+   "ssh",
+   "tools"
+  ],
+  "failed": [],
+  "failed_logs": {}
+ },
+ "model_calls": 0,
+ "log_sha256": "sha256:662f3a383af3c22aef6bbe14d66b09b1de02a57926db150475f6dce62f056a3a"
+}
