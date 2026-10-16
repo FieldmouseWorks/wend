@@ -2050,21 +2050,26 @@ relocate does; ext3 stays ext3, which every kernel on the EL routes mounts and t
 the old kernel can still read it. Where the new `/boot` goes depends on what the machine's bootloader can read:
 
 - **GRUB 2** (CentOS 7): a directory on the new root, and relocate's stub as built, with one change. Here the stub
-  stays in charge for the whole route, not just until a commit made before the walk, so its home (its `grub.cfg`,
-  its `grubenv`, and the modules under `core.img`'s prefix) has to be a plain partition that GRUB can save `grubenv`
-  on and that every kernel on the route mounts, since `arm_new` writes it from the new root at every hop. The old
-  `/boot` is that when it's ext4 or XFS v5 (CentOS 7.3 and later installs). An XFS v4 `/boot` (7.0 to 7.2) isn't,
-  because Alma 9's kernel and later can't mount it. Then the stub's home is a new plain XFS v5 partition at the start
-  of the spare disk, `refresh` installs `core.img` onto the boot disk with that prefix (`grub2-install
-  --boot-directory`), and entry 1 finds the old `/boot` by UUID (GRUB 2 still reads v4). With free extents and no
-  spare disk, an XFS v4 `/boot` is refused, naming a disk to add. The route's GRUB reinstall from EL8 on (the BIOS
-  step `docs/rebuild-and-carry.md` describes) installs into the stub's home on a relocated machine, never the new
-  root's `/boot`: that is on LVM, where GRUB can't save `grubenv`, so one-shot trials would stop. Each release's
-  `core.img` and modules land beside the stub, the stub's entry 0 stops moving `prefix` (the new root's modules come
-  from a newer `grub2` package than `core.img` from then on), and it loads the new root's BLS config; entry 1 loads
-  the old EL7 config under the newer GRUB, as the doc describes. `wend commit` moves the prefix to the new root's
-  `/boot` with the landing release's own `grub2-install`, as the doc's commit does. This home and the reinstall into
-  it have no proof yet either; step 3 proves them with the GRUB legacy stub, and refuses what fails.
+  stays in charge for the whole route, not just until a commit made before the walk, so its home (its `grub.cfg`, its
+  `grubenv`, and the modules under `core.img`'s prefix) has to be a plain partition that GRUB can save `grubenv` on
+  and that every kernel on the route mounts, since `arm_new` writes it from the new root at every hop. The old `/boot`
+  is that when it's ext4 or XFS v5 (CentOS 7.3 and later installs). An XFS v4 `/boot` (7.0 to 7.2) isn't, because Alma
+  9's kernel and later can't mount it. Then the stub's home is a new plain XFS v5 partition at the start of the spare
+  disk, `refresh` installs `core.img` onto the boot disk with that prefix (`grub2-install --boot-directory`), and
+  entry 1 finds the old `/boot` by UUID (GRUB 2 still reads v4). With free extents and no spare disk, an XFS v4
+  `/boot` is refused, naming a disk to add. `relocate.env` records the home's UUID as `STUB_UUID` (the old `/boot`'s
+  own when that is the home), and every write to the stub's variables after the flip (`arm_new`, `commit_trial`,
+  `rollback_next`) mounts that, never `BOOT_UUID`. The route's GRUB reinstall from EL8 on (the BIOS step
+  `docs/rebuild-and-carry.md` describes) installs into the stub's home on a relocated machine, never the new root's
+  `/boot`: that is on LVM, where GRUB can't save `grubenv`, so one-shot trials would stop. Each release's `core.img`
+  and modules land beside the stub, the stub's entry 0 stops moving `prefix` (the new root's modules come from a newer
+  `grub2` package than `core.img` from then on). Before it loads the new root's BLS config, entry 0 reads the new
+  root's own `grubenv` (`load_env -f` on the new root's `/boot/grub2/grubenv`, read-only, which GRUB can do on LVM),
+  so EL8's `kernelopts` (its root and `rd.lvm.lv=`) come from the root that the kernel and package tools keep them on,
+  and the stub's own variables stay in the stub's home; the proof checks `/proc/cmdline`. Entry 1 loads the old EL7
+  config under the newer GRUB, as the doc describes. `wend commit` moves the prefix to the new root's `/boot` with the
+  landing release's own `grub2-install`, as the doc's commit does. This home and the reinstall into it have no proof
+  yet either; step 3 proves them with the GRUB legacy stub, and refuses what fails.
 - **GRUB legacy** (CentOS 5 and 6, and every release after them on those machines, since GRUB legacy stays: "Kernels
   and the bootloader") can't read LVM, so the new `/boot` is a plain ext3 filesystem made by the machine's own
   `mkfs.ext3`: the first partition of the spare disk, or, with free extents and no spare disk, a directory
@@ -2220,8 +2225,8 @@ Then:
    Any difference refuses the hop there, before its first command, and the old system is the next boot.
 4. **Every reboot is a trial.** Before each reboot (after a hop, and between the transaction and the post steps on a
    hop whose release says `reboot = "before-post"`, centos6) it arms the stub's one-shot boot of the new root. It
-   runs on the new root, whose fstab no longer has the old `/boot`, so this is `arm_new`: `arm`'s write, made the
-   way `commit_trial` and `rollback_next` make theirs (mount the old boot volume by `BOOT_UUID`, write the flag
+   runs on the new root, whose fstab no longer has the stub's `/boot`, so this is `arm_new`: `arm`'s write, made
+   the way `commit_trial` and `rollback_next` make theirs (mount the stub's home by `STUB_UUID`, write the flag
    there, sync, freeze and thaw, unmount); relocate's own `arm` writes the running root's `/boot` and only arms
    from the old system. The stub's default stays the old system until `wend commit`, so a new kernel that hangs or
    panics, a power cut, or anyone's reboot at a bad moment brings back the old system, whole. When `reboot` returns
