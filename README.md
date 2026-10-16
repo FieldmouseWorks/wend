@@ -83,7 +83,7 @@ archive/allowed_signers                   the archive's public signing key (docs
 tools/
   check.py           schema check, content ids, decoy check, --repin, --compile
   backends.py        what each typed op compiles to: apt (Debian, Ubuntu) and rpm (EL)
-  mirror.py          http -> https cache for old boxes (CentOS 5's yum can't speak today's TLS; trusty's apt has no https)
+  mirror.py          http -> https cache for old boxes (CentOS 5's yum can't do today's TLS; trusty's apt lacks https)
   sandbox.py         chroot boxes: build, snapshot, roll back, private /dev
   walk.py            walk a route on a box (the map walk), write the run
   vm.py              the VM tier: replay a route on a real install in a KVM guest, a real reboot after every hop
