@@ -1245,7 +1245,9 @@ doesn't enable (CRB, PowerTools). Per hop it lists the box's own packages that g
 leapp-data says each becomes and the route's fixes for that hop whose steps name it or its successor; then, in one
 line, the dependencies that go; then what is deprecated there. A package with no fix naming it is a lead for a route
 author, not a verdict: the replay and the box's checks decide. Hops before EL7 aren't checked, since leapp-data starts
-at EL7. Whether it should ever stop a preflight is open question 14.
+at EL7. On a PR that the gate replays an EL route for, CI runs it on each of those route and box pairs and puts the
+report in the job summary, with a warning when an own package goes unnamed (`.github/workflows/route-gaps.yml`); it
+never fails and isn't a required check. Whether it should ever stop a preflight is open question 14.
 
 ## Sheltering an app (draft: chroot tier built)
 
@@ -1837,7 +1839,7 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
     existing route), with state movers for a fresh target root second. Design in `docs/rebuild-and-carry.md`; each
     piece moves into this document in the PR that builds it.
 14. **leapp-data as a gate.** `wend gaps` only reports ("Package evolution data"). Should a client's preflight warn, or
-    refuse, when one of a machine's own packages goes at a hop and no fix names it? And should route authors' PRs
-    show the report beside the replay? Not decided; the data is advisory until then. Its driver deprecation data and
+    refuse, when one of a machine's own packages goes at a hop and no fix names it? Route PRs show the report beside
+    the replay, as a warning only. Not decided; the data is advisory until then. Its driver deprecation data and
     repo maps aren't used: wend's driver tables come from the kernels themselves ("Hardware preflight"), and the
     route's own repo lists say which repos it enables.
