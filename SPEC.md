@@ -2230,6 +2230,41 @@ the stub's default (relocate's `commit_trial`) and ends the trials. After commit
 old root is dropped; dropping it (to get its disk back, and reinstalling the bootloader on the new root) is a later
 step of its own.
 
+### Fleets: one admin box, many identical machines
+
+An owner with a closet of machines built the same way wants to take all of them up from one laptop. wend's part of
+that is small on purpose: **a plan one machine's rehearsal made can be reused on another machine that matches it**, and
+`upgrade` has exit codes a plain loop can drive. Everything else is the owner's loop. No agent, no daemon on the
+machines, no inventory format, no scheduler: fleet orchestration is where a tool like this turns into a platform, and
+wend stays out of it.
+
+- **Reuse.** A plan made on machine A may be used on machine B when B matches it: the same `installed_list` (names,
+  versions and architectures, not only the sha256 of A's list), the same release and running kernel, the same
+  `checks.toml` when B's checks are generated (so B runs the same services, ports, vhosts, databases and cron
+  entries), and every pinned fix's precondition holding on B exactly as it did on A at the start. B's own facts must
+  pass hardware preflight on their own; they don't have to equal A's (addresses, disks and hostnames differ). On a
+  mismatch `upgrade` refuses before it touches anything, naming what differs, and B gets its own rehearsal. What a
+  match can't see (a hand-edited config file the rehearsal walked on A but not on B) is what each hop's fix match, its
+  checks and B's own undo are for.
+- **The cache** goes to each machine with the plan, copied (scp, rsync): nothing on the machines listens, and each
+  machine's offline walk is the same as a single machine's. Each machine needs room for its own undo, as always.
+- **Exit codes**, so the loop needs no parsing: `upgrade` exits 0 when the machine has landed (or is committed), 10
+  when it is about to reboot or has just rebooted and needs running again, 20 when it refused before touching
+  anything (with why on stderr, and 21 for a plan that doesn't match: rehearse this one), and 30 when it rolled back.
+  `wend upgrade --status` prints the state file's phase and exits the same way without doing anything.
+- **The loop** is a shell script in `docs/` (not a wend verb): push the binary and the plan to each machine over ssh,
+  run `wend upgrade` until it exits 0, 20 or 30, waiting out each reboot, and collect each machine's run and report.
+  One canary first, then batches of a size the owner picks, and the first 20 or 30 anywhere stops the loop before the
+  next batch starts. Ansible or anything else that runs a command over ssh and reads its exit code drives the same
+  commands.
+- **Rollback stays per machine,** local and automatic, as above. The admin box drives the rollout; it is never the
+  path back.
+
+Built after a single machine's upgrade and rollback are proved (step 6 of the order of work). The proof: two or three
+guests from one box on remi, driven from the host by the loop, with one guest changed on purpose before the start (a
+package installed) so it's refused as not matching, and a hop failed on purpose on one guest, which rolls that guest
+back and stops the loop before the next batch.
+
 ### State across reboots
 
 `/var/lib/wend/upgrade/state.json`, on the new root: the plan's sha256, the hop, the phase (relocated, before the hop,
@@ -2316,8 +2351,9 @@ the generated checks; the rehearsal's kernel downloads. Nothing else.
    the walk with CI's run of the same route.
 5. `wend upgrade`, `wend rollback`, `wend commit` and `vm.py upgrade`, on `el/centos7-lamp`, then `el/centos5-web`,
    with the proof above.
-6. `el/centos6-lamp` and its proof.
-7. README and docs/try-it.md say what's real.
+6. Fleets: plan reuse, the exit codes and the loop in `docs/`, with the proof in "Fleets".
+7. `el/centos6-lamp` and its proof.
+8. README and docs/try-it.md say what's real.
 
 Later, each as its own design: EL on UEFI (relocate's stub on the ESP); Debian and Ubuntu (the VM tier has proved
 their routes; relocate needs their bootloaders' stubs); dropping the old root after commit; a boot unit that goes on
@@ -2336,6 +2372,10 @@ by itself after each boot.
    refusing them, only if remi proves a restore entry that brings back the old system after a hop broken on purpose,
    with no one at the console. Which transport (rsync over ssh, nbd), and what does CentOS 5 do, whose initramfs has
    no network?
+4. **How close is a match.** A fleet plan matches on packages, checks and preconditions, not on config files.
+   Should it also compare the files the rpm database says differ from their packages (`rpm -Va`'s config changes),
+   less the ones every machine has its own of (network, hostname, host keys)? Stricter means more rehearsals; looser
+   leans on the canary and the undo.
 
 ## Open questions
 
