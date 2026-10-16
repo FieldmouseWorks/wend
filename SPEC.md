@@ -2067,9 +2067,10 @@ the old kernel can still read it. Where the new `/boot` goes depends on what the
   root's own `grubenv` (`load_env -f` on the new root's `/boot/grub2/grubenv`, read-only, which GRUB can do on LVM),
   so EL8's `kernelopts` (its root and `rd.lvm.lv=`) come from the root that the kernel and package tools keep them on,
   and the stub's own variables stay in the stub's home; the proof checks `/proc/cmdline`. Entry 1 loads the old EL7
-  config under the newer GRUB, as the doc describes. `wend commit` moves the prefix to the new root's `/boot` with the
-  landing release's own `grub2-install`, as the doc's commit does. This home and the reinstall into it have no proof
-  yet either; step 3 proves them with the GRUB legacy stub, and refuses what fails.
+  config under the newer GRUB, as the doc describes. Dropping the old root, a step of its own after `wend commit`
+  ("The upgrade"), moves the prefix to the new root's `/boot` with the landing release's own `grub2-install`; commit
+  leaves the stub in place. This home and the reinstall into it have no proof yet either; step 3 proves them with the
+  GRUB legacy stub, and refuses what fails.
 - **GRUB legacy** (CentOS 5 and 6, and every release after them on those machines, since GRUB legacy stays: "Kernels
   and the bootloader") can't read LVM, so the new `/boot` is a plain ext3 filesystem made by the machine's own
   `mkfs.ext3`: the first partition of the spare disk, or, with free extents and no spare disk, a directory
@@ -2254,9 +2255,10 @@ loudly, with the run.
 
 **`wend rollback`** does the same by hand, any time before commit: the old system, its kernel and its GRUB config
 come back, and the new root stays for a look or a later `wend upgrade --resume`. **`wend commit`** makes the new root
-the stub's default (relocate's `commit_trial`) and ends the trials. After commit `wend rollback` still works, until the
-old root is dropped; dropping it (to get its disk back, and reinstalling the bootloader on the new root) is a later
-step of its own.
+the stub's default (relocate's `commit_trial`) and ends the trials, and that is all it does: it deletes nothing, and
+the stub, its old entry and the old root stay. After commit `wend rollback` still works, until the old root is
+dropped; dropping it (to get its disk back, moving the bootloader's prefix onto the new root, and removing the stub
+and the old LVs) is a later step of its own, never part of commit.
 
 ### Fleets: one admin box, many identical machines
 
