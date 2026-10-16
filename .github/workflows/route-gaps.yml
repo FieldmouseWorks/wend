@@ -1,0 +1,75 @@
+# leapp-data gaps on EL route PRs (SPEC "Package evolution data"). For every EL route and box a PR makes the gate
+# replay, `wend gaps` lists the box's packages leapp-data says the route loses and whether a fix in it names them,
+# in the job summary. A warning, never a verdict: it never fails, isn't a required check, and never changes a route.
+#
+# Same trust model as gate.yml: the PR supplies data, and the tools, adapters and leapp-data snapshot that read it
+# come from the base branch. The box is built as the replay builds it (and reuses the replay's cached build).
+name: route-gaps
+
+on:
+  pull_request:
+    paths: ["routes/el/**", "fixes/el/**", "boxes/el/**", "adapters/el.toml"]
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: "${{ github.base_ref }}", path: .base }
+      - id: m
+        run: |
+          rm -rf tools adapters && cp -r .base/tools .base/adapters . && rm -rf .base
+          # the gate's own plan, EL routes only; a plan that fails here leaves the gate's plan to say why
+          if m=$(python3 -B tools/affected.py origin/${{ github.base_ref }}); then
+            m=$(jq -c '{include: [.include[] | select(.route | startswith("routes/el/"))]}' <<<"$m")
+          else
+            echo "::warning::tools/affected.py refused this PR; see the gate's plan job"
+            m='{"include":[]}'
+          fi
+          echo "matrix=$m" >> "$GITHUB_OUTPUT"
+
+  gaps:
+    needs: plan
+    if: ${{ fromJSON(needs.plan.outputs.matrix).include[0] }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: "${{ github.base_ref }}", path: .base }
+      - run: rm -rf tools adapters wend && cp -r .base/tools .base/adapters .base/wend . && rm -rf .base
+      - name: host packages
+        run: sudo apt-get update && sudo apt-get install -y rsync rpm2cpio cpio iproute2
+      - name: disk space for EL boxes
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/local/share/boost
+          df -h /
+      - name: the replay's cached box, if it has saved one (same key as gate.yml; never saved from here)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /var/tmp/wend/boxes
+          key: box-${{ matrix.box }}-${{ hashFiles(format('boxes/{0}/box.toml', matrix.box), 'adapters/*.toml', 'tools/sandbox.py') }}
+      - name: gaps (report only)
+        env: { ROUTE: "${{ matrix.route }}", BOX: "${{ matrix.box }}" }
+        run: |
+          if out=$(sudo -E python3 -B wend gaps "$ROUTE" "$BOX" 2>&1); then
+            { echo "### leapp-data gaps: \`$ROUTE\` on \`$BOX\`"; echo
+              echo "Report only: packages leapp-data says go on this route, and whether a fix in it names them."
+              echo; echo '```'; echo "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            n=$(grep -oE '[0-9]+ that no fix in the route names' <<<"$out" | awk '{s+=$1} END {print s+0}')
+            [ "$n" = 0 ] || echo "::warning title=leapp-data gaps::$ROUTE on $BOX: $n of the box's own packages go with no fix naming them (job summary)"
+          else
+            echo "::warning title=leapp-data gaps::wend gaps couldn't run for $ROUTE on $BOX"
+            { echo "### leapp-data gaps: \`$ROUTE\` on \`$BOX\` didn't run"; echo; echo '```'
+              echo "$out" | tail -n 40; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
