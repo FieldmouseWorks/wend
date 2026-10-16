@@ -1214,8 +1214,10 @@ Facts also list what those programs stand on that no package owns, so the route 
 - `native`: every x86-64 ELF program and shared library no package owns under `/usr`, `/opt`, `/srv`, and `/bin`,
   `/sbin`, `/lib` and `/lib64` when they aren't links into `/usr`, grouped by tree (`/opt/<name>`, `/srv/<name>`,
   `/usr/local`, a Python module directory, else the file's directory): `tree`, `files`, up to three `sample` paths,
-  and `needs`, the sonames (`DT_NEEDED`) its files load that none of those unowned files provides itself (by
-  `DT_SONAME`, or by file name when it has none). A statically linked program needs nothing. 32-bit files, other
+  and `needs`, the sonames (`DT_NEEDED`) its files load that no unowned file provides (by `DT_SONAME`, or by file
+  name when it has none): one in the same tree, or one in a directory the loader searches (`/lib*`, `/usr/lib*` and
+  their `x86_64-linux-gnu`, `/usr/local/lib*`, and what `/etc/ld.so.conf` and its includes list). A vendor's private
+  copy elsewhere serves only its own tree. A statically linked program needs nothing. 32-bit files, other
   architectures' (a cross toolchain's sysroot), relocatable
   objects (`.o`, kernel modules) and files under `/usr/src` aren't listed.
 - `kernel_owner`: the package that owns the running kernel's `/boot/vmlinuz-<release>`, or null (a hand-built kernel,

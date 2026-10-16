@@ -170,25 +170,100 @@ pub fn native(root: &Path, owned: &HashSet<String>) -> Vec<Value> {
         walk(root, &r, &mut files);
     }
     files.sort();
-    let mut provided = BTreeSet::new();
-    let mut trees: BTreeMap<String, (Vec<String>, BTreeSet<String>)> = BTreeMap::new();
+    let linker = linker_dirs(root);
+    // a library in a directory the loader searches serves every tree; one anywhere else, only its own tree (a
+    // vendor's private libssl in /opt/a/lib doesn't keep /opt/b's programs running when the distro's goes)
+    let mut everyone = BTreeSet::new();
+    // per tree: its files, what they load, what they provide
+    type Tree = (Vec<String>, BTreeSet<String>, BTreeSet<String>);
+    let mut trees: BTreeMap<String, Tree> = BTreeMap::new();
     for p in files.iter().filter(|p| !owned.contains(p.as_str())) {
         let Some(Some(d)) = elf(&root.join(p.trim_start_matches('/'))) else {
             continue;
         };
-        let name = p.rsplit('/').next().unwrap_or(p);
-        provided.insert(d.soname.clone().unwrap_or_else(|| name.to_string()));
+        let (dir, name) = p.rsplit_once('/').unwrap_or(("", p));
+        let soname = d.soname.clone().unwrap_or_else(|| name.to_string());
         let t = trees.entry(tree_of(p)).or_default();
+        if linker.contains(if dir.is_empty() { "/" } else { dir }) {
+            everyone.insert(soname.clone());
+        }
         t.0.push(p.clone());
         t.1.extend(d.needed);
+        t.2.insert(soname);
     }
     trees
         .into_iter()
-        .map(|(tree, (fs_, needs))| {
-            let needs: Vec<&String> = needs.iter().filter(|n| !provided.contains(*n)).collect();
+        .map(|(tree, (fs_, needs, own))| {
+            let needs: Vec<&String> = needs
+                .iter()
+                .filter(|n| !own.contains(*n) && !everyone.contains(*n))
+                .collect();
             json!({"tree": tree, "files": fs_.len(), "sample": fs_.iter().take(3).collect::<Vec<_>>(), "needs": needs})
         })
         .collect()
+}
+
+/// The directories the loader searches: the distro's own, `/usr/local/lib*`, and whatever `/etc/ld.so.conf` (and the
+/// files it includes) adds, as paths from `/`.
+fn linker_dirs(root: &Path) -> HashSet<String> {
+    let mut dirs: HashSet<String> = [
+        "/lib",
+        "/lib64",
+        "/usr/lib",
+        "/usr/lib64",
+        "/usr/local/lib",
+        "/usr/local/lib64",
+    ]
+    .iter()
+    .flat_map(|d| [d.to_string(), format!("{d}/x86_64-linux-gnu")])
+    .collect();
+    let mut todo = vec!["/etc/ld.so.conf".to_string()];
+    let mut seen = HashSet::new();
+    while let Some(f) = todo.pop() {
+        if !seen.insert(f.clone()) || seen.len() > 256 {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(root.join(f.trim_start_matches('/'))) else {
+            continue;
+        };
+        for line in text.lines().map(|l| l.split('#').next().unwrap_or("").trim()) {
+            if let Some(pat) = line.strip_prefix("include").filter(|r| r.starts_with([' ', '\t'])) {
+                for pat in pat.split_whitespace() {
+                    let pat = if pat.starts_with('/') {
+                        pat.to_string()
+                    } else {
+                        format!("/etc/{pat}")
+                    };
+                    todo.extend(expand(root, &pat));
+                }
+            } else if line.starts_with('/') {
+                // `dir:type` and `dir=type` are libc5 forms; the directory is what's before them
+                let d = line.split([':', '=', ' ', '\t']).next().unwrap_or(line);
+                dirs.insert(d.trim_end_matches('/').to_string());
+            }
+        }
+    }
+    dirs
+}
+
+/// `/etc/ld.so.conf.d/*.conf`, the one wildcard form ld.so.conf uses: a `*` in the last part of the path.
+fn expand(root: &Path, pat: &str) -> Vec<String> {
+    let Some((dir, last)) = pat.rsplit_once('/') else {
+        return vec![];
+    };
+    let Some((pre, post)) = last.split_once('*') else {
+        return vec![pat.to_string()];
+    };
+    let mut out: Vec<String> = fs::read_dir(root.join(dir.trim_start_matches('/')))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.len() >= pre.len() + post.len() && n.starts_with(pre) && n.ends_with(post))
+        .map(|n| format!("{dir}/{n}"))
+        .collect();
+    out.sort();
+    out
 }
 
 /// `python2_modules`: per module directory of the system Python 2, what no package owns in it.
@@ -421,6 +496,19 @@ mod tests {
             &fake_elf(3, None, &["libjemalloc.so.1", "libc.so.6"]),
         );
         put(&t, "/usr/local/bin/static-tool", &fake_elf(2, None, &[]));
+        // a vendor's private libssl serves only its own tree; /opt/shared/lib is on the loader's path
+        put(
+            &t,
+            "/opt/vendor/lib/libssl.so.10",
+            &fake_elf(3, Some("libssl.so.10"), &[]),
+        );
+        put(
+            &t,
+            "/opt/shared/lib/libjemalloc.so.1",
+            &fake_elf(3, Some("libjemalloc.so.1"), &[]),
+        );
+        put(&t, "/etc/ld.so.conf", b"include ld.so.conf.d/*.conf\n");
+        put(&t, "/etc/ld.so.conf.d/shared.conf", b"# vendor\n/opt/shared/lib/\n");
         let sp = "/usr/lib64/python2.6/site-packages";
         put(&t, &format!("{sp}/django/__init__.py"), b"");
         put(&t, &format!("{sp}/Django-1.3-py2.6.egg-info/PKG-INFO"), b"");
@@ -463,13 +551,13 @@ mod tests {
         let by: BTreeMap<&str, &Value> = n.iter().map(|x| (x["tree"].as_str().unwrap(), x)).collect();
         assert_eq!(
             by.keys().copied().collect::<Vec<_>>(),
-            vec!["/opt/postgresql-9.2", sp, "/usr/local"]
+            vec!["/opt/postgresql-9.2", "/opt/shared", "/opt/vendor", sp, "/usr/local"]
         );
         // its own libpq is provided by an unowned file; libssl.so.10 and libc.so.6 aren't
         assert_eq!(by["/opt/postgresql-9.2"]["needs"], json!(["libc.so.6", "libssl.so.10"]));
         assert_eq!(by["/opt/postgresql-9.2"]["files"], 2);
         assert_eq!(by[sp]["needs"], json!(["libpython2.6.so.1.0", "libxml2.so.2"]));
-        assert_eq!(by["/usr/local"]["needs"], json!(["libc.so.6", "libjemalloc.so.1"]));
+        assert_eq!(by["/usr/local"]["needs"], json!(["libc.so.6"]));
         assert_eq!(m.len(), 1, "{m:#?}");
         assert_eq!(m[0]["version"], "2.6");
         assert_eq!(m[0]["compiled"], 1);
