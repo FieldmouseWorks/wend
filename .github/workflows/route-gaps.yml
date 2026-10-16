@@ -1,6 +1,7 @@
 # leapp-data gaps on EL route PRs (SPEC "Package evolution data"). For every EL route and box a PR makes the gate
 # replay, `wend gaps` lists the box's packages leapp-data says the route loses and whether a fix in it names them,
-# in the job summary. A warning, never a verdict: it never fails, isn't a required check, and never changes a route.
+# in the job summary. A warning, never a verdict: a gap never fails it, it isn't a required check, and it never
+# changes a route.
 #
 # Same trust model as gate.yml: the PR supplies data, and the tools, adapters and leapp-data snapshot that read it
 # come from the base branch. The box is built as the replay builds it (and reuses the replay's cached build).
@@ -13,8 +14,14 @@ on:
 permissions:
   contents: read
 
+# a newer push supersedes the box builds of the last one
+concurrency:
+  group: route-gaps-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
-  plan:
+  # not "plan": that's the gate's required check, and a second check by the same name would muddy it
+  gaps-plan:
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.m.outputs.matrix }}
@@ -36,13 +43,14 @@ jobs:
           echo "matrix=$m" >> "$GITHUB_OUTPUT"
 
   gaps:
-    needs: plan
-    if: ${{ fromJSON(needs.plan.outputs.matrix).include[0] }}
+    needs: gaps-plan
+    if: ${{ fromJSON(needs.gaps-plan.outputs.matrix).include[0] }}
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.gaps-plan.outputs.matrix) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    continue-on-error: true      # a runner or mirror failure is no verdict on the PR either
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -62,7 +70,7 @@ jobs:
       - name: gaps (report only)
         env: { ROUTE: "${{ matrix.route }}", BOX: "${{ matrix.box }}" }
         run: |
-          if out=$(sudo -E python3 -B wend gaps "$ROUTE" "$BOX" 2>&1); then
+          if out=$(sudo -E python3 -P -B wend gaps "$ROUTE" "$BOX" 2>&1); then
             { echo "### leapp-data gaps: \`$ROUTE\` on \`$BOX\`"; echo
               echo "Report only: packages leapp-data says go on this route, and whether a fix in it names them."
               echo; echo '```'; echo "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
