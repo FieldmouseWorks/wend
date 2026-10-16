@@ -1700,7 +1700,9 @@ Sealed code is old and unpatched, so the seal is the point of the design, not a 
 
 - **In:** only the ports the app served before, on the addresses it served them on (facts' listening sockets), now
   with UDP and port ranges (SIP on 5060, RTP's range). Nothing else reaches the pod. An app that served the internet
-  still does, because otherwise it isn't working, and the report says it in the first line, not the last.
+  still does, because otherwise it isn't working, and the report flags every exposed port in its first lines, not its
+  last. Decided (2026-10-16): same ports as before by default, not loopback-only, which would break a working app on
+  purpose.
 - **Front it (opt-in, recommended for HTTP).** The host's own current web server or proxy terminates TLS and proxies
   to the boat's port on loopback, so the internet talks to a patched TLS stack and HTTP parser, and the boat's old
   OpenSSL never sees a handshake. The plan offers it for every HTTP(S) port and the report recommends it.
@@ -1785,11 +1787,9 @@ migration, not an upgrade.
 
 ### Open questions
 
-1. **Default exposure.** The design keeps an app's ports where they were, and recommends fronting. The stricter
-   default is loopback-only unless the owner opts in to publishing, which breaks a working app on purpose. Which?
-2. **How big a lift is too big.** A boat lifting thousands of files with `trust = none` is mostly an unverified copy
+1. **How big a lift is too big.** A boat lifting thousands of files with `trust = none` is mostly an unverified copy
    of the box. Should preflight refuse past a share of the boat (and say "rebuild the app instead"), or only report?
-3. **Exit dump cadence and space.** Daily by default, keep the last few? A large database doubles its disk.
+2. **Exit dump cadence and space.** Daily by default, keep the last few? A large database doubles its disk.
 
 ## VM tier (maintainer-run)
 
