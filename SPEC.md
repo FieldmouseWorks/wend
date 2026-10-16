@@ -1595,8 +1595,8 @@ with four changes: what can go in a boat, where its files may come from, how it'
 about getting out. "Lifeboat" is what the owner sees in the verdict and the report; the ops and the plan keep the
 shelter's names, since it is one mechanism.
 
-Nothing below is built. It moves into the shelter section, piece by piece, in the PRs that build it, the way the
-shelter did.
+Nothing below is built, and it will change as real boxes teach us. It moves into the shelter section, piece by
+piece, in the PRs that build it, the way the shelter did.
 
 ### What goes in a boat
 
@@ -1616,7 +1616,8 @@ serves the rest (its database, if the route carries that database fine; its reve
 "The seal").
 
 Never in a boat: a kernel, a kernel module or the hardware it drives (a telephony card's DAHDI drivers, a vendor
-RAID tool); the distro's own programs; the machine's package managers, a second one included (the boat is
+RAID tool); the distro's own programs the host still runs (the route carries those; a boat's httpd or PHP is its own
+copy from the vault); the machine's package managers, a second one included (the boat is
 immutable, and nothing inside it installs anything); anything that has to run as the host's root or see the host's
 `/etc` (the box's own sshd, its firewall); and the whole machine. An app that needs any of those is refused, by name.
 
@@ -1654,8 +1655,9 @@ Each lifted file gets a trust note in the lock, the strongest one that applies:
 
 What's never lifted, and refuses the boat when the app needs it: setuid or setgid files and files with file
 capabilities (the boat strips nothing: it refuses, so a lifted `su` can't quietly lose its bit and work differently);
-device nodes; anything under `/boot` or `/lib/modules`; and a file whose package the vault does carry but serves other
-bytes for (that's the shelter's refusal, unchanged: a vault that disagrees with itself isn't a lifting opportunity).
+device nodes; anything under `/boot` or `/lib/modules`; and a file the vault carries but whose vault bytes fail
+verification (that's the shelter's refusal, unchanged: a vault that fails its own checks isn't a lifting
+opportunity).
 
 Why lifting is allowed at all: on a dead repo there is nowhere else the bytes exist, so the choice is the owner's
 files or no boat. Why it's marked: the box may be compromised, and lifted bytes carry that with them. The boat's
@@ -1781,7 +1783,7 @@ migration, not an upgrade.
    (the most common real case; dies at the alma9 hop on PHP 8). Plan keys `services` and `ports` with `tcp`, pods,
    chroot tier first, then remi.
 3. Lifting, the lock's `[[lifted]]`, and the trust note, proved on a public box built for it (a CentOS 6 box with a
-   source-built service under `/opt` and an rpm db-matched lift), and privately on the appliance on remi, never in CI.
+   source-built service under `/opt`, and a third-party rpm from a repo that's gone, for a `db` lift), and privately on the appliance on remi, never in CI.
 4. UDP ports, the "front it" opt-in, exit dumps, `shelter.retire`, the report and the banner.
 5. Preflight's fourth "can't carry" check (a running service the landing release doesn't ship).
 
