@@ -2075,8 +2075,10 @@ route walks through. The scratch host is any machine the chroot harness runs on 
 needed.
 
 - **The copy.** `wend rehearse ROUTE --from root@machine` pulls the machine's root over ssh with rsync, with the
-  snapshot's flags (`-aHx --numeric-ids`, and `-AX` where both ends' rsync have them; one filesystem at a time: `/`,
-  then `/boot` and any other mounted filesystem into its place in the copy). `--root DIR` takes a copy made another
+  snapshot's flags (`-aHx --numeric-ids`, and `-AX` where both ends' rsync have them). `-x` is
+  `--one-file-system`: each pass copies one filesystem and crosses no mount point, so `/proc`, `/sys`, `/dev` and
+  `/run` come over as the empty directories they are underneath, and `/` is copied first, then `/boot` and each other
+  mounted disk filesystem into its place in the copy, once each. `--root DIR` takes a copy made another
   way (a mounted image or snapshot). The machine keeps running and nothing on it is written.
 - **The walk** is `walk --run` on the copy, unchanged: the pinned run the route was proved by, the verifying proxy,
   the generated checks, rollback per hop. A rehearsal never takes `--live`: `upgrade` installs only bytes a passing run
@@ -2084,9 +2086,13 @@ needed.
   the copy they do nothing and fetch nothing. After each hop the rehearsal downloads, without installing, what
   `hop.kernel_after` would install (the release's `kernel` and what it pulls in, through the same proxy), so the
   machine's offline walk finds it in the cache.
-- **The checks** it holds the copy to are the machine's ("Checks the machine is held to"). Only checks that pass on
-  the copy before the first hop are kept, as the walk does already; the rest are listed in the plan as dropped, with
-  their output.
+- **The checks** it holds the copy to are the machine's ("Checks the machine is held to"), run first on the machine
+  itself (their live forms, read-only) and then on the copy before the first hop. A check that fails on the machine
+  is dropped and listed with its output: it guards nothing that works today. A check that passes on the machine but
+  whose offline form can't pass on the copy (it needs another host, or hardware the copy hasn't got) fails the
+  rehearsal, naming it, unless the owner has marked it `live_only` in `checks.toml`. A `live_only` check isn't run on
+  the copy, but it still judges every boot of the upgrade, so nothing that worked at the start leaves the verdict
+  without the owner saying so.
 - **The result.** A pass writes the plan directory. A fail writes the run and the scrubbed gap report (`wend report`'s,
   with its issue link) and no plan.
 
@@ -2102,8 +2108,10 @@ A directory, `wend-plan-<machine id>/`, carried to the machine (scp, or a USB st
   as they read a box;
 - `cache/`, files named by their sha256, with a list of every file the walk and the kernel downloads fetched.
 
-`upgrade` refuses a plan whose fingerprint isn't the machine's as it is now (a package installed since, a kernel
-update, a reboot onto another kernel): the machine isn't the one rehearsed. The answer is a fresh rehearsal.
+The fingerprint is checked once, when `upgrade` starts with no state file: a plan whose fingerprint isn't the
+machine's as it is then (a package installed since, a kernel update, a reboot onto another kernel) is refused, since
+the machine isn't the one rehearsed, and the answer is a fresh rehearsal. Every later `upgrade` goes by the state file
+instead ("State across reboots"), since the hops change all three on purpose.
 
 ### Checks the machine is held to
 
@@ -2135,7 +2143,8 @@ it again.
 `sudo wend upgrade PLAN` refuses, touching nothing, unless all of this holds:
 
 - it runs as root on a machine booted from its own root (not a container, not a chroot);
-- the plan passed, is pinned, is for a route this atlas has, and its fingerprint is this machine's now;
+- the plan passed, is pinned, is for a route this atlas has, and its fingerprint is this machine's now (on a first
+  start; "The plan");
 - every file the plan lists is in its cache and hashes right (the walk's check of every pinned top file, extended
   to every file, since nothing is fetched from a network);
 - relocate's preflight passes, with a place for the new root and the new `/boot` ("The undo");
@@ -2200,6 +2209,12 @@ reboot, and the network and the checks that passed before the first hop. It's wr
 renamed over the old one before every reboot and every change of phase. The old system reads it by mounting the new
 root read-only (relocate's `relocate.env` says where), which is how `upgrade` and `rollback` know where things stand
 from either root. A second plan refuses while a state file is there.
+
+Each phase records what the next `upgrade` must find, and that replaces the plan's fingerprint from the first hop on:
+the root it should be booted from (`booted`), a `boot_id` other than the one recorded before the reboot, the release
+file and newest kernel the hop just finished should have left, and the sha256 of `installed_list` written at the end
+of the hop's transaction. A machine that matches none of what the state expects (someone ran the package manager
+between boots) is a red.
 
 ### Refused
 
