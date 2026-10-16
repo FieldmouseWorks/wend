@@ -27,6 +27,7 @@ L = "/etc/systemd/network"
 # systemd.link(5): the directories udevd reads .link files from (systemd's CONF_PATHS), and /lib, often /usr/lib
 LINK_DIRS = (L, "/run/systemd/network", "/usr/local/lib/systemd/network", "/usr/lib/systemd/network",
              "/lib/systemd/network")
+SYS = "/sys/class/net"
 SAVED = "/var/lib/wend/saved"
 NETWORK = "/etc/sysconfig/network"
 RESOLV = "/etc/resolv.conf"
@@ -101,9 +102,8 @@ def plan(path, net, resolv):
             fail(f"{path}: {side}{c} beside it isn't converted")
     if v.get("TYPE", "Ethernet") != "Ethernet":
         fail(f"{path}: TYPE={v['TYPE']}: only Ethernet profiles are converted")
-    hw = v.get("HWADDR", "").lower()
-    if not hw:  # the .link pin needs it: without one EL10 may call eth0 ens3, and a keyfile for eth0 never comes up
-        fail(f"{path}: no HWADDR to pin {dev} to")
+    # the .link pin needs a MAC: without one EL10 may call eth0 ens3, and a keyfile for eth0 never comes up
+    hw = v.get("HWADDR", "").lower() or running_mac(path, dev)
     if not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", hw):
         fail(f"{path}: HWADDR={hw} isn't a MAC address")
     name = v.get("NAME") or f"System {c}"
@@ -156,6 +156,8 @@ def plan(path, net, resolv):
         for key, want in (("NETWORK", lan.network_address), ("BROADCAST", lan.broadcast_address)):
             if key in v and addr(path, key, v[key]) != want:  # the installer writes both; NetworkManager derives them
                 fail(f"{path}: {key}={v[key]} doesn't match {ip}/{prefix}")
+        if "HWADDR" not in v:
+            carries(path, dev, f"{ip}/{prefix}")
         args += ["ipv4.method", "manual", "ipv4.addresses", f"{ip}/{prefix}"]
     else:
         fail(f"{path}: BOOTPROTO={proto} isn't converted")
@@ -207,6 +209,37 @@ def plan(path, net, resolv):
         args += ["ipv6.addr-gen-mode", gen or "default-or-eui64"]
     args += ["connection.autoconnect", "yes" if boolean(path, v, "ONBOOT", "yes") else "no"]
     return c, dev, hw, args
+
+
+def running_mac(path, dev):
+    """No HWADDR, as EL7's installer writes a profile unless told the NIC by MAC (wend#74): the profile then matches
+    the interface by name alone, so the NIC it configures is the one with that name now, on the box this runs on, and
+    pinning that NIC's own MAC to the name keeps the binding the box runs on today. Only a physical Ethernet NIC whose
+    address is its permanent one (sysfs addr_assign_type 0, not random or set) is pinned; a static profile's address
+    must also be on it (carries), so a copy of the box on another machine refuses instead of pinning that one's NIC.
+    A DHCP profile has no address to prove that by: the op must run on the box itself, as every engine runs it."""
+    s = os.path.join(SYS, dev)
+    if not os.path.isdir(os.path.join(s, "device")):
+        fail(f"{path}: no HWADDR, and no physical NIC named {dev} on this machine to pin it to")
+    attr = {}
+    for n in ("type", "addr_assign_type", "address"):
+        try:
+            attr[n] = open(os.path.join(s, n)).read().strip().lower()
+        except OSError:
+            attr[n] = ""
+    if attr["type"] != "1" or attr["addr_assign_type"] != "0":  # ARPHRD_ETHER; NET_ADDR_PERM
+        fail(f"{path}: no HWADDR, and {dev} isn't an Ethernet NIC with its own permanent MAC")
+    return attr["address"]
+
+
+def carries(path, dev, cidr):
+    """the NIC named dev has the static profile's address now: it is this box's NIC, running this profile"""
+    try:
+        p = subprocess.run(["ip", "-o", "-4", "addr", "show", "dev", dev], capture_output=True, text=True)
+    except OSError as e:
+        fail(f"ip: {e}")
+    if p.returncode or not any(f" inet {cidr} " in f" {line} " for line in p.stdout.splitlines()):
+        fail(f"{path}: no HWADDR, and {dev} doesn't have {cidr} now, so it may not be the NIC this profile runs on")
 
 
 def mac_pin(d, n):

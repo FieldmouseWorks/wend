@@ -867,7 +867,13 @@ digits). Effect, for each:
   NetworkManager's own serializer (`nmcli --offline connection add`, which needs no daemon);
 - `/etc/systemd/network/10-wend-<DEVICE>.link` pins the interface name to the profile's `HWADDR`. Once the ifcfg
   file is gone, nothing else keeps an `eth0` from becoming `ens3`, and the keyfile is bound to the old name and the
-  MAC. (Renaming several NICs to kernel names like `eth1` can race the kernel; only single-NIC boxes are proven.)
+  MAC. A profile with no `HWADDR` (EL7's installer writes one only when told the NIC by MAC: `network --bindto=mac`
+  or `ifname=`) matches its interface by name alone, so the NIC it runs on is the one with that name now: the op pins
+  that NIC's MAC, read from `/sys/class/net/<DEVICE>/address`, which keeps the binding the box runs on. Only a
+  physical NIC (a `device` link) of type 1 (Ethernet) with its permanent address (`addr_assign_type` 0) is pinned,
+  and a static profile's address and prefix must be on it now (`ip -o -4 addr show dev <DEVICE>`), so the op on a
+  copy of the box on another machine refuses instead of pinning that machine's NIC. A DHCP profile has nothing to
+  compare, so the op must run on the box itself, as every engine runs it. (Renaming several NICs to kernel names like `eth1` can race the kernel; only single-NIC boxes are proven.)
   The pin is written even when an earlier `.link` already pins exactly that MAC to that name (EL8's installer writes
   `10-anaconda-ifname-<DEVICE>.link` when booted with `ifname=`): that one wins and does the same, and ours takes
   over if it goes.
@@ -875,7 +881,7 @@ digits). Effect, for each:
 
 The files are read as `KEY=VALUE` lines and never executed; a value that isn't one word, or holds `$`, a backquote or
 `#`, fails, and an empty value is an unset key. Each key has the meaning the ifcfg-rh plugin gives it:
-- `DEVICE` and `HWADDR` (both required), `TYPE` (`Ethernet` only), `NAME` (the profile's name, else `System <name>`),
+- `DEVICE` (required) and `HWADDR` (else the running NIC's, above), `TYPE` (`Ethernet` only), `NAME` (the profile's name, else `System <name>`),
   `UUID` (the profile's uuid);
 - `BOOTPROTO`: `static`, `none` or empty with `IPADDR` and `PREFIX` or `NETMASK` (a real netmask), plus `GATEWAY` (or
   `/etc/sysconfig/network`'s); `dhcp` or `bootp` (read as `dhcp`) with none of those;
@@ -1964,7 +1970,8 @@ The rules:
   `releases.<id>.install.uefi` says it can (trusty, CentOS 7; not etch or CentOS 5, whose installers predate UEFI on
   x86-64, so no machine running them boots that way). A run records its `firmware`, and resumes only a run on the same.
 - Disk layout: by default anaconda makes `/boot` (the release's default size), swap and `/` as plain partitions on one
-  disk. Three install choices, given before the command, change that for an EL7-and-later kickstart: `--root-fs`
+  disk. Three install choices, given before the command, change that for an EL7-and-later kickstart (a fourth,
+  `--no-hwaddr`, the network profile): `--root-fs`
   overrides the box's `root_fs` (one the installer makes); `--lvm` lays the disk out as EL7's own autopart does
   (`/boot`, then one PV in a volume group
   `centos` holding `swap` and a `root` that fills it, so no extents are free); `--extra-disk GB` (repeatable) adds an
@@ -1973,6 +1980,9 @@ The rules:
   and its checks are the same either way. A layout is built and cached apart, a run records its `layout`, and resumes
   only a run with the same. This is how the VM tier makes a CentOS 7 machine installed from 7.0 to 7.2 media (`--root-fs
   xfs-v4 --lvm`) and gives rebuild and carry its room (`--extra-disk`, see `docs/rebuild-and-carry.md`).
+  `--no-hwaddr` boots the installer without `ifname=` (for a release whose `install.ifname` is on), so its ifcfg has
+  no `HWADDR`, as a plain kickstart or interactive EL7 install writes it (wend#74); the build fails if the installed
+  `ifcfg-eth0` has one anyway. It is an install choice too: the chroot box writes its own profile.
 - `replay ROUTE BOX --from RUN HOP` starts from an earlier run's disk after the hop before HOP, to iterate on a late
   hop. It only resumes from a hop that passed on the same box, logs in with the ssh key of the box build that disk
   came from, and is recorded as `partial-pass` at best, never `pass`.
