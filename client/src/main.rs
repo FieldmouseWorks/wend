@@ -215,10 +215,33 @@ fn cmd_preflight(atlas: &Atlas, route: &str, facts: Option<&str>, as_json: bool)
             .map_err(|e| format!("{p}: {e}"))?,
         None => hardware::gather()?,
     };
-    let v = hardware::evaluate(atlas, r, &f)?;
+    // on the machine itself, a release partway along the route is judged from there (a facts file names no release)
+    let rest = match (facts, share::system(std::path::Path::new("/")).release) {
+        (None, Some((fam, rel))) if str_of(r, "family")? == fam => {
+            let rest = check::rest_of_route(adapter_of(atlas, r)?, r, &rel);
+            if rest.is_none() {
+                eprintln!(
+                    "note: this machine runs {rel}, and this route starts at {} and doesn't pass through it on the \
+                     way to {}: judged as if it started there",
+                    str_of(r, "from")?,
+                    str_of(r, "to")?
+                );
+            }
+            rest.filter(|(_, joins)| joins.is_some())
+        }
+        _ => None,
+    };
+    let (r, joins) = rest.unwrap_or_else(|| (r.clone(), None));
+    let mut v = hardware::evaluate(atlas, &r, &f)?;
+    if let Some(rung) = &joins {
+        v["joins_at"] = Value::String(rung.clone());
+    }
     if as_json {
         println!("{}", serde_json::to_string_pretty(&v).unwrap());
     } else {
+        if let Some(rung) = &joins {
+            println!("This machine runs {rung}, partway along the route: judged from there.");
+        }
         print!("{}", hardware::report(&v));
     }
     Ok(v["ok"] == true)
@@ -458,6 +481,21 @@ impl Drop for RootUmask {
     }
 }
 
+/// The rung a root sits on partway along a route, `None` when it starts at the route's start (or nothing says where
+/// it starts), refused when the route doesn't pass through its release short of its end.
+fn joins_at(a: &Doc, r: &Doc, release: Option<&String>) -> Result<Option<String>, String> {
+    let Some(rel) = release else { return Ok(None) };
+    match check::rest_of_route(a, r, rel) {
+        Some((_, j)) => Ok(j),
+        None => Err(format!(
+            "the root is a {rel} machine, and this route starts at {} and doesn't pass through {rel} on the way to \
+             {}: wrong route or wrong checks",
+            str_of(r, "from")?,
+            str_of(r, "to")?
+        )),
+    }
+}
+
 fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
     let mask = RootUmask::set();
     let (rpath, r) = atlas.route(route)?;
@@ -559,13 +597,23 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
     }
     let cdoc = atlas::parse_toml(&std::fs::read_to_string(checks_path).map_err(|e| format!("{checks_path}: {e}"))?)?;
     let checks = walk::Checks::from_doc(&cdoc, a)?;
-    if let Some(rel) = &checks.release {
-        let from = str_of(r, "from")?;
-        if check::rung(a, rel) != from {
+    // where the root starts: the release its checks name, else the one its own release files name, else the route's
+    // start. A root on a rung partway along the route takes the hops after it (SPEC "Route").
+    let fam = str_of(r, "family")?;
+    let found = share::system(&root.dir)
+        .release
+        .filter(|(f, _)| f == fam)
+        .map(|(_, rel)| rel);
+    if let (Some(said), Some(seen)) = (&checks.release, &found) {
+        if check::rung(a, said) != check::rung(a, seen) {
             return Err(format!(
-                "{checks_path} is for a {rel} machine, and this route starts at {from}: wrong route or wrong checks"
+                "{checks_path} is for a {said} machine, and the root runs {seen}: wrong root or wrong checks"
             ));
         }
+    }
+    let joins_at = joins_at(a, r, checks.release.as_ref().or(found.as_ref()))?;
+    if let Some(rung) = &joins_at {
+        eprintln!("the root runs {rung}, partway along the route: walking only the hops after it");
     }
     let box_id = o.box_id.clone().unwrap_or_else(|| "local".into());
     let snap = work.join(format!("snap-{}", std::process::id()));
@@ -607,6 +655,7 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
     let guard = sandbox::Root { dir: root_dir.clone() };
     let mut w = walk::Walk::new(r, compile_with, atlas.fixes_by_id(), checks, root, snap.clone(), box_id);
     w.sources_adapter = a;
+    w.joins_at = joins_at;
     if let Some(p) = &proxy {
         eprintln!(
             "repos go through the verifying proxy at {} (cache {}{})",
@@ -706,6 +755,24 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::RootUmask;
+
+    #[test]
+    fn a_root_partway_along_a_route_walks_the_rest_of_it() {
+        let atlas = super::Atlas::load(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..")).unwrap();
+        let el = &atlas.adapters["el"];
+        let (_, c5) = atlas.route("centos5-to-alma10").unwrap();
+        let (_, c7) = atlas.route("centos7-to-alma10").unwrap();
+        let at = |r, rel: &str| super::joins_at(el, r, Some(&rel.to_string()));
+        assert_eq!(super::joins_at(el, c5, None), Ok(None));
+        assert_eq!(at(c5, "centos5"), Ok(None));
+        assert_eq!(at(c5, "centos6"), Ok(Some("centos6".into())));
+        assert_eq!(at(c5, "alma9"), Ok(Some("alma9".into())));
+        assert_eq!(at(c7, "sl7"), Ok(None));
+        for (r, rel) in [(c7, "centos6"), (c5, "alma10"), (c5, "centos8")] {
+            let e = at(r, rel).unwrap_err();
+            assert!(e.contains("doesn't pass through"), "{e}");
+        }
+    }
 
     fn mask_now() -> libc::mode_t {
         // SAFETY: reads the mask by setting it and putting it straight back.

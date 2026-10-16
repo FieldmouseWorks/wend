@@ -40,8 +40,10 @@ read-only:
 - It opens no network connection. It installs, upgrades, starts and stops nothing.
 
 `sudo ./wend share centos7-to-alma10` judges it against a route you name instead of the one that starts at its
-release. A machine on a release no route starts from still gets a report, and that's useful too: it says what's out
-there.
+release. A machine partway along a route takes the rest of it: CentOS 6 the CentOS 5 route from its CentOS 6 hop,
+Debian 10 and Ubuntu 18.04 likewise, and the report says those hops were proven on machines that walked up from the
+route's start. A machine on a release no route reaches still gets a report, and that's useful too: it says what's
+out there.
 
 On CentOS 5 and 6 (kernels 2.6.18 and 2.6.32) the binary is untested, since Rust only promises Linux 3.2 and later.
 If it doesn't run, that's worth an issue by itself.

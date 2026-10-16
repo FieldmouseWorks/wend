@@ -6,7 +6,7 @@
 //! Read-only, like `facts` and `preflight`: it reads /proc, /sys, /etc and the package database, and writes only the
 //! report file in the current directory.
 
-use crate::atlas::{str_of, Atlas};
+use crate::atlas::{get, str_of, Atlas};
 use regex::Regex;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -222,22 +222,35 @@ pub fn build(
     facts: &Value,
     words: &[String],
 ) -> Result<(String, String, String, String), String> {
-    // the route: the one asked for, else every route that starts at this release
-    let routes: Vec<(String, Value)> = match (atlas, route) {
+    // the route: the one asked for, else every route that starts at this release, else the rest of every route that
+    // passes through it (a CentOS 6 machine takes the CentOS 5 route from its centos6 rung). Each with the rung it
+    // joins at, when it joins partway.
+    let rest = |d: &Value| -> Option<(Value, Option<String>)> {
+        let (a, (fam, rel)) = (atlas?, sys.release.as_ref()?);
+        if str_of(d, "family").ok() != Some(fam.as_str()) {
+            return None;
+        }
+        crate::check::rest_of_route(a.adapters.get(fam)?, d, rel)
+    };
+    let routes: Vec<(String, Value, Option<String>)> = match (atlas, route) {
         (Some(a), Some(r)) => {
             let (k, d) = a.route(r)?;
-            vec![(k.clone(), d.clone())]
+            // a machine the route doesn't pass through is judged from the route's start, as asked
+            let (d, joins) = rest(d).unwrap_or_else(|| (d.clone(), None));
+            vec![(k.clone(), d, joins)]
         }
-        (Some(a), None) => a
-            .routes
-            .iter()
-            .filter(|(_, d)| {
-                sys.release.as_ref().is_some_and(|(fam, rel)| {
-                    str_of(d, "family").ok() == Some(fam.as_str()) && str_of(d, "from").ok() == Some(rel.as_str())
-                })
-            })
-            .map(|(k, d)| (k.clone(), d.clone()))
-            .collect(),
+        (Some(a), None) => {
+            let all: Vec<(String, Value, Option<String>)> = a
+                .routes
+                .iter()
+                .filter_map(|(k, d)| rest(d).map(|(d, j)| (k.clone(), d, j)))
+                .collect();
+            if all.iter().any(|r| r.2.is_none()) {
+                all.into_iter().filter(|r| r.2.is_none()).collect()
+            } else {
+                all
+            }
+        }
         (None, Some(r)) => {
             return Err(format!(
                 "no atlas here to find route {r:?} in (run it from the wend folder)"
@@ -299,7 +312,7 @@ pub fn build(
     let mut route_names = vec![];
     let mut verdicts = vec![];
     let mut headlines = vec![];
-    for (path, doc) in &routes {
+    for (path, doc, joins) in &routes {
         let name = Path::new(path)
             .file_stem()
             .map_or(path.clone(), |s| s.to_string_lossy().into_owned());
@@ -318,13 +331,31 @@ pub fn build(
         headlines.push(line.clone());
         verdicts.push(line);
         verdicts.push(String::new());
+        if let Some(rung) = joins {
+            let start = atlas
+                .and_then(|a| a.routes.get(path))
+                .and_then(|d| get(d, "from"))
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            let hops: Vec<String> = crate::atlas::strings(&doc["hops"]).unwrap_or_default();
+            let joined = format!(
+                "It joins this route at its {rung} rung, so it walks only {}. Those hops are proven on machines \
+                 that walked up from {start}, not yet on one installed as {rung}.",
+                hops.join(", ")
+            );
+            headlines.push(joined.clone());
+            verdicts.push(joined);
+            verdicts.push(String::new());
+        }
         verdicts.push(fence(&crate::hardware::report(&v)));
         verdicts.push(String::new());
         route_names.push(name);
     }
     if routes.is_empty() {
         md.push(match &sys.release {
-            Some((fam, rel)) => format!("No route starts at {fam} {rel} yet. This report still says what's out there."),
+            Some((fam, rel)) => format!(
+                "No route starts at or passes through {fam} {rel} yet. This report still says what's out there."
+            ),
             None => "wend doesn't know this release yet. This report still says what's out there.".into(),
         });
         md.push(String::new());
@@ -454,6 +485,55 @@ mod tests {
         }
         assert!(s.contains("/dev/mapper/centos_<local>-root"), "{s}");
         assert!(s.contains("/var/spool/cron/<user>"), "{s}");
+    }
+
+    fn sys(fam: &str, rel: &str) -> System {
+        System {
+            pretty: format!("{fam} {rel}"),
+            release: Some((fam.into(), rel.into())),
+        }
+    }
+
+    #[test]
+    fn a_machine_partway_along_a_route_takes_the_rest_of_it() {
+        let a = Atlas::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("..")).unwrap();
+        let f = serde_json::json!({"schema": "wend.hardware/3", "arch": "x86_64", "userland_bits": 64,
+            "cpu": {"model": "test", "features": ["cx16", "lahf_lm", "popcnt", "sse4_1", "sse4_2", "ssse3", "sse3"],
+                    "hypervisor": true},
+            "boot": "bios", "ram_mib": 4096, "free_mib": 40000,
+            "boot_dir": {"separate": false, "total_mib": 40000, "free_mib": 40000, "kernels": []},
+            "blacklisted": [], "pci": [], "runtimes": [], "mounts": []});
+        let report =
+            |fam: &str, rel: &str, route: Option<&str>| build(Some(&a), route, &sys(fam, rel), "k", &f, &[]).unwrap();
+        // CentOS 6: no route starts there, the CentOS 5 one passes through
+        let (summary, _, _, names) = report("el", "centos6", None);
+        assert_eq!(names, "centos5-to-alma10");
+        assert!(
+            summary.contains("joins this route at its centos6 rung, so it walks only centos7, alma9, alma10"),
+            "{summary}"
+        );
+        assert!(summary.contains("walked up from centos5"), "{summary}");
+        // the same, asked for by name
+        let (summary, _, _, _) = report("el", "centos6", Some("centos5-to-alma10"));
+        assert!(summary.contains("only centos7, alma9, alma10"), "{summary}");
+        // CentOS 7: its own route only, not the rest of CentOS 5's
+        let (summary, _, _, names) = report("el", "centos7", None);
+        assert_eq!(names, "centos7-to-alma10");
+        assert!(!summary.contains("joins this route"), "{summary}");
+        // Scientific Linux 7 joins the ladder at centos7, so the same
+        assert_eq!(report("el", "sl7", None).3, "centos7-to-alma10");
+        // Debian 10 and Ubuntu 18.04
+        let (summary, _, _, names) = report("debian", "buster", None);
+        assert_eq!(names, "etch-to-trixie");
+        assert!(summary.contains("only bullseye, bookworm, trixie"), "{summary}");
+        assert_eq!(report("ubuntu", "bionic", None).3, "trusty-to-resolute");
+        // at the end of every route: nothing left
+        let (summary, _, _, names) = report("el", "alma10", None);
+        assert_eq!(names, "");
+        assert!(
+            summary.contains("No route starts at or passes through el alma10"),
+            "{summary}"
+        );
     }
 
     #[test]
