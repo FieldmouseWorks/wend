@@ -735,7 +735,16 @@ fn check_runtimes(a: &Doc, wh: &str) -> Vec<String> {
                 ));
             }
         }
-        let extra: BTreeSet<String> = tm.keys().filter(|k| !RUNTIMES.contains(&k.as_str())).cloned().collect();
+        if !tm.get("libs").is_some_and(|d| full_v("sha256:[0-9a-f]{64}", d)) {
+            errs.push(format!(
+                "{wh}: runtimes.{r}.libs must be the sha256 of its library table"
+            ));
+        }
+        let extra: BTreeSet<String> = tm
+            .keys()
+            .filter(|k| !RUNTIMES.contains(&k.as_str()) && k.as_str() != "libs")
+            .cloned()
+            .collect();
         if !extra.is_empty() {
             errs.push(format!("{wh}: runtimes.{r} has unknown keys {}", sorted(&extra)));
         }
@@ -745,6 +754,30 @@ fn check_runtimes(a: &Doc, wh: &str) -> Vec<String> {
         errs.push(format!(
             "{wh}: runtimes has no table for {missing:?}, which a route can boot into"
         ));
+    }
+    errs
+}
+
+/// Each release's library table is in the atlas (adapters/sonames/<family>/<release>.txt) at the pinned hash.
+pub fn library_table_errors(atlas: &Atlas, fam: &str, a: &Doc, wh: &str) -> Vec<String> {
+    let mut errs = vec![];
+    let Some(Value::Object(rt)) = get(a, "runtimes") else {
+        return errs;
+    };
+    for (r, t) in rt {
+        let Some(want) = get(t, "libs").and_then(Value::as_str) else {
+            continue;
+        };
+        // not in git: a table that isn't here is fine (preflight says its check was skipped); one that is must match
+        let Some(got) = atlas.sonames.get(&format!("{fam}/{r}")).map(|b| sha256_hex(b)) else {
+            continue;
+        };
+        if format!("sha256:{got}") != want {
+            errs.push(format!(
+                "{wh}: runtimes.{r}.libs: the library table {fam}/{r}.txt.xz here has sha256 {}..., not the pinned one",
+                &got[..12]
+            ));
+        }
     }
     errs
 }
@@ -1353,6 +1386,7 @@ pub fn check_atlas(atlas: &Atlas) -> Vec<String> {
     for (fam, a) in &atlas.adapters {
         errs.extend(check_adapter(a, &format!("adapters/{fam}.toml")));
         errs.extend(driver_table_errors(atlas, fam, a, &format!("adapters/{fam}.toml")));
+        errs.extend(library_table_errors(atlas, fam, a, &format!("adapters/{fam}.toml")));
     }
     let mut seen: BTreeMap<String, &String> = BTreeMap::new();
     for (p, d) in &atlas.fixes {

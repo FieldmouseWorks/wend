@@ -298,8 +298,10 @@ def check_runtimes(a, where):
             v = t.get(k)
             if not (isinstance(v, list) and all(isinstance(x, str) and re.fullmatch(r"\d+\.\d+(\.\d+)?", x) for x in v)):
                 errs.append(f"{where}: runtimes.{r}.{k} must list the versions the release ships ([] for none)")
-        if set(t) - set(RUNTIMES):
-            errs.append(f"{where}: runtimes.{r} has unknown keys {sorted(set(t) - set(RUNTIMES))}")
+        if not (isinstance(t.get("libs"), str) and re.fullmatch(r"sha256:[0-9a-f]{64}", t["libs"])):
+            errs.append(f"{where}: runtimes.{r}.libs must be the sha256 of its library table")
+        if set(t) - set(RUNTIMES) - {"libs"}:
+            errs.append(f"{where}: runtimes.{r} has unknown keys {sorted(set(t) - set(RUNTIMES) - {'libs'})}")
     missing = [r for r in booted_releases(a) if r not in rt]
     if missing:
         errs.append(f"{where}: runtimes has no table for {missing}, which a route can boot into")
@@ -318,6 +320,25 @@ def driver_table_errors(fam, a, where):
         if got != t["drivers"]:
             errs.append(f"{where}: hardware.{r}.drivers: adapters/drivers/{fam}/{r}.txt "
                         f"{'is missing' if got is None else 'has sha256 ' + got[7:19] + '...'}, not the pinned one")
+    return errs
+
+
+def library_table_errors(fam, a, where, root=None):
+    """A release's library table isn't in git (tools/sonames.py): one that isn't here is fine, one that is (a release
+    tarball's adapters/sonames/, a checkout's .wend/sonames/) is at the pinned hash."""
+    root = root or ROOT
+    errs = []
+    rt = a.get("runtimes")
+    for r, t in (rt if isinstance(rt, dict) else {}).items():
+        if not isinstance(t, dict) or not isinstance(t.get("libs"), str):
+            continue
+        for p in (f"{root}/adapters/sonames/{fam}/{r}.txt.xz", f"{root}/.wend/sonames/{fam}/{r}.txt.xz"):
+            if os.path.isfile(p):
+                got = "sha256:" + hashlib.sha256(open(p, "rb").read()).hexdigest()
+                if got != t["libs"]:
+                    errs.append(f"{where}: runtimes.{r}.libs: the library table {fam}/{r}.txt.xz here has sha256 "
+                                f"{got[7:19]}..., not the pinned one")
+                break
     return errs
 
 
@@ -881,6 +902,7 @@ def main(argv):
     for fam, a in adapters.items():
         errs += check_adapter(a, f"adapters/{fam}.toml")
         errs += driver_table_errors(fam, a, f"adapters/{fam}.toml")
+        errs += library_table_errors(fam, a, f"adapters/{fam}.toml")
     errs += pes_errors()
     errs += root_module_errors()
     by_id = {}

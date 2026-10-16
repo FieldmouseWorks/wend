@@ -877,15 +877,22 @@ note = "AlmaLinux 10 has a separate x86_64_v2 build for older CPUs, but no wend 
 
 # SPEC "Runtime preflight": the Python 2 interpreters each release a route boots into ships, by upstream version
 # ([] for none). tools/runtimes.py reads them from the release's own index (the components the hop uses); a machine
-# whose own programs run on Python 2 is told where it stops shipping before anything is touched.
+# whose own programs run on Python 2 is told where it stops shipping before anything is touched. `libs` pins the
+# release's library table, xz-compressed (from tools/sonames.py; kept out of git, in the wend archive at this digest and
+# in the release tarball): the sonames its packages ship, which the machine's own native programs and libraries (no
+# package owns them) are held to.
 [runtimes.centos6]
 python2 = ["2.6.6"]
+libs = "sha256:3a1e18d5ee723c8e2a2662f689102c74ba1ea9ccd417e6e49d6fbc271255a38b"
 
 [runtimes.centos7]
 python2 = ["2.7.5"]
+libs = "sha256:dd2d4994a3bb73f06c8ea18d890f53023a0943f683e519347cd2b7542d2a0c2c"
 
 [runtimes.alma9]
 python2 = []
+libs = "sha256:58786ee27b8466441d44d8ce85110872deed758afc49f6d86ee468c5ba5f4a18"
 
 [runtimes.alma10]
 python2 = []
+libs = "sha256:cbe774a62e4bad8344fa8df4b5baec261d34e3671a7f3fc29c0e4067eb401eec"
