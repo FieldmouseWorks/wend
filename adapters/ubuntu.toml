@@ -20,12 +20,19 @@ writable = [
   "/etc/mysql/mysql.conf.d/*.cnf",
 ]
 
+[mirror]
+# tools/mirror.py, the shim EL and Debian use (the same port: one shim serves all three). It reaches the archive over
+# https for the box: trusty's apt has no https of its own (SPEC "Signed packages").
+shim = "http://127.0.0.1:8085"
+probe = "archive.ubuntu.com/ubuntu/dists/trusty/Release"
+
 [releases]
 # Ubuntu moves a release to old-releases.ubuntu.com some time after its support ends; every LTS from trusty on is
 # still on the main archive (ESM keeps them there). The release pocket only: it is frozen at release time, so a hop's
 # pinned Release file stays good. -updates and -security move, and a route that read them couldn't be replayed.
-archive = "http://old-releases.ubuntu.com/ubuntu"
-current = "http://archive.ubuntu.com/ubuntu"
+# Both go through the [mirror] shim, which reaches them over https: trusty's apt 1.0 has no https of its own.
+archive = "old-releases.ubuntu.com/ubuntu"
+current = "archive.ubuntu.com/ubuntu"
 current_from = "trusty"
 # `signed`: the hop into the release checks the archive's signatures (SPEC "Signed packages"). Checked with gpgv
 # against the keyring the box has on the release before (ubuntu-keyring in its release pocket): every Release from
