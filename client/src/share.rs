@@ -43,14 +43,18 @@ pub fn system(root: &Path) -> System {
     let deb = read(root, "etc/debian_version");
     let first = |s: &str| s.lines().next().unwrap_or("").trim().to_string();
     if !rh.trim().is_empty() {
-        // CentOS Linux 5, 7 and 8 are the EL starts; Stream, RHEL and the rebuilds aren't the boxes routes start from
-        let major = Regex::new(r"^CentOS (?:Linux )?release (\d+)")
+        // CentOS Linux 5 to 8 and AlmaLinux 8 and up are the EL ladder's rungs (a machine on one joins a route
+        // partway); Stream, RHEL and the other rebuilds aren't
+        let release = Regex::new(r"^(CentOS|AlmaLinux) (?:Linux )?release (\d+)")
             .unwrap()
             .captures(rh.trim())
-            .map(|c| c[1].to_string());
+            .map(|c| {
+                let vendor = if &c[1] == "CentOS" { "centos" } else { "alma" };
+                ("el".to_string(), format!("{vendor}{}", &c[2]))
+            });
         return System {
             pretty: first(&rh),
-            release: major.map(|m| ("el".to_string(), format!("centos{m}"))),
+            release,
         };
     }
     if kv(&lsb, "DISTRIB_ID").as_deref() == Some("Ubuntu") || kv(&osr, "ID").as_deref() == Some("ubuntu") {
@@ -443,6 +447,8 @@ mod tests {
         assert_eq!(s.pretty, "CentOS Linux release 7.9.2009 (Core)");
         let c5 = tree(&[("etc/redhat-release", "CentOS release 5.11 (Final)\n")]);
         assert_eq!(system(&c5).release, Some(("el".into(), "centos5".into())));
+        let alma9 = tree(&[("etc/redhat-release", "AlmaLinux release 9.4 (Seafoam Ocelot)\n")]);
+        assert_eq!(system(&alma9).release, Some(("el".into(), "alma9".into())));
         let stream = tree(&[("etc/redhat-release", "CentOS Stream release 8\n")]);
         assert_eq!(system(&stream).release, None);
         let trusty = tree(&[
@@ -527,6 +533,16 @@ mod tests {
         assert_eq!(names, "etch-to-trixie");
         assert!(summary.contains("only bullseye, bookworm, trixie"), "{summary}");
         assert_eq!(report("ubuntu", "bionic", None).3, "trusty-to-resolute");
+        // from the machine's own release files: AlmaLinux 9 has only the hop to alma10 left
+        let alma9 = system(&tree(&[(
+            "etc/redhat-release",
+            "AlmaLinux release 9.4 (Seafoam Ocelot)\n",
+        )]));
+        let (summary, _, _, names) = build(Some(&a), None, &alma9, "k", &f, &[]).unwrap();
+        assert_eq!(names, "centos5-to-alma10, centos7-to-alma10, centos8-to-alma10");
+        assert!(summary.contains("so it walks only alma10"), "{summary}");
+        let c6 = system(&tree(&[("etc/redhat-release", "CentOS release 6.10 (Final)\n")]));
+        assert_eq!(build(Some(&a), None, &c6, "k", &f, &[]).unwrap().3, "centos5-to-alma10");
         // at the end of every route: nothing left
         let (summary, _, _, names) = report("el", "alma10", None);
         assert_eq!(names, "");
