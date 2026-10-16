@@ -141,6 +141,28 @@ Only after every required check is green **and** the Claude review has signed of
 the same: a red check, an unresolved review finding, or no review at all means no merge. Nobody, human or bot, can
 push to `main` directly.
 
+## What a cloud Claude session can write on GitHub
+
+Claude sessions in the cloud (project threads included) reach GitHub through Anthropic's GitHub proxy. It sends
+the maintainer's credentials, so GitHub sees every write as the maintainer's, and it lets only some writes through:
+
+- **Direct.** Pushing a branch; opening, editing and merging PRs; comments and review replies; labels; and
+  dispatching a workflow (`POST .../actions/workflows/<file>/dispatches`). From `gh api` or curl, only GitHub's REST
+  API works: the proxy refuses GraphQL, so `gh pr` and `gh issue` (including `gh pr merge`) fail; merge with
+  `PUT .../pulls/N/merge`. Resolving a review thread exists only in GraphQL, so a session does it with its built-in
+  GitHub tools, not `gh` or curl.
+- **Through a dispatched workflow.** The proxy refuses `POST /statuses`, so:
+  - recording remi's verdict on a PR is `remi-verdict.yml` (layer 4);
+  - re-judging a PR's `remi-proof` status is `remi-proof.yml`, input `pr`.
+- **The maintainer, by hand.** Tags, deleting branches, and repository settings. The proxy refuses tag pushes and
+  branch deletion over git, and refused branch protection writes; tags and branch deletion stay with the maintainer
+  as policy too, even though a workflow token could do them.
+
+A new kind of write a session needs goes in a workflow_dispatch workflow with the narrowest `permissions:` that does
+it and checks on its inputs, like `remi-verdict.yml`, and gets added to `CHECKS` in `remi-proof.yml` so changing it
+needs a remi pass. Its run log names the maintainer as the actor whether a session or the maintainer started it, so
+say in the inputs (a link, a summary) where the request came from.
+
 ## How runs land
 
 A run's `sources` pin the exact bytes a route installs, and the client trusts them (`wend walk --run`). Nobody can
