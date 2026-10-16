@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -141,17 +142,30 @@ def ensure_mirror(adapter):
         return
     shim = adapter["mirror"]["shim"]
     probe = f"{shim}/{adapter['mirror']['probe']}"
+    mine = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mirror.py")
+    want = hashlib.sha256(open(mine, "rb").read()).hexdigest()
     for i in range(30):
+        try:  # a shim from another checkout answers with its own allow-list: never reuse one that isn't this file
+            with urllib.request.urlopen(f"{shim}/.wend-shim", timeout=60) as r:
+                have = r.read().decode(errors="replace").strip()
+        except urllib.error.HTTPError:
+            have = "an older tools/mirror.py"  # one from before /.wend-shim answers 403
+        except Exception:
+            have = None  # nothing listening yet
+        if have is not None and have != want:
+            raise RuntimeError(f"a mirror shim from another checkout ({have[:16]}) is listening on {shim}, not this "
+                               f"checkout's tools/mirror.py ({want[:16]}); stop it (python3 tools/vm.py shim-stop PID) "
+                               "and run again")
         try:
+            if have is None:
+                raise OSError("no shim yet")
             urllib.request.urlopen(probe, timeout=60).read()
             return
         except Exception:
-            if i == 0:
+            if i == 0 and have is None:
                 os.makedirs(WORK, exist_ok=True)
-                subprocess.Popen([sys.executable, "-B", os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                                                     "mirror.py"), shim.rsplit(":", 1)[1],
-                                  f"{WORK}/mirror"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                 start_new_session=True)
+                subprocess.Popen([sys.executable, "-B", mine, shim.rsplit(":", 1)[1], f"{WORK}/mirror"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             time.sleep(2)
     raise RuntimeError(f"the mirror shim at {shim} isn't answering {probe}")
 

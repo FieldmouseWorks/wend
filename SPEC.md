@@ -429,7 +429,9 @@ See `adapters/el.toml`. Notes that matter:
   `http://127.0.0.1:<port>/<host>/<path>`, for a fixed list of hosts, and caching what it fetched. It also keeps
   every file it fetched under its sha256 (`.sha256/<hex>` in its cache, which no request can reach) and logs every
   file it serves (`.fetched.log`: `<https url> sha256:<hex> <size>`). A live repo's `repomd.xml` is refetched each
-  time, so the store is the only place an older one survives. `wend replay --out RUN.json` turns the lines the
+  time, so the store is the only place an older one survives. The shim answers `/.wend-shim` with its own source's sha256, and
+  the harness reuses a shim already on the port only if that matches its own `tools/mirror.py`: one from another
+  checkout would serve with its own allow-list, so the harness stops and says to `shim-stop` it. `wend replay --out RUN.json` turns the lines the
   replay added to the log into a download list beside the run, `RUN.fetched/`: `fetched.txt` (each distinct file,
   sorted) and `blobs/<hex>` (the bytes of every file in it that isn't a package, and of live EPEL's packages, which
   go when they're updated). The gate uploads it for the archive (`docs/archive.md`, "Capture").
@@ -513,6 +515,11 @@ turns `AllowUnauthenticated`, `force-yes`, `AllowInsecureRepositories` and `Allo
 off after the box's own fragments, and stops the hop if `apt-config dump` still shows any of them on (set in
 `/etc/apt/apt.conf`, which apt reads last); an unsigned hop removes that file. Box builds still use
 `debootstrap --no-check-gpg`.
+
+Transport: every Debian and Ubuntu archive is given as host/path, so the box fetches it as plain http from the mirror
+shim on 127.0.0.1, and the shim fetches it from the archive over https (apt before 1.5 has no https of its own). That covers the unsigned hops too, where transport is the only
+check. The shim refetches a live archive's `dists/` metadata on every request, as it does rpm `repodata/`, except
+files named by their hash (`by-hash/`) and the dated snapshot.debian.org tree, which never change.
 
 With `wend walk --run` every byte is checked against the run's pins anyway; signatures are what protects `--live`
 walks and CI replays.

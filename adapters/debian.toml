@@ -27,7 +27,8 @@ writable = [
 # archive.debian.org has lost files (some of etch's, lenny's, squeeze's and wheezy's packages answer 404 now). The
 # archived releases come from a dated snapshot.debian.org tree instead: its dists/*/Release files are byte for byte
 # archive.debian.org's, and it has every file they list. It answers with redirects, which etch's and lenny's apt
-# can't follow, so it goes through tools/mirror.py, the shim EL uses (the same port: one shim serves both).
+# can't follow, so it goes through tools/mirror.py, the shim EL uses (the same port: one shim serves both). The
+# current mirror goes through it too, so the box reaches deb.debian.org over https (SPEC "Signed packages").
 shim = "http://127.0.0.1:8085"
 probe = "snapshot.debian.org/archive/debian-archive/20261003T165950Z/debian/dists/etch/Release"
 
@@ -35,7 +36,7 @@ probe = "snapshot.debian.org/archive/debian-archive/20261003T165950Z/debian/dist
 # Where each release's packages live today. Old ones move to the archive; the harness picks per release. A host/path
 # goes through the [mirror] shim.
 archive = "snapshot.debian.org/archive/debian-archive/20261003T165950Z/debian"
-current = "http://deb.debian.org/debian"
+current = "deb.debian.org/debian"
 current_from = "bullseye"
 # `signed`: the hop into the release checks the archive's signatures (SPEC "Signed packages"). Checked with gpgv
 # against the keyring the box has on the release before (debian-archive-keyring's last version there): from stretch's

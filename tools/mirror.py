@@ -2,7 +2,9 @@
 
 CentOS 5's yum (python 2.4, 2007's openssl) can't speak today's TLS, and vault.centos.org redirects http to https.
 Debian's archived releases come from a dated snapshot.debian.org tree, which answers with redirects that etch's and
-lenny's apt (before 0.7.21) can't follow; this follows them.
+lenny's apt (before 0.7.21) can't follow; this follows them. Every Debian and Ubuntu archive goes through it too, so
+the box speaks plain http only to this shim and the archive is reached over https: apt before 1.5 has no https of its
+own, and before the hops that check signatures, transport is all that stands between the box and a forged .deb.
 A chroot shares the host's network, so the box points at http://127.0.0.1:<port>/<host>/<path> and this fetches
 https://<host>/<path> once and serves it from disk after that. Only the hosts below are reachable through it.
 Started by tools/sandbox.py when an adapter has a [mirror] table. Standard library only.
@@ -24,7 +26,13 @@ import urllib.error
 import urllib.request
 
 ALLOWED = {"vault.centos.org", "repo.almalinux.org", "vault.almalinux.org", "archives.fedoraproject.org",
-           "dl.fedoraproject.org", "snapshot.debian.org"}
+           "dl.fedoraproject.org", "snapshot.debian.org", "deb.debian.org", "archive.ubuntu.com",
+           "old-releases.ubuntu.com"}
+# The sha256 of this file, served at /.wend-shim: tools/sandbox.py reuses a shim already on the port only if it is this
+# one (one from another checkout would answer with its own allow-list and rules).
+with open(os.path.abspath(__file__), "rb") as _f:
+    VERSION = hashlib.sha256(_f.read()).hexdigest()
+FROZEN = {"snapshot.debian.org"}  # dated trees: a path's bytes never change, metadata included
 CACHE = sys.argv[2] if len(sys.argv) > 2 else "/var/tmp/wend/mirror"
 STORE = os.path.join(CACHE, ".sha256")  # not reachable through the shim: a request's first segment must be a host
 LOG = os.path.join(CACHE, ".fetched.log")
@@ -125,6 +133,14 @@ class H(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def _go(self, body):
+        if self.path == "/.wend-shim":
+            v = VERSION.encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(v)))
+            self.end_headers()
+            if body:
+                self.wfile.write(v)
+            return
         parts = self.path.lstrip("/").split("?")[0].split("/", 1)
         # Only <allowed host>/<relative path>: no empty or dot segments, so the path can't leave the cache
         # (os.path.join would throw CACHE away for "/etc/shadow"; the shim runs as root).
@@ -136,12 +152,15 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.send_error(403)
         if local.endswith("/"):
             local += ".index"
-        # Live mirrors change their metadata; package files never change, and neither do repodata files named by
-        # their own hash (refetching those every time meant 170MB per dnf run, which timed out under load).
+        # Live mirrors change their metadata (rpm repodata, apt dists/); package files never change, and neither do
+        # metadata files named by their own hash (refetching those every time meant 170MB per dnf run, which timed out
+        # under load), apt's by-hash files included.
         name = os.path.basename(local)
         head = name.split("-", 1)[0]
         hashed = len(head) >= 40 and all(c in "0123456789abcdef" for c in head)
-        volatile = ("/repodata/" in parts[1] and "vault" not in parts[0] and not hashed) or local.endswith(".index")
+        live = "vault" not in parts[0] and parts[0] not in FROZEN
+        volatile = (("/repodata/" in parts[1] or "/dists/" in parts[1]) and live and not hashed) or \
+            local.endswith(".index")
         if not os.path.exists(local) or volatile:
             err = None
             for attempt in range(3):  # transfers through a busy proxy get cut off now and then
