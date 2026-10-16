@@ -63,7 +63,7 @@ jobs:
               r"|os-prober|dracut|initramfs-tools|mkinitrd|module-init-tools|kmod|lvm2|mdadm|cryptsetup|sysvinit|upstart"
               r"|systemd($|-sysv|-boot|-udev|-networkd|-resolved)|udev|initscripts|network($|-scripts|-manager)"
               r"|NetworkManager|netbase|ifupdown|ifenslave|netplan|resolvconf|isc-dhcp|dhcp3|dhcp-client|dhclient"
-              r"|dhcpcd|net-tools|iproute|firewalld)", re.I)
+              r"|dhcpcd|net-tools|iproute|firewalld|iptables|ip6tables|ebtables|arptables|nftables|ufw)", re.I)
           NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+@-]*")
 
           def api(path, method="GET", body=None, raw=False):
