@@ -18,6 +18,11 @@ on:
 permissions:
   contents: write
 
+# one release run at a time: two runs for the same version can't both pass the "tag is new" check
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-24.04
@@ -29,7 +34,8 @@ jobs:
         run: |
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             [ "$GITHUB_REF" = refs/heads/main ] || { echo "dispatch it on main"; exit 1; }
-            echo "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "version must look like v0.1.0"; exit 1; }
+            # bash's =~ matches the whole value, so a version with a newline in it (an extra GITHUB_ENV line) fails
+            [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must look like v0.1.0"; exit 1; }
             if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" >/dev/null 2>&1; then
               echo "tag $VERSION already exists; push a new one or dispatch a new version"; exit 1
             fi
@@ -62,6 +68,9 @@ jobs:
         # attach the files to it instead of creating it
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
+            # only a pushed tag's run attaches to a release that exists: a dispatched version was new when this run
+            # started, so a release there now is someone else's
+            [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || { echo "release $TAG appeared during this run"; exit 1; }
             gh release upload "$TAG" wend-x86_64-linux.tar.gz SHA256SUMS --clobber
           else
             # a pushed tag must already exist; a dispatched one is made here, at the commit this run built
