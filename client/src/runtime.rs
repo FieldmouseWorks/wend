@@ -6,7 +6,7 @@
 
 use regex::Regex;
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -180,6 +180,8 @@ impl Owners {
             }
             m
         });
+        // dpkg installed on an rpm machine (EPEL ships it) leaves an empty info dir: rpm's database is the real one
+        let dpkg = dpkg.filter(|m| !m.is_empty());
         Owners {
             root: root.to_path_buf(),
             dpkg,
@@ -202,6 +204,69 @@ impl Owners {
         let name = s.lines().next()?.trim();
         (out.status.success() && !name.is_empty() && !name.contains(' ')).then(|| name.to_string())
     }
+
+    /// The Conary trove that owns a file, on a live machine Conary manages too (rPath and SAS appliances): a package
+    /// manager the route doesn't drive, so what it owns is still the machine's own (`conary:<trove>`).
+    pub fn other(&self, path: &str) -> Option<String> {
+        if self.root != Path::new("/") || !Path::new("/usr/bin/conary").exists() {
+            return None;
+        }
+        let real = resolve(&self.root, path);
+        let out = std::process::Command::new("conary")
+            .args(["q", "--path", &real])
+            .output()
+            .ok()?;
+        let s = String::from_utf8_lossy(&out.stdout);
+        // `mint:python=/pdt.cny.sas.com@sas:rba-8-devel/...[...]`, one line per trove that owns it
+        let trove = s.lines().next()?.split('=').next()?.trim();
+        (out.status.success() && !trove.is_empty() && !trove.contains(' ')).then(|| format!("conary:{trove}"))
+    }
+
+    /// Every file a package owns, as the machine resolves it (a package that lists `/lib/x86_64-linux-gnu/libc.so.6`
+    /// owns `/usr/lib/x86_64-linux-gnu/libc.so.6` on a merged-/usr machine): dpkg's lists, or `rpm -qal` on the live
+    /// machine.
+    pub fn owned(&self) -> HashSet<String> {
+        let listed: Vec<String> = if let Some(m) = &self.dpkg {
+            m.keys().cloned().collect()
+        } else if self.root == Path::new("/") {
+            std::process::Command::new("rpm")
+                .arg("-qal")
+                .output()
+                .map(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .filter(|l| l.starts_with('/'))
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            vec![]
+        };
+        let mut dirs: HashMap<String, String> = HashMap::new();
+        let mut out = HashSet::new();
+        for p in listed {
+            let Some((dir, name)) = p.rsplit_once('/') else {
+                continue;
+            };
+            let real = dirs
+                .entry(dir.to_string())
+                .or_insert_with(|| {
+                    fs::canonicalize(self.root.join(dir.trim_start_matches('/')))
+                        .ok()
+                        .and_then(|r| {
+                            r.strip_prefix(&self.root)
+                                .ok()
+                                .map(|r| format!("/{}", r.to_string_lossy()))
+                        })
+                        .unwrap_or_else(|| dir.to_string())
+                })
+                .clone();
+            out.insert(format!("{}/{name}", real.trim_end_matches('/')));
+            out.insert(p);
+        }
+        out
+    }
 }
 
 /// The systemd unit a process runs in, from its cgroup (`0::/system.slice/billing.service`).
@@ -214,7 +279,7 @@ fn unit_of(cgroup: &str) -> Option<String> {
 
 /// Every Python 2 user on the live machine. Only root can read every process's executable and maps and every
 /// user's crontab, and a list a normal user gathered would quietly miss them, so anyone else is refused.
-pub fn gather_live() -> Result<Vec<Value>, String> {
+pub fn gather_live() -> Result<(Vec<Value>, Owners), String> {
     // SAFETY: geteuid has no preconditions.
     if unsafe { libc::geteuid() } != 0 {
         return Err(
@@ -224,7 +289,8 @@ pub fn gather_live() -> Result<Vec<Value>, String> {
         );
     }
     let root = Path::new("/");
-    Ok(gather(Path::new("/proc"), root, &Owners::new(root)))
+    let owners = Owners::new(root);
+    Ok((gather(Path::new("/proc"), root, &owners), owners))
 }
 
 /// Every Python 2 user on the machine: running processes (`proc`) and cron jobs (under `root`).
@@ -283,9 +349,14 @@ pub fn gather(proc: &Path, root: &Path, owners: &Owners) -> Vec<Value> {
         } else {
             None
         };
+        let other = if owner.is_none() && program.starts_with('/') {
+            owners.other(&program)
+        } else {
+            None
+        };
         found.entry(program.clone()).or_insert(json!({
             "runtime": "python2", "version": version, "via": via, "program": program, "interpreter": interp,
-            "where": unit, "owner": owner,
+            "where": unit, "owner": owner, "other_owner": other,
         }));
     }
     let bare = Regex::new(r"^python2?(\.\d+)?$").unwrap();
@@ -325,9 +396,14 @@ pub fn gather(proc: &Path, root: &Path, owners: &Owners) -> Vec<Value> {
             } else {
                 None
             };
+            let other = if owner.is_none() && program.starts_with('/') {
+                owners.other(&program)
+            } else {
+                None
+            };
             found.entry(program.clone()).or_insert(json!({
                 "runtime": "python2", "version": version, "via": "cron", "program": program,
-                "interpreter": interp, "where": src, "owner": owner,
+                "interpreter": interp, "where": src, "owner": owner, "other_owner": other,
             }));
             break;
         }
@@ -428,6 +504,13 @@ pub fn describe(u: &Value) -> String {
             u["version"].as_str().unwrap_or("2")
         ),
     };
+    let what = match u["other_owner"].as_str() {
+        Some(o) => match o.split_once(':') {
+            Some((pm, pkg)) => format!("{what}, installed by {pm} ({pkg})"),
+            None => format!("{what}, installed by {o}"),
+        },
+        None => what,
+    };
     match u["where"].as_str() {
         Some(w) if u["via"] == "cron" => format!("{what} (cron, {w})"),
         Some(w) => format!("{what} ({w})"),
@@ -446,6 +529,7 @@ pub fn check(users: &Value) -> bool {
                 && u["interpreter"].is_string()
                 && (u["where"].is_string() || u["where"].is_null())
                 && (u["owner"].is_string() || u["owner"].is_null())
+                && (u["other_owner"].is_string() || u["other_owner"].is_null())
         })
     })
 }

@@ -29,8 +29,9 @@ tar xzf wend-x86_64-linux.tar.gz && cd wend-x86_64-linux
 sudo ./wend share
 ```
 
-It needs root because it reads every process and every crontab, and a normal user can't see other users'. It's
-read-only:
+It needs root because it reads every process and every crontab, and a normal user can't see other users'. Run it
+from a terminal or as root: CentOS 5's sudoers has `requiretty`, so `ssh host 'sudo ./wend share'` gets "sorry,
+you must have a tty to run sudo" (use `ssh -t`). It's read-only:
 
 - It reads `/proc`, `/sys`, `/boot`, the release files under `/etc`, `/etc/passwd` and `/etc/hostname` (to know what
   to scrub), crontabs, the first bytes of each mounted disk filesystem (to tell XFS v4 from v5), and the package
@@ -40,11 +41,14 @@ read-only:
 - It opens no network connection. It installs, upgrades, starts and stops nothing.
 
 `sudo ./wend share centos7-to-alma10` judges it against a route you name instead of the one that starts at its
-release. A machine on a release no route starts from still gets a report, and that's useful too: it says what's out
-there.
+release. A machine partway along a route takes the rest of it: CentOS 6 the CentOS 5 route from its CentOS 6 hop,
+Debian 10 and Ubuntu 18.04 likewise, and the report says those hops were proven on machines that walked up from the
+route's start. A machine on a release no route reaches still gets a report, and that's useful too: it says what's
+out there.
 
-On CentOS 5 and 6 (kernels 2.6.18 and 2.6.32) the binary is untested, since Rust only promises Linux 3.2 and later.
-If it doesn't run, that's worth an issue by itself.
+Rust only promises Linux 3.2 and later. The binary runs on CentOS 5.11's 2.6.18 and CentOS 6.10's 2.6.32
+kernels (tested 2026-10-16: `share`, `preflight` and `facts` on real installs). If it doesn't run on yours, that's
+worth an issue by itself.
 
 ## 3. Read it, then share it
 

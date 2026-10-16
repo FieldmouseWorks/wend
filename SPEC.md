@@ -252,6 +252,15 @@ vendor. EL's `sl7` (Scientific Linux 7) joins `centos7`, so an SL7 box takes eve
 decoy for its fixes; what SL does differently is handled by fixes gated on SL's own packages (`sl-release`). No hop
 ever lands on a joined release, so it has no `upgrade`, `bootstrap`, `transit`, `reboot` or keys of its own.
 
+A machine can also join a route **partway**: one sitting on a rung the route passes through, short of `to`, takes
+the hops after that rung. A CentOS 6 machine takes `centos5-to-alma10` from `centos6` (centos7, alma9, alma10), a
+Debian 10 one `etch-to-trixie` from `buster`. The client judges and walks only what's left: `wend share` offers
+the rest of every route passing through when no route starts at the machine's release (and says those hops were
+proven on machines that walked up from `from`, not ones installed on the rung), `wend preflight` on the machine
+judges from its release, and `wend walk` starts from the release its checks name or its root's release files say,
+refusing a route that doesn't pass through it. The fixes are the route's, pinned by the same id, and the run's
+`from` is the rung the walk started at. A gate replay still starts every box at `from`.
+
 A route is a **map, not a playlist**. It pins a *set* of fixes by id, and the client applies whichever ones hold on
 each hop. In dep-lab, stitching fixes from three different runs into one map beat replaying any single run, and the
 same map served two different boxes. Which fixes actually fired on which box is recorded in runs, not in the route.
@@ -470,7 +479,8 @@ See `adapters/el.toml`. Notes that matter:
 Most real EL machines carry more than the vendor's repos: EPEL above all (EPEL's own mirror statistics are how the
 stuck EL7 fleet is counted). The adapter's `[addons.<name>]` tables name the ones the harness knows how to carry:
 `marker` (the package whose presence means the box uses it, EPEL: `epel-release`), `vendor` (the rpm `VENDOR` of its
-packages, EPEL: `Fedora Project`) and `repos` (release id = host/path, through the shim, like `releases.*.repos`).
+packages, EPEL: `Fedora Project`), `repos` (release id = host/path, through the shim, like `releases.*.repos`) and,
+optionally, `libs` (release id = the sha256 of the add-on's library table for that release, "Runtime preflight").
 
 - Every hop's `set_release` appends `{addons}`: for each add-on with a repo for the release being entered, the add-on's
   repo goes into the harness's repo file as `[<release>-<name>]` if its marker is installed at that moment. A box
@@ -1056,7 +1066,7 @@ refuses the CPU, or its kernel no longer drives the disk controller the root is 
 anything, a client walking a real machine checks that the machine can land on every release the route boots it into,
 and refuses, or names the furthest release it can land on, when it can't. `wend preflight ROUTE` does this.
 
-**Facts.** `wend facts` reads the machine (schema `wend.hardware/3`; its `runtimes` are SPEC "Runtime preflight"): the kernel's architecture (`uname -m`) and
+**Facts.** `wend facts` reads the machine (schema `wend.hardware/4`; its `runtimes`, `python2_modules` and `native` are SPEC "Runtime preflight"): the kernel's architecture (`uname -m`) and
 the userland's word size (the ELF class of `/bin/sh`); the CPU's x86-64 level features from CPUID itself, never
 `/proc/cpuinfo`, since an old kernel doesn't name features newer than itself (2.6.18 has no `avx2`), and the XSAVE
 bit, not OSXSAVE, since the old kernel may not have turned it on and the new one will; CPUID's hypervisor bit;
@@ -1179,7 +1189,7 @@ the owner picks: **stop** there, or **shelter** those programs and go all the wa
 Porting them to Python 3 is the third way, and it's the owner's (or their agent's) to do. `wend preflight` does this
 as part of the same verdict.
 
-**Facts.** `wend facts` (schema `wend.hardware/3`) lists every Python 2 user under `runtimes`, each with the
+**Facts.** `wend facts` (schema `wend.hardware/4`) lists every Python 2 user under `runtimes`, each with the
 interpreter's `version` (`2.7`), `via`, `program`, `interpreter`, `where` and `owner`:
 
 | `via` | found by | `program` |
@@ -1194,7 +1204,33 @@ place facts asks a distro tool, since rpm's database is rpm's own format). Each 
 workers, or a script a service and a cron job both run, count once. A process whose root isn't the machine's (in a
 docker or LXC container) isn't listed: its userland isn't the one the route moves. Only root can read every
 process's executable and maps and every user's crontab, so `wend facts` and a live `wend preflight` refuse to run as
-anyone else rather than miss them.
+anyone else rather than miss them. When another package manager the route doesn't drive owns the program (Conary,
+on rPath and SAS appliances: `conary q --path`), `other_owner` names it (`conary:mint:python`), and `owner` stays null:
+the route doesn't carry that package, so the program is still the machine's own.
+
+Facts also list what those programs stand on that no package owns, so the route won't carry it:
+
+- `python2_modules`: for each Python 2 module directory of the system interpreter (`site-packages` and
+  `dist-packages` under `/usr/lib`, `/usr/lib64`, `/usr/local/lib` and `/usr/local/lib64`, in `python2.N`), the files
+  in it no package owns (bytecode, `.pyc` and `.pyo`, next to its own `.py` aside: Debian's Python helpers write it
+  after dpkg's lists, so it's a cache, not a module), when that leaves a module: `version`, `dir`, `files`,
+  `compiled` (how many are ELF extension modules, built for that 2.N alone), and `modules`, the top-level names
+  (`django`, `lxml`; `.egg-info` and `.pth` aside). pip, easy_install and a hand `setup.py install` put things here,
+  and so does a second package manager.
+- `native`: every x86-64 ELF program and shared library no package owns under `/usr`, `/opt`, `/srv`, and `/bin`,
+  `/sbin`, `/lib` and `/lib64` when they aren't links into `/usr`, grouped by tree (`/opt/<name>`, `/srv/<name>`,
+  `/usr/local`, a Python module directory, else the file's directory): `tree`, `files`, up to three `sample` paths,
+  and `needs`, the sonames (`DT_NEEDED`) its files load that no unowned file provides (by `DT_SONAME`, or by file
+  name when it has none): one in the same tree, or one in a directory the loader searches (`/lib*`, `/usr/lib*` and
+  their `x86_64-linux-gnu`, `/usr/local/lib*`, and what `/etc/ld.so.conf` and its includes list). A vendor's private
+  copy elsewhere serves only its own tree. A statically linked program needs nothing. 32-bit files, other
+  architectures' (a cross toolchain's sysroot), relocatable
+  objects (`.o`, kernel modules) and files under `/usr/src` aren't listed.
+- `kernel_owner`: the package that owns the running kernel's `/boot/vmlinuz-<release>`, or null (a hand-built kernel,
+  or another package manager's).
+- `repo_packages`: the packages that own the machine's repository definitions (`/etc/yum.repos.d/*`,
+  `/etc/apt/sources.list` and `sources.list.d/*`), such as `epel-release`: an add-on's marker package (SPEC "Add-on
+  repositories") shows up here when the machine has it.
 
 **Whose it is.** A user is the machine's own when its program belongs to no package, or it is `embedded` (whatever
 code mod_wsgi runs is the owner's: the distro never configures it). The distro's own Python 2 programs (yum,
@@ -1210,8 +1246,32 @@ through jammy (2.7.18, universe), EL through EL8 (2.7.18, the `python27` module,
 2024). wend's EL routes never land on EL8 (`may_skip`), so an EL7 machine's last release with Python 2 is CentOS 7
 itself.
 
+Each release also has a library table, `libs`: the sha256 of `<family>/<release>.txt.xz`, which
+`tools/sonames.py` writes from the release's own indexes (EL: every `(64bit)` soname a package in the release's repos
+provides; Debian and Ubuntu: every shared library file in the linker's own directories, from the Contents index of the
+components the hop uses). A library that only another component ships (Debian's contrib or non-free, such as a vendor
+GPU library) isn't in the table, so a program that loads it reads as losing it: check those by hand.
+
+An add-on repository has a table of its own for each release it has a repo for, `<family>/<release>.<add-on>.txt.xz`,
+pinned as `[addons.<add-on>].libs.<release>`. A hop keeps an add-on only on a machine with its marker package, so
+preflight adds the add-on's sonames to the release's only when `repo_packages` lists the marker: a machine without
+`epel-release` isn't credited with EPEL's libraries.
+
+The tables stay out of git: the repository keeps only their pins. Each table is in the wend archive at its pin
+(`blob/sha256/<2>/<hex>`, stored by `tools/archive.py add-tables`) and in the release tarball under
+`adapters/sonames/`; a checkout fetches them into `.wend/sonames/` with `tools/sonames.py fetch`, which keeps only
+bytes matching the pin. A table here whose bytes don't match its pin stops the run. A missing one skips the check:
+each hop that would need it gets a note saying the libraries weren't checked, never a silent pass.
+
 **The verdict.** A hop has a runtime problem when the machine has its own Python 2 users and the release ships no
-Python 2. Each hop lists those in `runtime_problems`, apart from `problems`, which stay the hardware's: the machine
+Python 2, and in two more cases:
+
+- **Stranded modules.** The machine's own users run Python 2.N, the release ships Python 2 but not 2.N, and
+  `python2_modules` lists unowned modules for 2.N. The release's 2.M replaces the interpreter and never reads 2.N's
+  module directories, and compiled modules are built for 2.N alone, so those programs lose their imports. Without
+  unowned modules it stays a note (Python 2 code mostly runs on a later 2.x).
+- **Missing libraries.** A `native` tree needs a soname the release's library table doesn't list: the route takes
+  the library away, and whatever loads it stops starting. One problem per tree, naming the missing sonames. Each hop lists those in `runtime_problems`, apart from `problems`, which stay the hardware's: the machine
 would boot fine, and the owner's program wouldn't run. `keeps_runtimes_on` names the last release before the first
 such hop, or the route's last release when no hop drops it (`null` when the machine has no Python 2 of its own); a
 hop with runtime problems isn't `ok`, `runtimes` lists the machine's own users, and `ok`
@@ -1222,10 +1282,18 @@ it is), or shelter them and land where the hardware allows. When the hardware st
 alone. Nothing overrides a runtime problem: the owner shelters the programs, ports them, or retires them and checks
 again.
 
+When `kernel_owner` is null and a kernel in `/boot` is the running one (a container boots none of its own), the first
+hop notes it: the route installs and boots the release's own kernel and
+doesn't carry the running one. On EL, `hop.kernel_after` makes the newest kernel rpm owns GRUB's default, so a
+custom kernel with a higher version doesn't stay the default; the custom kernel stays as the fallback entry for that
+reboot, and the next hop's `hop.kernel_before` removes its files, modules and boot entry like any kernel no package
+owns. A device only that kernel drives is a hardware problem already (its driver isn't in the release's table).
+
 Not checked yet: services that are enabled but not running, and timers; scripts a cron job reaches through a shell
 script of its own; a Python 2 an add-on repository ships (EPEL's `python26` on EL5); third-party packages of the
-owner's own code (an rpm or deb the owner built counts as the distro's); a Python 2 built from source, whose shared
-libraries the hop may take away even though its files stay; and runtimes other than Python 2 (PHP 5, Java 6).
+owner's own code (an rpm or deb the owner built counts as the distro's); unowned modules of a Python 2 built from source
+(its own `lib/python2.N`; the libraries it loads are `native`'s); ELF files outside the trees `native` reads (home
+directories, `/var`); symbol versions (a library of the same soname that is too old); and runtimes other than Python 2 (PHP 5, Java 6).
 
 ## Package evolution data (leapp-data)
 

@@ -202,6 +202,9 @@ marker = "epel-release"
 vendor = "Fedora Project"
 repos = { centos7 = "archives.fedoraproject.org/pub/archive/epel/7/x86_64", centos8 = "archives.fedoraproject.org/pub/archive/epel/8.5/Everything/x86_64", alma8 = "dl.fedoraproject.org/pub/epel/8/Everything/x86_64", alma9 = "dl.fedoraproject.org/pub/epel/9/Everything/x86_64", alma10 = "dl.fedoraproject.org/pub/epel/10/Everything/x86_64" }
 gpgkeys = { alma8 = "RPM-GPG-KEY-EPEL-8", alma9 = "RPM-GPG-KEY-EPEL-9", alma10 = "RPM-GPG-KEY-EPEL-10" }
+# EPEL's own library tables (tools/sonames.py; SPEC "Runtime preflight"): preflight adds them to a release's only on a
+# machine with epel-release, the one where the hop keeps EPEL
+libs = { centos7 = "sha256:204fc6a5733e8d100c0c92ee5e146f2a96917d646d0b0a93316ca72ed5adf82f", alma9 = "sha256:9c5066720516acf89c18a33036e2184683b1380f2b8be54526ee870941a087e7", alma10 = "sha256:57dd066a5f4f083f02e963c2175ec77c3e95a9d3563265a1f125be0173a6b9ba" }
 
 # SPEC "Signed packages": the vendors' signing keys, written to /etc/wend/keys/<name> at the start of every hop
 # ({keys} in hop.set_release). A release's repos (releases.*.gpgkeys) and an add-on's repo for a release
@@ -904,18 +907,26 @@ note = "AlmaLinux 10 has a separate x86_64_v2 build for older CPUs, but no wend 
 
 # SPEC "Runtime preflight": the Python 2 interpreters each release a route boots into ships, by upstream version
 # ([] for none). tools/runtimes.py reads them from the release's own index (the components the hop uses); a machine
-# whose own programs run on Python 2 is told where it stops shipping before anything is touched.
+# whose own programs run on Python 2 is told where it stops shipping before anything is touched. `libs` pins the
+# release's library table, xz-compressed (from tools/sonames.py; kept out of git, in the wend archive at this digest and
+# in the release tarball): the sonames its packages ship, which the machine's own native programs and libraries (no
+# package owns them) are held to.
 [runtimes.centos5]
 python2 = ["2.4.3"]
+libs = "sha256:576ca44c7a59edc438fdf2d0790fdf045d808a425ae2266a81d996d05024653c"
 
 [runtimes.centos6]
 python2 = ["2.6.6"]
+libs = "sha256:3a1e18d5ee723c8e2a2662f689102c74ba1ea9ccd417e6e49d6fbc271255a38b"
 
 [runtimes.centos7]
 python2 = ["2.7.5"]
+libs = "sha256:998a3d638bb186aaa418fb3826a4627f83c41948564c6a290838a2fa057cb615"
 
 [runtimes.alma9]
 python2 = []
+libs = "sha256:66d9031c44bde60ec0760fa9f6bcf35b6d0115a71f4886b564a0757e7a58b653"
 
 [runtimes.alma10]
 python2 = []
+libs = "sha256:038b6f7d3e3eb8a4d643568434a1f7aa2ff777dfafb5282df5d20e26dd741179"

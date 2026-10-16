@@ -15,4 +15,4 @@ name = "el9-drop-orphaned-polkit"
 author = "claude (wend#13, hand-written from the VM replay)"
 source = "wend#13"
 note = "On EL6, hal pulls in ConsoleKit, which requires polkit, and EL7's polkit brings polkit-pkla-compat. From EL9 nothing hard-requires polkit any more: polkit-pkla-compat only has Requires(pre): polkit, which rpm -e and rpm -q --whatrequires ignore. So the services check flags polkit as a new service family the box never ran. Removing polkit alone isn't enough: EL10's transaction upgrades polkit-pkla-compat and installs polkit again for that Requires(pre) (seen in the replay), so both go. Where something on EL9 still requires polkit (tuned on every CentOS 7 @core install, pcsc-lite, accountsservice, ...), rpm.drop-unneeded keeps both and says what needs them: polkit was already a service there. The check runs after the hop: on EL7, NetworkManager links libpolkit, so a when could not tell. Local .pkla or polkit rules that grant non-root users actions stop applying."
-fires_on = ["el/centos5-web", "el/centos7-lamp", "el/centos7-pyapp"]
+fires_on = ["el/centos5-web", "el/centos7-lamp", "el/centos7-pyapp", "el/sl7-lamp"]

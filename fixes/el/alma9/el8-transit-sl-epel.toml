@@ -1,0 +1,19 @@
+# el8-transit-epel for Scientific Linux 7: SL's release package is sl-release, and its packages carry SL's vendor.
+schema = "wend.fix/0"
+family = "el"
+hop = "alma9"
+when = { all = [{ installed = "sl-release" }, { installed = "epel-release" }, { installed = "perl" }, { installed = "curl" }, { installed = "rsync" }, { installed = "sudo" }, { installed = "openssh-server" }, { installed = "postfix" }, { installed = "cronie" }] }
+restores = ["pkgdb"]
+adds = []
+
+[[pre]]
+op = "rpm.transit"
+release = "alma8"
+remove = "sl-release"
+reinstall = ["perl", "curl", "rsync", "sudo", "openssh-server", "postfix", "cronie"]
+
+[meta]
+name = "el8-transit-sl-epel"
+author = "claude-code / opus 5.5 (agent)"
+note = "el8-transit-epel's transit on a Scientific Linux 7 box: the same EL7 packages, rebuilt by SL, under sl-release (which provides centos-release but isn't it, so rpm -q tells the two apart and neither fix fires on the other's boxes). rpm.transit takes the vendor to allow from the package it removes, so SL's own packages (yum-conf-*, yum-cron, the .sl7 rebuilds) pass and the same refusals hold for anything else."
+fires_on = ["el/sl7-lamp"]

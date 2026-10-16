@@ -2,6 +2,7 @@
 import copy
 import os
 import sys
+import tempfile
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -113,6 +114,8 @@ for name, mutate in {
     "an adapter missing a booted release's runtimes": lambda a: a["runtimes"].pop("alma9"),
     "an adapter that doesn't say whether a release ships Python 2": lambda a: a["runtimes"]["alma9"].pop("python2"),
     "an adapter whose Python 2 version isn't a version": lambda a: a["runtimes"]["centos7"].update(python2=["2.7*"]),
+    "an adapter without a release's library table": lambda a: a["runtimes"]["alma9"].pop("libs"),
+    "an adapter whose library table isn't a sha256": lambda a: a["runtimes"]["alma9"].update(libs="libs.txt"),
     "a relocate table missing a step (SPEC \"Relocate\")": lambda a: a["relocate"].pop("flip"),
     "a relocate table with a step tools/vm.py doesn't run": lambda a: a["relocate"].update(extra=["true"]),
     "a relocate step that's one command, not a list": lambda a: a["relocate"].update(place="true"),
@@ -128,6 +131,9 @@ for name, mutate in {
         after=[c for c in a["hop"]["after"] if c != "{drop_keys}"]),
     "an add-on key for a release the add-on has no repo for": lambda a: a["addons"]["epel"]["gpgkeys"].update(
         centos5="RPM-GPG-KEY-EPEL-8"),
+    "an add-on library table for a release the add-on has no repo for": lambda a: a["addons"]["epel"]["libs"].update(
+        centos6="sha256:" + "0" * 64),
+    "an add-on library table that isn't a sha256": lambda a: a["addons"]["epel"]["libs"].update(alma9="latest"),
     "signing keys the hops never write": lambda a: a["hop"].update(
         set_release=a["hop"]["set_release"].replace("{keys} && ", "")),
     "a joined release that is on the ladder too": lambda a: a["ladder"].insert(3, "sl7"),
@@ -177,6 +183,24 @@ errs = check.driver_table_errors("el", a, "adapters/el.toml")
 print(("refused " if errs else "MISSED  ") + "a driver table that isn't the pinned one" +
       (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
 bad += not errs
+# library tables aren't in git: one that isn't here passes (preflight says it skipped), one that is must be pinned
+with tempfile.TemporaryDirectory() as d:
+    os.makedirs(f"{d}/.wend/sonames/el")
+    with open(f"{d}/.wend/sonames/el/alma9.txt.xz", "wb") as f:
+        f.write(b"not the table")
+    a = copy.deepcopy(adapters["el"])
+    errs = check.library_table_errors("el", a, "adapters/el.toml", root=d)
+    print(("refused " if errs else "MISSED  ") + "a library table that isn't the pinned one" +
+          (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
+    bad += not errs
+    os.rename(f"{d}/.wend/sonames/el/alma9.txt.xz", f"{d}/.wend/sonames/el/alma9.epel.txt.xz")
+    errs = check.library_table_errors("el", a, "adapters/el.toml", root=d)
+    print(("refused " if errs else "MISSED  ") + "an add-on's library table that isn't the pinned one" +
+          (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
+    bad += not errs or "addons.epel.libs.alma9" not in errs[0]
+    errs = check.library_table_errors("el", a, "adapters/el.toml", root=f"{d}/none")
+    print(("passed  " if not errs else "WRONG   ") + "library tables not fetched yet" + (f" ({errs})" if errs else ""))
+    bad += bool(errs)
 # a pattern can dodge any finite probe, so values are also held to a fixed safe set, whatever the adapter says
 loose = copy.deepcopy(adapters)
 loose["el"]["ops"]["kv.set"]["args"]["values"] = {"table": "x[a-z;|&$ ]*"}

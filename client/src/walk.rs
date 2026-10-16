@@ -77,6 +77,8 @@ pub struct Walk<'a> {
     stamp: String,
     /// A complete snapshot exists and the root may have changed since: only then is restoring from it right.
     pub mid_step: bool,
+    /// The rung the root sits on partway along the route (SPEC "Route"): the walk takes only the hops after it.
+    pub joins_at: Option<String>,
 }
 
 impl<'a> Walk<'a> {
@@ -106,6 +108,7 @@ impl<'a> Walk<'a> {
             },
             steps: vec![],
             hops: vec![],
+            joins_at: None,
             t0: Instant::now(),
             stamp: host("date +%Y%m%d-%H%M%S").1.trim().to_string(),
             mid_step: false,
@@ -259,7 +262,11 @@ impl<'a> Walk<'a> {
     pub fn walk(&mut self) -> Result<Value, String> {
         let family = str_of(self.route, "family")?.to_string();
         let start_release = self.health.release.clone();
-        let fp = json!({"family": family, "release": self.checks.release.clone().map(Value::String).or_else(|| get(self.route, "from").cloned()),
+        let from = match &self.joins_at {
+            Some(r) => json!(r),
+            None => get(self.route, "from").cloned().unwrap_or(Value::Null),
+        };
+        let fp = json!({"family": family, "release": self.checks.release.clone().map_or_else(|| from.clone(), Value::String),
                         "arch": self.checks.arch.clone().unwrap_or_else(|| "amd64".into()), "installed": self.installed_list()});
         let fingerprint = format!("sha256:{}", sha256_hex(canonical(&fp).as_bytes()));
         let mut services: Vec<String> = self
@@ -271,7 +278,14 @@ impl<'a> Walk<'a> {
             .collect();
         services.sort();
         let pins = pinned(self.route, &self.fixes_by_id)?;
-        let hops = list_of(self.route, "hops")?;
+        let mut hops = list_of(self.route, "hops")?;
+        if let Some(r) = &self.joins_at {
+            let i = hops
+                .iter()
+                .position(|h| h == r)
+                .ok_or(format!("{r} isn't one of the route's hops"))?;
+            hops.drain(..=i);
+        }
         self.log(&format!(
             "start: {start_release}, {}/{} checks pass",
             self.health.passed.len(),
@@ -341,7 +355,7 @@ impl<'a> Walk<'a> {
         };
         let mut run = json!({
             "schema": "wend.run/0", "route": content_id(self.route), "box": self.box_id,
-            "from": get(self.route, "from"), "to": get(self.route, "to"),
+            "from": from, "to": get(self.route, "to"),
             "result": if complete && failed.is_empty() { "pass" } else { "fail" },
             "started": self.stamp, "wall_seconds": self.t0.elapsed().as_secs_f64().round() as u64,
             "start_fingerprint": fingerprint, "runner": runner(), "hops": self.hops, "start_services": services,
