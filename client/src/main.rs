@@ -538,6 +538,26 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
     }
     let root = sandbox::Root::new(std::path::Path::new(root))?;
     let work = sandbox::work_dir(std::path::Path::new(&o.work), &root.dir)?;
+    let cdoc = atlas::parse_toml(&std::fs::read_to_string(checks_path).map_err(|e| format!("{checks_path}: {e}"))?)?;
+    let checks = walk::Checks::from_doc(&cdoc, a)?;
+    // where the root starts (before the proxy, which verifies only the hops that will run): the release its checks name, else the one its own release files name, else the route's
+    // start. A root on a rung partway along the route takes the hops after it (SPEC "Route").
+    let fam = str_of(r, "family")?;
+    let found = share::system(&root.dir)
+        .release
+        .filter(|(f, _)| f == fam)
+        .map(|(_, rel)| rel);
+    if let (Some(said), Some(seen)) = (&checks.release, &found) {
+        if check::rung(a, said) != check::rung(a, seen) {
+            return Err(format!(
+                "{checks_path} is for a {said} machine, and the root runs {seen}: wrong root or wrong checks"
+            ));
+        }
+    }
+    let joins_at = joins_at(a, r, checks.release.as_ref().or(found.as_ref()))?;
+    if let Some(rung) = &joins_at {
+        eprintln!("the root runs {rung}, partway along the route: walking only the hops after it");
+    }
     // --run: the box's repos go through the verifying proxy, which serves only what the run's pinned sources vouch
     // for (SPEC "Pinned sources")
     let proxy = match &o.run {
@@ -560,7 +580,20 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
             if !o.offline && !o.no_archive {
                 archives.push(fetch::ARCHIVE.to_string());
             }
-            let p = fetch::Proxy::start(&run, &cache, o.sources.clone(), archives, o.offline)?;
+            // a walk joining partway pins only the hops it will run: earlier hops' snapshots aren't needed
+            let mut pins = run.clone();
+            if let Some(rung) = &joins_at {
+                let rest = check::rest_of_route(a, r, rung).map(|(d, _)| d);
+                let left: Vec<String> = rest
+                    .as_ref()
+                    .and_then(|d| get(d, "hops"))
+                    .and_then(atlas::strings)
+                    .unwrap_or_default();
+                if let Some(Value::Array(hs)) = pins.get_mut("hops") {
+                    hs.retain(|h| h["to"].as_str().is_some_and(|t| left.iter().any(|l| l == t)));
+                }
+            }
+            let p = fetch::Proxy::start(&pins, &cache, o.sources.clone(), archives, o.offline)?;
             // before anything touches the root: a snapshot gone from every source refuses here
             p.ensure_pinned().map_err(|e| {
                 format!(
@@ -594,26 +627,6 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
                 str_of(m, "shim")?.rsplit(':').next().unwrap_or("8085")
             ));
         }
-    }
-    let cdoc = atlas::parse_toml(&std::fs::read_to_string(checks_path).map_err(|e| format!("{checks_path}: {e}"))?)?;
-    let checks = walk::Checks::from_doc(&cdoc, a)?;
-    // where the root starts: the release its checks name, else the one its own release files name, else the route's
-    // start. A root on a rung partway along the route takes the hops after it (SPEC "Route").
-    let fam = str_of(r, "family")?;
-    let found = share::system(&root.dir)
-        .release
-        .filter(|(f, _)| f == fam)
-        .map(|(_, rel)| rel);
-    if let (Some(said), Some(seen)) = (&checks.release, &found) {
-        if check::rung(a, said) != check::rung(a, seen) {
-            return Err(format!(
-                "{checks_path} is for a {said} machine, and the root runs {seen}: wrong root or wrong checks"
-            ));
-        }
-    }
-    let joins_at = joins_at(a, r, checks.release.as_ref().or(found.as_ref()))?;
-    if let Some(rung) = &joins_at {
-        eprintln!("the root runs {rung}, partway along the route: walking only the hops after it");
     }
     let box_id = o.box_id.clone().unwrap_or_else(|| "local".into());
     let snap = work.join(format!("snap-{}", std::process::id()));
