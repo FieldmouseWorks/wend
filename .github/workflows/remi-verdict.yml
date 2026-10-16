@@ -1,0 +1,71 @@
+# Records remi's verdict on a PR's exact head as its `remi-proof` status (CONTRIBUTING.md, layer 4, "Proof on remi").
+#
+# Run by hand, after a maintainer-run proof on remi: Actions, remi-verdict, Run workflow (or the dispatch API). Only
+# people with write access can start it, the same people who could post the status themselves; it exists because the
+# API proxy Claude sessions use can dispatch a workflow but can't write a commit status. It never touches remi.
+#
+# It refuses a commit that isn't the PR's current head, so a pass on an old push can't green a newer one. Its statuses
+# say "remi verdict:", which is how remi-proof.yml tells them from its own (both are github-actions[bot]'s) and leaves
+# them standing.
+name: remi-verdict
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr: { description: "PR number", required: true }
+      sha: { description: "the full commit remi ran (run.json head.commit)", required: true }
+      state: { description: "remi's verdict", required: true, type: choice, options: [success, failure] }
+      summary: { description: "what ran and how it ended, e.g. trusty-to-resolute on ubuntu/trusty-web, BIOS, passed", required: true }
+      link: { description: "the write-up: a PR comment or thread (optional)", required: false }
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  record:
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          GH_TOKEN: "${{ github.token }}"
+          REPO: "${{ github.repository }}"
+          ACTOR: "${{ github.actor }}"
+          PR: "${{ inputs.pr }}"
+          SHA: "${{ inputs.sha }}"
+          STATE: "${{ inputs.state }}"
+          SUMMARY: "${{ inputs.summary }}"
+          LINK: "${{ inputs.link }}"
+        shell: python3 -I {0}
+        run: |
+          import json, os, re, sys, urllib.request
+
+          REPO, PR, SHA, STATE = os.environ["REPO"], os.environ["PR"], os.environ["SHA"], os.environ["STATE"]
+
+          def api(path, body=None):
+              req = urllib.request.Request("https://api.github.com/" + path, method="POST" if body else "GET",
+                                           data=json.dumps(body).encode() if body else None)
+              req.add_header("Authorization", "Bearer " + os.environ["GH_TOKEN"])
+              req.add_header("Accept", "application/vnd.github+json")
+              req.add_header("X-GitHub-Api-Version", "2022-11-28")
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  return json.loads(r.read())
+
+          if not re.fullmatch(r"[0-9]+", PR) or not re.fullmatch(r"[0-9a-f]{40}", SHA) or STATE not in ("success", "failure"):
+              sys.exit("need a PR number, a full 40-character commit and success or failure")
+          pr = api(f"repos/{REPO}/pulls/{PR}")
+          if pr["state"] != "open":
+              sys.exit(f"#{PR} is not open")
+          if pr["head"]["sha"] != SHA:
+              sys.exit(f"#{PR}'s head is {pr['head']['sha']}, not {SHA}: remi has to prove the current head")
+
+          link = os.environ["LINK"].strip()
+          if link and not re.fullmatch(r"https://[^\s]+", link):
+              sys.exit("the link must be an https URL")
+          desc = f"remi verdict: {os.environ['SUMMARY'].strip()}"
+          desc = desc if len(desc) <= 140 else desc[:139] + "…"
+          body = {"state": STATE, "context": "remi-proof", "description": desc}
+          if link:
+              body["target_url"] = link
+          api(f"repos/{REPO}/statuses/{SHA}", body)
+          print(f"#{PR} {SHA[:7]}: remi-proof {STATE}, recorded for {os.environ['ACTOR']}: {desc}")
