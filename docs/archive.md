@@ -82,6 +82,11 @@ Only files that proven routes and boxes reference. Never a mirror of a whole dis
    `ingest` lists the gaps. They don't fail an ingest. They are what has to be filled (from snapshot.debian.org,
    Koji's source RPMs, or a minor-release vault) before that release goes public.
 
+   One gap is known and stays: runs recorded before the capture shim (#105) pin 28 AlmaLinux 8-10 and EPEL 8-10
+   `repomd.xml` digests (under 9 URLs; `ingest` lists gaps by URL) that upstream replaced before anything kept them,
+   and no CI artifact or copy on remi holds them. Their packages are stored, but `wend walk --run` can't replay those
+   runs from the archive. The next recording of each EL route is captured whole and closes it for that route.
+
 "Referenced" means: by a run file on main whose `result` is `pass`, or by a box file on main. The archive never
 evicts a blob that such a file references. No eviction at all in the first version: storage is cheap and the set is
 small. A blob a later run no longer references can be swept once there are numbers saying it's worth the code.
