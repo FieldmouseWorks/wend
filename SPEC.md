@@ -2062,21 +2062,23 @@ the old kernel can still read it. Where the new `/boot` goes depends on what the
   --boot-directory=/run/wend/stub`); until the flip the home's copy of the old config boots the old system as before
   (EL7's entries find their kernel by `search --fs-uuid`), and `cleanup` after a failure before the flip runs the
   refresh again with the old `/boot` as the prefix, so the old system's own kernel updates keep reaching its menu.
-  Entry 1 finds the old `/boot` by UUID (GRUB 2 still reads v4). With free extents and no spare disk, an XFS v4
-  `/boot` is refused, naming a disk to add. `relocate.env` records the home's UUID as `STUB_UUID` (the old `/boot`'s
-  own when that is the home), and every write to the stub's variables after the flip (`arm_new`, `commit_trial`,
-  `rollback_next`) mounts that, never `BOOT_UUID`. The route's GRUB reinstall from EL8 on (the BIOS step
-  `docs/rebuild-and-carry.md` describes) installs into the stub's home on a relocated machine, never the new root's
-  `/boot`: that is on LVM, where GRUB can't save `grubenv`, so one-shot trials would stop. Each release's `core.img`
-  and modules land beside the stub, the stub's entry 0 stops moving `prefix` (the new root's modules come from a newer
-  `grub2` package than `core.img` from then on). Before it loads the new root's BLS config, entry 0 reads the new
-  root's own `grubenv` (`load_env -f` on the new root's `/boot/grub2/grubenv`, read-only, which GRUB can do on LVM),
-  so EL8's `kernelopts` (its root and `rd.lvm.lv=`) come from the root that the kernel and package tools keep them on,
-  and the stub's own variables stay in the stub's home; the proof checks `/proc/cmdline`. Entry 1 loads the old EL7
-  config under the newer GRUB, as the doc describes. Dropping the old root, a step of its own after `wend commit`
-  ("The upgrade"), moves the prefix to the new root's `/boot` with the landing release's own `grub2-install`; commit
-  leaves the stub in place. This home and the reinstall into it have no proof yet either; step 3 proves them with the
-  GRUB legacy stub, and refuses what fails.
+  From the flip on, every relocate step that writes the stub (`flip`'s stub, its `grub.cfg.wend-old` and its first
+  `grubenv` writes) writes the stub's home, `/run/wend/stub/grub2`, where `core.img` now reads, not the old
+  `/boot/grub2`. Entry 1 finds the old `/boot` by UUID (GRUB 2 still reads v4). With free extents and no spare disk,
+  an XFS v4 `/boot` is refused, naming a disk to add. `relocate.env` records the home's UUID as `STUB_UUID` (the old
+  `/boot`'s own when that is the home), and every write to the stub's variables after the flip (`arm_new`,
+  `commit_trial`, `rollback_next`) mounts that, never `BOOT_UUID`. The route's GRUB reinstall from EL8 on (the BIOS
+  step `docs/rebuild-and-carry.md` describes) installs into the stub's home on a relocated machine, never the new
+  root's `/boot`: that is on LVM, where GRUB can't save `grubenv`, so one-shot trials would stop. Each release's
+  `core.img` and modules land beside the stub, the stub's entry 0 stops moving `prefix` (the new root's modules come
+  from a newer `grub2` package than `core.img` from then on). Before it loads the new root's BLS config, entry 0 reads
+  the new root's own `grubenv` (`load_env -f` on the new root's `/boot/grub2/grubenv`, read-only, which GRUB can do on
+  LVM), so EL8's `kernelopts` (its root and `rd.lvm.lv=`) come from the root that the kernel and package tools keep
+  them on, and the stub's own variables stay in the stub's home; the proof checks `/proc/cmdline`. Entry 1 loads the
+  old EL7 config under the newer GRUB, as the doc describes. Dropping the old root, a step of its own after `wend
+  commit` ("The upgrade"), moves the prefix to the new root's `/boot` with the landing release's own `grub2-install`;
+  commit leaves the stub in place. This home and the reinstall into it have no proof yet either; step 3 proves them
+  with the GRUB legacy stub, and refuses what fails.
 - **GRUB legacy** (CentOS 5 and 6, and every release after them on those machines, since GRUB legacy stays: "Kernels
   and the bootloader") can't read LVM, so the new `/boot` is a plain ext3 filesystem made by the machine's own
   `mkfs.ext3`: the first partition of the spare disk, or, with free extents and no spare disk, a directory
