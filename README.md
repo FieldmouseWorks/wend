@@ -11,10 +11,10 @@ This repo is **the map**: small, reviewed fixes for the places where a plain rel
 pin those fixes into release-to-release paths. Each route carries evidence (runs) that it was replayed from scratch on
 real test boxes and every health check stayed green. A client (a static Rust binary, being built in `client/`)
 fingerprints your machine, picks a route, and walks it. At each hop it applies the fixes whose preconditions hold on
-*your* box, takes a snapshot first, and rolls back if a check fails. The client uses no model. It fetches the exact
-bytes a route was proven with, by sha256, from your own cache, wend's public package archive
-(https://archive.fieldmouseworks.com, [docs/archive.md](docs/archive.md)) or your distro's mirrors, and refuses
-anything that doesn't match.
+*your* box, takes a snapshot first, and rolls back if a check fails. The client uses no model. A walk pinned to a
+proven run (`--run`) fetches the exact bytes that run used, by sha256, from your own cache, wend's public package
+archive (https://archive.fieldmouseworks.com, [docs/archive.md](docs/archive.md)) or your distro's mirrors, and
+refuses anything that doesn't match. A `--live` walk takes today's mirrors unverified, and its run says so.
 
 Five routes so far. Every box below passes its route's current version from scratch, with no model:
 

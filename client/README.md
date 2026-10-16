@@ -1,8 +1,8 @@
 # wend client
 
 The thing that runs on a real machine: a single static Rust binary that reads the atlas (adapters, fixes, routes,
-runs), finds the route for the box, and walks it. No model. It fetches by digest, from wend's archive or the
-distro's mirrors.
+runs), finds the route for the box, and walks it. No model. A `--run` walk fetches by digest, from wend's archive or
+the distro's mirrors; a `--live` walk takes today's mirrors unverified.
 
 It is built in slices, each one proven against the Python engine in `tools/`, which stays CI's judge and SPEC.md's
 reference implementation:
