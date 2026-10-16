@@ -1,0 +1,18 @@
+# Hand-written from the replay on el/centos7-junk, whose transit stopped on it.
+schema = "wend.fix/0"
+family = "el"
+hop = "alma9"
+when = { all = [{ installed = "epel-release" }, { installed = "python2-pip" }] }
+restores = ["pkgdb"]
+adds = []
+
+[[pre]]
+op = "remove"
+packages = ["python2-pip"]
+purge = false
+
+[meta]
+name = "el9-drop-python2-pip"
+author = "claude-code / opus 5.5 (agent, hand-written)"
+note = "EPEL 7's python2-pip has no EL8 or EPEL 8 package of that name outside the python27 module stream, which the EL8 pass-through never enables, so rpm.transit never downloads it and stops. EL9 ships no Python 2 for it to install into, so it leaves before the transit (nothing else needs it). What pip installed stays where it is, owned by no package: an app that imports it runs from a shelter, which carries those files (SPEC \"Sheltering an app\")."
+fires_on = ["el/centos7-junk"]

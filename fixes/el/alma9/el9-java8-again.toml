@@ -1,0 +1,17 @@
+# Hand-written from the replay on el/centos7-junk: its Tomcat lost the JVM on this hop.
+schema = "wend.fix/0"
+family = "el"
+hop = "alma9"
+when = { installed = "java-1.8.0-openjdk-headless" }
+restores = ["box:tomcat", "box:current"]
+adds = []
+
+[[post]]
+op = "install"
+packages = ["java-1.8.0-openjdk-headless"]
+
+[meta]
+name = "el9-java8-again"
+author = "claude-code / opus 5.5 (agent, hand-written)"
+note = "The EL8 pass-through of rpm.transit leaves EL7's Java 8 out of its download, so its record is dropped (with the alternatives it registered) and its files are left unowned. EL9 ships Java 8 again: installing it puts java and /usr/lib/jvm/jre on EL9's build. EL7's tree stays under /usr/lib/jvm, owned by no package."
+fires_on = ["el/centos7-junk"]
