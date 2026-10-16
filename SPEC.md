@@ -1990,6 +1990,235 @@ Not built yet: free extents in the volume group instead of a disk, a root on a p
 UEFI (the same stub on the ESP), the route's GRUB reinstall at EL8 (see the doc), the client's preflight verdict,
 `wend commit` and `wend rollback`.
 
+## Upgrading a running machine (draft: design only)
+
+Everything that has upgraded a real machine so far is the VM tier: `tools/vm.py` on remi, driving a guest from
+outside over ssh, with a qcow2 overlay per hop to fall back on. The client a machine's owner runs reports (`share`,
+`preflight`) and walks copies (`walk --root`), and refuses to walk `/`. This section moves the VM tier's live walk
+into the client, so the owner runs it on the machine itself. It ports the harness; it doesn't invent a second one.
+Each step below names the harness step it comes from, and the short list of what's new is at the end.
+
+The first target is Enterprise Linux on BIOS: `centos5-to-alma10` and `centos7-to-alma10`, the routes the VM tier has
+proved, and CentOS 6 machines joining the first one at its `centos6` rung. EL on UEFI, Debian and Ubuntu come after,
+each once its own proof below has run. Nothing here is built. It moves into the sections it changes, piece by piece,
+in the PRs that build it.
+
+### Three verbs
+
+1. **`wend share`** (built) on the machine: which route it's on and where it joins, the hops left, the reboots, the
+   download size, and preflight's verdict.
+2. **`wend rehearse`** on a scratch host: walks a copy of the machine's root, writes the checks the machine will be
+   held to, fills a cache with every byte the walk needs, and writes a **plan**. A red rehearsal costs nothing and
+   gives a gap report.
+3. **`wend upgrade`** on the machine: walks it from the plan and its cache, offline, rebooting where the VM tier
+   reboots, booting each new kernel once on trial, and stopping at the first red.
+
+An owner with several machines rehearses each one. A plan belongs to one machine (see "The plan").
+
+### The rehearsal
+
+It runs on a scratch host, never on the machine: the later releases' binaries can't run under the machine's own
+kernel (EL6's apr already needs `SOCK_CLOEXEC`, which CentOS 5's kernel doesn't have), and that's every release the
+route walks through. The scratch host is any machine the chroot harness runs on ("Sandbox requirements"), root
+needed.
+
+- **The copy.** `wend rehearse ROUTE --from root@machine` pulls the machine's root over ssh with rsync, with the
+  snapshot's flags (`-aHx --numeric-ids`, and `-AX` where both ends' rsync have them; one filesystem at a time: `/`,
+  then `/boot` and any other mounted filesystem into its place in the copy). `--root DIR` takes a copy made another way (a mounted image or snapshot).
+  The machine keeps running and nothing on it is written.
+- **The walk** is `walk --run` on the copy, unchanged: the pinned run the route was proved by, the verifying proxy,
+  the generated checks, rollback per hop. A rehearsal never takes `--live`: `upgrade` installs only bytes a passing run
+  pinned. One addition: the kernel steps act only on a machine booted from the root (`[ / -ef /proc/1/root ]`), so in
+  the copy they do nothing and fetch nothing. After each hop the rehearsal downloads, without installing, what
+  `hop.kernel_after` would install (the release's `kernel` and what it pulls in, through the same proxy), so the
+  machine's offline walk finds it in the cache.
+- **The checks** it holds the copy to are the machine's ("Checks the machine is held to"). Only checks that pass on
+  the copy before the first hop are kept, as the walk does already; the rest are listed in the plan as dropped, with
+  their output.
+- **The result.** A pass writes the plan directory. A fail writes the run and the scrubbed gap report (`wend report`'s,
+  with its issue link) and no plan.
+
+### The plan
+
+A directory, `wend-plan-<machine id>/`, carried to the machine (scp, or a USB stick for a closet with no network):
+
+- `plan.json` (schema `wend.plan/0`): the route's content id, the run it was pinned by, the wend version, and per hop
+  the fix ids that fired, the commands' seconds, and whether its kernel steps found the kernel in the cache;
+- the machine's **fingerprint** at the moment of the copy: the adapter's `installed_list` (sha256), the running
+  kernel, the release file, and the facts preflight read;
+- `checks.toml`, the checks, in the format a box's `[roles]` and `[vm].live` use, so `walk` and the VM tier read it
+  as they read a box;
+- `cache/`, files named by their sha256, with a list of every file the walk and the kernel downloads fetched.
+
+`upgrade` refuses a plan whose fingerprint isn't the machine's as it is now (a package installed since, a kernel
+update, a reboot onto another kernel): the machine isn't the one rehearsed. The answer is a fresh rehearsal.
+
+### Checks the machine is held to
+
+This answers open question 8 for a client. A hop is green on a running machine when all of these hold after its
+reboot:
+
+- **What the VM tier checks with no box at all:** the machine is booted from a new `boot_id`; the release's newest
+  kernel is the one running (`hop.kernel_newest`); it runs on the firmware it started on; its addresses, default
+  route and resolvers are the ones it had before the first hop (the VM tier's `NET` read, systemd-resolved's stub
+  standing for its upstreams); and sshd answers a new connection on its port.
+- **The adapter's checks:** `pkgdb`, `current`, and `services` once the family map is in the adapter (open question 11).
+- **Generated checks**, written by the rehearsal from what the machine runs at the moment of the copy, read from
+  the machine over the same ssh:
+  - every TCP port a packaged service listens on, by program family and port, listens again;
+  - every service that was enabled and running is enabled and running, by family (`mysqld` is `mariadb` later on);
+  - a web server's config test passes, and each local vhost's `/` answers on localhost with the status it gave before;
+  - a MySQL or MariaDB server answers, and every database lists the tables it listed before;
+  - `/etc/crontab`, `/etc/cron.d` and the cron spool hold the entries they held.
+
+  Each has a live form (asks the running service, as `[vm].live` does) and an offline form for the copy (starts the
+  daemon inside the root and asks it, as a CI box's roles do).
+- **The owner's own**, added to `checks.toml` as roles before the rehearsal. `upgrade` refuses a `checks.toml` whose
+  sha256 isn't the plan's: a check the rehearsal never ran proves nothing.
+
+### The upgrade
+
+`sudo wend upgrade PLAN --backup "<what and where>"` refuses, touching nothing, unless all of this holds:
+
+- it runs as root on a machine booted from its own root (not a container, not a chroot);
+- the plan passed, is pinned, is for a route this atlas has, and its fingerprint is this machine's now;
+- every file the plan lists is in its cache and hashes right (the walk's check of every pinned top file, extended
+  to every file, since nothing is fetched from a network);
+- `--backup` says what the owner backed up and where. wend can't check it and says so; it records the words in the
+  run. There is no way past this. A hypervisor snapshot, an LVM snapshot taken from outside, or an image of the disk
+  all count; nothing wend does is a substitute;
+- hardware preflight passes for the whole route, counting the cache's size against the disk it sits on;
+- the machine's layout is one the VM tier has a passing run for on this route ("Refused", below);
+- no newer kernel than the running one is installed (reboot first) and no package manager is running, as relocate's
+  preflight asks;
+- the plan and the cache aren't under `/tmp` or `/run` (they must survive reboots).
+
+Then:
+
+1. **Detach.** It copies itself, the atlas and the plan's `plan.json` and `checks.toml` to `/var/lib/wend/upgrade/`,
+   starts the walk as a detached process (`setsid`, the VM tier's `RUNNER`), and follows its log in the foreground.
+   The transaction replaces sshd and glibc under the owner's session; when ssh drops, the walk goes on, and running
+   `wend upgrade` again follows it. The binary is static, so the glibc it was started beside going away changes
+   nothing for it. It prints the downtime it expects (the rehearsal's seconds per hop, plus a reboot each) before it
+   starts.
+2. **Each hop** compiles exactly the commands the VM tier runs (`hop_parts`, with `hop.after` whatever happened), from
+   the cache through the verifying proxy, `--offline`. Before a hop touches anything, its fixes' preconditions are
+   evaluated on the machine, and the fixes that hold must be exactly the ones that fired in the rehearsal. Any
+   difference refuses the hop there, before its first command.
+3. **It reboots** where the VM tier does: after each hop, and between the transaction and the post steps on a hop
+   whose release says `reboot = "before-post"` (centos6). When `reboot` returns and the old boot is still running two
+   minutes later (the first boot onto systemd, and EL8 to EL9), it does what the VM tier does from outside, from
+   inside: stops every process but itself (`kill -TERM -1`, then `-KILL`), syncs, remounts read-only and resets with
+   sysrq ("VM tier").
+4. **Each new kernel boots once, on trial.** `hop.kernel_after` still writes the new kernel's entry, but the default
+   stays on the running kernel's entry and the new one is the next boot only (`hop.kernel_trial`, new: GRUB legacy's
+   one-shot default, `savedefault --once`, still to be proved on CentOS 5's and 6's grub; GRUB 2's `next_entry`). After a green boot, `hop.kernel_commit` (new) makes the new
+   entry the default. A kernel that hangs or panics at boot leaves the old one as the next boot, so a power cycle
+   brings the machine back to a console. That isn't a rollback, and wend never calls it one: after the transaction,
+   the old kernel runs the new release's userland, which on the centos6 hop may not even start sshd.
+5. **After each boot**, the owner runs `wend upgrade` again. It reads the state file, judges the boot ("Checks the
+   machine is held to"), commits the trial on green, and goes on with the next hop. Until then `/etc/motd` carries one
+   line saying an upgrade is under way and how to go on, removed at the end.
+6. **At the end**, the prune removes exactly the packages the rehearsal's prune removed (no bisecting: there's no
+   snapshot to try halves on), then the checks run once more. The package manager is pointed at the landing release's
+   own repositories (the release package's repo files, as a fresh install has them), never left on the proxy. The run
+   (schema `wend.vmrun/0`'s shape, `runner.kind = "live"`, the `--backup` words, the real downtime) goes to
+   `/var/lib/wend/runs/`, where `wend share` can attach it.
+
+**The first red stops it.** wend undoes nothing on a running machine, because there's nothing it could undo with:
+no snapshot of `/` exists. It stops, leaves the trial uncommitted if there was one, writes the run and the gap report,
+and says what state the machine is in (the hop, the step or the checks that failed) and that the way back is the
+owner's backup. Every check that can be made before a hop's first command is made there (the plan's fingerprint, the
+cache, the fixes that fire, disk and `/boot` room), so a red after that point is a gap the route has, and the rehearsal
+missed it. `upgrade` won't run again on a machine stopped mid-hop: the next try is the backup restored, then a fresh
+rehearsal once the gap is closed.
+
+### State across reboots
+
+`/var/lib/wend/upgrade/state.json`: the plan's sha256, the hop, the phase (before the hop, rebooted mid-hop, after the
+transaction, booting on trial, committed), the `boot_id` before each reboot, the network and the checks that passed
+before the first hop, and the `--backup` words. It's written to a new file, synced and renamed over the old one
+before every reboot and every change of phase. The VM tier keeps the same facts on its host; here the machine keeps
+them. A second plan refuses while a state file is there.
+
+### Refused
+
+The VM tier's proven layouts, nothing else. Today that refuses:
+
+- UEFI firmware, until EL on UEFI has a VM tier pass (the Ubuntu route has one, and comes later anyway);
+- `/boot` or `/` on md RAID or LUKS; `/usr` or `/var` on a filesystem of its own (EL7's UsrMove and the boot need
+  them on `/`);
+- a CentOS 7 machine on XFS v4, until relocate runs as part of an upgrade (it's built for the VM tier);
+- a box whose route needs a shelter or a lifeboat (the VM tier builds them in a chroot copy first; a live machine's
+  path for that isn't designed);
+- everything hardware preflight already refuses (32-bit, a CPU or driver the landing release drops, `/boot` too small).
+
+Other mounted filesystems (`/home`, `/srv`, a data disk) are left mounted and untouched, and the proof includes one.
+
+### Proof
+
+A VM tier run of the client, not of the harness: the release workflow's static binary, its atlas, and a plan,
+inside a remi guest, upgrading it. `tools/vm.py upgrade ROUTE BOX --client TARBALL` (new) builds the box as `replay`
+does, rehearses it from the host with `wend rehearse --from` the running guest, pushes the plan in, and then plays
+the owner: runs `wend upgrade --backup "qemu overlay"` over ssh, waits out each reboot, and runs it again after each
+boot until it ends. The harness judges every hop on its own as `replay` does (network, checks, newest kernel,
+firmware), and the run passes only if every hop is green by both the client's verdict and the harness's. Its run goes
+to `.wend/vm/`, schema `wend.vmrun/0`, `runner.kind = "vm-client"`.
+
+What it has to show, BIOS first:
+
+- `el/centos7-lamp` and `el/centos5-web` land on Alma 10, with an extra data disk mounted throughout;
+- a reset from outside (QEMU `system_reset`) during a trial boot comes back on the old kernel, and `wend upgrade`
+  says so and retries the trial;
+- a check made to fail after a hop (a harness flag that stops a service in the guest) stops the walk with the trial
+  uncommitted and the gap report written;
+- the owner's ssh session killed mid-transaction changes nothing;
+- the binary runs at all on CentOS 5's 2.6.18 and CentOS 6's 2.6.32 kernels (the cheap remi job already queued).
+
+A native CentOS 6 box (`el/centos6-lamp`, from the 6.10 installer) and its proof come before anyone is told CentOS 6
+is a proven start: the only C6 rung proved so far is a C5 box upgraded to C6.
+
+### What's ported and what's new
+
+| piece | from |
+|---|---|
+| hop commands, fixes, kernel steps, sshd watcher, network carry | the adapters, unchanged; the client already compiles them (`client/parity.py`) |
+| verified offline fetch | the client's `walk --run --cache --offline` |
+| the rehearsal's walk | the client's `walk --root` |
+| the detached hop, reboot points, forced reset | `tools/vm.py` (`RUNNER`, `Guest.reboot`, the forced reset) |
+| judging a boot | `tools/vm.py` `walk_vm` (`NET`, `kernel_newest`, `FW_NOW`, the checks) |
+| gap report | `wend report`, `wend share` |
+
+New: the plan and the state file; `hop.kernel_trial` and `hop.kernel_commit` in the adapter (harness steps beside
+`kernel_before` and `kernel_after`, out of fixes' reach, reviewed as a spec change); the generated checks; the
+rehearsal's kernel downloads; the backup gate. Nothing else.
+
+### Order of work
+
+1. This section, reviewed.
+2. The mid-route join in `share`, preflight and `walk` (its own PR, in flight), so a CentOS 6 machine hears where it
+   joins.
+3. `hop.kernel_trial` and `hop.kernel_commit` for GRUB legacy and GRUB 2, proved by the VM tier's own `replay` first
+   (each hop's boot on trial, a reset back to the old kernel, the commit), and moved into "Kernels and the
+   bootloader".
+4. `wend rehearse`, the plan and the generated checks, proved by rehearsing VM guests from remi's host and comparing
+   the walk with CI's run of the same route.
+5. `wend upgrade` and `vm.py upgrade`, on `el/centos7-lamp`, then `el/centos5-web`.
+6. `el/centos6-lamp` and its proof.
+7. README and docs/try-it.md say what's real, and say "take a backup" before anything else.
+
+Later, each as its own design: EL on UEFI; Debian and Ubuntu (the VM tier has proved them; GRUB 2's trial is the
+same step on apt); a boot unit that goes on by itself after each boot; relocate as part of an upgrade.
+
+### Open questions
+
+1. **Going on by itself after a boot.** The owner runs `wend upgrade` after each boot. A boot unit that does it would
+   have to start under SysV init, upstart and systemd on one route, which is three places for it to break. Wait until
+   the owner-driven walk is proven, then decide?
+2. **A rollback wend owns.** An LVM snapshot of `/` needs free extents and the device mapper's snapshot merge, which
+   CentOS 5's kernel lacks, and `/boot` isn't in it. Relocate keeps the old root whole, but needs a spare disk. Until
+   one of these is built and proven, the backup is the owner's, and wend says so on every screen.
+
 ## Open questions
 
 Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them as follows; 7 to 12 are still open.
@@ -2017,6 +2246,8 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
    form". Do we add a `for-each` over files, or keep local fixes out of the shared library?
 8. **Client-side checks.** CI boxes have rich roles. A real machine has only the adapter checks plus whatever the
    user supplies. What is the minimum check set a client runs before it calls a hop healthy?
+   Proposed for a running machine in "Upgrading a running machine": the VM tier's box-free checks, the adapter's,
+   checks generated from what the machine runs, and the owner's own.
 9. **Signing.** Sigstore attestation from GitHub Actions on each run file, or a project key held by the verifier
    box? The client trusts a run only if it is attested and refers to the route id it is about to apply.
 10. **Booting.** A chroot can't test init. `drop-sysvinit-for-trixie` is fine in a chroot and dangerous on a real
