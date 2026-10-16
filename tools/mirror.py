@@ -28,6 +28,10 @@ import urllib.request
 ALLOWED = {"vault.centos.org", "repo.almalinux.org", "vault.almalinux.org", "archives.fedoraproject.org",
            "dl.fedoraproject.org", "snapshot.debian.org", "deb.debian.org", "archive.ubuntu.com",
            "old-releases.ubuntu.com"}
+# The sha256 of this file, served at /.wend-shim: tools/sandbox.py reuses a shim already on the port only if it is this
+# one (one from another checkout would answer with its own allow-list and rules).
+with open(os.path.abspath(__file__), "rb") as _f:
+    VERSION = hashlib.sha256(_f.read()).hexdigest()
 FROZEN = {"snapshot.debian.org"}  # dated trees: a path's bytes never change, metadata included
 CACHE = sys.argv[2] if len(sys.argv) > 2 else "/var/tmp/wend/mirror"
 STORE = os.path.join(CACHE, ".sha256")  # not reachable through the shim: a request's first segment must be a host
@@ -129,6 +133,14 @@ class H(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def _go(self, body):
+        if self.path == "/.wend-shim":
+            v = VERSION.encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(v)))
+            self.end_headers()
+            if body:
+                self.wfile.write(v)
+            return
         parts = self.path.lstrip("/").split("?")[0].split("/", 1)
         # Only <allowed host>/<relative path>: no empty or dot segments, so the path can't leave the cache
         # (os.path.join would throw CACHE away for "/etc/shadow"; the shim runs as root).
