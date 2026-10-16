@@ -573,7 +573,8 @@ def kickstart(box_doc, adapter, key_pub):
     anaconda doesn't know it), inst["nobase"] (default on) whether %packages takes --nobase, which EL8's installer
     no longer accepts, inst["repos"] the trees besides `tree` the install reads (EL8's AppStream, where httpd, php
     and mariadb live), each a kickstart `repo` through the shim, inst["packages_flags"] more %packages options (EL4's
-    anaconda stops to ask about dependencies unless it gets --resolvedeps). On UEFI, an EFI system partition. The box's customize runs in %post after the release's
+    anaconda stops to ask about dependencies unless it gets --resolvedeps), inst["ks"] more kickstart commands (EL4's
+    anaconda stops at its language support screen unless it gets langsupport). On UEFI, an EFI system partition. The box's customize runs in %post after the release's
     repos are set (set_release), as the chroot build runs it, with the mirror shim where the guest sees the host."""
     rel = adapter["releases"][box_doc["release"]]
     inst = rel["install"]
@@ -596,7 +597,7 @@ def kickstart(box_doc, adapter, key_pub):
     return "\n".join([
         "install", f"url --url {shim}/{inst['tree']}",
         *(f"repo --name={name} --baseurl={shim}/{path}" for name, path in inst.get("repos", {}).items()),
-        "text", "skipx", "lang en_US.UTF-8", "keyboard us",
+        "text", "skipx", "lang en_US.UTF-8", "keyboard us", *inst.get("ks", []),
         # a static address, as servers have: the live checks compare the guest's addresses with it after every boot
         f"network --device eth0 --bootproto static --ip {ADDR} --netmask 255.255.255.0 --gateway 10.0.2.2 "
         "--nameserver 10.0.2.3 --hostname wend-vm.example.org",

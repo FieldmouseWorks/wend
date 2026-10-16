@@ -49,9 +49,10 @@ probe = "vault.centos.org/5.11/os/x86_64/repodata/repomd.xml"
 major = 4
 pm = "yum"
 repos = { base = "vault.centos.org/4.9/os/x86_64", updates = "vault.centos.org/4.9/updates/x86_64" }
-# tools/vm.py: as CentOS 5's, but EL4's anaconda stops to ask about dependencies unless %packages has --resolvedeps.
+# tools/vm.py: as CentOS 5's, but EL4's anaconda stops to ask about dependencies unless %packages has --resolvedeps,
+# and at its language support screen unless the kickstart has langsupport (EL5 dropped the command).
 # 4.8 and later carry virtio drivers, so the VM tier's default virtio disk and NIC stand.
-install = { tree = "vault.centos.org/4.9/os/x86_64", pxeboot = "images/pxeboot", packages = ["grub"], packages_flags = ["--resolvedeps"] }
+install = { tree = "vault.centos.org/4.9/os/x86_64", pxeboot = "images/pxeboot", packages = ["grub"], packages_flags = ["--resolvedeps"], ks = ["langsupport --default=en_US.UTF-8 en_US.UTF-8"] }
 
 [releases.centos5]
 major = 5
