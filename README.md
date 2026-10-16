@@ -2,12 +2,20 @@
 
 Upgrade a 2007 server to today, one release at a time, along a path someone already proved works.
 
+wend is for people running fleets of old servers on Linux releases that stopped getting updates years ago. A
+distro's own upgrader moves the OS; wend moves the server: every hop carries the box's services and data along (web
+server, PHP, database, DNS) and checks they still answer before the next one. Debian etch to trixie, Ubuntu trusty to
+resolute and CentOS 5, 7 and 8 to AlmaLinux 10 have each passed on real installs in a VM, with a real reboot after
+every hop.
+
 This repo is **the map**: small, reviewed fixes for the places where a plain release upgrade breaks, and routes that
 pin those fixes into release-to-release paths. Each route carries evidence (runs) that it was replayed from scratch on
-real test boxes and every health check stayed green. A client (a static Rust binary, later) fingerprints your
-machine, picks a route, and walks it. At each hop it applies the fixes whose preconditions hold on *your* box, takes
-a snapshot first, and rolls back if a check fails. The client uses no model and needs no network beyond your
-distro's mirrors.
+real test boxes and every health check stayed green. A client (a static Rust binary, being built in `client/`)
+fingerprints your machine, picks a route, and walks it. At each hop it applies the fixes whose preconditions hold on
+*your* box, takes a snapshot first, and rolls back if a check fails. The client uses no model. A walk pinned to a
+proven run (`--run`) fetches the exact bytes that run used, by sha256, from your own cache, wend's public package
+archive (https://archive.fieldmouseworks.com, [docs/archive.md](docs/archive.md)) or your distro's mirrors, and
+refuses anything that doesn't match. A `--live` walk takes today's mirrors unverified, and its run says so.
 
 Five routes so far. Every box below passes its route's current version from scratch, with no model:
 
@@ -54,7 +62,9 @@ The map grows from people using it:
    labels the gap `triaged`, and a bot opens a PR adding it to `wanted.toml`.
 5. **Discover.** An agent claims it (AGENTS.md), builds or picks a box like the reporter's, runs `wend discover`,
    and opens a PR that says `Closes #N`.
-6. **Merge.** CI replays it on every box, the Claude review signs off, and the maintainer or Claude merges. The issue closes, and the reporter is pinged to retry.
+6. **Merge.** CI replays the routes it touches, remi proves it on real installs when a chroot can't judge it
+   (CONTRIBUTING.md, `remi-proof`), the Claude review signs off, and the maintainer or Claude merges. The issue
+   closes, and the reporter is pinged to retry.
 
 Every gap that gets closed makes the map work on one more kind of machine.
 
@@ -111,6 +121,7 @@ client/              the Rust client (client/README.md): reads, checks and compi
   workflows/gate.yml the PR gate: dco, schema, plan, replay, decoys, claude-review
   workflows/client.yml the Rust client: build, test, parity with tools/
   workflows/gaps.yml the gap loop: dedupe reports, triaged gap -> wanted.toml PR, ping the reporter on close
+  workflows/remi-proof.yml the remi-proof status: holds PRs a chroot can't judge until remi passes their head
   pull_request_template.md, ISSUE_TEMPLATE/route-gap.yml, ISSUE_TEMPLATE/wanted.md, dependabot.yml
   CODEOWNERS         a human on everything; the owner on tools/, adapters/, SPEC.md, .github/
 ```

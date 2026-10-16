@@ -410,8 +410,8 @@ See `adapters/ubuntu.toml`. The Debian adapter's engine on Ubuntu's own ladder. 
   runs a daemon during a transaction; a real machine never takes that branch.
 - debootstrap knows every Ubuntu release as its `gutsy` script, but Ubuntu 24.04's own debootstrap package only
   links lunar and later, so the adapter names the script (`[box] debootstrap_script`).
-- Container tier only for now: the adapter has no `releases.trusty.install` or `kernel_newest`, so the VM tier
-  (tools/vm.py) can't build or boot an Ubuntu box yet.
+- The VM tier (tools/vm.py) installs a trusty box with trusty's own debian-installer (`releases.trusty.install`), on
+  BIOS or UEFI; all three boxes have passed trusty -> resolute on UEFI (wend#13, #84; Secure Boot isn't proven).
 
 ### Enterprise Linux (`el`, rpm backend)
 
