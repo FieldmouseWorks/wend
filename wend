@@ -205,7 +205,7 @@ def cmd_verify(base=None, all_=False, jobs=2):
     need_root({d["family"] for d in repo.boxes.values()})
     if all_ or not base:
         matrix = [{"route": r, "box": b} for r, d in repo.routes.items() for b, x in repo.boxes.items()
-                  if check.starts(x, d)]
+                  if check.starts(x, d, repo.adapters)]
     else:
         r = subprocess.run([sys.executable, "-B", f"{ROOT}/tools/affected.py", base], capture_output=True, text=True)
         if r.returncode:

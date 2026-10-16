@@ -246,6 +246,12 @@ lists in `may_skip`: a route may leave it out. EL lists `alma8`, because the box
 (`rpm.transit`) on the hop to EL9, and `centos8`, where boxes start but no route lands. No health check runs on a
 release the route skips. `wend discover` leaves `may_skip` releases out of a new route's hops.
 
+A route starts on the ladder. A release off it can still be where boxes start, if the adapter says which rung it
+**joins** (`releases.<id>.joins`): a rebuild of a release on the ladder, same major, same packages from another
+vendor. EL's `sl7` (Scientific Linux 7) joins `centos7`, so an SL7 box takes every route from `centos7` and is a
+decoy for its fixes; what SL does differently is handled by fixes gated on SL's own packages (`sl-release`). No hop
+ever lands on a joined release, so it has no `upgrade`, `bootstrap`, `transit`, `reboot` or keys of its own.
+
 A route is a **map, not a playlist**. It pins a *set* of fixes by id, and the client applies whichever ones hold on
 each hop. In dep-lab, stitching fixes from three different runs into one map beat replaying any single run, and the
 same map served two different boxes. Which fixes actually fired on which box is recorded in runs, not in the route.
@@ -360,7 +366,7 @@ them to plain shapes, since every value lands in commands the harness runs as ro
 
 ### Decoys
 
-Every box that starts at a route's `from` release is a decoy for each of that route's fixes that doesn't claim it (a box
+Every box that starts at a route's `from` release (or at a release that joins it there, see Route) is a decoy for each of that route's fixes that doesn't claim it (a box
 that starts elsewhere can't walk the route, so CI doesn't replay it there). On a passing run, each pinned fix must have
 fired on exactly the boxes in its `fires_on`. If it fired somewhere unclaimed, it's a decoy hit and the PR fails. If it
 didn't fire where it claims, that fails too: the claim is stale or the precondition broke. dep-lab's round 3 is the
@@ -419,7 +425,8 @@ See `adapters/el.toml`. Notes that matter:
 
 - The ladder crosses vendors: `centos4 centos5 centos6 centos7 centos8 alma8 alma9 alma10`. A family isn't a distro; release
   ids carry the vendor. CentOS 8 and AlmaLinux 8 sit side by side: routes from EL7 and earlier skip both (EL8 is
-  crossed inside the hop to EL9), and a route from CentOS 8 goes straight to EL9 with its own dnf.
+  crossed inside the hop to EL9), and a route from CentOS 8 goes straight to EL9 with its own dnf. Scientific Linux 7
+  (`sl7`) is off the ladder and joins it at `centos7` (see Route): its boxes take the CentOS 7 routes.
 - The package manager changes mid-ladder (yum through 7, dnf from 8), and so does the upgrade verb: `upgrade` on EL6,
   `distro-sync` from EL7 (EL6's grep is newer than EL7's). Each release can set its own `upgrade` in the adapter.
 - EL4 to EL5 runs EL4's yum 2.4 (`upgrade`; it has no distro-sync). Two of EL5's yum's own modules are installed as
@@ -925,7 +932,7 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `writable`, `managed` | the allowlists (globs) named by `write-file` (`writable`) and the `rpm.*` file ops (`managed`). Nothing under `/etc/wend/` is ever on either |
 | `[kv."<path>"]` | the files `kv.*` may touch: `keys` (the only keys it may set or unset; never one that grants access) and `set` (false for files with sections, which only take `kv.unset`) |
 | `force` | required: the `force-remove` flags this family allows, a subset of its backend's (apt: `depends`, `remove-essential`; rpm: `depends`, `scripts`) |
-| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`; each an http(s) URL, or host/path through the `[mirror]` shim), and optional `releases.<id>.upgrade` like rpm's. rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader"). apt: a start release may have `releases.<id>.install` too, and any release `signed` (see "Signed packages") |
+| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`; each an http(s) URL, or host/path through the `[mirror]` shim), and optional `releases.<id>.upgrade` like rpm's. rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader"), `joins` (a start release off the ladder: the ladder release with the same major whose routes its boxes take; see Route). apt: a start release may have `releases.<id>.install` too, and any release `signed` (see "Signed packages") |
 | `[addons.<name>]` | rpm: `marker`, `vendor`, `repos` (see "Add-on repositories") |
 | `[mirror]` | `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts): every rpm repo, and an apt mirror given as host/path |
 | `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), `autoremove`, `obsolete`, `installed_list`, `kernel_newest` (the VM tier's newest-kernel query); apt also `apt_conf`, the harness's apt config, and `apt_unsigned`, the lines added on hops into unsigned releases |
@@ -934,7 +941,7 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear. Whatever a `pattern`, `list` or `table` says, every value a fix passes through one must also match `[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*`: no quote, whitespace, backslash, glob character, `%`, any of `` $`;&|<>(){}~ ``, or leading `-` |
 | `[checks]` | universal health checks: `pkgdb` is a command; `current` and `services` are described in words and built by the harness from the box |
 | `[hardware]` | required: what a machine needs before a route boots it into each release (see "Hardware preflight"): `boot`, `old_kernels`, and a table per release a route can boot into |
-| `[relocate]` | optional: relocate's steps (lists of scripts: `preflight`, `refresh`, `place`, `copy`, `fixup`, `flip`, `release`, `cleanup`) and the commands between boots (`booted`, `arm`, `commit_trial`, `rollback_next`); see "Relocate" |
+| `[relocate]` | optional: relocate's steps (lists of scripts: `preflight`, `refresh`, `place`, `copy`, `fixup`, `flip`, `release`, `cleanup`) and the commands between boots (`booted`, `arm`, `commit_trial`, `rollback_next`, `rollback`, `forward`); see "Relocate" |
 | `[box]` | how to build a fresh box of this family (rpm: `seeds`, the packages to bootstrap a root from; apt: optional `debootstrap_script`, a script name under the host's `/usr/share/debootstrap/scripts`) |
 
 These checks narrow what an adapter lets fixes do (ops, force flags, argument values). They don't judge an adapter's
@@ -1572,7 +1579,224 @@ The verdict is `ok` only when every own Python 2 user is in a shelter that `shel
 - relabeling or mounting a directory the app shares with a host service
 - a cron schedule that doesn't translate exactly
 - a shelter on a release whose own repos have no podman
-- building from anything but the vendor's archive, verified as above (or, once it exists, wend's pinned archive)
+- building from anything but the vendor's archive, verified as above (or, once it exists, wend's pinned archive);
+  a lifeboat's lifted layer is the one exception (see "Lifeboats")
+
+## Lifeboats (draft: design only)
+
+A route has three honest endings for a machine, in this order:
+
+1. **Home.** The machine lands on the target release and everything on it runs natively: the route carried it.
+2. **Lifeboat.** The machine lands on the target release, and whatever the target can't run keeps running in a
+   sealed lifeboat on it, on the old userland it needs. That buys the owner time and gives them a way out. It isn't
+   support: wend never patches what's in a lifeboat, and every report, unit file and login banner says so.
+3. **Refusal.** wend stops before touching the machine and says why, and which release the machine can still reach
+   with everything working.
+
+The Python 2 shelter (above) is the first lifeboat. This section widens it from one app's interpreter to whole old
+app stacks: a PHP 5 web app, an appliance's Python 2.6 + PostgreSQL 9.2 + nginx stack, a PBX. It is the same
+mechanism (podman, a fixed user namespace, the platform's MAC, a private network, typed ops, the same proof tiers),
+with four changes: what can go in a boat, where its files may come from, how it's sealed, and what it tells the owner
+about getting out. "Lifeboat" is what the owner sees in the verdict and the report; the ops and the plan keep the
+shelter's names, since it is one mechanism.
+
+Nothing below is built, and it will change as real boxes teach us. It moves into the shelter section, piece by
+piece, in the PRs that build it, the way the shelter did.
+
+### What goes in a boat
+
+Preflight decides per app, not per machine. An app is what the shelter already calls one (a code tree, its services,
+its cron jobs, its data), widened to every service in its stack: the web server in front of it, its database, its
+cache, its queue, its own daemons. An app needs a boat when the route can't carry one of those pieces and the pieces
+still work on the release the boat is built from. What says "can't carry" is data, never a list of product names:
+
+- a runtime problem (runtime preflight: Python 2 today; PHP 5 and Java 6 are the same check with another table);
+- modules the landing release's interpreter won't load (a `python2.N` site-packages tree under a minor bump, #140);
+- unowned native code whose sonames the landing release doesn't ship (#140's `native` trees and `runtimes.<release>.libs`);
+- a running service whose package the landing release, with the route's add-on repos, doesn't ship by name or by
+  what leapp-data says it becomes (Asterisk on EL10). This one is new: it reads the same pinned indexes.
+
+Everything else on the machine rides the route as usual. The boat holds only what has to stay old, and the host
+serves the rest (its database, if the route carries that database fine; its reverse proxy, if the owner opts in, see
+"The seal").
+
+Never in a boat: a kernel, a kernel module or the hardware it drives (a telephony card's DAHDI drivers, a vendor
+RAID tool); the distro's own programs the host still runs (the route carries those; a boat's httpd or PHP is its own
+copy from the vault); the machine's package managers, a second one included (the boat is
+immutable, and nothing inside it installs anything); anything that has to run as the host's root or see the host's
+`/etc` (the box's own sshd, its firewall); and the whole machine. An app that needs any of those is refused, by name.
+
+### The release a boat is built from
+
+The boat's base is the **last release on the route where every piece of the app still runs**: the release before the
+first hop that breaks any of them. That's the shelter's `keeps_runtimes_on` for a Python 2 app, and for an appliance
+whose stack dies at the CentOS 7 hop it's CentOS 6 itself, so the boat is built before the first hop. Like the
+shelter, it's built at that release's final versions from its vault, never at a snapshot, and it's built on the box
+while the box is on that release.
+
+### Where a boat's files come from
+
+In this order, and each file comes from the first source that has it:
+
+1. **Packages from the base release's vault** (or wend's archive, #19), verified exactly as the shelter's are (signed
+   index, or per-package signatures on EL), pinned by digest in the lock. The set is the shelter's: the packages that
+   own what the app's processes map and load, plus their dependency closure. A piece the vault carries always comes
+   from the vault, even when the box's copy came from somewhere else (a second package manager's copy of `zlib`).
+2. **Carried files**, as in the shelter: files the app needs that no package owns, inside the app's own trees, and
+   packaged files the box has changed. The owner's code and config. Listed with their sha256.
+3. **Lifted files.** Files the app needs that no repo wend can reach has at all: not the vault, not the archive, not
+   a living repo. They're copied off the machine itself, into a separate read-only layer, and marked **unverified**.
+   This is the one place wend builds from the box, and only for lifeboats (decided 2026-10-16; the shelter's rule,
+   "never from a copy of the box", still holds for everything a repo can supply). Typical lifted trees: a stack a dead
+   repo installed (an appliance vendor's Conary troves, a third-party yum repo that's gone), a hand-built `/opt/pgsql`,
+   a vendored library under `/usr/local`.
+
+Each lifted file gets a trust note in the lock, the strongest one that applies:
+
+| `trust` | means |
+|---|---|
+| `db` | the box's own package database (rpm's, dpkg's md5sums, a second package manager's) records a digest for this path, and the bytes match it. That proves the file hasn't changed since it was installed. It says nothing about where it came from |
+| `none` | nothing on the box vouches for it |
+
+What's never lifted, and refuses the boat when the app needs it: setuid or setgid files and files with file
+capabilities (the boat strips nothing: it refuses, so a lifted `su` can't quietly lose its bit and work differently);
+device nodes; anything under `/boot` or `/lib/modules`; and a file the vault carries but whose vault bytes fail
+verification (that's the shelter's refusal, unchanged: a vault that fails its own checks isn't a lifting
+opportunity).
+
+Why lifting is allowed at all: on a dead repo there is nowhere else the bytes exist, so the choice is the owner's
+files or no boat. Why it's marked: the box may be compromised, and lifted bytes carry that with them. The boat's
+confinement doesn't depend on them being clean (they run as an unprivileged mapped uid, `container_t`, no
+capabilities), and the report lists every lifted tree with its file count and trust, so the owner sees exactly what
+wend couldn't check.
+
+The lock grows one table: `[[lifted]]` with `path`, `sha256`, `trust`, and `claimed_by` (`conary:<trove>`,
+`rpm:<name>`, or none), next to `[[packages]]` and `[[carried]]`.
+
+### What runs in a boat
+
+A boat is a podman pod: one network namespace, so the stack's own loopback traffic (the app to its PostgreSQL on
+`127.0.0.1:5439`, nginx to gunicorn) stays inside the boat and never touches the host. Each service is a container
+in the pod from the boat's one image, with its own command line and its own user. The command is the service's
+running main process as facts saw it (argv, working directory, user, environment), confirmed in the plan, because a
+boat runs no init system: a SysV script or a supervisord config is evidence for the plan, not something the boat
+runs. One wend unit starts the pod and its containers in the plan's order; cron lines become timers exactly as the
+shelter does.
+
+The plan grows from one `unit` to a list:
+
+| key | type | means |
+|---|---|---|
+| `services` | list of `{ name, user, argv, cwd, env, after }` | one container each, in the pod; `after` orders them |
+| `ports` | list of `"proto:address:port"` (`tcp` or `udp`), or a range for udp | served on the host, see below |
+| `lift` | list of absolute paths | the trees the owner agreed to lift (facts propose them; nothing outside them is lifted) |
+| `arch` | `x86_64` or `i686` | the boat's userland; `i686` needs the host's kernel to run 32-bit programs |
+
+The shelter's other keys (`code`, `data`, `user`, `cron`, `sockets`, `egress`) keep their meaning.
+
+**The old userland on a new kernel.** A boat's libc can be fifteen years older than its kernel. Two things are known
+to bite, and preflight checks both on the landing release's kernel before the first hop: a glibc older than 2.14
+(EL6 and earlier) calls the vsyscall page, which a kernel with `vsyscall=none` (on its command line, or as its build
+default) kills it for, while `xonly` still runs those calls (preflight reads the landing kernel's config and command
+line; the VM tier proves it); and an `i686`
+boat needs the kernel's 32-bit support (`CONFIG_IA32_EMULATION`, and not `ia32_emulation=0` on its command line).
+
+### The seal
+
+Sealed code is old and unpatched, so the seal is the point of the design, not a detail:
+
+- **In:** only the ports the app served before, on the addresses it served them on (facts' listening sockets), now
+  with UDP and port ranges (SIP on 5060, RTP's range). Nothing else reaches the pod. An app that served the internet
+  still does, because otherwise it isn't working, and the report flags every exposed port in its first lines, not its
+  last. Decided (2026-10-16): same ports as before by default, not loopback-only, which would break a working app on
+  purpose.
+- **Front it (opt-in, recommended for HTTP).** The host's own current web server or proxy terminates TLS and proxies
+  to the boat's port on loopback, so the internet talks to a patched TLS stack and HTTP parser, and the boat's old
+  OpenSSL never sees a handshake. The plan offers it for every HTTP(S) port and the report recommends it.
+- **Out:** nothing by default. The shelter prefills egress opt-ins from observed connections; a boat does the same,
+  and every opt-in is listed in the report as a hole, with the destination.
+- **Host services** reach the boat the shelter's way (unix-socket proxies), and a database the route carries stays on
+  the host.
+- Everything else is the shelter's confinement, unchanged: read-only root, fixed user namespace, idmapped data
+  mounts, all capabilities dropped (plus the ones the plan names, each shown), `no_new_privs`, SELinux `container_t`
+  at the boat's own level or AppArmor's `containers-default`, the nftables table that fails closed.
+
+### The way out
+
+A boat is a waiting room. The report, written to `/var/lib/wend/lifeboat/<app>/README` and printed by
+`wend preflight` and `wend status`, answers four questions for each boat:
+
+1. **What's inside:** the base release and its end-of-life date, every package and version, the carried files, and
+   the lifted trees with their trust, so nothing in the boat is unnamed.
+2. **What's exposed:** each published port and who can reach it, each egress hole, and the plain statement "the
+   software in this boat gets no security fixes, from wend or anyone; anything that reaches these ports reaches it".
+3. **What replaces it:** for each piece, what the landing release ships instead, read from data (the landing release's
+   index by name and provides, and leapp-data's events on EL), never guessed: `postgresql 9.2 (lifted) -> postgresql
+   16 (alma10 appstream)`, `nginx 1.x (lifted) -> nginx 1.26`, `Django 1.3 (lifted) -> none: the app needs porting`.
+   "None" is a valid answer and the honest one for the owner's own code.
+4. **The exit ticket:** for every database in the boat, a logical dump taken by the boat's own binaries at boarding
+   and again on a timer (`pg_dumpall`, `mysqldump --all-databases`), written to the host under
+   `/var/lib/wend/lifeboat/<app>/exit/`. The boat's old binaries are the only thing that can read its data
+   directory; the dump is what a modern server can restore. Without it the boat is a trap, not a lifeboat.
+
+A login banner (`/etc/motd.d/wend-lifeboat`) names each boat, its base release and how long it's been afloat. No
+nagging daemon, no expiry date: when to leave is the owner's call.
+
+`shelter.retire APP` (new op) stops and disables the boat's units and removes its network table, proxies, timers and
+subuid range, and keeps the image, the lock, the data and the exit dumps until the owner deletes them. The way back to
+running natively (port the app, restore the dump into the host's database) is the owner's work; wend's part is the
+report that says what that work is.
+
+### Later hops
+
+A boat rides every later hop of the route, and later routes: it's a container, so the host's upgrade doesn't touch
+its userland. Each hop's checks include the app's checks against the boat, and the confinement probe after each
+reboot, as for the shelter. A later hop that breaks the boat (a kernel that drops 32-bit support, a podman that can't
+import the image) fails that hop's checks and rolls back like any other hop.
+
+### Worked examples
+
+**A Python 2 service on CentOS 7** (el/centos7-pyapp, proved on the VM tier): a one-service boat on CentOS 7's vault
+packages, nothing lifted. This is the shelter as built.
+
+**A software appliance on CentOS 6 whose stack came from a second package manager.** The base CentOS 6.7 is rpm's
+and consistent, so the machine routes like any CentOS 6 box (joining the CentOS 5 route at its el6 rung). The
+appliance itself (a Python 2.6 site-packages tree, PostgreSQL 9.2 in `/opt`, nginx, an XMPP server, memcached, a
+build service) came from a dead Conary repo, along with a Fedora kernel. #140's preflight says the app dies at the
+CentOS 7 hop. Lifeboat: the boat's base is CentOS 6 final from the vault; whatever the vault or a living repo carries
+of the stack comes from there (the per-trove diff decides which), and the rest is lifted, mostly with `trust = db`
+from Conary's own database. Its services run in one pod, PostgreSQL's data directory is mounted in, nginx's 80 and 443
+are published (front recommended), and the first exit dump is a `pg_dumpall` from 9.2 that PostgreSQL 16 on Alma 10
+restores. The Fedora kernel and Conary itself stay behind: the host boots the route's kernel, and the route's kernel
+cleanup has to learn about a kernel rpm doesn't own (#140 notes it). The host lands on Alma 10, with the appliance
+afloat and every lifted tree named.
+
+**A PBX (Elastix-style: Asterisk + FreePBX on PHP 5 + MySQL).** Asterisk isn't packaged for EL10 and FreePBX 2.x
+dies on PHP 8, so it's two pieces the route can't carry. A boat on the base the box runs (CentOS 7 for Elastix 4)
+carries Asterisk, httpd with PHP 5.4 and FreePBX, with SIP and the RTP range published over UDP and its web UI fronted
+and LAN-only by the owner's choice. MySQL can stay on the host if the route carries its data. Refused instead when the
+box drives telephony cards (DAHDI is kernel modules, and those never board). Elastix 2.5 is i386 CentOS 5: an i386
+machine's in-place route ends at CentOS 6 (EL7 is x86_64-only), so that box can't host a boat on Alma 10 itself.
+Its honest outcomes are refusal, or rebuild and carry onto a new x86_64 machine with an `i686` boat, which is later
+work. The report's "what replaces it" says Asterisk 18 on EL9's EPEL and a chan_sip to pjsip move, which is a
+migration, not an upgrade.
+
+### Order of work
+
+1. This section, reviewed.
+2. A public box for a whole-stack boat with nothing lifted: `el/centos7-php5`, a PHP 5.4 app on httpd with MariaDB
+   (the most common real case; dies at the alma9 hop on PHP 8). Plan keys `services` and `ports` with `tcp`, pods,
+   chroot tier first, then remi.
+3. Lifting, the lock's `[[lifted]]`, and the trust note, proved on a public box built for it (a CentOS 6 box with a
+   source-built service under `/opt`, and a third-party rpm from a repo that's gone, for a `db` lift), and privately on the appliance on remi, never in CI.
+4. UDP ports, the "front it" opt-in, exit dumps, `shelter.retire`, the report and the banner.
+5. Preflight's fourth "can't carry" check (a running service the landing release doesn't ship).
+
+### Open questions
+
+1. **How big a lift is too big.** A boat lifting thousands of files with `trust = none` is mostly an unverified copy
+   of the box. Should preflight refuse past a share of the boat (and say "rebuild the app instead"), or only report?
+2. **Exit dump cadence and space.** Daily by default, keep the last few? A large database doubles its disk.
 
 ## VM tier (maintainer-run)
 
@@ -1738,7 +1962,9 @@ The steps, in order, each a list of scripts that run inside the booted machine a
   finds the new root by UUID and sets `prefix` there before loading its config (so every module and the `grubenv`
   after that are the new root's); entry 1 loads the old config as it was. The stub keeps its own variables in the old
   `/boot`'s `grubenv`, never the configs' `saved_entry` or `next_entry`: `wend_next`, if 0 or 1, is a one-shot boot
-  GRUB clears before taking it; otherwise `wend_default`, and the old root unless it says 0. If entry 0 fails inside
+  GRUB clears before taking it; otherwise `wend_rollback` from a `grubenv` block of the new root's own
+  (`/var/lib/wend/relocate.grubenv`), which means the old root when it says 1; otherwise `wend_default`, and the old
+  root unless it says 0. If entry 0 fails inside
   GRUB, it falls back to entry 1 (`fallback=1`), which first puts `root` and `prefix` back to the old `/boot` as GRUB
   found it (a failed entry 0 may have moved them), so a remote machine doesn't sit at a menu. The flip leaves the old
   root the default, arms the trial (`wend_next=0`) as its last write, then freezes and thaws `/boot` so the XFS log
@@ -1748,7 +1974,11 @@ The steps, in order, each a list of scripts that run inside the booted machine a
 
 Between boots: `booted` says which root is up (`new`, which must be XFS v5, or `old`); `arm` tries the new root once
 more from the old one; `commit_trial` makes the new root the default (it mounts the old `/boot`, which the copy's
-fstab doesn't); `rollback_next` boots the old root once.
+fstab doesn't); `rollback_next` boots the old root once. Those three mount the old `/boot`, which a kernel without
+XFS v4 (EL10's) can't. So `rollback`, from the new root on any release, writes `wend_rollback=1` into the new root's
+own `grubenv` block (by hand, so no release's `grub2-editenv` is needed, then a freeze of `/` from one process, since
+GRUB doesn't replay the XFS log). GRUB can't write to LVM, so that rollback sticks until `forward`, from the old root,
+mounts the new LV and removes the block.
 
 The copy's `fixup` chroot sees the machine's own `/dev` (bound), `/proc` and `/sys`, all unmounted before the step
 ends and checked against `/proc/self/mountinfo` before the labels are fixed. That's an exception to the sandbox rules
@@ -1759,8 +1989,21 @@ on a harness host. Nothing under `/run/wend/new` is ever deleted: a failed reloc
 to 7.2 install), the new root on the first extra disk. After the steps, each followed by which root came up, the box's
 checks, its network and its firmware: the trial boot (new), a hard reset from outside, as a power cut (old: the trial
 was one-shot), the trial again (new), commit to the trial and reboot (new), a one-shot rollback (old), and one more
-reboot (new). Its run goes to `.wend/vm/` (schema `wend.vmrelocate/0`), with each stage, how long the steps and the
-trial boot took, and what the new root uses. `tools/test_relocate.py` checks preflight's refusals, the copy's fstab and
+reboot (new), then `rollback` (old, and old again after another reboot) and `forward` (new). Its run goes to
+`.wend/vm/` (schema `wend.vmrelocate/0`), with each stage, how long the steps and the trial boot took, and what the new
+root uses.
+
+**Walking a route on a relocated root.** `tools/vm.py --extra-disk GB --relocate replay ROUTE BOX` (with `--root-fs
+xfs-v4 --lvm` for a 7.0 to 7.2 install) relocates the box before the route's first hop: the steps, with `{route_mib}`
+the route's room (every hop's `hardware.<release>.disk_mib` plus its `boot_mib`, since `/boot` is a directory on the
+new root now, plus the `releases.<release>.transit.boot_mib` of each release a pinned fix passes through with
+`rpm.transit`), the trial boot, and `commit_trial`. Every hop then walks the new root as it walks any box, and each
+hop's reboot must also come up on it (`booted` is `new`, recorded as the hop's `root`). After the last hop, `rollback`
+must boot the old root with the box's checks passing as they did before anything moved, and `forward` the walked root
+again with them. The run (`wend.vmrun/0`) records `relocate`: the new disk, `route_mib` and every stage. The relocated
+root keeps the refreshed EL7 GRUB (`core.img` and the modules on the old `/boot`, the prefix the stub sets into the
+new root) for the whole route: the in-place route already boots Alma 10 on EL7's GRUB (BIOS, VM-proven), and nothing
+reinstalls GRUB on the way. `tools/test_relocate.py` checks preflight's refusals, the copy's fstab and
 kernel line, and the flip (with the real `grub-editenv`, and `grub-script-check` on the stub) without a machine.
 
 Between the flip and commit, the old root must not install a kernel: its grubby and `grub2-mkconfig` write through
@@ -1768,8 +2011,8 @@ Between the flip and commit, the old root must not install a kernel: its grubby 
 at once); a client will have to hold kernel updates while the stub is in charge.
 
 Not built yet: free extents in the volume group instead of a disk, a root on a plain partition, other v4 filesystems,
-UEFI (the same stub on the ESP), the route's GRUB reinstall at EL8 (see the doc), the client's preflight verdict,
-`wend commit` and `wend rollback`.
+UEFI (the same stub on the ESP), a GRUB reinstall onto the new root (so the old `/boot` can go; until then commit keeps
+it), the client's preflight verdict, `wend commit` and `wend rollback`.
 
 ## Open questions
 
@@ -1787,7 +2030,9 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
 4. **The `installed` predicate.** Plain `rpm -q` was enough on both boxes. No qualifier until a box needs one.
 5. **Release ids across vendors.** One ladder, vendor in the release id. A route may skip a release the adapter lists
    in `may_skip` (EL8, crossed inside one hop by `rpm.transit`; CentOS 8, where boxes start but no route lands).
-   Two vendors at one major version are two ladder entries, in the order a route could pass them.
+   Two vendors at one major version are two ladder entries, in the order a route could pass them, when a route
+   can land on both (CentOS 8 and AlmaLinux 8). A vendor that's only ever a starting point (Scientific Linux 7) stays
+   off the ladder and `joins` the rung its packages match.
 6. **Ordering and interaction.** Yes, once: on the hop to EL9, the database password rehash and the slow shutdown
    have to run on EL7, before `rpm.transit` replaces the server. Route order handles it (pre steps run in the order
    the route pins fixes), and the route says so. No fix needs to see another fix's effect in its `when`.

@@ -365,7 +365,7 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
             "release",
             "cleanup",
         ];
-        const COMMANDS: &[&str] = &["booted", "arm", "commit_trial", "rollback_next"];
+        const COMMANDS: &[&str] = &["booted", "arm", "commit_trial", "rollback_next", "rollback", "forward"];
         let want: BTreeSet<&str> = STEPS.iter().chain(COMMANDS).copied().collect();
         match r.as_object() {
             Some(o) if o.keys().map(String::as_str).collect::<BTreeSet<_>>() == want => {
@@ -405,6 +405,24 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
             if !get(t, "boot_mib").and_then(Value::as_u64).is_some_and(|m| m > 0) {
                 errs.push(format!(
                     "{wh}: releases.{r}.transit.boot_mib must be the MiB its kernel takes in /boot"
+                ));
+            }
+        }
+        // a release off the ladder that boxes start at, on the rung it joins: never a hop's target
+        if let Some(j) = get(rel, "joins") {
+            let on = j.as_str().and_then(|j| get(a, "releases").and_then(|rs| get(rs, j)));
+            let ok = !ladder.contains(r)
+                && j.as_str().is_some_and(|j| ladder.iter().any(|x| x == j))
+                && on.is_some_and(|on| {
+                    on.is_object() && get(on, "joins").is_none() && get(rel, "major") == get(on, "major")
+                })
+                && ["upgrade", "bootstrap", "transit", "reboot", "gpgkeys", "drop_keys"]
+                    .iter()
+                    .all(|k| get(rel, k).is_none());
+            if !ok {
+                errs.push(format!(
+                    "{wh}: releases.{r}.joins must name a ladder release with the same major, from a release off the \
+                     ladder with no upgrade, bootstrap, transit, reboot, gpgkeys or drop_keys"
                 ));
             }
         }
@@ -569,6 +587,16 @@ fn check_signed(a: &Doc, wh: &str) -> Vec<String> {
         }
     }
     errs
+}
+
+/// The ladder release a machine that starts at `release` stands on: the release itself, or the one it `joins`
+/// (SPEC "Adapter format"): Scientific Linux 7 is off the EL ladder and takes the routes from centos7.
+pub fn rung<'a>(a: &'a Doc, release: &'a str) -> &'a str {
+    get(a, "releases")
+        .and_then(|rs| get(rs, release))
+        .and_then(|r| get(r, "joins"))
+        .and_then(Value::as_str)
+        .unwrap_or(release)
 }
 
 /// Every release a route can boot a machine into: the ladder after its first release, less may_skip.

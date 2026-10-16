@@ -1,7 +1,8 @@
 # Rebuild and carry: design, first case old-XFS CentOS 7
 
-Status: design, 2026-10-13. Not normative yet. Each piece moves into SPEC.md in the PR that builds it, as AGENTS.md
-asks (spec before ops). Background: the "defunct to living" notes (option 2) and wend#67.
+Status: design, 2026-10-13; relocate itself (BIOS, onto a named disk) is built and in SPEC.md ("Relocate"), and so is
+walking a route on the relocated root. Each other piece moves into SPEC.md in the PR that builds it, as AGENTS.md asks
+(spec before ops). Where SPEC and this doc differ, SPEC is what's built. Background: the "defunct to living" notes (option 2) and wend#67.
 
 ## The problem this case brings
 
@@ -45,7 +46,7 @@ same, and Alma 9 is where these boxes already stop.
 Order of preference, picked by preflight from the machine's facts. Refused when none fits; the machine owner then adds
 a disk (on a VM, which most old fleets are, that's a minute in the hypervisor) and runs preflight again.
 
-1. **Free extents in the root's volume group**: a new LV, `<vg>/wend-<release>` (`root` stays the old one's name).
+1. **Free extents in the root's volume group**: a new LV, `<vg>/wend-root` (`root` stays the old one's name).
    A default EL7 install gives every extent to `root`, `swap` and maybe `home`, so this is the rare case.
 2. **An unused whole disk**: no partition table, no filesystem signature (`wipefs -n` empty), not mounted, not a PV,
    not in an md array, and named by the owner on the command line (`--new-root-disk /dev/disk/by-id/...`). Never
@@ -164,9 +165,14 @@ in-place route needs a UEFI step there too, the counterpart of the BIOS GRUB rei
 that step carries the rollback entry over. Preflight keeps refusing UEFI until a UEFI VM proof (that's already the
 rule for every route).
 
-**Afterwards, the route.** The in-place route walks the copy, booted, exactly as it walks any 7.3+ box. One gap shows
-up here that the in-place route has too: on BIOS, nothing reinstalls GRUB, so once the box is on EL8 or later
-(where BLS entries start) its `core.img` is still EL7's, which has no `blscfg`. Leapp runs `grub2-install` on BIOS
+**Afterwards, the route.** The in-place route walks the copy, booted, exactly as it walks any 7.3+ box. Built
+(SPEC "Walking a route on a relocated root") without the GRUB reinstall below: the in-place route's BIOS VM proof
+showed EL7's GRUB booting Alma 10 as it is, so the relocated root keeps the refreshed 7.9 GRUB for the whole walk, and
+a rollback from a release whose kernel can't mount the old `/boot` is a flag in a `grubenv` block of the new root's
+own, which the stub reads (sticky, since GRUB can't write to LVM; `forward` from the old root clears it). The rest of
+this section is the design for when the old `/boot` has to go (commit). The gap it names, which the in-place route has
+too: on BIOS, nothing reinstalls GRUB, so once the box is on EL8 or later (where BLS entries start) its `core.img` is
+still EL7's, which has no `blscfg`. Leapp runs `grub2-install` on BIOS
 for this. wend's in-place EL7 route needs the same harness step before its VM proof can pass; relocate inherits it.
 On a relocated box:
 
@@ -252,14 +258,15 @@ runner a public PR can trigger.
 
 The VM proof needs:
 
-- a box `el/centos7-lamp-xfsv4`: centos7-lamp's packages and checks, installed by kickstart from the 7.9 tree with
+- centos7-lamp's packages and checks, installed by kickstart from the 7.9 tree with
   every XFS made `-m crc=0 -n ftype=0` (exactly what 7.0 to 7.2's mkfs made; the format is the format), a 500 MB
-  `/boot`, LVM `root` and `swap` filling the disk as a default install does, and a second empty 30 GB disk. Its GRUB
+  `/boot`, LVM `root` and `swap` filling the disk as a default install does, and a second empty 30 GB disk. Built as
+  `tools/vm.py` command-line flags on the existing box (`--root-fs xfs-v4 --lvm --extra-disk 30`), not a box of its
+  own: a chroot box has no disks, so its packages and checks are centos7-lamp's either way. Its GRUB
   is 7.9's, so it can't show the old-`core.img` failure the GRUB refresh exists for. The refresh is unconditional for
   that reason, and a second VM case gets its `core.img` and modules from 7.0 media's grub2 (install from 7.0's
   `pxeboot`, or put 7.0's `grub2-install` output on the disk before the update) and boots all the way to the new root
-  to prove the refresh. Today the EL7 kickstart (remi's, landing separately) is ext3: the box needs `[vm]` keys for
-  the layout (`fs`, `mkfs_options`, `lvm`, `extra_disks`), which is a VM-tier spec change in its own PR;
+  to prove the refresh;
 - relocate as a vm.py step before the first hop, a forced reset during the trial boot (it must come back on the old
   root), the trial again, all the way to the new root's checks, and the commit-to-trial, then the route, rebooting as
   usual, and a rollback boot after the last hop (the old root's checks pass, as they did at the start);
@@ -270,11 +277,11 @@ The VM proof needs:
 ## Order of work
 
 1. This doc (spec PR).
-2. VM tier: layout keys in `[vm]`, the `el/centos7-lamp-xfsv4` VM box (box PR on its own).
-3. Harness: BIOS GRUB reinstall step for EL8+ hops (in-place route needs it anyway); remi proves the in-place
-   centos7-lamp VM run.
+2. VM tier: the layout as `tools/vm.py` flags (`--root-fs xfs-v4 --lvm --extra-disk GB`). Done.
+3. remi proves the in-place centos7-lamp VM run. Done, without a GRUB reinstall (EL7's GRUB boots Alma 10).
 4. Harness: `relocate` in `tools/vm.py` (adapter `[relocate]` table: the mkfs command, the GRUB stub and config
-   commands, the initramfs rebuild), with its SPEC section. remi proves BIOS: relocate, trial reset, route, rollback.
+   commands, the initramfs rebuild), with its SPEC section. remi proves BIOS: relocate, trial reset, rollback. Done.
+   Then the route on the relocated root (`replay --relocate`), with a sticky rollback after the last hop.
 5. Preflight: the relocate verdict (room, boot layout, moving filesystems) in the Rust client; `wend commit` and
    `wend rollback` once the client walks live roots.
 6. UEFI: OVMF box, the stub on the ESP, the EL8+ loader step, remi proof.
