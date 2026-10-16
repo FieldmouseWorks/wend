@@ -2059,10 +2059,10 @@ the old kernel can still read it. Where the new `/boot` goes depends on what the
   `/boot`. The old `grub.conf` becomes a stub with the same two entries and the same rules as relocate's: entry 0 loads
   the new `/boot`'s `grub.conf` (`configfile`), entry 1 the old one, saved as `grub.conf.wend-old`; the one-shot boot is
   `default saved` with `savedefault --once`. The copy's initramfs comes from the release's own tool (CentOS 5's
-  `mkinitrd`, CentOS 6's dracut), not host-only, so it finds the new root. This stub, and the new kernels' entries landing in the new `/boot`'s
-  config with the right paths (`hop.kernel_after` takes them from the default entry; EL6's grubby from `/boot`'s
-  mount), are the parts of this section with no proof yet, and the first thing step 3 of the order of work proves.
-  If one of them can't be made to work, that layout is refused, not patched over.
+  `mkinitrd`, CentOS 6's dracut), not host-only, so it finds the new root. This stub, and the new kernels' entries
+  landing in the new `/boot`'s config with the right paths (`hop.kernel_after` takes them from the default entry;
+  EL6's grubby from `/boot`'s mount), are the parts of this section with no proof yet, and the first thing step 3 of
+  the order of work proves. If one of them can't be made to work, that layout is refused, not patched over.
 
 #### Other places for the undo
 
