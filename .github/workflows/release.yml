@@ -18,9 +18,9 @@ on:
 permissions:
   contents: write
 
-# one release run at a time: two runs for the same version can't both pass the "tag is new" check
+# one run per version at a time; different versions don't wait on (or cancel) each other
 concurrency:
-  group: release
+  group: release-${{ inputs.version || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -36,10 +36,12 @@ jobs:
             [ "$GITHUB_REF" = refs/heads/main ] || { echo "dispatch it on main"; exit 1; }
             # bash's =~ matches the whole value, so a version with a newline in it (an extra GITHUB_ENV line) fails
             [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must look like v0.1.0"; exit 1; }
-            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" >/dev/null 2>&1; then
-              echo "tag $VERSION already exists; push a new one or dispatch a new version"; exit 1
-            fi
+            # claim the tag now, at the commit this run builds: creating a ref that exists fails, so a second run or a
+            # pushed tag can't take the version between this check and the publish
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$VERSION" -f "sha=$GITHUB_SHA" >/dev/null ||
+              { echo "tag $VERSION already exists; dispatch a new version"; exit 1; }
             echo "TAG=$VERSION" >> "$GITHUB_ENV"
+            echo "CLAIMED=1" >> "$GITHUB_ENV"
           else
             echo "TAG=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
           fi
@@ -68,13 +70,17 @@ jobs:
         # attach the files to it instead of creating it
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
-            # only a pushed tag's run attaches to a release that exists: a dispatched version was new when this run
-            # started, so a release there now is someone else's
+            # only a pushed tag's run attaches to a release that exists: a dispatched run claimed a new tag, so a
+            # release there now is someone else's
             [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || { echo "release $TAG appeared during this run"; exit 1; }
             gh release upload "$TAG" wend-x86_64-linux.tar.gz SHA256SUMS --clobber
           else
-            # a pushed tag must already exist; a dispatched one is made here, at the commit this run built
-            if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then where="--target $GITHUB_SHA"; else where=--verify-tag; fi
-            gh release create "$TAG" wend-x86_64-linux.tar.gz SHA256SUMS $where --title "wend $TAG" \
+            gh release create "$TAG" wend-x86_64-linux.tar.gz SHA256SUMS --verify-tag --title "wend $TAG" \
               --notes "The client and the atlas it reads, built from $GITHUB_SHA. What to run, and what it does and doesn't touch: README.md inside, or docs/try-it.md."
           fi
+      - name: give back a claimed tag the run couldn't release
+        if: failure() && env.CLAIMED == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG"
