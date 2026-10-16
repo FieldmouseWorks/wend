@@ -3,6 +3,7 @@
   python3 tools/archive.py ingest STORE [--fetched DIR]... [--blobs DIR]... [--tree DIR]... [--offline] [--runs DIR]
   python3 tools/archive.py verify STORE [--signers FILE]
   python3 tools/archive.py sign STORE --key KEY
+  python3 tools/archive.py add-tables STORE DIR
 
 ingest trusts nothing but the run files on main (runs/, result "pass"). Each hop's `sources` pins a top metadata file
 by sha256; the top file lists its indexes' checksums; an index lists its packages'. A file goes into the store only
@@ -30,6 +31,12 @@ evicted. verify rehashes every blob and alias and checks the index against them.
 
 ingest exits 1 when a referenced file wasn't found or couldn't be read, so a cron job notices. One ingest at a time:
 a second one exits 2 rather than wait.
+
+add-tables stores wend's own library tables (tools/sonames.py): each one an adapter in this checkout pins
+(`runtimes.<release>.libs`), read from DIR/<family>/<release>.txt.xz, only at its pinned sha256, indexed under
+wend:adapters/sonames/<family>/<release>.txt.xz. They're wend's data, not upstream's: what vouches for them is the pin
+in the adapter and, for their content, the index digests their own header lists. Exits 1 when one is missing or
+isn't the pinned file.
 
 sign signs each index file (index/<stamp>.json, index/latest.json) with ssh-keygen -Y sign, ed25519, namespace
 wend-archive, into <file>.sig beside it: what says which URLs the archive saw upstream serve, and when. KEY is the
@@ -769,6 +776,29 @@ def verify(path, signers=None):
     return 1 if bad else 0
 
 
+def add_tables(path, src):
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # run with -P, tools/ isn't on the path
+    import sonames  # its pins() reads the adapters in this checkout
+    s = Store(path, offline=True)
+    bad = 0
+    for fam, r, pin in sonames.pins():
+        p = f"{src}/{fam}/{r}.txt.xz"
+        try:
+            data = open(p, "rb").read()
+        except OSError as e:
+            print(f"  missing {p} ({e})")
+            bad += 1
+            continue
+        if f"sha256:{hexof('sha256', data)}" != pin:
+            print(f"  wrong   {p}: not the table adapters/{fam}.toml pins ({pin})")
+            bad += 1
+            continue
+        s.keep(f"wend:adapters/sonames/{fam}/{r}.txt.xz", data)
+    s.write_index()
+    print(f"stored {len(s.added)} new library tables; {bad} missing or wrong")
+    return 1 if bad else 0
+
+
 def lock_store(path, what):
     os.makedirs(path, exist_ok=True)
     lock = open(f"{path}/.lock", "w")
@@ -781,9 +811,17 @@ def lock_store(path, what):
 
 
 def main(argv):
-    if len(argv) < 2 or argv[0] not in ("ingest", "verify", "sign"):
+    if len(argv) < 2 or argv[0] not in ("ingest", "verify", "sign", "add-tables"):
         print(__doc__)
         return 2
+    if argv[0] == "add-tables":
+        if len(argv) != 3:
+            print(__doc__)
+            return 2
+        lock = lock_store(argv[1], "ingest")
+        if not lock:
+            return 2
+        return add_tables(argv[1], argv[2])
     if argv[0] in ("verify", "sign"):
         flag = "--signers" if argv[0] == "verify" else "--key"
         if len(argv) == 4 and argv[2] == flag:

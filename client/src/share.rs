@@ -310,6 +310,11 @@ pub fn build(
             bd["kernels"].as_array().map_or(0, Vec::len)
         ),
         format!("- Python 2 programs of its own: {py2}"),
+        format!(
+            "- program trees no package owns: {}; Python 2 module directories with modules no package owns: {}",
+            f["native"].as_array().map_or(0, Vec::len),
+            f["python2_modules"].as_array().map_or(0, Vec::len)
+        ),
         format!("- wend {} (`wend share`)", env!("CARGO_PKG_VERSION")),
         String::new(),
     ];
@@ -503,12 +508,13 @@ mod tests {
     #[test]
     fn a_machine_partway_along_a_route_takes_the_rest_of_it() {
         let a = Atlas::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("..")).unwrap();
-        let f = serde_json::json!({"schema": "wend.hardware/3", "arch": "x86_64", "userland_bits": 64,
+        let f = serde_json::json!({"schema": "wend.hardware/4", "arch": "x86_64", "userland_bits": 64,
             "cpu": {"model": "test", "features": ["cx16", "lahf_lm", "popcnt", "sse4_1", "sse4_2", "ssse3", "sse3"],
                     "hypervisor": true},
             "boot": "bios", "ram_mib": 4096, "free_mib": 40000,
             "boot_dir": {"separate": false, "total_mib": 40000, "free_mib": 40000, "kernels": []},
-            "blacklisted": [], "pci": [], "runtimes": [], "mounts": []});
+            "blacklisted": [], "pci": [], "runtimes": [], "python2_modules": [], "native": [], "kernel_owner": "kernel",
+            "mounts": []});
         let report =
             |fam: &str, rel: &str, route: Option<&str>| build(Some(&a), route, &sys(fam, rel), "k", &f, &[]).unwrap();
         // CentOS 6: no route starts there, the CentOS 5 one passes through

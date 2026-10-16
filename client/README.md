@@ -81,6 +81,11 @@ It also finds the machine's own Python 2 programs (SPEC "Runtime preflight"): ru
 anything with `libpython2` loaded (mod_wsgi), less what the distro's own packages own. When the route leaves Python 2
 behind before the hardware stops, it names the last release that ships it (adapters' `[runtimes]`, from
 `tools/runtimes.py`) and offers the choice: stop there, or shelter those programs and go on.
+It holds what those programs stand on to each release too: Python 2 modules no package owns, which a release that
+ships a different 2.x strands (pip's Django in `python2.6/site-packages` on the way to CentOS 7's 2.7), and native
+programs and libraries no package owns (`/opt`, `/usr/local`, another package manager's files), whose sonames must be
+ones the release ships (the library tables: in the release tarball, or `tools/sonames.py fetch` in a checkout;
+without them the check is skipped and says so). A running kernel no package owns gets a note.
 
 ### Verified fetching (`--run`)
 

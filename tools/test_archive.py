@@ -374,6 +374,18 @@ if sh.which("ssh-keygen"):  # the index signature (docs/archive.md, step 8)
     p = a("sign", s, "--key", f"{w}/other")
     p = a("verify", s, "--signers", signers)
     check(p.returncode == 1 and "UNSIGNED index/latest.json" in p.stdout, "a signature by a key not in signers is bad")
+# wend's own library tables: only at the digest an adapter in this checkout pins
+sys.path.insert(0, HERE)
+import sonames  # noqa: E402
+tables = sonames.pins()
+fam, rel, pin = tables[0]
+os.makedirs(f"{w}/tables/{fam}")
+open(f"{w}/tables/{fam}/{rel}.txt.xz", "wb").write(b"not the pinned table")
+p = subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", "add-tables", f"{w}/tstore", f"{w}/tables"],
+                   capture_output=True, text=True)
+check(p.returncode == 1 and f"{fam}/{rel}.txt.xz" in p.stdout and "wrong" in p.stdout and
+      not os.path.isdir(f"{w}/tstore/blob"),
+      "add-tables stores no table that isn't the pinned one")
 if sh.which("zstd"):  # EPEL 10 serves its primary only as .zst; CI's runners have zstd, not every laptop does
     sys.path.insert(0, HERE)
     import archive  # noqa: E402

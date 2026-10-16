@@ -17,11 +17,12 @@ const LEVEL_FEATURES: [&[&str]; 2] = [
 
 // ---------- gathering facts ----------
 
-/// What preflight knows about this machine (schema `wend.hardware/3`). Read from the hardware and /proc and /sys,
+/// What preflight knows about this machine (schema `wend.hardware/4`). Read from the hardware and /proc and /sys,
 /// never from the distro's tools, so it reads the same on CentOS 5 as on trixie. The one exception is who owns a
 /// Python 2 program (SPEC "Runtime preflight"): on rpm machines only `rpm` can read its database.
 pub fn gather() -> Result<Value, String> {
-    let runtimes = crate::runtime::gather_live()?;
+    let (runtimes, owners) = crate::runtime::gather_live()?;
+    let (modules, native) = crate::native::gather_live(&owners);
     let mut uts: libc::utsname = unsafe { std::mem::zeroed() };
     // SAFETY: uname fills the struct it is given.
     let arch = if unsafe { libc::uname(&mut uts) } == 0 {
@@ -60,7 +61,7 @@ pub fn gather() -> Result<Value, String> {
         })
         .map_or(Value::Null, |kb| json!(kb / 1024));
     Ok(json!({
-        "schema": "wend.hardware/3",
+        "schema": "wend.hardware/4",
         "arch": arch,
         "userland_bits": userland,
         "cpu": {"model": model, "features": features, "hypervisor": hypervisor},
@@ -72,6 +73,9 @@ pub fn gather() -> Result<Value, String> {
         "mounts": mounts(),
         "pci": pci_devices(Path::new("/sys/bus/pci/devices"), &module_files(&release)),
         "runtimes": runtimes,
+        "python2_modules": modules,
+        "native": native,
+        "kernel_owner": owners.of(&format!("/boot/vmlinuz-{release}")),
     }))
 }
 
@@ -736,12 +740,18 @@ const CLASS_ONLY_MAYBE: &[&str] = &["ata_generic", "ide_pci_generic", "pata_acpi
 
 /// Facts from a file are held to the shape `gather` writes: a check whose input is missing never passes by default.
 pub fn check_facts(f: &Value) -> Result<(), String> {
-    let bad = |what: &str| Err(format!("not a wend.hardware/3 facts file: {what}"));
-    if f["schema"] != "wend.hardware/3" {
+    let bad = |what: &str| Err(format!("not a wend.hardware/4 facts file: {what}"));
+    if f["schema"] != "wend.hardware/4" {
         return bad("schema (gather the facts again with this client: wend facts)");
     }
     if !crate::runtime::check(&f["runtimes"]) {
         return bad("runtimes");
+    }
+    if !crate::native::check(&f["python2_modules"], &f["native"]) {
+        return bad("python2_modules or native");
+    }
+    if !(f["kernel_owner"].is_string() || f["kernel_owner"].is_null()) {
+        return bad("kernel_owner");
     }
     let b = &f["boot_dir"];
     if !(b["separate"].is_boolean() && b["total_mib"].is_u64() && b["free_mib"].is_u64())
@@ -1255,11 +1265,33 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
                 ));
             }
         }
+        // a container boots no kernel of its own from /boot: nothing to note
+        let running = bd["kernels"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|k| k["running"] == json!(true))
+            .and_then(|k| k["version"].as_str());
+        if let (true, true, Some(running)) = (first, facts["kernel_owner"].is_null(), running) {
+            notes.push(if get(a, "backend").and_then(Value::as_str) == Some("rpm") {
+                format!(
+                    "the running kernel {running} belongs to no package (a hand-built kernel, or another package \
+                     manager's): the route doesn't carry it. This hop installs {h}'s kernel and makes it GRUB's \
+                     default; {running} stays as the fallback entry for that reboot, and the next hop removes its \
+                     files, modules and entry"
+                )
+            } else {
+                format!(
+                    "the running kernel {running} belongs to no package (a hand-built kernel, or another package \
+                     manager's): the route doesn't carry it, and this hop installs and boots {h}'s own kernel"
+                )
+            });
+        }
         first = false;
         let mut app: Vec<String> = vec![];
+        let rt = get(a, "runtimes").and_then(|r| get(r, h));
         if !own.is_empty() {
-            let ships: Vec<String> = get(a, "runtimes")
-                .and_then(|r| get(r, h))
+            let ships: Vec<String> = rt
                 .and_then(|t| get(t, "python2"))
                 .and_then(crate::atlas::strings)
                 .ok_or(format!("adapters/{fam}.toml has no runtimes.{h}.python2"))?;
@@ -1269,10 +1301,52 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
                     own.iter().map(crate::runtime::describe).collect::<Vec<_>>().join("; ")
                 ));
             } else {
+                let mut stranded: Vec<String> = vec![];
                 for u in &own {
                     let v = u["version"].as_str().unwrap_or("");
                     let prog = u["program"].as_str().unwrap_or("?").to_string();
-                    if !ships.iter().any(|s| s == v || s.starts_with(&format!("{v}."))) && !noted.contains(&prog) {
+                    if ships.iter().any(|s| s == v || s.starts_with(&format!("{v}."))) {
+                        continue;
+                    }
+                    // modules no package owns, for a 2.N the release replaces: its 2.M never reads them
+                    let mods: Vec<&Value> = facts["python2_modules"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|m| m["version"] == v)
+                        .collect();
+                    for m in &mods {
+                        let dir = m["dir"].as_str().unwrap_or("?").to_string();
+                        if stranded.contains(&dir) {
+                            continue;
+                        }
+                        let names: Vec<&str> = m["modules"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str)
+                            .collect();
+                        let shown = if names.len() > 8 {
+                            format!("{} and {} more", names[..8].join(", "), names.len() - 8)
+                        } else {
+                            names.join(", ")
+                        };
+                        let compiled = m["compiled"].as_u64().unwrap_or(0);
+                        app.push(format!(
+                            "{h} ships Python {} instead of {v}, and this machine's own programs on Python {v} import \
+                             modules no package owns from {dir} ({shown}; {} files{}). {h}'s Python never reads \
+                             them, so those programs lose their imports",
+                            ships.join(" and "),
+                            m["files"],
+                            if compiled > 0 {
+                                format!(", {compiled} of them compiled for {v} alone")
+                            } else {
+                                String::new()
+                            }
+                        ));
+                        stranded.push(dir);
+                    }
+                    if mods.is_empty() && !noted.contains(&prog) {
                         notes.push(format!(
                             "{prog} runs on Python {v}; {h} ships Python {} instead. Python 2 code mostly runs on a \
                              later 2.x, but check it does",
@@ -1281,6 +1355,43 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
                         noted.push(prog);
                     }
                 }
+            }
+        }
+        // native programs and libraries no package owns: every soname they load has to be one the release ships
+        let trees: Vec<&Value> = facts["native"].as_array().into_iter().flatten().collect();
+        if trees
+            .iter()
+            .any(|t| t["needs"].as_array().is_some_and(|n| !n.is_empty()))
+        {
+            let libs = sonames(atlas, fam, h)?;
+            if libs.is_none() {
+                // never a silent pass: the owner is told this hop's libraries weren't checked
+                notes.push(format!(
+                    "the check that this machine's own programs still find their libraries on {h} was skipped: {h}'s \
+                     library table isn't here (a release tarball carries it; in a checkout, run \
+                     python3 tools/sonames.py fetch)"
+                ));
+            }
+            for t in trees.iter().filter(|_| libs.is_some()) {
+                let missing: Vec<&str> = t["needs"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .filter(|n| !libs.as_ref().is_some_and(|l| l.contains(*n)))
+                    .collect();
+                if missing.is_empty() {
+                    continue;
+                }
+                app.push(format!(
+                    "{} ({} programs and libraries no package owns, such as {}) loads {}, which no package in {h} \
+                     ships: the route takes {} away",
+                    t["tree"].as_str().unwrap_or("?"),
+                    t["files"],
+                    t["sample"][0].as_str().unwrap_or("?"),
+                    missing.join(", "),
+                    if missing.len() == 1 { "it" } else { "them" }
+                ));
             }
         }
         if app.is_empty() && !runtime_broken {
@@ -1310,9 +1421,39 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
         "hops": out_hops,
         "lands_on": lands,
         "runtimes": own,
-        "keeps_runtimes_on": if own.is_empty() { Value::Null } else { json!(keeps) },
+        "keeps_runtimes_on": if own.is_empty() && !runtime_broken { Value::Null } else { json!(keeps) },
         "ok": lands.as_deref() == Some(to) && !runtime_broken,
     }))
+}
+
+/// A release's library table (SPEC "Runtime preflight"), held to the sha256 its adapter pins.
+fn sonames(atlas: &Atlas, fam: &str, h: &str) -> Result<Option<std::collections::HashSet<String>>, String> {
+    let want = atlas
+        .adapters
+        .get(fam)
+        .and_then(|a| get(a, "runtimes"))
+        .and_then(|r| get(r, h))
+        .and_then(|t| get(t, "libs"))
+        .and_then(Value::as_str)
+        .ok_or(format!("adapters/{fam}.toml has no runtimes.{h}.libs"))?;
+    // not in git: absent from a checkout until fetched, and then the check is skipped, never passed
+    let Some(xz) = atlas.sonames.get(&format!("{fam}/{h}")) else {
+        return Ok(None);
+    };
+    if format!("sha256:{}", crate::canon::sha256_hex(xz)) != want {
+        return Err(format!(
+            "the library table for {fam}/{h} here isn't the one adapters/{fam}.toml pins"
+        ));
+    }
+    let mut text = vec![];
+    lzma_rs::xz_decompress(&mut &xz[..], &mut text).map_err(|e| format!("the library table for {fam}/{h}: {e}"))?;
+    Ok(Some(
+        String::from_utf8_lossy(&text)
+            .lines()
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(str::to_string)
+            .collect(),
+    ))
 }
 
 /// How a verdict reads to the machine's owner.
@@ -1358,27 +1499,37 @@ pub fn report(v: &Value) -> String {
         if at(k) < at(l) {
             // the runtime goes before the hardware stops: the owner picks
             let stop = if k == from {
-                format!("stay on {from}: the route's first hop already leaves Python 2 behind")
+                format!("stay on {from}: the route's first hop already leaves them behind")
             } else {
-                format!("walk the route only to {k}, the last release that still ships Python 2")
+                format!("walk the route only to {k}, the last release they still run on")
             };
             let landing = if l == to {
                 to.to_string()
             } else {
                 format!("{l}, the furthest this hardware goes")
             };
-            s += &format!(
-                "This machine's own programs run on Python 2, and the route leaves it behind after {k}:\n{}\
-                 Pick one:\n  stop:    {stop}\n  shelter: upgrade to {landing}, and run those programs in a sealed \
-                 Python 2 userland of their own (SPEC \"Sheltering an app\"; not built yet)\n\
-                 Or port them to Python 3 and check again. Nothing was touched.\n",
-                v["runtimes"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .map(|u| format!("  {}\n", crate::runtime::describe(u)))
-                    .collect::<String>()
-            );
+            let py2: String = v["runtimes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|u| format!("  {}\n", crate::runtime::describe(u)))
+                .collect();
+            s += &if py2.is_empty() {
+                // only native programs and libraries no package owns: the problems above name them
+                format!(
+                    "This machine's own programs need libraries the route takes away after {k} (above).\nPick one:\n  \
+                     stop:    {stop}\n  shelter: upgrade to {landing}, and run those programs in a sealed userland \
+                     of {k} (SPEC \"Sheltering an app\"; not built yet)\nOr rebuild them against {to}'s libraries and \
+                     check again. Nothing was touched.\n"
+                )
+            } else {
+                format!(
+                    "This machine's own programs run on Python 2, and the route leaves them behind after {k}:\n{py2}\
+                     Pick one:\n  stop:    {stop}\n  shelter: upgrade to {landing}, and run those programs in a sealed \
+                     Python 2 userland of their own (SPEC \"Sheltering an app\"; not built yet)\n\
+                     Or port them to Python 3 and check again. Nothing was touched.\n"
+                )
+            };
             return s;
         }
     }
@@ -1428,7 +1579,30 @@ mod tests {
     }
 
     fn atlas() -> Atlas {
-        Atlas::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("..")).unwrap()
+        let mut a = Atlas::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("..")).unwrap();
+        // library tables aren't in git, so tests hold routes to small ones of their own, pinned like the real ones:
+        // every release ships libc, and EL6 and EL7 also ship OpenSSL 1.0's libssl.so.10
+        let mut tables = vec![];
+        for (fam, doc) in a.adapters.iter_mut() {
+            let Some(Value::Object(rt)) = doc.get_mut("runtimes") else {
+                continue;
+            };
+            for (r, t) in rt.iter_mut() {
+                if t.get("libs").is_none() {
+                    continue;
+                }
+                let mut names = vec!["libc.so.6"];
+                if r == "centos6" || r == "centos7" {
+                    names.extend(["libssl.so.10", "libcrypto.so.10"]);
+                }
+                let mut xz = vec![];
+                lzma_rs::xz_compress(&mut format!("# test\n{}\n", names.join("\n")).as_bytes(), &mut xz).unwrap();
+                t["libs"] = json!(format!("sha256:{}", crate::canon::sha256_hex(&xz)));
+                tables.push((format!("{fam}/{r}"), xz));
+            }
+        }
+        a.sonames = tables.into_iter().collect();
+        a
     }
 
     fn dev(slot: &str, class: &str, alias: &str, driver: Option<&str>) -> Value {
@@ -1437,11 +1611,11 @@ mod tests {
     }
 
     fn machine(features: &[&str], vm: bool, pci: Vec<Value>) -> Value {
-        json!({"schema": "wend.hardware/3", "arch": "x86_64", "userland_bits": 64,
+        json!({"schema": "wend.hardware/4", "arch": "x86_64", "userland_bits": 64,
                "cpu": {"model": "test", "features": features, "hypervisor": vm}, "boot": "bios",
                "ram_mib": 4096, "free_mib": 20000,
                "boot_dir": {"separate": false, "total_mib": 20000, "free_mib": 20000, "kernels": []},
-               "blacklisted": [], "pci": pci, "runtimes": [],
+               "blacklisted": [], "pci": pci, "runtimes": [], "python2_modules": [], "native": [], "kernel_owner": "kernel",
                "mounts": [{"mount": "/", "device": "/dev/sda1", "fstype": "ext3", "xfs_v4": null, "inode_size": 256}]})
     }
 
@@ -2177,6 +2351,94 @@ mod tests {
             &modern(vec![app("/usr/sbin/httpd", "2.7", "embedded", Some("httpd"))]),
         );
         assert_eq!(v["keeps_runtimes_on"], "centos7");
+    }
+
+    /// The rBuilder box (CentOS 6 under Conary): its Python 2.6 programs import a site-packages stack no package
+    /// owns, so CentOS 7's 2.7 strands them; its own Postgres loads EL6's libssl, which Alma 9 doesn't ship; and its
+    /// kernel belongs to no package. Without the stranded modules the 2.6 -> 2.7 step stays a note.
+    #[test]
+    fn stranded_modules_missing_libraries_and_a_foreign_kernel() {
+        let mut m = modern(vec![app("/usr/share/rmake/dispatcher", "2.6", "process", None)]);
+        m["python2_modules"] = json!([{"version": "2.6", "dir": "/usr/lib64/python2.6/site-packages",
+            "files": 11098, "compiled": 212, "modules": ["django", "gunicorn", "lxml", "twisted"]}]);
+        m["native"] = json!([
+            {"tree": "/opt/postgresql-9.2", "files": 40, "sample": ["/opt/postgresql-9.2/bin/postgres"],
+             "needs": ["libc.so.6", "libssl.so.10", "libcrypto.so.10"]},
+            {"tree": "/usr/local", "files": 1, "sample": ["/usr/local/bin/tool"], "needs": ["libc.so.6"]}]);
+        m["kernel_owner"] = Value::Null;
+        m["boot_dir"]["kernels"] = json!([{"version": "4.0.4-303.fc22.x86_64", "mib": 34, "running": true}]);
+        let v = verdict("centos5-to-alma10", &m);
+        let hop = |h: &str| {
+            v["hops"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|x| x["to"] == h)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(hop("centos6")["ok"], true, "{v:#}");
+        assert!(hop("centos6")["notes"].as_array().unwrap().iter().any(|n| n
+            .as_str()
+            .unwrap()
+            .starts_with("the running kernel 4.0.4-303.fc22.x86_64 belongs to no package")));
+        let c7 = hop("centos7");
+        let p = c7["runtime_problems"][0].as_str().unwrap();
+        assert!(
+            p.starts_with("centos7 ships Python 2.7.5 instead of 2.6") && p.contains("django, gunicorn"),
+            "{p}"
+        );
+        assert!(p.contains("212 of them compiled for 2.6 alone"), "{p}");
+        let a9 = hop("alma9")["runtime_problems"].as_array().unwrap().clone();
+        assert!(
+            a9.iter().any(|p| p
+                .as_str()
+                .unwrap()
+                .starts_with("/opt/postgresql-9.2 (40 programs and libraries no package owns")
+                && p.as_str().unwrap().contains("loads libssl.so.10, libcrypto.so.10,")),
+            "{a9:#?}"
+        );
+        assert!(
+            !a9.iter().any(|p| p.as_str().unwrap().starts_with("/usr/local")),
+            "{a9:#?}"
+        );
+        assert_eq!(v["keeps_runtimes_on"], "centos6", "{v:#}");
+        // no stranded modules: the minor bump is a note, and Python 2 ends at centos7
+        let mut m2 = m.clone();
+        m2["python2_modules"] = json!([]);
+        m2["native"] = json!([]);
+        let v2 = verdict("centos5-to-alma10", &m2);
+        assert_eq!(v2["keeps_runtimes_on"], "centos7", "{v2:#}");
+        // a native tree alone, with no Python 2 of its own, still stops the route where its library goes
+        let mut m3 = modern(vec![]);
+        m3["native"] = m["native"].clone();
+        let v3 = verdict("centos7-to-alma10", &m3);
+        assert_eq!(v3["keeps_runtimes_on"], "centos7", "{v3:#}");
+        assert_eq!(v3["ok"], false);
+        assert!(report(&v3).contains("/opt/postgresql-9.2"), "{}", report(&v3));
+        // a table that isn't here (not fetched into a checkout) skips that hop's check and says so; a table that
+        // isn't the pinned one is an error
+        let mut a = atlas();
+        a.sonames.remove("el/alma9");
+        let (_, r) = a.route("centos7-to-alma10").unwrap();
+        let v4 = evaluate(&a, r, &m3).unwrap();
+        let a9 = v4["hops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["to"] == "alma9")
+            .unwrap();
+        assert!(a9["runtime_problems"].as_array().unwrap().is_empty(), "{v4:#}");
+        assert!(a9["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().starts_with(
+                "the check that this machine's own programs still find their libraries on alma9 was skipped"
+            )));
+        a.sonames.insert("el/alma9".into(), b"other bytes".to_vec());
+        let (_, r) = a.route("centos7-to-alma10").unwrap();
+        assert!(evaluate(&a, r, &m3).is_err());
     }
 
     /// Ubuntu keeps Python 2 in universe through jammy; Debian through bullseye, with a note where an app's own

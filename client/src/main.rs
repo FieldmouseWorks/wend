@@ -10,6 +10,7 @@ mod check;
 mod fetch;
 mod hardware;
 mod hop;
+mod native;
 mod runtime;
 mod sandbox;
 mod share;
