@@ -31,8 +31,7 @@ checks against the live services. As of 2026-10-14, at the route versions record
 from scratch on BIOS: `etch-web`, `etch-db`, `trusty-db`, `trusty-web-updated`, `centos5-web`, `centos7-lamp` and
 `centos8-lamp`. All three Ubuntu boxes have also passed on UEFI. The results are on
 [wend#13](https://github.com/FieldmouseWorks/wend/issues/13), [#84](https://github.com/FieldmouseWorks/wend/pull/84)
-(UEFI) and [#92](https://github.com/FieldmouseWorks/wend/pull/92) (CentOS 8); #13 stays open until the VM tier runs
-in CI.
+(UEFI) and [#92](https://github.com/FieldmouseWorks/wend/pull/92) (CentOS 8).
 
 **Agents and contributors: start with [AGENTS.md](AGENTS.md).** Clone, plug in any model, discover a path, prove it
 with the same command CI runs, and open a PR.
