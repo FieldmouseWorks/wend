@@ -2205,8 +2205,11 @@ Then:
    fixes' preconditions are evaluated, and the fixes that hold must be exactly the ones that fired in the rehearsal.
    Any difference refuses the hop there, before its first command, and the old system is the next boot.
 4. **Every reboot is a trial.** Before each reboot (after a hop, and between the transaction and the post steps on a
-   hop whose release says `reboot = "before-post"`, centos6) it arms the stub's one-shot boot of the new root
-   (relocate's `arm`). The stub's default stays the old system until `wend commit`, so a new kernel that hangs or
+   hop whose release says `reboot = "before-post"`, centos6) it arms the stub's one-shot boot of the new root. It
+   runs on the new root, whose fstab no longer has the old `/boot`, so this is `arm_new`: `arm`'s write, made the
+   way `commit_trial` and `rollback_next` make theirs (mount the old boot volume by `BOOT_UUID`, write the flag
+   there, sync, freeze and thaw, unmount); relocate's own `arm` writes the running root's `/boot` and only arms
+   from the old system. The stub's default stays the old system until `wend commit`, so a new kernel that hangs or
    panics, a power cut, or anyone's reboot at a bad moment brings back the old system, whole. When `reboot` returns
    and the old boot is still running two minutes later (the first boot onto systemd, and EL8 to EL9), it does what the
    VM tier does from outside, from inside: stops every process but itself (`kill -TERM -1`, then `-KILL`), syncs,
@@ -2344,9 +2347,9 @@ is a proven start: the only C6 rung proved so far is a C5 box upgraded to C6.
 | judging a boot | `tools/vm.py` `walk_vm` (`NET`, `kernel_newest`, `FW_NOW`, the checks) |
 | gap report | `wend report`, `wend share` |
 
-New: relocate's free-extents placement, a plain-partition root on a spare disk, and its GRUB legacy stub and `/boot`
-(the adapter's `[relocate]` table, reviewed as a spec change); relocate run by the client; the plan and the state file;
-the generated checks; the rehearsal's kernel downloads. Nothing else.
+New: relocate's free-extents placement, a plain-partition root on a spare disk, its GRUB legacy stub and `/boot`,
+and the new root's `arm_new` (the adapter's `[relocate]` table, reviewed as a spec change); relocate run by the
+client; the plan and the state file; the generated checks; the rehearsal's kernel downloads. Nothing else.
 
 ### Order of work
 
