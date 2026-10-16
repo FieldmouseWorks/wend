@@ -1,0 +1,33 @@
+name: Box report
+description: What wend's preflight says about a real machine of yours. `wend share` fills this in for you.
+title: "box: <release>"
+labels: [box-report]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks. This tells us what real machines look like, which no test box can. Nothing here changed your machine.
+        If you got here without `wend share`, see docs/try-it.md: it fills in every field and scrubs the hostname,
+        users, home directories and addresses. Read the report before you submit it.
+  - type: input
+    id: system
+    attributes: { label: Release, description: "From `wend share`.", placeholder: "CentOS Linux release 7.9.2009 (Core)" }
+    validations: { required: true }
+  - type: input
+    id: route
+    attributes: { label: Route it was judged against, description: "From `wend share`; none if no route starts there.", placeholder: centos7-to-alma10 }
+  - type: textarea
+    id: details
+    attributes: { label: Report, description: "From `wend share`. Attach wend-box-<id>.md if it says to." }
+    validations: { required: true }
+  - type: textarea
+    id: server
+    attributes:
+      label: What does it run? (optional)
+      description: The services and local setup that matter (web server, database, an app of your own). This is what a matching test box would need.
+  - type: dropdown
+    id: walk
+    attributes:
+      label: Would you walk a copy of it? (optional)
+      description: On a snapshot or clone, never the machine itself.
+      options: ["No", "Maybe, with help", "Yes, I have a spare copy"]

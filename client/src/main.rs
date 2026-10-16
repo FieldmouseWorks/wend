@@ -12,6 +12,7 @@ mod hardware;
 mod hop;
 mod runtime;
 mod sandbox;
+mod share;
 mod walk;
 
 use atlas::{get, str_of, Atlas, Doc};
@@ -47,6 +48,11 @@ wend: walk a proven upgrade route on a machine. No model, no network beyond your
                                     firmware, memory, disk, and the disk and network drivers each release's
                                     kernel has, and whether each still ships the Python 2 the machine's own
                                     programs run. Says the furthest release it can land on; exits 1 short of the end
+  wend share [ROUTE] [--redact WORD]...
+                                    a box report to post: this machine's release, facts and preflight against
+                                    the route that starts there (or ROUTE), with its hostname, users, home
+                                    directories, IPs and secrets scrubbed. Shows it all, saves it, and prints a
+                                    prefilled issue link; sends nothing. Read-only, root needed, like facts
   wend parity INPUT.json            machine output for client/parity.py (the Python engine must agree)
 
 Options: --atlas DIR (default: the current directory, laid out like the wend repo).
@@ -99,6 +105,7 @@ fn main() -> ExitCode {
         offline: flag(&mut args, "--offline"),
         live: flag(&mut args, "--live"),
     };
+    let redact: Vec<String> = std::iter::from_fn(|| opt(&mut args, "--redact")).collect();
     let Some(cmd) = args.first().cloned() else {
         println!("{USAGE}");
         return ExitCode::from(2);
@@ -118,6 +125,23 @@ fn main() -> ExitCode {
         };
         println!("{}", serde_json::to_string_pretty(&f).unwrap());
         return ExitCode::SUCCESS;
+    }
+    if cmd == "share" && args.len() <= 2 {
+        // the atlas is optional: without one the report has the facts and no verdict
+        let atlas = Atlas::load(&root).ok();
+        if let Some(a) = &atlas {
+            if let Err(e) = preflight(a) {
+                eprintln!("wend: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+        return match share::cmd_share(atlas.as_ref(), args.get(1).map(String::as_str), &redact) {
+            Ok(_) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("wend: {e}");
+                ExitCode::FAILURE
+            }
+        };
     }
     let atlas = match Atlas::load(&root) {
         Ok(a) => a,
