@@ -246,6 +246,12 @@ lists in `may_skip`: a route may leave it out. EL lists `alma8`, because the box
 (`rpm.transit`) on the hop to EL9, and `centos8`, where boxes start but no route lands. No health check runs on a
 release the route skips. `wend discover` leaves `may_skip` releases out of a new route's hops.
 
+A route starts on the ladder. A release off it can still be where boxes start, if the adapter says which rung it
+**joins** (`releases.<id>.joins`): a rebuild of a release on the ladder, same major, same packages from another
+vendor. EL's `sl7` (Scientific Linux 7) joins `centos7`, so an SL7 box takes every route from `centos7` and is a
+decoy for its fixes; what SL does differently is handled by fixes gated on SL's own packages (`sl-release`). No hop
+ever lands on a joined release, so it has no `upgrade`, `bootstrap`, `transit`, `reboot` or keys of its own.
+
 A route is a **map, not a playlist**. It pins a *set* of fixes by id, and the client applies whichever ones hold on
 each hop. In dep-lab, stitching fixes from three different runs into one map beat replaying any single run, and the
 same map served two different boxes. Which fixes actually fired on which box is recorded in runs, not in the route.
@@ -360,7 +366,7 @@ them to plain shapes, since every value lands in commands the harness runs as ro
 
 ### Decoys
 
-Every box that starts at a route's `from` release is a decoy for each of that route's fixes that doesn't claim it (a box
+Every box that starts at a route's `from` release (or at a release that joins it there, see Route) is a decoy for each of that route's fixes that doesn't claim it (a box
 that starts elsewhere can't walk the route, so CI doesn't replay it there). On a passing run, each pinned fix must have
 fired on exactly the boxes in its `fires_on`. If it fired somewhere unclaimed, it's a decoy hit and the PR fails. If it
 didn't fire where it claims, that fails too: the claim is stale or the precondition broke. dep-lab's round 3 is the
@@ -419,7 +425,8 @@ See `adapters/el.toml`. Notes that matter:
 
 - The ladder crosses vendors: `centos5 centos6 centos7 centos8 alma8 alma9 alma10`. A family isn't a distro; release
   ids carry the vendor. CentOS 8 and AlmaLinux 8 sit side by side: routes from EL7 and earlier skip both (EL8 is
-  crossed inside the hop to EL9), and a route from CentOS 8 goes straight to EL9 with its own dnf.
+  crossed inside the hop to EL9), and a route from CentOS 8 goes straight to EL9 with its own dnf. Scientific Linux 7
+  (`sl7`) is off the ladder and joins it at `centos7` (see Route): its boxes take the CentOS 7 routes.
 - The package manager changes mid-ladder (yum through 7, dnf from 8), and so does the upgrade verb: `upgrade` on EL6,
   `distro-sync` from EL7 (EL6's grep is newer than EL7's). Each release can set its own `upgrade` in the adapter.
 - The harness owns `/etc/yum.repos.d` and clears the vendor .repo files every release package drops (they point at
@@ -920,7 +927,7 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `writable`, `managed` | the allowlists (globs) named by `write-file` (`writable`) and the `rpm.*` file ops (`managed`). Nothing under `/etc/wend/` is ever on either |
 | `[kv."<path>"]` | the files `kv.*` may touch: `keys` (the only keys it may set or unset; never one that grants access) and `set` (false for files with sections, which only take `kv.unset`) |
 | `force` | required: the `force-remove` flags this family allows, a subset of its backend's (apt: `depends`, `remove-essential`; rpm: `depends`, `scripts`) |
-| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`; each an http(s) URL, or host/path through the `[mirror]` shim), and optional `releases.<id>.upgrade` like rpm's. rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader"). apt: a start release may have `releases.<id>.install` too, and any release `signed` (see "Signed packages") |
+| `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`; each an http(s) URL, or host/path through the `[mirror]` shim), and optional `releases.<id>.upgrade` like rpm's. rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader"), `joins` (a start release off the ladder: the ladder release with the same major whose routes its boxes take; see Route). apt: a start release may have `releases.<id>.install` too, and any release `signed` (see "Signed packages") |
 | `[addons.<name>]` | rpm: `marker`, `vendor`, `repos` (see "Add-on repositories") |
 | `[mirror]` | `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts): every rpm repo, and an apt mirror given as host/path |
 | `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), `autoremove`, `obsolete`, `installed_list`, `kernel_newest` (the VM tier's newest-kernel query); apt also `apt_conf`, the harness's apt config, and `apt_unsigned`, the lines added on hops into unsigned releases |
@@ -1782,7 +1789,9 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
 4. **The `installed` predicate.** Plain `rpm -q` was enough on both boxes. No qualifier until a box needs one.
 5. **Release ids across vendors.** One ladder, vendor in the release id. A route may skip a release the adapter lists
    in `may_skip` (EL8, crossed inside one hop by `rpm.transit`; CentOS 8, where boxes start but no route lands).
-   Two vendors at one major version are two ladder entries, in the order a route could pass them.
+   Two vendors at one major version are two ladder entries, in the order a route could pass them, when a route
+   can land on both (CentOS 8 and AlmaLinux 8). A vendor that's only ever a starting point (Scientific Linux 7) stays
+   off the ladder and `joins` the rung its packages match.
 6. **Ordering and interaction.** Yes, once: on the hop to EL9, the database password rehash and the slow shutdown
    have to run on EL7, before `rpm.transit` replaces the server. Route order handles it (pre steps run in the order
    the route pins fixes), and the route says so. No fix needs to see another fix's effect in its `when`.

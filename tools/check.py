@@ -75,6 +75,14 @@ def load_adapters():
     return {os.path.basename(p)[:-5]: tomllib.load(open(p, "rb")) for p in glob.glob(f"{ROOT}/adapters/*.toml")}
 
 
+def rung(adapter, release):
+    """The ladder release a box that starts at `release` stands on: the release itself, or the one it `joins` (SPEC
+    "Adapter format"): Scientific Linux 7 is not on the EL ladder, and its boxes take the routes from centos7."""
+    rel = (adapter or {}).get("releases", {}).get(release)
+    j = rel.get("joins") if isinstance(rel, dict) else None
+    return j if isinstance(j, str) else release
+
+
 # ---------- validation ----------
 
 def check_adapter(a, where):
@@ -120,6 +128,15 @@ def check_adapter(a, where):
         t = rel.get("transit") if isinstance(rel, dict) else None  # SPEC "Hardware preflight": its kernel in /boot
         if t is not None and not (isinstance(t, dict) and type(t.get("boot_mib")) is int and t["boot_mib"] > 0):
             errs.append(f"{where}: releases.{r}.transit.boot_mib must be the MiB its kernel takes in /boot")
+        # a release off the ladder that boxes start at, on the rung it joins: never a hop's target, so nothing a hop
+        # into it would run
+        if isinstance(rel, dict) and "joins" in rel:
+            on = a.get("releases", {}).get(rel["joins"]) if isinstance(rel["joins"], str) else None
+            if r in a.get("ladder", []) or not isinstance(on, dict) or rel["joins"] not in a.get("ladder", []) or \
+                    "joins" in on or rel.get("major") != on.get("major") or \
+                    set(rel) & {"upgrade", "bootstrap", "transit", "reboot", "gpgkeys", "drop_keys"}:
+                errs.append(f"{where}: releases.{r}.joins must name a ladder release with the same major, from a "
+                            "release off the ladder with no upgrade, bootstrap, transit, reboot, gpgkeys or drop_keys")
     if a.get("backend") == "apt":  # SPEC "Adapter format": the mirrors land in root shell commands as {mirror}
         for k in ("archive", "current"):
             u = a.get("releases", {}).get(k)
@@ -565,7 +582,7 @@ def check_box(doc, adapters, where):
     if doc.get("schema") != "wend.box/0":
         return [f"{where}: schema must be 'wend.box/0'"]
     a = adapters.get(doc.get("family"))
-    if not a or doc.get("release") not in a["ladder"]:
+    if not a or rung(a, doc.get("release")) not in a["ladder"]:
         errs.append(f"{where}: unknown family or release")
     for k in ("packages", "customize", "roles"):
         if k not in doc:
@@ -743,10 +760,19 @@ def decoy_errors(runs, routes_by_id, fixes_by_id):
     return errs
 
 
-def starts(box, route):
-    """A route is replayed on the boxes of its family that start at its `from` (tools/affected.py, CONTRIBUTING.md).
-    A box that starts elsewhere can't walk it: a centos7 box can't take a centos5 route's hop to centos6."""
-    return box.get("family") == route.get("family") and box.get("release") == route.get("from")
+_ADAPTERS = {}
+
+
+def starts(box, route, adapters=None):
+    """A route is replayed on the boxes of its family that start at its `from` (tools/affected.py, CONTRIBUTING.md),
+    or at a release that joins the ladder there (an sl7 box takes the centos7 routes). A box that starts elsewhere
+    can't walk it: a centos7 box can't take a centos5 route's hop to centos6."""
+    if adapters is None:
+        if not _ADAPTERS:
+            _ADAPTERS.update(load_adapters())
+        adapters = _ADAPTERS
+    return box.get("family") == route.get("family") and \
+        rung(adapters.get(box.get("family")), box.get("release")) == route.get("from")
 
 
 def pairing_errors(routes, boxes, fixes):
