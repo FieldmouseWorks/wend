@@ -111,6 +111,7 @@ tools/
   port_oldlinux.py   one-off import of the dep-lab Debian results, with a lossless round-trip proof
   test_*.py          the tools' own tests; test_check.py holds the broken fixes the gate must refuse
 docs/validation/     the first end-to-end test: verify on both boxes, and Opus refilling a deleted fix
+docs/try-it.md       for a machine's owner: get the client, run `wend share` (read-only), post the report
 docs/archive.md      design: the wend archive (wend#19), every byte proven routes reference, by sha256
 docs/rebuild-and-carry.md  design: moving a machine whose filesystem a later kernel can't mount (old-XFS CentOS 7)
 client/              the Rust client (client/README.md): reads, checks and compiles the atlas exactly as tools/
@@ -121,12 +122,21 @@ client/              the Rust client (client/README.md): reads, checks and compi
   workflows/gate.yml the PR gate: dco, schema, plan, replay, decoys, claude-review
   workflows/client.yml the Rust client: build, test, parity with tools/
   workflows/gaps.yml the gap loop: dedupe reports, triaged gap -> wanted.toml PR, ping the reporter on close
+  workflows/release.yml on a version tag: the static client and the atlas it reads, as a release download
   workflows/remi-proof.yml the remi-proof status: holds PRs a chroot can't judge until remi passes their head
-  pull_request_template.md, ISSUE_TEMPLATE/route-gap.yml, ISSUE_TEMPLATE/wanted.md, dependabot.yml
+  pull_request_template.md, ISSUE_TEMPLATE/route-gap.yml, ISSUE_TEMPLATE/box-report.yml,
+  ISSUE_TEMPLATE/wanted.md, dependabot.yml
   CODEOWNERS         a human on everything; the owner on tools/, adapters/, SPEC.md, .github/
 ```
 
-## Try it
+## Try it on your server
+
+Got an old CentOS, Debian or Ubuntu machine? `sudo ./wend share`, from the
+[latest release](https://github.com/FieldmouseWorks/wend/releases/latest), reads it without changing anything, says
+whether its release's route would get it to the end, and writes a report with the hostname, users and addresses
+scrubbed, plus a prefilled issue link. [docs/try-it.md](docs/try-it.md) says what it reads and what it scrubs.
+
+## Try the map
 
 ```
 python3 wend check                  # schema check plus the gate's own tests, no root needed

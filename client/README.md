@@ -42,6 +42,24 @@ sudo wend walk etch-to-trixie --root /srv/etch --checks boxes/debian/etch-web/bo
 `/proc` and `/sys` inside the root, never the host's. EL routes fetch through `tools/mirror.py` on port 8085 (old yum
 can't speak the vault's TLS), as the Python harness does; `walk` checks it is up before it starts.
 
+### Box reports (`wend share`)
+
+```
+sudo wend share                                  # this machine's release, facts and preflight, scrubbed, as a report
+sudo wend share centos7-to-alma10 --redact acme  # against a route you name; --redact scrubs a word of your own too
+```
+
+For a machine's owner who wants to say what their machine is without handing it over
+([docs/try-it.md](../docs/try-it.md)). It names the release from the files the adapters read (`/etc/redhat-release`, `/etc/lsb-release`,
+`/etc/debian_version`), runs preflight against every route that starts there, scrubs the hostname (inside LVM names
+too), login accounts from `UID_MIN` up, home directories, cron spool names, addresses and anything shaped like a
+secret, prints the whole report, saves it as `wend-box-<id>.md`, and prints a prefilled `box-report.yml` issue link.
+It sends nothing and, like `facts`, touches nothing. Without an atlas beside it, the report has the facts and no
+verdict.
+
+The [release](https://github.com/FieldmouseWorks/wend/releases/latest) packs the static binary with the atlas it reads
+(`.github/workflows/release.yml`, on a `v*` tag), so a machine's owner needs no checkout.
+
 ### Hardware preflight
 
 ```

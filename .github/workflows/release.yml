@@ -1,0 +1,42 @@
+# Releases: the client a machine's owner downloads. A maintainer pushes a tag (v0.1.0); this builds the static binary
+# from that commit, packs it with the atlas it reads (adapters and their driver tables, fixes, routes, runs), checks
+# the pack loads and passes its own check, and publishes both files on the tag's release. The asset names carry no
+# version, so releases/latest/download/wend-x86_64-linux.tar.gz always names the newest one.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup target add x86_64-unknown-linux-musl
+      - name: static binary
+        working-directory: client
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+      - name: pack
+        run: |
+          d=wend-x86_64-linux
+          mkdir -p "$d/adapters"
+          cp client/target/x86_64-unknown-linux-musl/release/wend "$d/"
+          cp adapters/*.toml "$d/adapters/"
+          cp -r adapters/drivers "$d/adapters/"
+          cp -r fixes routes runs LICENSE-MIT LICENSE-APACHE "$d/"
+          cp docs/try-it.md "$d/README.md"
+          (cd "$d" && ./wend check)
+          tar czf "$d.tar.gz" "$d"
+          sha256sum "$d.tar.gz" > SHA256SUMS
+          cat SHA256SUMS
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" wend-x86_64-linux.tar.gz SHA256SUMS --verify-tag --title "wend $TAG" \
+            --notes "The client and the atlas it reads, built from $GITHUB_SHA. What to run, and what it does and doesn't touch: README.md inside, or docs/try-it.md."
