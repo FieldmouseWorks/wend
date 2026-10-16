@@ -625,8 +625,10 @@ S=$(sed -n 's/^SELINUX=//p' $N/etc/selinux/config 2>/dev/null || true) T=$(sed -
 ''']
 # The old /boot's grub.cfg becomes a stub (the old config moves beside it as grub.cfg.wend-old): entry 0 is the new
 # root, entry 1 the old one. Its own variables in the old /boot's grubenv, never saved_entry or next_entry: wend_next
-# is a one-shot boot, cleared before it's taken, else wend_default, and the old root unless that says 0. The old root
-# stays the default; arming the trial is the last write; then fsfreeze, because GRUB doesn't replay the XFS log.
+# is a one-shot boot, cleared before it's taken, then wend_rollback, read from the new root (a rollback asked for there
+# sticks: GRUB can't write to LVM, and a kernel that can't mount the old /boot can't ask through its grubenv), else
+# wend_default, and the old root unless that says 0. The old root stays the default; arming the trial is the last
+# write; then fsfreeze, because GRUB doesn't replay the XFS log.
 flip = ['''
 set -e
 . /var/lib/wend/relocate.env
@@ -641,6 +643,13 @@ set wend_boot=$root
 set wend_prefix=$prefix
 export wend_boot wend_prefix
 load_env wend_default wend_next
+insmod lvm
+insmod xfs
+if search --no-floppy --fs-uuid --set=wend_new NEW_UUID; then
+  if [ -f ($wend_new)/var/lib/wend/relocate.grubenv ]; then
+    load_env -f ($wend_new)/var/lib/wend/relocate.grubenv wend_rollback
+  fi
+fi
 if [ "${wend_next}" = 0 ]; then
   set default=0
   set wend_next=
@@ -649,6 +658,8 @@ elif [ "${wend_next}" = 1 ]; then
   set default=1
   set wend_next=
   save_env wend_next
+elif [ "${wend_rollback}" = 1 ]; then
+  set default=1
 elif [ "${wend_default}" = 0 ]; then
   set default=0
 else
@@ -667,7 +678,7 @@ menuentry 'wend rollback: the old root' {
   configfile /grub2/grub.cfg.wend-old
 }
 EOF
-sed -i "s/NEW_UUID/$NEW_UUID/" $B/grub.cfg.wend-stub && cp -p $B/grub.cfg $B/grub.cfg.wend-old && mv $B/grub.cfg.wend-stub $B/grub.cfg || exit 1
+sed -i "s/NEW_UUID/$NEW_UUID/g" $B/grub.cfg.wend-stub && cp -p $B/grub.cfg $B/grub.cfg.wend-old && mv $B/grub.cfg.wend-stub $B/grub.cfg || exit 1
 grub2-editenv $B/grubenv set wend_next=0 && touch /var/lib/wend/relocate-flipped && sync && fsfreeze -f /boot && fsfreeze -u /boot
 ''']
 release = ['''
@@ -684,10 +695,15 @@ if [ ! -e /var/lib/wend/relocate-flipped ] && [ -s /var/lib/wend/relocate-stoppe
 booted = '''. /var/lib/wend/relocate.env; L=$(lvs --noheadings -o lv_name "$(findmnt -no SOURCE /)" 2>/dev/null | tr -d ' '); if [ "$L" = wend-root ]; then xfs_info / | grep -q crc=1 && echo new || echo "new, but not XFS v5"; elif [ "$L" = "$OLD_LV" ]; then echo old; else echo "neither: ${L:-$(findmnt -no SOURCE /)}"; fi'''
 # while the stub is in charge: from the old root, try the new one once more (arm); from the new root, make it the
 # default (commit_trial: the old /boot is mounted, since the copy's fstab doesn't), or boot the old root once
-# (rollback_next)
+# (rollback_next). Both mount the old /boot, which only a kernel that reads XFS v4 can (not EL10's). So a rollback
+# from any release is `rollback`: on the new root, a grubenv block of its own the stub reads, wend_rollback=1, written
+# by hand (no grub2-editenv needed) and flushed with a freeze of / from one process; it sticks until `forward`, from
+# the old root, mounts the new LV and removes it.
 arm = '''grub2-editenv /boot/grub2/grubenv set wend_next=0 && sync && fsfreeze -f /boot && fsfreeze -u /boot'''
 commit_trial = '''. /var/lib/wend/relocate.env; O=/run/wend/oldboot; mkdir -p $O && mount "UUID=$BOOT_UUID" $O || exit 1; grub2-editenv $O/grub2/grubenv set wend_default=0 && grub2-editenv $O/grub2/grubenv unset wend_next && sync && fsfreeze -f $O && fsfreeze -u $O; r=$?; umount $O && exit $r'''
 rollback_next = '''. /var/lib/wend/relocate.env; O=/run/wend/oldboot; mkdir -p $O && mount "UUID=$BOOT_UUID" $O || exit 1; grub2-editenv $O/grub2/grubenv set wend_next=1 && sync && fsfreeze -f $O && fsfreeze -u $O; r=$?; umount $O && exit $r'''
+rollback = '''L=$(lvs --noheadings -o lv_name "$(findmnt -no SOURCE /)" 2>/dev/null | tr -d ' '); [ "$L" = wend-root ] || { echo "not booted from the relocated root ($L)"; exit 1; }; F=/var/lib/wend/relocate.grubenv; { printf '# GRUB Environment Block\nwend_rollback=1\n'; head -c 1024 /dev/zero | tr '\0' '#'; } | head -c 1024 > $F.new && mv $F.new $F && sync && xfs_io -x -c freeze -c thaw /'''
+forward = '''. /var/lib/wend/relocate.env; N=/run/wend/new; lvchange -ay "$VG/wend-root" && mkdir -p $N && mount "/dev/$VG/wend-root" $N || exit 1; rm -f $N/var/lib/wend/relocate.grubenv && [ ! -e $N/var/lib/wend/relocate.grubenv ]; r=$?; umount $N && exit $r'''
 
 [predicates]
 # "installed" is rpm -q: EL has no removed-but-configured state. Multiple versions (kernels) still count as installed.

@@ -929,7 +929,7 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear. Whatever a `pattern`, `list` or `table` says, every value a fix passes through one must also match `[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*`: no quote, whitespace, backslash, glob character, `%`, any of `` $`;&|<>(){}~ ``, or leading `-` |
 | `[checks]` | universal health checks: `pkgdb` is a command; `current` and `services` are described in words and built by the harness from the box |
 | `[hardware]` | required: what a machine needs before a route boots it into each release (see "Hardware preflight"): `boot`, `old_kernels`, and a table per release a route can boot into |
-| `[relocate]` | optional: relocate's steps (lists of scripts: `preflight`, `refresh`, `place`, `copy`, `fixup`, `flip`, `release`, `cleanup`) and the commands between boots (`booted`, `arm`, `commit_trial`, `rollback_next`); see "Relocate" |
+| `[relocate]` | optional: relocate's steps (lists of scripts: `preflight`, `refresh`, `place`, `copy`, `fixup`, `flip`, `release`, `cleanup`) and the commands between boots (`booted`, `arm`, `commit_trial`, `rollback_next`, `rollback`, `forward`); see "Relocate" |
 | `[box]` | how to build a fresh box of this family (rpm: `seeds`, the packages to bootstrap a root from; apt: optional `debootstrap_script`, a script name under the host's `/usr/share/debootstrap/scripts`) |
 
 These checks narrow what an adapter lets fixes do (ops, force flags, argument values). They don't judge an adapter's
@@ -1733,7 +1733,9 @@ The steps, in order, each a list of scripts that run inside the booted machine a
   finds the new root by UUID and sets `prefix` there before loading its config (so every module and the `grubenv`
   after that are the new root's); entry 1 loads the old config as it was. The stub keeps its own variables in the old
   `/boot`'s `grubenv`, never the configs' `saved_entry` or `next_entry`: `wend_next`, if 0 or 1, is a one-shot boot
-  GRUB clears before taking it; otherwise `wend_default`, and the old root unless it says 0. If entry 0 fails inside
+  GRUB clears before taking it; otherwise `wend_rollback` from a `grubenv` block of the new root's own
+  (`/var/lib/wend/relocate.grubenv`), which means the old root when it says 1; otherwise `wend_default`, and the old
+  root unless it says 0. If entry 0 fails inside
   GRUB, it falls back to entry 1 (`fallback=1`), which first puts `root` and `prefix` back to the old `/boot` as GRUB
   found it (a failed entry 0 may have moved them), so a remote machine doesn't sit at a menu. The flip leaves the old
   root the default, arms the trial (`wend_next=0`) as its last write, then freezes and thaws `/boot` so the XFS log
@@ -1743,7 +1745,11 @@ The steps, in order, each a list of scripts that run inside the booted machine a
 
 Between boots: `booted` says which root is up (`new`, which must be XFS v5, or `old`); `arm` tries the new root once
 more from the old one; `commit_trial` makes the new root the default (it mounts the old `/boot`, which the copy's
-fstab doesn't); `rollback_next` boots the old root once.
+fstab doesn't); `rollback_next` boots the old root once. Those three mount the old `/boot`, which a kernel without
+XFS v4 (EL10's) can't. So `rollback`, from the new root on any release, writes `wend_rollback=1` into the new root's
+own `grubenv` block (by hand, so no release's `grub2-editenv` is needed, then a freeze of `/` from one process, since
+GRUB doesn't replay the XFS log). GRUB can't write to LVM, so that rollback sticks until `forward`, from the old root,
+mounts the new LV and removes the block.
 
 The copy's `fixup` chroot sees the machine's own `/dev` (bound), `/proc` and `/sys`, all unmounted before the step
 ends and checked against `/proc/self/mountinfo` before the labels are fixed. That's an exception to the sandbox rules
@@ -1754,8 +1760,21 @@ on a harness host. Nothing under `/run/wend/new` is ever deleted: a failed reloc
 to 7.2 install), the new root on the first extra disk. After the steps, each followed by which root came up, the box's
 checks, its network and its firmware: the trial boot (new), a hard reset from outside, as a power cut (old: the trial
 was one-shot), the trial again (new), commit to the trial and reboot (new), a one-shot rollback (old), and one more
-reboot (new). Its run goes to `.wend/vm/` (schema `wend.vmrelocate/0`), with each stage, how long the steps and the
-trial boot took, and what the new root uses. `tools/test_relocate.py` checks preflight's refusals, the copy's fstab and
+reboot (new), then `rollback` (old, and old again after another reboot) and `forward` (new). Its run goes to
+`.wend/vm/` (schema `wend.vmrelocate/0`), with each stage, how long the steps and the trial boot took, and what the new
+root uses.
+
+**Walking a route on a relocated root.** `tools/vm.py --extra-disk GB --relocate replay ROUTE BOX` (with `--root-fs
+xfs-v4 --lvm` for a 7.0 to 7.2 install) relocates the box before the route's first hop: the steps, with `{route_mib}`
+the route's room (every hop's `hardware.<release>.disk_mib` plus its `boot_mib`, since `/boot` is a directory on the
+new root now, plus the `releases.<release>.transit.boot_mib` of each release a pinned fix passes through with
+`rpm.transit`), the trial boot, and `commit_trial`. Every hop then walks the new root as it walks any box, and each
+hop's reboot must also come up on it (`booted` is `new`, recorded as the hop's `root`). After the last hop, `rollback`
+must boot the old root with the box's checks passing as they did before anything moved, and `forward` the walked root
+again with them. The run (`wend.vmrun/0`) records `relocate`: the new disk, `route_mib` and every stage. The relocated
+root keeps the refreshed EL7 GRUB (`core.img` and the modules on the old `/boot`, the prefix the stub sets into the
+new root) for the whole route: the in-place route already boots Alma 10 on EL7's GRUB (BIOS, VM-proven), and nothing
+reinstalls GRUB on the way. `tools/test_relocate.py` checks preflight's refusals, the copy's fstab and
 kernel line, and the flip (with the real `grub-editenv`, and `grub-script-check` on the stub) without a machine.
 
 Between the flip and commit, the old root must not install a kernel: its grubby and `grub2-mkconfig` write through
@@ -1763,8 +1782,8 @@ Between the flip and commit, the old root must not install a kernel: its grubby 
 at once); a client will have to hold kernel updates while the stub is in charge.
 
 Not built yet: free extents in the volume group instead of a disk, a root on a plain partition, other v4 filesystems,
-UEFI (the same stub on the ESP), the route's GRUB reinstall at EL8 (see the doc), the client's preflight verdict,
-`wend commit` and `wend rollback`.
+UEFI (the same stub on the ESP), a GRUB reinstall onto the new root (so the old `/boot` can go; until then commit keeps
+it), the client's preflight verdict, `wend commit` and `wend rollback`.
 
 ## Open questions
 
