@@ -24,8 +24,8 @@ replays of the same routes will replace them. The Debian route began as the dep-
 crosses yum to dnf, the /usr merge, two package-manager bootstraps and a vendor switch; Opus 5.5 found the path in all
 5 of its dep-lab runs, and replays are free.
 
-CI replays every route in a chroot, which proves the userland only. Kernels, bootloaders and the first real boot are
-tested by the VM tier (`tools/vm.py`, SPEC.md "VM tier"), which the maintainer runs: each box is installed by its
+CI replays a route in a chroot whenever a change touches it, which proves the userland only. Kernels, bootloaders and
+the first real boot are tested by the VM tier (`tools/vm.py`, SPEC.md "VM tier"), which the maintainer runs: each box is installed by its
 release's own installer in a KVM guest, and every hop ends with a real reboot and the box's checks against the live
 services. As of 2026-10-14, at the route versions recorded there, these boxes have passed it from scratch on BIOS:
 `etch-web`, `etch-db`, `trusty-db`, `trusty-web-updated`, `centos5-web`, `centos7-lamp` and `centos8-lamp`. All three
