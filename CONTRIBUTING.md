@@ -76,7 +76,8 @@ The `remi-proof` commit status carries the verdict to GitHub (`.github/workflows
 PRs pass at once: the gate's replays are their proof. A PR stays pending until someone with push access records remi's
 verdict on its exact head commit when it:
 
-- touches `tools/`, `adapters/`, `boxes/` or `wend`;
+- touches `tools/`, `adapters/`, `boxes/` or `wend`, or the workflows behind the required checks (`gate.yml`,
+  `remi-proof.yml`; Dependabot's own action bumps excepted);
 - adds, changes, removes, pins or unpins a fix a chroot can't judge (before or after the change), because it works
   on what a chroot never boots: a `net.*` or `fs.layout` op, or one that names a kernel, bootloader, initramfs,
   storage, init, network or firewall package or unit in any argument (`install`'s packages, `rpm.transit`'s

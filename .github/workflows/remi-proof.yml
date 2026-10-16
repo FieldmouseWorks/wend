@@ -27,7 +27,8 @@ name: remi-proof
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    # edited: a new base branch changes what the PR's diff holds
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
   workflow_dispatch:
     # re-judge an open PR, e.g. one opened before this workflow existed
     inputs:
@@ -58,6 +59,9 @@ jobs:
           # what remi proves and CI can't: the harness the gate copies from base, the boxes its VM tier installs, and
           # the entry point that runs them
           HARNESS = re.compile(r"(tools/|adapters/|boxes/|wend$)")
+          # the workflows that define the required checks run from the PR (gate.yml) or become the next judge
+          # (this file): nothing in CI judges a change to them either. Dependabot's own action bumps are exempt.
+          CHECKS = re.compile(r"\.github/workflows/(gate|remi-proof)\.yml$")
           # package and unit names (a prefix of the name, any case)
           BOOTNET = re.compile(
               r"(kernel|linux-(image|headers|modules|generic|server|virtual|signed)|linux-firmware|grub|shim|efibootmgr"
@@ -136,6 +140,20 @@ jobs:
                       return "unreadable"
               return "unreadable" if not docs else next(filter(None, map(blind, docs)), None)
 
+          def dependabot():
+              """Only Dependabot touched this PR: GitHub says Dependabot opened it, and every commit is authored and
+              committed by dependabot[bot] with a signature GitHub verified (gate.yml's dco job, the same rule)."""
+              bot = "49699333+dependabot[bot]@users.noreply.github.com"
+              if pr["user"]["login"] != "dependabot[bot]":
+                  return False
+              commits, page = [], 1
+              while batch := api(f"repos/{REPO}/pulls/{PR}/commits?per_page=100&page={page}"):
+                  commits += batch
+                  page += 1
+              return bool(commits) and all(
+                  c["commit"]["author"]["email"] == bot and c["commit"]["committer"]["email"] in (bot, "noreply@github.com")
+                  and c["commit"]["verification"]["verified"] for c in commits)
+
           if not re.fullmatch(r"[0-9]+", PR):
               sys.exit(f"not a PR number: {PR}")
           pr = api(f"repos/{REPO}/pulls/{PR}")
@@ -171,7 +189,7 @@ jobs:
               why.append("the API didn't list every changed file")
           for f in files:
               names = [f["filename"]] + ([f["previous_filename"]] if f.get("previous_filename") else [])
-              if any(HARNESS.match(n) for n in names):
+              if any(HARNESS.match(n) for n in names) or (any(CHECKS.match(n) for n in names) and not dependabot()):
                   why.append(f"it changes {f['filename']}")
                   continue
               # a fix is judged by what it was and what it is now: turning a network fix into a harmless one
