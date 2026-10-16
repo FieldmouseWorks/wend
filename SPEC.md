@@ -2081,12 +2081,12 @@ Weighed for owners with no free extents and no spare disk, none in the first bui
   machines than any other place.
 - **An external disk** (a USB SSD). Turned around: the old system is relocated out onto it and boots from it through
   the stub's entry 1, and the hops walk the internal disk in place, so production never runs from USB. Rollback boots
-  the old system from the external disk, then copies it back. Open question 2.
+  the old system from the external disk, then copies it back. Open question 1.
 - **An admin box on the same network.** The rehearsal's copy already lives there, pinned to the plan's fingerprint,
   so keeping it as the machine's restore image costs nothing; one admin host could hold one for each machine in a
   closet. It isn't a bootable undo: a rollback would be a boot entry whose initramfs brings up the network and pulls
   the image back (rsync or nbd), which CentOS 5's `mkinitrd` can't do and EL6's and EL7's dracut can only with work.
-  Open question 3. Until then, the copy the rehearsal took is the backup the docs tell the owner to keep.
+  Open question 2. Until then, the copy the rehearsal took is the backup the docs tell the owner to keep.
 - **A cloud drive.** A backup, not an undo: getting a root back from it means a rescue boot and a long download, so
   it can't bring the old system back by itself after a panic. Not part of this design.
 
@@ -2292,9 +2292,14 @@ The VM tier's proven layouts, nothing else. Today that refuses:
   path for that isn't designed);
 - everything hardware preflight already refuses (32-bit, a CPU or driver the landing release drops, `/boot` too small).
 
+- a database server's data directory (MySQL, MariaDB, PostgreSQL, from the running server's own settings), or the
+  state directory of any other running service a hop migrates, on a filesystem other than `/`: the hops' data
+  upgrades (`mysql.upgrade-data`) would rewrite it in place, and a rollback would hand the old server files a newer one
+  had already migrated.
+
 Other mounted filesystems (`/home`, `/srv`, a data disk) aren't copied: both roots mount them, and since only one
-root runs at a time, the new system's writes to them stay after a rollback. `share` and `upgrade` say so, and name
-them. The proof includes one.
+root runs at a time, the new system's writes to them stay after a rollback. That's fine for files and fatal for a
+database, hence the refusal above. `share` and `upgrade` say so, and name them. The proof includes one.
 
 ### Proof
 
@@ -2361,18 +2366,15 @@ by itself after each boot.
 
 ### Open questions
 
-1. **Shared data mounts.** `/home`, `/srv` and data disks are shared by both roots, so a rollback keeps what the new
-   system wrote there. Is saying so enough, or should preflight refuse a database whose data directory is on one
-   (a rollback would hand MariaDB 10.11's files to MySQL 5.0)?
-2. **An external disk as the undo.** BIOS has to boot it through GRUB on the internal disk, under a device order that
+1. **An external disk as the undo.** BIOS has to boot it through GRUB on the internal disk, under a device order that
    changes when it's unplugged, and a cheap thumb drive is too slow to run a server from even for a day. Refuse below
    a write rate measured during the copy? How long may the old system run from it after a rollback before it's copied
    back?
-3. **The admin box's image as the undo.** Worth building as the fallback for machines with no room, instead of
+2. **The admin box's image as the undo.** Worth building as the fallback for machines with no room, instead of
    refusing them, only if remi proves a restore entry that brings back the old system after a hop broken on purpose,
    with no one at the console. Which transport (rsync over ssh, nbd), and what does CentOS 5 do, whose initramfs has
    no network?
-4. **How close is a match.** A fleet plan matches on packages, checks and preconditions, not on config files.
+3. **How close is a match.** A fleet plan matches on packages, checks and preconditions, not on config files.
    Should it also compare the files the rpm database says differ from their packages (`rpm -Va`'s config changes),
    less the ones every machine has its own of (network, hostname, host keys)? Stricter means more rehearsals; looser
    leans on the canary and the undo.
