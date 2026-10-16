@@ -150,7 +150,7 @@ def check_adapter(a, where):
     for n, ad in a.get("addons", {}).items():  # SPEC "Add-on repositories": their values land in root shell commands
         rels = a.get("releases", {})
         if a.get("backend") != "rpm" or not re.fullmatch(r"[a-z0-9]+", n) or not isinstance(ad, dict) or \
-                not {"marker", "vendor", "repos"} <= set(ad) <= {"marker", "vendor", "repos", "gpgkeys"} or \
+                not {"marker", "vendor", "repos"} <= set(ad) <= {"marker", "vendor", "repos", "gpgkeys", "libs"} or \
                 not isinstance(ad["marker"], str) or \
                 not re.fullmatch(PKG, ad["marker"]) or not isinstance(ad["vendor"], str) or \
                 not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 .,-]*", ad["vendor"]) or not isinstance(ad["repos"], dict) or \
@@ -158,6 +158,11 @@ def check_adapter(a, where):
                                            n not in rels[r].get("repos", {}) for r, u in ad["repos"].items()):
             errs.append(f"{where}: addons.{n} needs a plain name, a marker package, a plain vendor, and repos "
                         "(host/path) for releases the adapter has, on the rpm backend")
+        elif not (isinstance(ad.get("libs", {}), dict) and all(
+                r in ad["repos"] and isinstance(p, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", p)
+                for r, p in ad.get("libs", {}).items())):
+            errs.append(f"{where}: addons.{n}.libs must pin (sha256:<hex>) library tables for releases the add-on has "
+                        "a repo for")
     if a.get("addons") and "{addons}" not in str(a.get("hop", {}).get("set_release", "")):
         errs.append(f"{where}: an adapter with addons must put {{addons}} in hop.set_release")
     for k in ("kernel_before", "kernel_after"):
@@ -324,19 +329,25 @@ def driver_table_errors(fam, a, where):
 
 
 def library_table_errors(fam, a, where, root=None):
-    """A release's library table isn't in git (tools/sonames.py): one that isn't here is fine, one that is (a release
-    tarball's adapters/sonames/, a checkout's .wend/sonames/) is at the pinned hash."""
+    """A library table isn't in git (tools/sonames.py): one that isn't here is fine, one that is (a release tarball's
+    adapters/sonames/, a checkout's .wend/sonames/) is at the pinned hash. Releases pin theirs in runtimes.<r>.libs,
+    add-ons theirs for a release in addons.<name>.libs.<r>."""
     root = root or ROOT
     errs = []
-    rt = a.get("runtimes")
-    for r, t in (rt if isinstance(rt, dict) else {}).items():
-        if not isinstance(t, dict) or not isinstance(t.get("libs"), str):
-            continue
-        for p in (f"{root}/adapters/sonames/{fam}/{r}.txt.xz", f"{root}/.wend/sonames/{fam}/{r}.txt.xz"):
+    pins = []
+    for r, t in (a.get("runtimes") if isinstance(a.get("runtimes"), dict) else {}).items():
+        if isinstance(t, dict) and isinstance(t.get("libs"), str):
+            pins.append((r, f"runtimes.{r}.libs", t["libs"]))
+    for n, ad in (a.get("addons") if isinstance(a.get("addons"), dict) else {}).items():
+        libs = ad.get("libs") if isinstance(ad, dict) else None
+        pins += [(f"{r}.{n}", f"addons.{n}.libs.{r}", p) for r, p in (libs if isinstance(libs, dict) else {}).items()
+                 if isinstance(p, str)]
+    for table, field, pin in pins:
+        for p in (f"{root}/adapters/sonames/{fam}/{table}.txt.xz", f"{root}/.wend/sonames/{fam}/{table}.txt.xz"):
             if os.path.isfile(p):
                 got = "sha256:" + hashlib.sha256(open(p, "rb").read()).hexdigest()
-                if got != t["libs"]:
-                    errs.append(f"{where}: runtimes.{r}.libs: the library table {fam}/{r}.txt.xz here has sha256 "
+                if got != pin:
+                    errs.append(f"{where}: {field}: the library table {fam}/{table}.txt.xz here has sha256 "
                                 f"{got[7:19]}..., not the pinned one")
                 break
     return errs

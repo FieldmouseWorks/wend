@@ -474,7 +474,8 @@ See `adapters/el.toml`. Notes that matter:
 Most real EL machines carry more than the vendor's repos: EPEL above all (EPEL's own mirror statistics are how the
 stuck EL7 fleet is counted). The adapter's `[addons.<name>]` tables name the ones the harness knows how to carry:
 `marker` (the package whose presence means the box uses it, EPEL: `epel-release`), `vendor` (the rpm `VENDOR` of its
-packages, EPEL: `Fedora Project`) and `repos` (release id = host/path, through the shim, like `releases.*.repos`).
+packages, EPEL: `Fedora Project`), `repos` (release id = host/path, through the shim, like `releases.*.repos`) and,
+optionally, `libs` (release id = the sha256 of the add-on's library table for that release, "Runtime preflight").
 
 - Every hop's `set_release` appends `{addons}`: for each add-on with a repo for the release being entered, the add-on's
   repo goes into the harness's repo file as `[<release>-<name>]` if its marker is installed at that moment. A box
@@ -1222,6 +1223,9 @@ Facts also list what those programs stand on that no package owns, so the route 
   objects (`.o`, kernel modules) and files under `/usr/src` aren't listed.
 - `kernel_owner`: the package that owns the running kernel's `/boot/vmlinuz-<release>`, or null (a hand-built kernel,
   or another package manager's).
+- `repo_packages`: the packages that own the machine's repository definitions (`/etc/yum.repos.d/*`,
+  `/etc/apt/sources.list` and `sources.list.d/*`), such as `epel-release`: an add-on's marker package (SPEC "Add-on
+  repositories") shows up here when the machine has it.
 
 **Whose it is.** A user is the machine's own when its program belongs to no package, or it is `embedded` (whatever
 code mod_wsgi runs is the owner's: the distro never configures it). The distro's own Python 2 programs (yum,
@@ -1238,11 +1242,15 @@ through jammy (2.7.18, universe), EL through EL8 (2.7.18, the `python27` module,
 itself.
 
 Each release also has a library table, `libs`: the sha256 of `<family>/<release>.txt.xz`, which
-`tools/sonames.py` writes from the release's own indexes (EL: every `(64bit)` soname a package in the release's repos,
-or an add-on repository the adapter names for it, provides; Debian and Ubuntu: every shared library file in the
-linker's own directories, from the Contents index of the components the hop uses). A library that only another
-component ships (Debian's contrib or non-free, such as a vendor GPU library) isn't in the table, so a program that
-loads it reads as losing it: check those by hand.
+`tools/sonames.py` writes from the release's own indexes (EL: every `(64bit)` soname a package in the release's repos
+provides; Debian and Ubuntu: every shared library file in the linker's own directories, from the Contents index of the
+components the hop uses). A library that only another component ships (Debian's contrib or non-free, such as a vendor
+GPU library) isn't in the table, so a program that loads it reads as losing it: check those by hand.
+
+An add-on repository has a table of its own for each release it has a repo for, `<family>/<release>.<add-on>.txt.xz`,
+pinned as `[addons.<add-on>].libs.<release>`. A hop keeps an add-on only on a machine with its marker package, so
+preflight adds the add-on's sonames to the release's only when `repo_packages` lists the marker: a machine without
+`epel-release` isn't credited with EPEL's libraries.
 
 The tables stay out of git: the repository keeps only their pins. Each table is in the wend archive at its pin
 (`blob/sha256/<2>/<hex>`, stored by `tools/archive.py add-tables`) and in the release tarball under

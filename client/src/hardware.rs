@@ -76,7 +76,28 @@ pub fn gather() -> Result<Value, String> {
         "python2_modules": modules,
         "native": native,
         "kernel_owner": owners.of(&format!("/boot/vmlinuz-{release}")),
+        "repo_packages": repo_packages(Path::new("/"), &owners),
     }))
+}
+
+/// The packages that own the machine's repository definitions (`epel-release` for EPEL's): a hop keeps an add-on
+/// repository only where its marker package is installed (SPEC "Add-on repositories"), and preflight counts the
+/// add-on's libraries only then.
+fn repo_packages(root: &Path, owners: &crate::runtime::Owners) -> Vec<String> {
+    let mut files = vec!["/etc/apt/sources.list".to_string()];
+    for d in ["/etc/yum.repos.d", "/etc/apt/sources.list.d"] {
+        for e in fs::read_dir(root.join(&d[1..])).into_iter().flatten().flatten() {
+            files.push(format!("{d}/{}", e.file_name().to_string_lossy()));
+        }
+    }
+    let mut out: Vec<String> = files
+        .iter()
+        .filter(|f| root.join(&f[1..]).is_file())
+        .filter_map(|f| owners.of(f))
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// The filesystems driver tables say whether a kernel mounts (`fs` lines); a mount of any other type isn't checked.
@@ -753,6 +774,12 @@ pub fn check_facts(f: &Value) -> Result<(), String> {
     if !(f["kernel_owner"].is_string() || f["kernel_owner"].is_null()) {
         return bad("kernel_owner");
     }
+    if !f["repo_packages"]
+        .as_array()
+        .is_some_and(|a| a.iter().all(Value::is_string))
+    {
+        return bad("repo_packages");
+    }
     let b = &f["boot_dir"];
     if !(b["separate"].is_boolean() && b["total_mib"].is_u64() && b["free_mib"].is_u64())
         || !b["kernels"].as_array().is_some_and(|a| {
@@ -1363,7 +1390,7 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
             .iter()
             .any(|t| t["needs"].as_array().is_some_and(|n| !n.is_empty()))
         {
-            let libs = sonames(atlas, fam, h)?;
+            let libs = libraries(atlas, fam, h, facts)?;
             if libs.is_none() {
                 // never a silent pass: the owner is told this hop's libraries weren't checked
                 notes.push(format!(
@@ -1426,16 +1453,47 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
     }))
 }
 
-/// A release's library table (SPEC "Runtime preflight"), held to the sha256 its adapter pins.
-fn sonames(atlas: &Atlas, fam: &str, h: &str) -> Result<Option<std::collections::HashSet<String>>, String> {
-    let want = atlas
-        .adapters
-        .get(fam)
-        .and_then(|a| get(a, "runtimes"))
-        .and_then(|r| get(r, h))
-        .and_then(|t| get(t, "libs"))
-        .and_then(Value::as_str)
-        .ok_or(format!("adapters/{fam}.toml has no runtimes.{h}.libs"))?;
+/// The sonames a hop to `h` leaves this machine (SPEC "Runtime preflight"): the release's own table, plus each
+/// add-on's table for `h` when the machine has the add-on's marker package (the hop keeps only those add-ons). None
+/// when one of those tables isn't here.
+fn libraries(
+    atlas: &Atlas,
+    fam: &str,
+    h: &str,
+    facts: &Value,
+) -> Result<Option<std::collections::HashSet<String>>, String> {
+    let a = atlas.adapters.get(fam).ok_or(format!("no adapter {fam}"))?;
+    let installed: Vec<&str> = facts["repo_packages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let mut tables = vec![h.to_string()];
+    for (n, ad) in get(a, "addons").and_then(Value::as_object).into_iter().flatten() {
+        let marker = get(ad, "marker").and_then(Value::as_str).unwrap_or_default();
+        if installed.contains(&marker) && get(ad, "repos").is_some_and(|r| get(r, h).is_some()) {
+            tables.push(format!("{h}.{n}"));
+        }
+    }
+    let pins = crate::check::library_pins(a);
+    let mut out = std::collections::HashSet::new();
+    for t in tables {
+        let want = pins
+            .iter()
+            .find(|p| p.0 == t)
+            .map(|p| p.2.as_str())
+            .ok_or(format!("adapters/{fam}.toml pins no library table {t}"))?;
+        match sonames(atlas, fam, &t, want)? {
+            Some(s) => out.extend(s),
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(out))
+}
+
+/// One library table, held to the sha256 its adapter pins.
+fn sonames(atlas: &Atlas, fam: &str, h: &str, want: &str) -> Result<Option<std::collections::HashSet<String>>, String> {
     // not in git: absent from a checkout until fetched, and then the check is skipped, never passed
     let Some(xz) = atlas.sonames.get(&format!("{fam}/{h}")) else {
         return Ok(None);
@@ -1550,6 +1608,39 @@ pub fn report(v: &Value) -> String {
 mod tests {
     use super::*;
 
+    /// The packages that own the machine's repo definitions, read from dpkg's lists on a mounted root.
+    #[test]
+    fn repo_packages_are_whoever_owns_the_repo_files() {
+        let d = std::env::temp_dir().join(format!("wend-repos-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        let put = |p: &str, t: &str| {
+            let f = d.join(p);
+            fs::create_dir_all(f.parent().unwrap()).unwrap();
+            fs::write(f, t).unwrap();
+        };
+        put("var/lib/dpkg/info/apt.list", "/etc/apt/sources.list.d\n");
+        put(
+            "var/lib/dpkg/info/vendor-archive.list",
+            "/etc/apt/sources.list.d/vendor.list\n",
+        );
+        put("var/lib/dpkg/info/base-files.list", "/etc/apt/sources.list\n");
+        put(
+            "etc/apt/sources.list",
+            "deb http://deb.debian.org/debian bookworm main\n",
+        );
+        put(
+            "etc/apt/sources.list.d/vendor.list",
+            "deb http://vendor.example/ stable main\n",
+        );
+        put(
+            "etc/apt/sources.list.d/mine.list",
+            "deb http://mine.example/ stable main\n",
+        );
+        let o = crate::runtime::Owners::new(&d);
+        assert_eq!(repo_packages(&d, &o), vec!["base-files", "vendor-archive"]);
+        let _ = fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn aliases_match_like_the_kernel() {
         let m = |p: &str, s: &str| alias_match(p.as_bytes(), s.as_bytes());
@@ -1601,6 +1692,23 @@ mod tests {
                 tables.push((format!("{fam}/{r}"), xz));
             }
         }
+        // EPEL, an add-on, ships jemalloc on each release it has a repo for
+        for (fam, doc) in a.adapters.iter_mut() {
+            let Some(Value::Object(addons)) = doc.get_mut("addons") else {
+                continue;
+            };
+            for (n, ad) in addons.iter_mut() {
+                let rels: Vec<String> = ad["repos"].as_object().unwrap().keys().cloned().collect();
+                let mut libs = serde_json::Map::new();
+                for r in rels {
+                    let mut xz = vec![];
+                    lzma_rs::xz_compress(&mut &b"# test\nlibjemalloc.so.2\n"[..], &mut xz).unwrap();
+                    libs.insert(r.clone(), json!(format!("sha256:{}", crate::canon::sha256_hex(&xz))));
+                    tables.push((format!("{fam}/{r}.{n}"), xz));
+                }
+                ad["libs"] = Value::Object(libs);
+            }
+        }
         a.sonames = tables.into_iter().collect();
         a
     }
@@ -1616,6 +1724,7 @@ mod tests {
                "ram_mib": 4096, "free_mib": 20000,
                "boot_dir": {"separate": false, "total_mib": 20000, "free_mib": 20000, "kernels": []},
                "blacklisted": [], "pci": pci, "runtimes": [], "python2_modules": [], "native": [], "kernel_owner": "kernel",
+               "repo_packages": [],
                "mounts": [{"mount": "/", "device": "/dev/sda1", "fstype": "ext3", "xfs_v4": null, "inode_size": 256}]})
     }
 
@@ -2439,6 +2548,26 @@ mod tests {
         a.sonames.insert("el/alma9".into(), b"other bytes".to_vec());
         let (_, r) = a.route("centos7-to-alma10").unwrap();
         assert!(evaluate(&a, r, &m3).is_err());
+        // an add-on's libraries count only where the hop keeps the add-on: on a machine with its marker package
+        let mut m5 = modern(vec![]);
+        m5["native"] = json!([{"tree": "/opt/cache", "files": 1, "sample": ["/opt/cache/bin/cached"],
+                               "needs": ["libc.so.6", "libjemalloc.so.2"]}]);
+        let v5 = verdict("centos7-to-alma10", &m5);
+        assert_eq!(v5["ok"], false, "{v5:#}");
+        assert!(report(&v5).contains("libjemalloc.so.2"), "{}", report(&v5));
+        m5["repo_packages"] = json!(["centos-release", "epel-release"]);
+        let v5 = verdict("centos7-to-alma10", &m5);
+        assert_eq!(v5["ok"], true, "{v5:#}");
+        // with EPEL, its table for the hop has to be here too, or the check is skipped
+        let mut a = atlas();
+        a.sonames.remove("el/alma9.epel");
+        let (_, r) = a.route("centos7-to-alma10").unwrap();
+        let v6 = evaluate(&a, r, &m5).unwrap();
+        assert!(v6["hops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|h| h["to"] == "alma9" && h["notes"].to_string().contains("was skipped")));
     }
 
     /// Ubuntu keeps Python 2 in universe through jammy; Debian through bullseye, with a note where an app's own

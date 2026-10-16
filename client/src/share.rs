@@ -514,7 +514,7 @@ mod tests {
             "boot": "bios", "ram_mib": 4096, "free_mib": 40000,
             "boot_dir": {"separate": false, "total_mib": 40000, "free_mib": 40000, "kernels": []},
             "blacklisted": [], "pci": [], "runtimes": [], "python2_modules": [], "native": [], "kernel_owner": "kernel",
-            "mounts": []});
+            "repo_packages": [], "mounts": []});
         let report =
             |fam: &str, rel: &str, route: Option<&str>| build(Some(&a), route, &sys(fam, rel), "k", &f, &[]).unwrap();
         // CentOS 6: no route starts there, the CentOS 5 one passes through
