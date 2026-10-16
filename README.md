@@ -25,13 +25,14 @@ crosses yum to dnf, the /usr merge, two package-manager bootstraps and a vendor 
 5 of its dep-lab runs, and replays are free.
 
 CI replays a route in a chroot whenever a change touches it, which proves the userland only. Kernels, bootloaders and
-the first real boot are tested by the VM tier (`tools/vm.py`, SPEC.md "VM tier"), which the maintainer runs: each box is installed by its
-release's own installer in a KVM guest, and every hop ends with a real reboot and the box's checks against the live
-services. As of 2026-10-14, at the route versions recorded there, these boxes have passed it from scratch on BIOS:
-`etch-web`, `etch-db`, `trusty-db`, `trusty-web-updated`, `centos5-web`, `centos7-lamp` and `centos8-lamp`. All three
-Ubuntu boxes have also passed on UEFI. The results are on [wend#13](https://github.com/FieldmouseWorks/wend/issues/13),
-[#84](https://github.com/FieldmouseWorks/wend/pull/84) (UEFI) and [#92](https://github.com/FieldmouseWorks/wend/pull/92)
-(CentOS 8); #13 stays open until the VM tier runs in CI.
+the first real boot are tested by the VM tier (`tools/vm.py`, SPEC.md "VM tier"), which the maintainer runs: each box
+is installed by its release's own installer in a KVM guest, and every hop ends with a real reboot and the box's
+checks against the live services. As of 2026-10-14, at the route versions recorded there, these boxes have passed it
+from scratch on BIOS: `etch-web`, `etch-db`, `trusty-db`, `trusty-web-updated`, `centos5-web`, `centos7-lamp` and
+`centos8-lamp`. All three Ubuntu boxes have also passed on UEFI. The results are on
+[wend#13](https://github.com/FieldmouseWorks/wend/issues/13), [#84](https://github.com/FieldmouseWorks/wend/pull/84)
+(UEFI) and [#92](https://github.com/FieldmouseWorks/wend/pull/92) (CentOS 8); #13 stays open until the VM tier runs
+in CI.
 
 **Agents and contributors: start with [AGENTS.md](AGENTS.md).** Clone, plug in any model, discover a path, prove it
 with the same command CI runs, and open a PR.
