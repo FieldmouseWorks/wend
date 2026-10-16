@@ -3,7 +3,8 @@
 # The gate judges a PR's data with the BASE branch's tools and adapters, so a PR that changes the harness itself is
 # never exercised by CI. Only a maintainer-run proof on remi (tools/vm.py's real installs and reboots, or whatever the
 # change needs) tests it. This workflow turns that rule into a status branch protection can require:
-#   - the PR doesn't touch the harness and has no `needs-remi` label: success at once
+#   - the PR doesn't touch the harness, adds or changes no fix a chroot can't judge, and has no `needs-remi` label:
+#     success at once
 #   - otherwise: pending ("needs a remi pass at <sha>") until a maintainer, or a Claude session working for one,
 #     records remi's verdict on that exact commit (CONTRIBUTING.md, layer 4, "Proof on remi"). Statuses belong to a commit, so
 #     every push starts over.
@@ -11,10 +12,16 @@
 #
 # remi is never reached from here, and nothing here can start a run there: remi only runs what a maintainer starts.
 #
+# A fix a chroot can't judge is one that touches what the chroot tier never boots (SPEC.md "Kernels and the
+# bootloader"): an op on networking (`net.*`) or the root's layout (`fs.layout`), or one that installs, removes or
+# reinstalls a kernel, bootloader, initramfs, init or network package (BOOTNET below). A changed route counts its newly
+# pinned fixes too, so an existing network fix pinned onto a new route needs remi as well.
+#
 # Trust: pull_request_target runs this file as it is on the base branch, with a token that can write statuses, so no PR
-# (fork or not) can change its own judge. It never checks out or runs the PR's code. The only PR data it reads is the
-# file list and labels from the API, and file names reach nothing but jq and the log. People without push access, fork
-# authors included, can't set a commit status at all.
+# (fork or not) can change its own judge. It never checks out or runs the PR's code. What it reads from the PR (the file
+# list, labels, and the fix and route files as TOML data) comes from the API and is only parsed, never run or passed to
+# a shell; anything it can't read or parse counts as needing remi. People without push access, fork authors included,
+# can't set a commit status at all.
 name: remi-proof
 
 on:
@@ -42,46 +49,140 @@ jobs:
           GH_TOKEN: "${{ github.token }}"
           REPO: "${{ github.repository }}"
           PR: "${{ github.event.pull_request.number || inputs.pr }}"
-          # what remi proves and CI can't: the harness the gate copies from base, the boxes its VM tier installs,
-          # and the entry point that runs them
-          HARNESS: '^(tools/|adapters/|boxes/|wend$)'
-          CONTEXT: remi-proof
+        shell: python3 -I {0}
         run: |
-          set -euo pipefail
-          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "not a PR number: $PR"; exit 1; }
-          pr=$(gh api "repos/$REPO/pulls/$PR")
-          [ "$(jq -r .state <<<"$pr")" = open ] || { echo "#$PR is not open"; exit 0; }
-          sha=$(jq -r .head.sha <<<"$pr")
-          echo "#$PR head $sha"
+          import json, os, re, sys, tomllib, urllib.error, urllib.parse, urllib.request
 
-          # a verdict recorded by hand stands; only this workflow's own success/pending is ours to replace
-          last=$(gh api "repos/$REPO/commits/$sha/statuses?per_page=100" \
-                 --jq "[.[] | select(.context == \"$CONTEXT\")][0] // empty | \"\(.creator.login) \(.state)\"")
-          if [ -n "$last" ] && [ "${last%% *}" != 'github-actions[bot]' ]; then
-            echo "already recorded by hand: $last"
-            exit 0
-          fi
+          REPO, PR, CONTEXT = os.environ["REPO"], os.environ["PR"], "remi-proof"
+          # what remi proves and CI can't: the harness the gate copies from base, the boxes its VM tier installs, and
+          # the entry point that runs them
+          HARNESS = re.compile(r"(tools/|adapters/|boxes/|wend$)")
+          BOOTNET = re.compile(
+              r"(kernel|linux-(image|headers|modules|generic|server|virtual|signed)|grub|shim|efibootmgr|os-prober"
+              r"|dracut|initramfs-tools|mkinitrd|module-init-tools|kmod|systemd-boot|sysvinit|systemd-sysv|upstart"
+              r"|udev|systemd-udev|NetworkManager|network-scripts|initscripts|ifupdown|ifenslave|netplan|resolvconf"
+              r"|systemd-networkd|systemd-resolved|isc-dhcp|dhcp3|dhclient|dhcpcd|net-tools|iproute|linux-firmware)")
+          PKG_OPS = {"install", "remove", "force-remove", "dpkg.reinstall"}
 
-          # a rename counts at both ends. The API lists at most 3000 files; if it lists fewer than the PR changed,
-          # assume the harness is among the missing ones.
-          files=$(gh api --paginate "repos/$REPO/pulls/$PR/files?per_page=100" --jq '.[]')
-          harness=$(jq -r --arg re "$HARNESS" '.filename, (.previous_filename // empty) | select(test($re))' <<<"$files")
-          why=
-          if [ -n "$harness" ]; then
-            why="it touches the harness"
-            echo "harness files:"; sed 's/^/  /' <<<"$harness"
-          elif [ "$(jq -s length <<<"$files")" -lt "$(jq -r .changed_files <<<"$pr")" ]; then
-            why="the API didn't list every changed file"
-          elif jq -e '.labels | any(.name == "needs-remi")' <<<"$pr" >/dev/null; then
-            why="it's labeled needs-remi"
-          fi
+          def api(path, method="GET", body=None, raw=False):
+              req = urllib.request.Request("https://api.github.com/" + path, method=method,
+                                           data=json.dumps(body).encode() if body else None)
+              req.add_header("Authorization", "Bearer " + os.environ["GH_TOKEN"])
+              req.add_header("Accept", "application/vnd.github.raw" if raw else "application/vnd.github+json")
+              req.add_header("X-GitHub-Api-Version", "2022-11-28")
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  data = r.read()
+              return data if raw else json.loads(data)
 
-          url="https://github.com/$REPO/blob/main/CONTRIBUTING.md#4-proof-on-remi-harness-changes-only"
-          if [ -n "$why" ]; then
-            state=pending desc="needs a remi pass at ${sha:0:7}: $why"
-          else
-            state=success desc="no harness change: the gate's replays are the proof"
-          fi
-          echo "$state: $desc"
-          gh api -X POST "repos/$REPO/statuses/$sha" -f state="$state" -f context="$CONTEXT" \
-             -f description="$desc" -f target_url="$url" >/dev/null
+          def toml_at(repo, path, ref):
+              """The file's TOML, or None if it isn't there or isn't TOML."""
+              try:
+                  return tomllib.loads(api(f"repos/{repo}/contents/{urllib.parse.quote(path)}?ref={ref}",
+                                           raw=True).decode())
+              except (urllib.error.HTTPError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+                  return None
+
+          def steps(doc):
+              if isinstance(doc, dict):
+                  if isinstance(doc.get("op"), str):
+                      yield doc
+                  for v in doc.values():
+                      yield from steps(v)
+              elif isinstance(doc, list):
+                  for v in doc:
+                      yield from steps(v)
+
+          def blind(doc):
+              """Why a chroot can't judge this fix, or None."""
+              for st in steps(doc):
+                  op = st["op"]
+                  if op.startswith("net.") or op == "fs.layout":
+                      return op
+                  pkgs = st.get("packages")
+                  if op in PKG_OPS and isinstance(pkgs, list):
+                      hit = [p for p in pkgs if not isinstance(p, str) or BOOTNET.match(p)]
+                      if hit:
+                          return f"{op} {hit[0]}"
+              return None
+
+          if not re.fullmatch(r"[0-9]+", PR):
+              sys.exit(f"not a PR number: {PR}")
+          pr = api(f"repos/{REPO}/pulls/{PR}")
+          if pr["state"] != "open":
+              print(f"#{PR} is not open")
+              sys.exit(0)
+          sha, head_repo = pr["head"]["sha"], pr["head"]["repo"]["full_name"]
+          base_repo, base_sha = pr["base"]["repo"]["full_name"], pr["base"]["sha"]
+          print(f"#{PR} head {sha}")
+
+          def stand_by_hand_verdict():
+              """A verdict recorded by hand stands; only this workflow's own success/pending is ours to replace."""
+              mine = [s for s in api(f"repos/{REPO}/commits/{sha}/statuses?per_page=100") if s["context"] == CONTEXT]
+              if mine and (mine[0].get("creator") or {}).get("login") != "github-actions[bot]":
+                  print(f"already recorded by hand: {mine[0]['creator']['login']} {mine[0]['state']}")
+                  sys.exit(0)
+
+          stand_by_hand_verdict()
+
+          files, page = [], 1
+          while batch := api(f"repos/{REPO}/pulls/{PR}/files?per_page=100&page={page}"):
+              files += batch
+              page += 1
+
+          # judge the files of the commit the status goes on: a push meanwhile has its own run
+          if api(f"repos/{REPO}/pulls/{PR}")["head"]["sha"] != sha:
+              print("the PR moved on while its files were listed; the newer push's run judges it")
+              sys.exit(0)
+
+          why = []
+          # The API lists at most 3000 files; if it lists fewer than the PR changed, the harness may be among the rest.
+          if len(files) < pr["changed_files"]:
+              why.append("the API didn't list every changed file")
+          for f in files:
+              names = [f["filename"]] + ([f["previous_filename"]] if f.get("previous_filename") else [])
+              if any(HARNESS.match(n) for n in names):
+                  why.append(f"it changes {f['filename']}")
+                  continue
+              for n in names:
+                  if not (n.startswith("fixes/") and n.endswith(".toml")):
+                      continue
+                  # a removed fix is judged by what it was; an added or changed one by what it is now
+                  doc = (toml_at(base_repo, n, base_sha) if f["status"] == "removed" or n != f["filename"]
+                         else toml_at(head_repo, n, sha))
+                  b = "unreadable" if doc is None else blind(doc)
+                  if b:
+                      why.append(f"{n}: {b}")
+              if f["filename"].startswith("routes/") and f["status"] != "removed":
+                  route = toml_at(head_repo, f["filename"], sha)
+                  old = toml_at(base_repo, f.get("previous_filename") or f["filename"], base_sha) or {}
+                  if route is None:
+                      why.append(f"{f['filename']}: unreadable")
+                      continue
+                  pinned = {x.get("id") for x in old.get("fixes", []) if isinstance(x, dict)}
+                  for x in route.get("fixes", []):
+                      if not isinstance(x, dict) or x.get("id") in pinned:
+                          continue
+                      # a newly pinned fix: meta.name is its file name (AGENTS.md step 5), under one of the route's hops
+                      name, fam = x.get("name"), route.get("family")
+                      ok = all(isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", v)
+                               for v in [name, fam, *route.get("hops", [])])
+                      doc = next((d for h in route.get("hops", []) if ok
+                                  for d in [toml_at(head_repo, f"fixes/{fam}/{h}/{name}.toml", sha)] if d), None)
+                      b = "unreadable" if doc is None else blind(doc)
+                      if b:
+                          why.append(f"{f['filename']} pins {name}: {b}")
+          if any(l["name"] == "needs-remi" for l in pr["labels"]):
+              why.append("it's labeled needs-remi")
+
+          for w in why:
+              print("  " + w)
+          if why:
+              state, desc = "pending", f"needs a remi pass at {sha[:7]}: {why[0]}"
+          else:
+              state, desc = "success", "nothing a chroot can't judge: the gate's replays are the proof"
+          desc = desc if len(desc) <= 140 else desc[:139] + "…"
+          print(f"{state}: {desc}")
+          stand_by_hand_verdict()   # again: one may have landed while this run read the PR
+          api(f"repos/{REPO}/statuses/{sha}", method="POST", body={
+              "state": state, "context": CONTEXT, "description": desc,
+              "target_url": f"https://github.com/{REPO}/blob/main/CONTRIBUTING.md#4-proof-on-remi-harness-changes-only"})

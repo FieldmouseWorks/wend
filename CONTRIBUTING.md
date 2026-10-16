@@ -72,11 +72,17 @@ remi, the maintainer's lab machine, is where they get tested: VM replays on real
 (`tools/vm.py`, SPEC.md "VM tier"), or whatever else the change needs. remi only runs what a maintainer starts. It is
 never a CI runner, and nothing a PR does can reach it.
 
-The `remi-proof` commit status carries the verdict to GitHub (`.github/workflows/remi-proof.yml`). A PR that touches
-none of `tools/`, `adapters/`, `boxes/` or `wend`, and isn't labeled `needs-remi`, passes at once. Anything else stays
-pending until someone with push access records remi's verdict on the PR's exact head commit. Statuses belong to a
-commit, so every push resets it to pending. A maintainer adds the `needs-remi` label to any other PR a chroot can't
-judge, such as a fix for kernels, the bootloader or networking.
+The `remi-proof` commit status carries the verdict to GitHub (`.github/workflows/remi-proof.yml`). Most fix and route
+PRs pass at once: the gate's replays are their proof. A PR stays pending until someone with push access records remi's
+verdict on its exact head commit when it:
+
+- touches `tools/`, `adapters/`, `boxes/` or `wend`;
+- adds, changes or newly pins a fix a chroot can't judge, because it works on what a chroot never boots: a `net.*` or
+  `fs.layout` op, or one that installs, removes or reinstalls a kernel, bootloader, initramfs, init or network package
+  (the workflow's `BOOTNET` list);
+- or is labeled `needs-remi`, which a maintainer adds to any other PR that needs a real boot.
+
+Statuses belong to a commit, so every push resets it to pending.
 
 To record a verdict, check that the run's `run.json` `head` is the PR's current head and not dirty, then:
 
@@ -96,7 +102,9 @@ curl -fsS -X POST -H "Content-Type: application/json" https://api.github.com/rep
   -d "$(jq -n --arg s "$state" --arg d "$desc" --arg u "<link>" '{context:"remi-proof",state:$s,description:$d,target_url:$u}')"
 ```
 
-A verdict recorded this way stands: the workflow never overwrites a status a person or a session set. To re-judge an
+A verdict recorded this way stands: the workflow never overwrites a status a person or a session set. Record it with
+a person's own credentials, never from an Actions job's `GITHUB_TOKEN`: the workflow tells its own statuses apart by
+that token's account. To re-judge an
 open PR that was opened before the workflow existed, run it by hand: Actions, remi-proof, Run workflow, PR number.
 
 ### 5. Claude review (automatic, minutes)
