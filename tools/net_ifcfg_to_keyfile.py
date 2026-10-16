@@ -218,6 +218,9 @@ def running_mac(path, dev):
     address is its permanent one (sysfs addr_assign_type 0, not random or set) is pinned; a static profile's address
     must also be on it (carries), so a copy of the box on another machine refuses instead of pinning that one's NIC.
     A DHCP profile has no address to prove that by: the op must run on the box itself, as every engine runs it."""
+    # the running machine's sysfs: in a chroot engine, the NIC of whatever machine runs it. Right only because every
+    # engine that deploys this op's output runs it on the box itself (SPEC "The rehearsal", "The walk"); an engine that
+    # deploys a copy's output must supply the target's NIC identity instead
     s = os.path.join(SYS, dev)
     if not os.path.isdir(os.path.join(s, "device")):
         fail(f"{path}: no HWADDR, and no physical NIC named {dev} on this machine to pin it to")
