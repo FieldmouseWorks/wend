@@ -2116,7 +2116,8 @@ Then:
    entry the default. A kernel that hangs or panics at boot leaves the old one as the next boot, so a power cycle
    brings the machine back to a console. That isn't a rollback, and wend never calls it one: after the transaction,
    the old kernel runs the new release's userland, which on the centos6 hop may not even start sshd.
-5. **After each boot**, the owner runs `wend upgrade` again. It reads the state file, judges the boot ("Checks the
+5. **After each boot**, the owner runs `wend upgrade` again (decided for the first build: a boot unit that did it
+   would have to start under SysV init, upstart and systemd on one route, three places for it to break). It reads the state file, judges the boot ("Checks the
    machine is held to"), commits the trial on green, and goes on with the next hop. Until then `/etc/motd` carries one
    line saying an upgrade is under way and how to go on, removed at the end.
 6. **At the end**, the prune removes exactly the packages the rehearsal's prune removed (no bisecting: there's no
@@ -2212,10 +2213,7 @@ same step on apt); a boot unit that goes on by itself after each boot; relocate 
 
 ### Open questions
 
-1. **Going on by itself after a boot.** The owner runs `wend upgrade` after each boot. A boot unit that does it would
-   have to start under SysV init, upstart and systemd on one route, which is three places for it to break. Wait until
-   the owner-driven walk is proven, then decide?
-2. **A rollback wend owns.** An LVM snapshot of `/` needs free extents and the device mapper's snapshot merge, which
+1. **A rollback wend owns.** An LVM snapshot of `/` needs free extents and the device mapper's snapshot merge, which
    CentOS 5's kernel lacks, and `/boot` isn't in it. Relocate keeps the old root whole, but needs a spare disk. Until
    one of these is built and proven, the backup is the owner's, and wend says so on every screen.
 
