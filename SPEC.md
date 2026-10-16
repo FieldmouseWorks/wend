@@ -2177,7 +2177,10 @@ it again.
 - every file the plan lists is in its cache and hashes right (the walk's check of every pinned top file, extended
   to every file, since nothing is fetched from a network);
 - relocate's preflight passes, with a place for the new root and the new `/boot` ("The undo");
-- hardware preflight passes for the whole route;
+- hardware preflight passes for the whole route, judged with the relocation assumed (as `docs/rebuild-and-carry.md`
+  has it): the filesystems relocate carries count as the new ones it makes (XFS v5, or the same type for ext3), and
+  `/boot`'s room is the new `/boot`'s, not the old one's. So an XFS v4 CentOS 7 machine, which preflight stops at
+  Alma 9 today, is judged on the root it will walk;
 - the plan and the cache aren't under `/tmp` or `/run` (they must survive reboots).
 
 It asks for no backup. It says once, before it starts, that an undo on the same disk is no help against that disk
