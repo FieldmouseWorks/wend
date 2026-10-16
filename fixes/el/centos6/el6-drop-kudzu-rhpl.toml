@@ -16,4 +16,4 @@ name = "el6-drop-kudzu-rhpl"
 author = "claude (wend#13, hand-written from the VM replay)"
 source = "wend#13"
 note = "Every anaconda install of CentOS 5 has kudzu (boot-time hardware probe) and rhpl. EL6 ships neither, and both need python(abi) = 2.4 (rhpl also libiw.so.28), so yum's EL6 transaction fails on them. On a kickstarted (@core) install nothing else requires them. A default install's @base tools (firstboot-tui, system-config-network-tui) require them, so rpm -e refuses and the hop stops there as before."
-fires_on = ["el/centos5-web"]
+fires_on = ["el/centos4-dns", "el/centos5-web"]

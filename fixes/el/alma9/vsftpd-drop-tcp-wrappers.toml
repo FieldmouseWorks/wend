@@ -23,4 +23,4 @@ author = "claude-opus-5-5 medium (dep-lab grow mode, box B)"
 curated_by = "claude (wend port to typed ops)"
 source = "dep-lab centos/fixes-v3.json: a9-vsftpd-drop-tcp-wrappers"
 note = "EL9's vsftpd is built without libwrap and refuses tcp_wrappers=YES. Setting NO is harmless where it was never on, so this fires only where hosts.allow and hosts.deny contain no rules, where wrappers had nothing to enforce. A box with any rule there hits a route gap."
-fires_on = ["el/centos5-dns"]
+fires_on = ["el/centos4-dns", "el/centos5-dns"]

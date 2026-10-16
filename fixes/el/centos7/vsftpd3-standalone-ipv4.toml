@@ -17,4 +17,4 @@ author = "claude-opus-5-5 medium (dep-lab grow mode, box B)"
 curated_by = "claude (wend port to typed ops)"
 source = "dep-lab centos/fixes-v3.json: vsftpd3-standalone-ipv4-listen"
 note = "Keeps anonymous FTP on: once this file differs from the packaged one, EL8+ keeps it instead of installing its stock vsftpd.conf, whose anonymous_enable=NO would switch off the anonymous FTP this box serves (without this fix the route loses ftp at alma9). The edit itself keeps CentOS 5's listener, standalone on IPv4, instead of EL7's dual-stack listen_ipv6=YES: a choice, not a necessity on a real box."
-fires_on = ["el/centos5-dns"]
+fires_on = ["el/centos4-dns", "el/centos5-dns"]
