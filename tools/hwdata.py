@@ -39,7 +39,7 @@ WORK = os.path.join(os.environ.get("WEND_WORK", "/var/tmp/wend"), "hwdata")
 # (scsi, ata, nvme, block, md, message: the Fusion MPT drivers, ide) and network (net, and virtio's PCI transport).
 DIRS = ("drivers/scsi/", "drivers/ata/", "drivers/nvme/", "drivers/block/", "drivers/md/", "drivers/message/",
         "drivers/ide/", "drivers/net/", "drivers/virtio/")
-EL_KERNEL = {6: ["kernel"], 7: ["kernel"], 8: ["kernel-core", "kernel-modules"],
+EL_KERNEL = {5: ["kernel"], 6: ["kernel"], 7: ["kernel"], 8: ["kernel-core", "kernel-modules"],
              9: ["kernel-core", "kernel-modules", "kernel-modules-core"],
              10: ["kernel-core", "kernel-modules", "kernel-modules-core"]}
 # The filesystems a machine's disks may carry, with the config symbol and module that mount each (SPEC "Hardware
@@ -92,7 +92,7 @@ def evr_key(v):
 def el_kernel(adapter, release):
     """[(name, url, sha256)] for the newest kernel across the release's repos, at its origin (not through the shim)."""
     rel = adapter["releases"][release]
-    found = {}  # name -> (evr key, evr, url, sha256)
+    found = {}  # name -> (evr key, evr, url, digest, digest type)
     for repo in rel["repos"].values():
         base = f"https://{repo}"
         md = ET.fromstring(get(f"{base}/repodata/repomd.xml"))
@@ -106,16 +106,30 @@ def el_kernel(adapter, release):
             v = p.find("c:version", RPM_NS)
             evr = f"{v.get('ver')}-{v.get('rel')}"
             cs = p.find("c:checksum", RPM_NS)
-            if cs.get("type") != "sha256":
+            if cs.get("type") not in ("sha256", "sha", "sha1"):
                 continue
             url = f"{base}/{p.find('c:location', RPM_NS).get('href')}"
             if name not in found or evr_key(evr) > found[name][0]:
-                found[name] = (evr_key(evr), evr, url, cs.text)
+                found[name] = (evr_key(evr), evr, url, cs.text, cs.get("type"))
     evrs = {f[1] for f in found.values()}
     if set(found) != set(EL_KERNEL[rel["major"]]) or len(evrs) != 1:
         raise SystemExit(f"{release}: kernel packages {sorted(found)} at {sorted(evrs)}; want "
                          f"{EL_KERNEL[rel['major']]} at one version")
-    return [(f"{n}-{f[1]}", f[2], f[3]) for n, f in sorted(found.items())]
+    return [(f"{n}-{f[1]}", f[2], f[3] if f[4] == "sha256" else via_sha1(f[2], f[3])) for n, f in sorted(found.items())]
+
+
+def via_sha1(url, sha1):
+    """EL5's index lists only SHA-1: download, check that, and name the file by its sha256 from then on."""
+    os.makedirs(WORK, exist_ok=True)
+    part = os.path.join(WORK, f"sha1-{sha1}.part")
+    subprocess.run(["curl", "-fsSL", "--retry", "5", "--retry-all-errors", "-o", part, url], check=True)
+    data = open(part, "rb").read()
+    if hashlib.sha1(data).hexdigest() != sha1:
+        os.unlink(part)
+        raise SystemExit(f"{url}: sha1 {hashlib.sha1(data).hexdigest()}, the index says {sha1}")
+    sha256 = hashlib.sha256(data).hexdigest()
+    os.rename(part, os.path.join(WORK, sha256))
+    return sha256
 
 
 def apt_index(mirror, release):

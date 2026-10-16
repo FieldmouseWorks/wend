@@ -1,7 +1,8 @@
 # Rebuild and carry: design, first case old-XFS CentOS 7
 
-Status: design, 2026-10-13. Not normative yet. Each piece moves into SPEC.md in the PR that builds it, as AGENTS.md
-asks (spec before ops). Background: the "defunct to living" notes (option 2) and wend#67.
+Status: design, 2026-10-13; relocate itself (BIOS, onto a named disk) is built and in SPEC.md ("Relocate"), and so is
+walking a route on the relocated root. Each other piece moves into SPEC.md in the PR that builds it, as AGENTS.md asks
+(spec before ops). Where SPEC and this doc differ, SPEC is what's built. Background: the "defunct to living" notes (option 2) and wend#67.
 
 ## The problem this case brings
 
@@ -45,7 +46,7 @@ same, and Alma 9 is where these boxes already stop.
 Order of preference, picked by preflight from the machine's facts. Refused when none fits; the machine owner then adds
 a disk (on a VM, which most old fleets are, that's a minute in the hypervisor) and runs preflight again.
 
-1. **Free extents in the root's volume group**: a new LV, `<vg>/wend-<release>` (`root` stays the old one's name).
+1. **Free extents in the root's volume group**: a new LV, `<vg>/wend-root` (`root` stays the old one's name).
    A default EL7 install gives every extent to `root`, `swap` and maybe `home`, so this is the rare case.
 2. **An unused whole disk**: no partition table, no filesystem signature (`wipefs -n` empty), not mounted, not a PV,
    not in an md array, and named by the owner on the command line (`--new-root-disk /dev/disk/by-id/...`). Never
@@ -164,9 +165,14 @@ in-place route needs a UEFI step there too, the counterpart of the BIOS GRUB rei
 that step carries the rollback entry over. Preflight keeps refusing UEFI until a UEFI VM proof (that's already the
 rule for every route).
 
-**Afterwards, the route.** The in-place route walks the copy, booted, exactly as it walks any 7.3+ box. One gap shows
-up here that the in-place route has too: on BIOS, nothing reinstalls GRUB, so once the box is on EL8 or later
-(where BLS entries start) its `core.img` is still EL7's, which has no `blscfg`. Leapp runs `grub2-install` on BIOS
+**Afterwards, the route.** The in-place route walks the copy, booted, exactly as it walks any 7.3+ box. Built
+(SPEC "Walking a route on a relocated root") without the GRUB reinstall below: the in-place route's BIOS VM proof
+showed EL7's GRUB booting Alma 10 as it is, so the relocated root keeps the refreshed 7.9 GRUB for the whole walk, and
+a rollback from a release whose kernel can't mount the old `/boot` is a flag in a `grubenv` block of the new root's
+own, which the stub reads (sticky, since GRUB can't write to LVM; `forward` from the old root clears it). The rest of
+this section is the design for when the old `/boot` has to go (commit). The gap it names, which the in-place route has
+too: on BIOS, nothing reinstalls GRUB, so once the box is on EL8 or later (where BLS entries start) its `core.img` is
+still EL7's, which has no `blscfg`. Leapp runs `grub2-install` on BIOS
 for this. wend's in-place EL7 route needs the same harness step before its VM proof can pass; relocate inherits it.
 On a relocated box:
 
@@ -174,33 +180,40 @@ On a relocated box:
   second disk is not the disk `/boot` is now on. Picking it by `grub-probe -t device /boot`, as the Debian step
   does, would leave EL7's `core.img` in the first disk's MBR and brick the box. Relocate records the boot disk (by
   `/dev/disk/by-id`) and this step uses it;
-- the prefix becomes the new root's `/boot/grub2`, and the rollback entry moves into the new root's
-  `/etc/grub.d/40_custom` (`search --no-floppy --fs-uuid --set=root <old /boot>`, `configfile
-  /grub2/grub.cfg.wend-old`; GRUB 2 still reads v4 XFS where the kernel can't). That runs EL7's entries (`linux16`,
-  `initrd16`) under the EL8+ GRUB with its `grubenv`, whose `saved_entry` is a BLS id, so the old config falls to its
-  entry 0. The rollback boot after the last hop is what proves this works;
-- from then on the prefix is on LVM, where GRUB can't `save_env`. One-shot boots stop working (`next_entry` would
-  stay set), so `wend rollback` is sticky from this point: it makes the rollback entry the default, it doesn't try it
-  once.
+- while the stub is in charge (until the old root is dropped, so through every hop `wend upgrade` walks, before and
+  after commit: SPEC.md, "Upgrading a running machine"), the install goes into the stub's home, with the stub's
+  prefix, never the new root's `/boot/grub2`: the new root is on LVM, where GRUB can't `save_env`, and the stub's
+  one-shot trials and one-shot rollback need it to. The stub's home is a plain partition every kernel on the route
+  mounts (the old `/boot` unless it's XFS v4, which Alma 9 and later can't mount; then a new XFS v5 partition on the
+  spare disk, see the SPEC). From then on the stub's entry 0 no longer moves `prefix` (the new root's modules are a
+  newer build than `core.img`) and reads the new root's `grubenv` (`load_env -f`, read-only) before its BLS config,
+  for EL8's `kernelopts`; entry 1 runs EL7's entries (`linux16`, `initrd16`) under the EL8+ GRUB, and since the stub
+  never writes `saved_entry`, the old config falls to its entry 0. The rollback boot after the last hop is what proves
+  this works;
+- once the old root is dropped (below), the stub is gone and the prefix is the new root's `/boot/grub2`, like any
+  in-place box. Commit alone doesn't do that.
 
 ## Rollback and commit
 
-The old root and old `/boot` are never written after the flip, except for `grubenv` on the old `/boot`.
+The old root and old `/boot` are never written after the flip, except for the stub's home when the old `/boot` is
+that home (its `grubenv`, and the modules each GRUB reinstall puts under its prefix).
 So:
 
 - **Before the trial boot passes**: reset. The trial was one-shot, on BIOS and UEFI alike.
-- **After**: boot the "wend rollback" entry (`wend rollback` sets it as the next boot while the stub is in charge, and
-  as the default once the EL8 GRUB reinstall has moved the prefix onto LVM, see above). Data written on the new root
-  since the flip stays there, readable from the old root only through the new LV (the old kernel mounts the new root
-  fine, it made it). The run says this in words: rollback loses what happened after the flip, unless you copy it back.
-  A rollback that stays for good (`wend rollback --permanent`) also renames `grub.cfg.wend-old` back over the stub:
-  the old root's `/etc/grub2.cfg` and `/etc/grub2-efi.cfg` still point at that path, so its next kernel update would
-  otherwise have grubby edit the stub.
-- **Commit** (`wend commit`, never automatic): drops the rollback entry and removes the old LVs that moved (`root`,
-  and `home` or `var` if they were v4), or tells the owner which partitions are now free (wend never repartitions).
-  On BIOS, if the route's GRUB reinstall hasn't already moved the prefix to the new root (a relocate committed before
-  the route reaches EL8), commit does that move, so the old `/boot` is no longer needed. The old `/boot` partition is
-  left unused and named. Reformatting it is the owner's call, since nothing needs it.
+- **After**: boot the stub's old entry (`wend rollback` sets it as the next boot, or as the default; the stub stays in
+  charge, with its home on a partition GRUB can write, through every hop until commit, see above). Data written on the
+  new root since the flip stays there, readable from the old root only through the new LV (the old kernel mounts the
+  new root fine, it made it). The run says this in words: rollback loses what happened after the flip, unless you copy
+  it back. A rollback that stays for good (`wend rollback --permanent`) also renames `grub.cfg.wend-old` back over the
+  stub: the old root's `/etc/grub2.cfg` and `/etc/grub2-efi.cfg` still point at that path, so its next kernel update
+  would otherwise have grubby edit the stub.
+- **Commit** (`wend commit`, never automatic): makes the new root the stub's default (`commit_trial`) and nothing
+  else. It deletes nothing: the stub, its old entry and the old root stay, so `wend rollback` still works after it.
+- **Drop the old root** (a separate step after commit, never automatic, and never part of commit): moves the prefix
+  to the new root's `/boot/grub2` with the running release's own `grub2-install` onto the boot disk, which retires
+  the stub and its rollback entry, then removes the old LVs that moved (`root`, and `home` or `var` if they were v4),
+  or tells the owner which partitions are now free (wend never repartitions). The old `/boot` partition is left
+  unused and named. Reformatting it is the owner's call, since nothing needs it.
 
 ## State movers (the second stage, sketched so the first doesn't block it)
 
@@ -252,14 +265,15 @@ runner a public PR can trigger.
 
 The VM proof needs:
 
-- a box `el/centos7-lamp-xfsv4`: centos7-lamp's packages and checks, installed by kickstart from the 7.9 tree with
+- centos7-lamp's packages and checks, installed by kickstart from the 7.9 tree with
   every XFS made `-m crc=0 -n ftype=0` (exactly what 7.0 to 7.2's mkfs made; the format is the format), a 500 MB
-  `/boot`, LVM `root` and `swap` filling the disk as a default install does, and a second empty 30 GB disk. Its GRUB
+  `/boot`, LVM `root` and `swap` filling the disk as a default install does, and a second empty 30 GB disk. Built as
+  `tools/vm.py` command-line flags on the existing box (`--root-fs xfs-v4 --lvm --extra-disk 30`), not a box of its
+  own: a chroot box has no disks, so its packages and checks are centos7-lamp's either way. Its GRUB
   is 7.9's, so it can't show the old-`core.img` failure the GRUB refresh exists for. The refresh is unconditional for
   that reason, and a second VM case gets its `core.img` and modules from 7.0 media's grub2 (install from 7.0's
   `pxeboot`, or put 7.0's `grub2-install` output on the disk before the update) and boots all the way to the new root
-  to prove the refresh. Today the EL7 kickstart (remi's, landing separately) is ext3: the box needs `[vm]` keys for
-  the layout (`fs`, `mkfs_options`, `lvm`, `extra_disks`), which is a VM-tier spec change in its own PR;
+  to prove the refresh;
 - relocate as a vm.py step before the first hop, a forced reset during the trial boot (it must come back on the old
   root), the trial again, all the way to the new root's checks, and the commit-to-trial, then the route, rebooting as
   usual, and a rollback boot after the last hop (the old root's checks pass, as they did at the start);
@@ -270,11 +284,11 @@ The VM proof needs:
 ## Order of work
 
 1. This doc (spec PR).
-2. VM tier: layout keys in `[vm]`, the `el/centos7-lamp-xfsv4` VM box (box PR on its own).
-3. Harness: BIOS GRUB reinstall step for EL8+ hops (in-place route needs it anyway); remi proves the in-place
-   centos7-lamp VM run.
+2. VM tier: the layout as `tools/vm.py` flags (`--root-fs xfs-v4 --lvm --extra-disk GB`). Done.
+3. remi proves the in-place centos7-lamp VM run. Done, without a GRUB reinstall (EL7's GRUB boots Alma 10).
 4. Harness: `relocate` in `tools/vm.py` (adapter `[relocate]` table: the mkfs command, the GRUB stub and config
-   commands, the initramfs rebuild), with its SPEC section. remi proves BIOS: relocate, trial reset, route, rollback.
+   commands, the initramfs rebuild), with its SPEC section. remi proves BIOS: relocate, trial reset, rollback. Done.
+   Then the route on the relocated root (`replay --relocate`), with a sticky rollback after the last hop.
 5. Preflight: the relocate verdict (room, boot layout, moving filesystems) in the Rust client; `wend commit` and
    `wend rollback` once the client walks live roots.
 6. UEFI: OVMF box, the stub on the ESP, the EL8+ loader step, remi proof.

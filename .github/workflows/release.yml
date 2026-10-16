@@ -1,5 +1,5 @@
 # Releases: the client a machine's owner downloads. A maintainer pushes a tag (v0.1.0), publishes a release with a new
-# tag in GitHub's web UI, or runs this workflow on main with a version; this builds the static binary from that commit, packs it with the atlas it reads (adapters and their driver tables, fixes, routes, runs), checks
+# tag in GitHub's web UI, or runs this workflow on main with a version; this builds the static binary from that commit, packs it with the atlas it reads (adapters, their driver tables and library tables, fixes, routes, runs), checks
 # the pack loads and passes its own check, and publishes both files on the tag's release. The asset names carry no
 # version, so releases/latest/download/wend-x86_64-linux.tar.gz always names the newest one.
 name: release
@@ -57,6 +57,8 @@ jobs:
           cp client/target/x86_64-unknown-linux-musl/release/wend "$d/"
           cp adapters/*.toml "$d/adapters/"
           cp -r adapters/drivers "$d/adapters/"
+          # library tables aren't in git: from the wend archive, each checked against its pin (a missing one fails)
+          python3 -P tools/sonames.py fetch --into "$d/adapters/sonames"
           cp -r fixes routes runs LICENSE-MIT LICENSE-APACHE "$d/"
           cp docs/try-it.md "$d/README.md"
           (cd "$d" && ./wend check)

@@ -235,31 +235,43 @@ drivers = "sha256:a92330e859465be7c7c6060cabcabcd4af20d8c1018d5ef2a61e188cca7707
 
 # SPEC "Runtime preflight": the Python 2 interpreters each release a route boots into ships, by upstream version
 # ([] for none). tools/runtimes.py reads them from the release's own index (the components the hop uses); a machine
-# whose own programs run on Python 2 is told where it stops shipping before anything is touched.
+# whose own programs run on Python 2 is told where it stops shipping before anything is touched. `libs` pins the
+# release's library table, xz-compressed (from tools/sonames.py; kept out of git, in the wend archive at this digest and
+# in the release tarball): the sonames its packages ship, which the machine's own native programs and libraries (no
+# package owns them) are held to.
 [runtimes.lenny]
 python2 = ["2.4.6", "2.5.2"]
+libs = "sha256:59a786bfd18c70eb35a35e4b31901d3d18a2bc71af0d363cd6652290c5261fe9"
 
 [runtimes.squeeze]
 python2 = ["2.5.5", "2.6.6"]
+libs = "sha256:52df9731d5f0faafa4d2943e60278f777742d7258485a0c83faaf852b2dfcf52"
 
 [runtimes.wheezy]
 python2 = ["2.6.8", "2.7.3"]
+libs = "sha256:85c9fd28f8f1f4dc52d69fe971a87ae1962f56deff32ee032b00bc6664949aca"
 
 [runtimes.jessie]
 python2 = ["2.7.9"]
+libs = "sha256:3cf69c2488147a2c3aaf7e6feabddc9a3472066a1f135c49540d6a9d64fecc00"
 
 [runtimes.stretch]
 python2 = ["2.7.13"]
+libs = "sha256:38d2815f145a2e870c9954a41111f318c69f5af8c764201c3c64e9b3f5f44f90"
 
 [runtimes.buster]
 python2 = ["2.7.16"]
+libs = "sha256:9fae9d22eea11cc90b696af28818c3eda6298eaa80920aaf180e950de866842f"
 
 [runtimes.bullseye]
 python2 = ["2.7.18"]
+libs = "sha256:1358f656ba9073a1eacc2f65657a9730cfeedf650a49b0f3ba0492dd42b536d2"
 
 [runtimes.bookworm]
 python2 = []
+libs = "sha256:e11f838b9d2a7d2c07218065fe69c43bf59b080a6c5d27f98a7abb7c594a67d9"
 
 [runtimes.trixie]
 python2 = []
+libs = "sha256:f157874e2f17b996603726146ab9060496b7a6a6150f71451e6e9585933db0c7"
 

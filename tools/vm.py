@@ -20,8 +20,13 @@ not runs/ (runs/ holds what CI proved).
                                            relocate a fresh copy of BOX onto the first extra disk and prove the trial
                                            boot, a reset back to the old root, commit and a rollback boot (SPEC
                                            "Relocate"; with --root-fs xfs-v4 --lvm, an EL 7.0-7.2 install)
+  python3 tools/vm.py --extra-disk GB --relocate replay ROUTE BOX
+                                           the same relocate (trial, commit) before ROUTE's first hop, every hop on the
+                                           new root, then a rollback to the old root and forward again after the last
   --uefi (before the command)              the same on UEFI firmware (OVMF) instead of BIOS: its own box, install
                                            and NVRAM, and after every boot the guest must still be running on UEFI
+  --no-hwaddr                              (before the command, EL7 kickstart) the installer isn't told the NIC
+                                           by MAC, so ifcfg-eth0 has no HWADDR, as a stock install (wend#74)
   --root-fs FS, --lvm, --extra-disk GB     (before the command, EL7 kickstart on) the box installed another way:
                                            FS overrides [vm].root_fs; --lvm puts / and swap on LVM in a VG `centos`
                                            filling the disk, beside /boot, as a default EL7 install does;
@@ -93,7 +98,12 @@ FW_NOW = "{ [ -d /sys/firmware/efi ] && echo uefi || echo bios; } 2>/dev/null"
 # The disk layout, from the command line (main): how anaconda lays out the first disk, and the empty disks beside it.
 # The chroot box is the same either way (a chroot has no disks), so these are install choices, not other boxes: CentOS 7
 # from 7.0 to 7.2 media is XFS v4 on LVM, and rebuild-and-carry (docs/rebuild-and-carry.md) needs room on a second disk.
-LAYOUT = {"root_fs": None, "lvm": False, "extra_disks": []}
+# no_hwaddr (--no-hwaddr): the installer isn't told the NIC by MAC (no ifname=), so its ifcfg-eth0 has no HWADDR, as
+# a plain kickstart or interactive EL7 install writes it (wend#74); an install choice too: the chroot box writes its own.
+LAYOUT = {"root_fs": None, "lvm": False, "extra_disks": [], "no_hwaddr": False}
+# replay --relocate (main): relocate the box onto the first extra disk before the route's first hop, and roll back to
+# the old root and forward again after its last (SPEC "Relocate", "Walking a route on a relocated root")
+RELOCATE = False
 # on UEFI, the boot chain a hop leaves: the firmware's boot entries and every EFI binary on the system partition, by
 # hash, so a replay shows whether each release refreshed shim and GRUB or booted on what an older one left
 EFI_CHAIN = ("{ efibootmgr -v || echo 'no efibootmgr'; } 2>/dev/null | grep -E '^(BootCurrent|BootOrder|no efibootmgr)|HD\\('; "
@@ -351,7 +361,8 @@ def extras(disk):
 def layout_tag():
     """LAYOUT as a short name for directories (empty for the box's own layout), e.g. xfs-v4-lvm-x1."""
     return "-".join(([LAYOUT["root_fs"]] if LAYOUT["root_fs"] else []) + (["lvm"] if LAYOUT["lvm"] else []) +
-                    ([f"x{len(LAYOUT['extra_disks'])}"] if LAYOUT["extra_disks"] else []))
+                    ([f"x{len(LAYOUT['extra_disks'])}"] if LAYOUT["extra_disks"] else []) +
+                    (["nohwaddr"] if LAYOUT["no_hwaddr"] else []))
 
 
 def overlay(prev, disk):
@@ -566,7 +577,9 @@ def kickstart(box_doc, adapter, key_pub):
     whose 5.11 installer makes 100 MiB, inst["ks_end"] whether sections end with %end (EL7 on; EL5's
     anaconda doesn't know it), inst["nobase"] (default on) whether %packages takes --nobase, which EL8's installer
     no longer accepts, inst["repos"] the trees besides `tree` the install reads (EL8's AppStream, where httpd, php
-    and mariadb live), each a kickstart `repo` through the shim. On UEFI, an EFI system partition. The box's customize runs in %post after the release's
+    and mariadb live), each a kickstart `repo` through the shim, inst["packages_flags"] more %packages options (EL4's
+    anaconda stops to ask about dependencies unless it gets --resolvedeps), inst["ks"] more kickstart commands (EL4's
+    anaconda stops at its language support screen unless it gets langsupport). On UEFI, an EFI system partition. The box's customize runs in %post after the release's
     repos are set (set_release), as the chroot build runs it, with the mirror shim where the guest sees the host."""
     rel = adapter["releases"][box_doc["release"]]
     inst = rel["install"]
@@ -589,7 +602,7 @@ def kickstart(box_doc, adapter, key_pub):
     return "\n".join([
         "install", f"url --url {shim}/{inst['tree']}",
         *(f"repo --name={name} --baseurl={shim}/{path}" for name, path in inst.get("repos", {}).items()),
-        "text", "skipx", "lang en_US.UTF-8", "keyboard us",
+        "text", "skipx", "lang en_US.UTF-8", "keyboard us", *inst.get("ks", []),
         # a static address, as servers have: the live checks compare the guest's addresses with it after every boot
         f"network --device eth0 --bootproto static --ip {ADDR} --netmask 255.255.255.0 --gateway 10.0.2.2 "
         "--nameserver 10.0.2.3 --hostname wend-vm.example.org",
@@ -598,7 +611,7 @@ def kickstart(box_doc, adapter, key_pub):
         f'bootloader --location=mbr{disks[2]} --append="console=tty0 console=ttyS0,115200 {inst.get("append", "")}"'
         .replace(" \"", "\""),
         *disks[0], "zerombr", f"clearpart --all --initlabel{disks[1]}", *parts, "poweroff", "",
-        "%packages --nobase" if inst.get("nobase", True) else "%packages", "kernel", *inst.get("packages", []), *box_doc["packages"], *end, "",
+        " ".join(["%packages", *(["--nobase"] if inst.get("nobase", True) else []), *inst.get("packages_flags", [])]), "kernel", *inst.get("packages", []), *box_doc["packages"], *end, "",
         "%post --log=/root/ks-post.log",
         post_install(box_doc, key_pub, before=backends.fill(adapter["hop"]["set_release"], v),
                      shim=(load(f"adapters/{box_doc['family']}.toml")["mirror"]["shim"], adapter["mirror"]["shim"])),
@@ -762,6 +775,9 @@ def install(box_id, box_doc, d):
     if (LAYOUT["lvm"] or LAYOUT["extra_disks"]) and not (load(f"adapters/{fam}.toml")["backend"] == "rpm" and
                                                           inst.get("ks_end")):
         raise SystemExit("--lvm and --extra-disk are EL7-and-later kickstart choices (logvol, ignoredisk --only-use)")
+    if LAYOUT["no_hwaddr"] and not inst.get("ifname"):
+        raise SystemExit(f"--no-hwaddr is for a release whose installer is told the NIC by MAC (releases."
+                         f"{box_doc['release']}.install.ifname)")
     if FIRMWARE == "uefi" and not inst.get("uefi"):
         raise SystemExit(f"{box_doc['release']}'s installer doesn't install on UEFI (adapter: releases."
                          f"{box_doc['release']}.install.uefi)")
@@ -793,7 +809,8 @@ def install(box_id, box_doc, d):
         try:
             g.start(["-kernel", os.path.join(d, "vmlinuz"), "-initrd", os.path.join(d, "initrd.img"), "-no-reboot",
                      "-append", f"ks=http://{GUEST_HOST}:{srv.port}/ks.cfg ksdevice=eth0 console=ttyS0,115200 text "
-                     f"{inst.get('append', '')}{f' ifname=eth0:{MAC}' if inst.get('ifname') else ''}".strip()])
+                     f"{inst.get('append', '')}{f' ifname=eth0:{MAC}' if inst.get('ifname') and not LAYOUT['no_hwaddr'] else ''}"
+                     .strip()])
             g.proc.wait(3600)
         finally:
             srv.httpd.shutdown()
@@ -842,6 +859,11 @@ def install(box_id, box_doc, d):
     fw = g.ssh(FW_NOW)[1].strip()
     if fw != FIRMWARE:
         raise RuntimeError(f"the installed box booted on {fw!r}, not {FIRMWARE}")
+    if LAYOUT["no_hwaddr"]:  # the installer wrote no MAC pin, or this isn't the install it says
+        rc, out = g.ssh("test -f /etc/sysconfig/network-scripts/ifcfg-eth0 && "
+                        "! grep -E '^[[:space:]]*HWADDR=' /etc/sysconfig/network-scripts/ifcfg-eth0")
+        if rc:
+            raise RuntimeError(f"--no-hwaddr: the installed ifcfg-eth0 is missing or has a HWADDR: {out[-600:]}")
     if root_fs:  # the box has the filesystem it says, or it isn't that box
         rc, out = g.ssh(ROOT_FS_IS[root_fs])
         if rc:
@@ -1044,8 +1066,17 @@ def replay(route_path, box_id, resume=None):
         chain = json.loads(subprocess.run(["qemu-img", "info", "-U", "--backing-chain", "--output=json", prev],
                                           capture_output=True, text=True, check=True).stdout)
         key = os.path.join(os.path.dirname(chain[-1]["filename"]), "key")
+    reloc = None
+    if RELOCATE:
+        relocate_ready(a)
+        reloc = Relocation(a, box_doc, box_doc.get("shelter", {}))
+        reloc.fills = {"new_disk": new_disk(hardware(a, route["from"])), "route_mib": route_mib(a, route, pinned)}
+        if resume and not all(x["ok"] for x in src.get("relocate", {}).get("stages", [{"ok": False}])):
+            raise SystemExit(f"{resume[0]} didn't relocate the box: resume a --relocate run from one that did")
+    elif resume and "relocate" in src:
+        raise SystemExit(f"{resume[0]} walked a relocated root: resume it with --relocate")
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    tag = "-".join(filter(None, [FIRMWARE, layout_tag()]))
+    tag = "-".join(filter(None, [FIRMWARE, layout_tag(), "relocate" if RELOCATE else ""]))
     out_dir = os.path.join(ROOT, ".wend", "vm", f"{stamp}-{box_id.replace('/', '_')}-{tag}-{os.getpid()}")
     w.head = head()
     at = w.head or {}
@@ -1069,16 +1100,19 @@ def replay(route_path, box_id, resume=None):
         w.shelter_steps = {drop: sh_steps} if sh_steps else {}
     try:
         return walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_dir, stamp, key, prev,
-                       port, hw, plan, drop, sheltered, rw, sh_steps)
+                       port, hw, plan, drop, sheltered, rw, sh_steps, reloc)
     finally:
         if rw:
             rw.close()
 
 
 def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_dir, stamp, key, prev, port, hw,
-            plan, drop, sheltered, rw, sh_steps):
-    """replay's hops, once the shelters (if any) are built."""
+            plan, drop, sheltered, rw, sh_steps, reloc=None):
+    """replay's hops, once the shelters (if any) are built; with reloc (replay --relocate), on the relocated root."""
     hops, start_net, efi_start = [], None, None
+    if reloc and not resume:
+        moved = relocate_first(reloc, prev, key, port, hw, out_dir)
+        todo, prev = (todo, moved) if moved else ([], prev)
     for hop in todo:
         disk = os.path.join(out_dir, f"{hop}.qcow2")
         overlay(prev, disk)
@@ -1168,6 +1202,9 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
             if FIRMWARE == "uefi":
                 h["efi_chain"] = g.ssh(EFI_CHAIN)[1][-3000:]
             h["ok"] = ok and h["net_kept"] and not lost and h["kernel_current"] and h["firmware"] == FIRMWARE
+            if reloc:  # every hop's reboot has to land on the relocated root again, through the stub
+                h["root"] = g.ssh(reloc.r["booted"])[1].strip()
+                h["ok"] = h["ok"] and h["root"] == "new"
             if not h["net_kept"]:
                 h["net"] = {"start": start_net, "now": net}
             if hop in sheltered:
@@ -1185,13 +1222,20 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
         if not h["ok"]:
             break
         prev = disk
-    if len(hops) == len(todo) and all(h["ok"] for h in hops) and route.get("finish", {}).get("prune_obsolete"):
+    walked = bool(todo) and len(hops) == len(todo) and all(h["ok"] for h in hops)
+    if reloc and walked:  # the old root still boots after the last hop, and the relocated one again after that
+        back = relocate_back(reloc, prev, key, port, hw, out_dir)
+        walked, prev = bool(back), back or prev
+    if walked and route.get("finish", {}).get("prune_obsolete"):
         hops += prune(a, w, route["to"], box_doc, out_dir, prev, key, port, hw, start_net, plan)
-    complete = len(hops) == len(todo) + bool(route.get("finish", {}).get("prune_obsolete"))
+    complete = bool(todo) and len(hops) == len(todo) + bool(route.get("finish", {}).get("prune_obsolete"))
+    if reloc:
+        complete = complete and walked and reloc.ok()
     run = {"schema": "wend.vmrun/0", "route": check.content_id(route), "box": box_id, "from": route["from"],
            "to": route["to"], "started": stamp, "head": w.head, "firmware": FIRMWARE,
            **({"efi_start": efi_start} if FIRMWARE == "uefi" else {}),
-           "layout": {k: v for k, v in LAYOUT.items() if v}, "hops": hops,
+           "layout": {k: v for k, v in LAYOUT.items() if v},
+           **({"relocate": {**reloc.fills, "stages": reloc.stages}} if reloc else {}), "hops": hops,
            "result": "pass" if complete and all(h["ok"] for h in hops) and not resume else
            "partial-pass" if complete and all(h["ok"] for h in hops) else "fail",
            "runner": {"kind": "vm", "host": os.uname().nodename, "kernel": os.uname().release}}
@@ -1214,25 +1258,109 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
     return 0 if run["result"] == "pass" else 1
 
 
+class Relocation:
+    """Relocate (SPEC "Relocate") on one guest at a time: the adapter's [relocate] steps, and the boots between, each
+    recorded in `stages` with which root came up (the adapter's `booted`), the box's checks against `before` (taken
+    once, on the box as it was), its network against `start_net` and its firmware."""
+
+    def __init__(self, a, box_doc, plan=None):
+        self.r, self.a, self.box_doc, self.plan = a["relocate"], a, box_doc, plan or {}
+        self.stages, self.g, self.before, self.start_net = [], None, None, None
+
+    def start(self, g):
+        """The box as it is before anything moves: what every later boot is held to."""
+        self.g = g
+        self.start_net = net_read(g, self.plan)
+        if f"default via {GUEST_HOST}" not in self.start_net or ADDR not in self.start_net:  # never compare two empties
+            raise RuntimeError(f"the box's network can't be read at the start (no `ip`?): {self.start_net!r}")
+        self.before = checks(g, self.box_doc, self.a)
+
+    def steps(self, fills, out_dir):
+        t0 = time.time()
+        ok, steps = run_hop(self.g, [backends.fill(c, fills) for k in check.RELOCATE_STEPS if k != "cleanup"
+                                     for c in self.r[k]], [backends.fill(c, fills) for c in self.r["cleanup"]])
+        open(os.path.join(out_dir, "relocate.steps.log"), "w").write(steps)
+        self.stages.append({"stage": "relocate", "ok": ok, "seconds": round(time.time() - t0),
+                            "route_mib": fills["route_mib"]})
+        log(f"relocate: {'OK' if ok else 'FAILED'} in {round(time.time() - t0)} s (route_mib {fills['route_mib']})")
+        return ok
+
+    def came_up(self, name, want, back, forced=False, **extra):
+        """Which root the guest came up on after a stage, and whether it's the box it was."""
+        g = self.g
+        h = {"stage": name, "want": want, "came_back": back, "forced": forced, **extra}
+        if back:
+            after = checks(g, self.box_doc, self.a)
+            h["booted"] = g.ssh(self.r["booted"])[1].strip()
+            h["lost"] = sorted(n for n, (good, _) in self.before.items() if good and not after.get(n, (False,))[0])
+            h["failed_logs"] = {n: after[n][1][-1500:] for n in h["lost"]}
+            h["net_kept"] = net_read(g, self.plan) == self.start_net
+            h["firmware"] = g.ssh(FW_NOW)[1].strip()
+            h["ok"] = h["booted"] == want and not h["lost"] and h["net_kept"] and h["firmware"] == FIRMWARE
+        else:
+            h["ok"] = False
+            h["console_tail"] = open(g.console, errors="replace").read()[-4000:]
+        log(f"{name}: {'OK' if h['ok'] else 'FAILED'} (came back {back}{' (forced)' if forced else ''}, root "
+            f"{h.get('booted')!r}, wanted {want!r}, lost {h.get('lost')}, network kept {h.get('net_kept')})")
+        self.stages.append(h)
+        return h["ok"]
+
+    def boot(self, name, cmd, want):
+        """Run one of the adapter's commands between boots, reboot, and check the root that came up."""
+        rc, out = self.g.ssh(cmd)
+        if rc:
+            self.stages.append({"stage": name, "ok": False, "output": out[-3000:]})
+            log(f"{name}: FAILED ({out[-300:]})")
+            return False
+        return self.came_up(name, want, *self.g.reboot())
+
+    def trial(self):
+        """The trial boot right after the steps (the new root), timed."""
+        t0 = time.time()
+        back, forced = self.g.reboot()
+        return self.came_up("trial", "new", back, forced, seconds=round(time.time() - t0))
+
+    def ok(self):
+        return bool(self.stages) and all(x["ok"] for x in self.stages)
+
+
+def route_mib(a, route, pinned):
+    """The room a relocated root needs for ROUTE on top of the copy (docs/rebuild-and-carry.md, "Where the new root
+    lives"): every hop's disk_mib and boot_mib (/boot is a directory on the new root, and SPEC leaves a /boot on / to
+    disk_mib), and the kernel of each release a pinned fix passes through with rpm.transit."""
+    hw = a.get("hardware", {})
+    n = sum(hw.get(h, {}).get("disk_mib", 0) + hw.get(h, {}).get("boot_mib", 0) for h in route["hops"])
+    transit = {s["release"] for f in pinned for k in ("pre", "post") for s in f.get(k, []) if s["op"] == "rpm.transit"}
+    return n + sum(a["releases"][t]["transit"]["boot_mib"] for t in sorted(transit))
+
+
+def new_disk(hw):
+    """The first extra disk, as the guest names it: the new root's."""
+    first = FIRST_DISK[hw[0]]
+    return f"/dev/{first[:-1]}{chr(ord(first[-1]) + 1)}"
+
+
+def relocate_ready(a):
+    if not a.get("relocate"):
+        raise SystemExit("this family's adapter has no [relocate] table")
+    if FIRMWARE != "bios":
+        raise SystemExit("relocate is BIOS-only for now (docs/rebuild-and-carry.md: UEFI comes after its own proof)")
+    if not LAYOUT["extra_disks"]:
+        raise SystemExit("relocate needs a disk for the new root: --extra-disk GB")
+
+
 def relocate(box_id):
     """Relocate (SPEC "Relocate"): on a fresh copy of the box, the adapter's [relocate] steps copy the running root onto
     the first extra disk and flip the boot to it for one trial. Then, each followed by a check of which root came up
     (and the box's checks, its network and its firmware): the trial boot (the new root), a hard reset (the trial was
     one-shot: the old root), the trial again (the new root), commit to the trial and reboot (the new root, now the
-    default), a one-shot rollback (the old root) and one more reboot (the new root). No route: the relocated root
-    walks a route on its own later."""
+    default), a one-shot rollback (the old root), one more reboot (the new root), a rollback that sticks (the old
+    root, twice) and forward again (the new root). No route: `replay --relocate` walks one on the relocated root."""
     d, box_doc = build(box_id)
     a = guest_adapter(box_doc["family"])
-    r = a.get("relocate")
-    if not r:
-        raise SystemExit(f"adapters/{box_doc['family']}.toml has no [relocate] table")
-    if FIRMWARE != "bios":
-        raise SystemExit("relocate is BIOS-only for now (docs/rebuild-and-carry.md: UEFI comes after its own proof)")
-    if not LAYOUT["extra_disks"]:
-        raise SystemExit("relocate needs a disk for the new root: --extra-disk GB")
+    relocate_ready(a)
     hw = hardware(a, box_doc["release"])
-    first = FIRST_DISK[hw[0]]
-    fills = {"new_disk": f"/dev/{first[:-1]}{chr(ord(first[-1]) + 1)}", "route_mib": 0}
+    fills = {"new_disk": new_disk(hw), "route_mib": 0}
     stamp = time.strftime("%Y%m%d-%H%M%S")
     tag = "-".join(filter(None, [FIRMWARE, layout_tag()]))
     out_dir = os.path.join(ROOT, ".wend", "vm", f"{stamp}-{box_id.replace('/', '_')}-{tag}-relocate-{os.getpid()}")
@@ -1241,9 +1369,10 @@ def relocate(box_id):
     overlay(os.path.join(d, "base.qcow2"), disk)
     g = Guest(disk, os.path.join(d, "key"), box_doc.get("vm", {}).get("ssh_port", 22), hw)
     g.start()
-    stages = []
+    rel = Relocation(a, box_doc)
+    r = rel.r
     run = {"schema": "wend.vmrelocate/0", "box": box_id, "started": stamp, "head": head(), "firmware": FIRMWARE,
-           "layout": {k: v for k, v in LAYOUT.items() if v}, "new_disk": fills["new_disk"], "stages": stages,
+           "layout": {k: v for k, v in LAYOUT.items() if v}, "new_disk": fills["new_disk"], "stages": rel.stages,
            "runner": {"kind": "vm", "host": os.uname().nodename, "kernel": os.uname().release}}
 
     def finish(result):
@@ -1254,59 +1383,65 @@ def relocate(box_id):
         return 0 if result == "pass" else 1
 
     if not g.wait_ssh():
-        stages.append({"stage": "start", "ok": False, "console_tail": open(g.console, errors="replace").read()[-4000:]})
+        rel.stages.append({"stage": "start", "ok": False,
+                           "console_tail": open(g.console, errors="replace").read()[-4000:]})
         return finish("fail")
-    start_net = g.ssh(NET)[1]
-    if f"default via {GUEST_HOST}" not in start_net or ADDR not in start_net:  # never compare two empty reads
-        raise RuntimeError(f"the box's network can't be read at the start (no `ip`?): {start_net!r}")
-    before = checks(g, box_doc, a)
-
-    def came_up(name, want, back, forced=False, **extra):
-        """Which root the guest came up on after a stage, and whether it's the box it was."""
-        h = {"stage": name, "want": want, "came_back": back, "forced": forced, **extra}
-        if back:
-            after = checks(g, box_doc, a)
-            h["booted"] = g.ssh(r["booted"])[1].strip()
-            h["lost"] = sorted(n for n, (good, _) in before.items() if good and not after.get(n, (False,))[0])
-            h["failed_logs"] = {n: after[n][1][-1500:] for n in h["lost"]}
-            h["net_kept"] = g.ssh(NET)[1] == start_net
-            h["firmware"] = g.ssh(FW_NOW)[1].strip()
-            h["ok"] = h["booted"] == want and not h["lost"] and h["net_kept"] and h["firmware"] == FIRMWARE
-        else:
-            h["ok"] = False
-            h["console_tail"] = open(g.console, errors="replace").read()[-4000:]
-        log(f"{name}: {'OK' if h['ok'] else 'FAILED'} (came back {back}{' (forced)' if forced else ''}, root "
-            f"{h.get('booted')!r}, wanted {want!r}, lost {h.get('lost')}, network kept {h.get('net_kept')})")
-        stages.append(h)
-        return h["ok"]
-
-    def between(name, cmd):
-        rc, out = g.ssh(cmd)
-        if rc:
-            stages.append({"stage": name, "ok": False, "output": out[-3000:]})
-            log(f"{name}: FAILED ({out[-300:]})")
-        return rc == 0
-
-    t0 = time.time()
-    ok, steps = run_hop(g, [backends.fill(c, fills) for k in check.RELOCATE_STEPS if k != "cleanup" for c in r[k]],
-                        [backends.fill(c, fills) for c in r["cleanup"]])
-    open(os.path.join(out_dir, "relocate.steps.log"), "w").write(steps)
-    stages.append({"stage": "relocate", "ok": ok, "seconds": round(time.time() - t0)})
-    log(f"relocate: {'OK' if ok else 'FAILED'} in {round(time.time() - t0)} s")
-    if not ok:
+    rel.start(g)
+    if not rel.steps(fills, out_dir) or not rel.trial():
         return finish("fail")
-    t0 = time.time()
-    back, forced = g.reboot()
-    if not came_up("trial", "new", back, forced, seconds=round(time.time() - t0)):
-        return finish("fail")
-    if not came_up("reset during the trial", "old", g.reset()):
+    if not rel.came_up("reset during the trial", "old", g.reset()):
         return finish("fail")
     for name, cmd, want in (("trial again", r["arm"], "new"), ("commit to the trial", r["commit_trial"], "new"),
-                            ("rollback once", r["rollback_next"], "old"), ("after the rollback", "true", "new")):
-        if not between(name, cmd) or not came_up(name, want, *g.reboot()):
+                            ("rollback once", r["rollback_next"], "old"), ("after the rollback", "true", "new"),
+                            ("rollback", r["rollback"], "old"), ("still rolled back", "true", "old"),
+                            ("forward", r["forward"], "new")):
+        if not rel.boot(name, cmd, want):
             return finish("fail")
     run["new_root_used_mib"] = g.ssh("df -Pm / | awk 'NR == 2 {print $3}'")[1].strip()
     return finish("pass")
+
+
+def relocate_first(rel, prev, key, port, hw, out_dir):
+    """replay --relocate, before the first hop: relocate's steps on a copy of prev, the trial boot, and the commit to
+    it (the relocated root is the default from here on). Returns the disk the route walks on, or None."""
+    disk = os.path.join(out_dir, "relocate.qcow2")
+    overlay(prev, disk)
+    g = Guest(disk, key, port, hw)
+    g.start()
+    try:
+        if not g.wait_ssh():
+            rel.stages.append({"stage": "start", "ok": False,
+                               "console_tail": open(g.console, errors="replace").read()[-4000:]})
+            return None
+        rel.start(g)
+        ok = rel.steps(rel.fills, out_dir) and rel.trial() and rel.boot("commit to the trial", rel.r["commit_trial"],
+                                                                        "new")
+        return disk if ok else None
+    finally:
+        g.stop()  # a failed stage's disk and console stay for a look
+
+
+def relocate_back(rel, prev, key, port, hw, out_dir):
+    """replay --relocate, after the last hop: a rollback from the route's last release (whose kernel may not mount the
+    old /boot, so it sticks) must boot the old root as it was at the start, and forward must boot the walked root again.
+    Returns the disk after that, or None."""
+    disk = os.path.join(out_dir, "rollback.qcow2")
+    overlay(prev, disk)
+    g = Guest(disk, key, port, hw)
+    g.start()
+    try:
+        if not g.wait_ssh():
+            rel.stages.append({"stage": "rollback after the route", "ok": False,
+                               "console_tail": open(g.console, errors="replace").read()[-4000:]})
+            return None
+        rel.g = g
+        if rel.before is None:  # resumed: the old root is held to the walked one's checks
+            rel.start(g)
+        ok = rel.boot("rollback after the route", rel.r["rollback"], "old") and \
+            rel.boot("forward after the route", rel.r["forward"], "new")
+        return disk if ok else None
+    finally:
+        g.stop()
 
 
 def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net, plan):
@@ -1401,13 +1536,17 @@ def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net, plan):
 
 
 def main(args):
-    global FIRMWARE
+    global FIRMWARE, RELOCATE
     while args[:1] and args[0].startswith("--"):
-        if args[0] == "--uefi":
+        if args[0] == "--relocate":
+            RELOCATE, args = True, args[1:]
+        elif args[0] == "--uefi":
             FIRMWARE, args = "uefi", args[1:]
             for f in (OVMF_CODE, OVMF_VARS):
                 if not os.path.exists(f):
                     raise SystemExit(f"--uefi needs OVMF ({f}; Debian and Ubuntu: the ovmf package)")
+        elif args[0] == "--no-hwaddr":
+            LAYOUT["no_hwaddr"], args = True, args[1:]
         elif args[0] == "--lvm":
             LAYOUT["lvm"], args = True, args[1:]
         elif args[0] == "--root-fs" and len(args) > 1 and args[1] in ROOT_FS:
@@ -1427,7 +1566,7 @@ def main(args):
         return replay(args[1], args[2])
     if args[:1] == ["replay"] and len(args) == 6 and args[3] == "--from":
         return replay(args[1], args[2], (args[4], args[5]))
-    if args[:1] == ["relocate"] and len(args) == 2:
+    if args[:1] == ["relocate"] and len(args) == 2 and not RELOCATE:
         return relocate(args[1])
     return __doc__
 

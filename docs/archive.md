@@ -88,6 +88,11 @@ Only files that proven routes and boxes reference. Never a mirror of a whole dis
    and no CI artifact or copy on remi holds them. Their packages are stored, but `wend walk --run` can't replay those
    runs from the archive. The next recording of each EL route is captured whole and closes it for that route.
 
+6. **wend's own library tables** (SPEC "Runtime preflight"): each `<family>/<release>.txt.xz` an adapter's `libs`
+   pins, at that pin, stored by `tools/archive.py add-tables STORE DIR` (which refuses bytes that aren't the pinned
+   ones). They are wend's files, not a distro's, and stay out of git; the release workflow and
+   `tools/sonames.py fetch` read them back from here.
+
 "Referenced" means: by a run file on main whose `result` is `pass`, or by a box file on main. The archive never
 evicts a blob that such a file references. No eviction at all in the first version: storage is cheap and the set is
 small. A blob a later run no longer references can be swept once there are numbers saying it's worth the code.

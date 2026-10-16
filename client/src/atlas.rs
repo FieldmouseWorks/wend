@@ -20,6 +20,9 @@ pub struct Atlas {
     /// "family/release" -> that release's driver table (SPEC "Hardware preflight"), as bytes: the adapter pins it by
     /// sha256
     pub drivers: BTreeMap<String, Vec<u8>>,
+    /// "family/release" -> that release's library table (SPEC "Runtime preflight"), as bytes: the adapter pins it by
+    /// sha256
+    pub sonames: BTreeMap<String, Vec<u8>>,
 }
 
 pub fn parse_toml(text: &str) -> Result<Doc, String> {
@@ -71,6 +74,7 @@ impl Atlas {
             routes: BTreeMap::new(),
             runs: BTreeMap::new(),
             drivers: BTreeMap::new(),
+            sonames: BTreeMap::new(),
         };
         let mut ps = vec![];
         files(&root.join("adapters"), 0, "toml", &mut ps);
@@ -89,6 +93,20 @@ impl Atlas {
             let rel_ = p.file_stem().unwrap().to_string_lossy();
             let bytes = fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?;
             a.drivers.insert(format!("{fam}/{rel_}"), bytes);
+        }
+        // library tables aren't in git: a release tarball carries them in adapters/sonames/, a checkout fetches them
+        // into .wend/sonames/ (tools/sonames.py fetch); xz-compressed, checked against their pins where they're read
+        let mut ps = vec![];
+        files(&root.join("adapters").join("sonames"), 1, "xz", &mut ps);
+        files(&root.join(".wend").join("sonames"), 1, "xz", &mut ps);
+        for p in ps {
+            let fam = p.parent().and_then(Path::file_name).unwrap().to_string_lossy();
+            let name = p.file_name().unwrap().to_string_lossy();
+            let Some(rel_) = name.strip_suffix(".txt.xz") else {
+                continue;
+            };
+            let bytes = fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+            a.sonames.entry(format!("{fam}/{rel_}")).or_insert(bytes);
         }
         let mut ps = vec![];
         files(&root.join("fixes"), 2, "toml", &mut ps);
