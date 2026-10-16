@@ -141,6 +141,24 @@ Only after every required check is green **and** the Claude review has signed of
 the same: a red check, an unresolved review finding, or no review at all means no merge. Nobody, human or bot, can
 push to `main` directly.
 
+### What a cloud Claude session can write on GitHub
+
+Claude sessions in the cloud (project threads included) reach GitHub through Anthropic's GitHub proxy, which uses
+the maintainer's credentials but only lets some writes through. So the gate is built around those writes:
+
+- **Direct:** pushing a branch, opening, editing and merging PRs, comments, review replies, resolving review threads,
+  labels, and dispatching a workflow (`POST .../actions/workflows/<file>/dispatches`). GitHub's REST API only; the
+  proxy refuses GraphQL, so `gh pr` and `gh issue` don't work there.
+- **Through a dispatched workflow:** anything the proxy refuses that a workflow's own token can do.
+  - Recording remi's verdict on a PR: `remi-verdict.yml` (layer 4). The proxy refuses `POST /statuses`.
+  - Re-judging a PR's `remi-proof` status: `remi-proof.yml`, input `pr`.
+- **The maintainer, by hand:** pushing or deleting tags, deleting branches, and repository settings (branch
+  protection, required checks, Actions permissions). The proxy refuses all of them.
+
+A new kind of write a session needs goes in a workflow_dispatch workflow with the narrowest `permissions:` that does
+it and checks on its inputs, like `remi-verdict.yml`. The
+workflow's run log records who dispatched it.
+
 ## How runs land
 
 A run's `sources` pin the exact bytes a route installs, and the client trusts them (`wend walk --run`). Nobody can
