@@ -3,7 +3,7 @@
 Upgrade a 2007 server to today, one release at a time, along a path someone already proved works.
 
 This repo is **the map**: small, reviewed fixes for the places where a plain release upgrade breaks, and routes that
-pin those fixes into release-to-release paths. Each route carries evidence (runs) that CI replayed it from scratch on
+pin those fixes into release-to-release paths. Each route carries evidence (runs) that it was replayed from scratch on
 real test boxes and every health check stayed green. A client (a static Rust binary, later) fingerprints your
 machine, picks a route, and walks it. At each hop it applies the fixes whose preconditions hold on *your* box, takes
 a snapshot first, and rolls back if a check fails. The client uses no model and needs no network beyond your
@@ -27,9 +27,11 @@ crosses yum to dnf, the /usr merge, two package-manager bootstraps and a vendor 
 CI replays every route in a chroot, which proves the userland only. Kernels, bootloaders and the first real boot are
 tested by the VM tier (`tools/vm.py`, SPEC.md "VM tier"), which the maintainer runs: each box is installed by its
 release's own installer in a KVM guest, and every hop ends with a real reboot and the box's checks against the live
-services. As of 2026-10-14 the Debian, Ubuntu, CentOS 5 and CentOS 7 routes have passed it from scratch on BIOS, and
-the Ubuntu route also on UEFI; CentOS 8 has no VM run yet. The results are on [wend#13](https://github.com/FieldmouseWorks/wend/issues/13),
-which stays open until the VM tier runs in CI.
+services. As of 2026-10-14, at the route versions recorded there, these boxes have passed it from scratch on BIOS:
+`etch-web`, `etch-db`, `trusty-db`, `trusty-web-updated`, `centos5-web`, `centos7-lamp` and `centos8-lamp`. All three
+Ubuntu boxes have also passed on UEFI. The results are on [wend#13](https://github.com/FieldmouseWorks/wend/issues/13),
+[#84](https://github.com/FieldmouseWorks/wend/pull/84) (UEFI) and [#92](https://github.com/FieldmouseWorks/wend/pull/92)
+(CentOS 8); #13 stays open until the VM tier runs in CI.
 
 **Agents and contributors: start with [AGENTS.md](AGENTS.md).** Clone, plug in any model, discover a path, prove it
 with the same command CI runs, and open a PR.
@@ -76,7 +78,7 @@ adapters/
 fixes/<family>/<hop>/<name>.toml          14 debian, 46 el, 8 ubuntu
 routes/<family>/<from>-to-<to>.toml       the five routes above
 boxes/<family>/<name>/box.toml            CI fixtures, trusted test code, never shipped
-runs/<family>/<route>/<box>/<stamp>.json  written by CI only: the gate refuses a run it didn't attest
+runs/<family>/<route>/<box>/<stamp>.json  new runs land from CI only: the gate refuses a run it didn't attest
 archive/allowed_signers                   the archive's public signing key (docs/archive.md)
 tools/
   check.py           schema check, content ids, decoy check, --repin, --compile
@@ -94,7 +96,7 @@ tools/
   hwdata.py, runtimes.py     build the driver and runtime tables for hardware and runtime preflight
   shelter.py, podman_standin.sh   sheltering an app (SPEC "Sheltering an app"), chroot tier
   net_*.py           reference implementations of the network ops
-  archive.py, fetched.py, gate_fetched.py, r2push.py   the archive: capture, store, publish (docs/archive.md)
+  archive.py, fetched.py, gate_fetched.py, r2push.py   the archive: capture, store, publish
   tomlw.py           writes TOML (tomllib only reads)
   port_oldlinux.py   one-off import of the dep-lab Debian results, with a lossless round-trip proof
   test_*.py          the tools' own tests; test_check.py holds the broken fixes the gate must refuse
@@ -102,8 +104,9 @@ docs/validation/     the first end-to-end test: verify on both boxes, and Opus r
 docs/archive.md      design: the wend archive (wend#19), every byte proven routes reference, by sha256
 docs/rebuild-and-carry.md  design: moving a machine whose filesystem a later kernel can't mount (old-XFS CentOS 7)
 client/              the Rust client (client/README.md): reads, checks and compiles the atlas exactly as tools/
-                     does (client/parity.py proves it), and walks a route on a root filesystem. It doesn't walk the running system yet: that
-                     needs a snapshot backend. No AI.
+                     does (client/parity.py proves it), walks a route on a root filesystem, and runs hardware and
+                     runtime preflight. Fetching by digest is the current slice. It doesn't walk the running
+                     system yet: that needs a snapshot backend. No AI.
 .github/
   workflows/gate.yml the PR gate: dco, schema, plan, replay, decoys, claude-review
   workflows/client.yml the Rust client: build, test, parity with tools/
