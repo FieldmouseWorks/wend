@@ -432,12 +432,17 @@ See `adapters/ubuntu.toml`. The Debian adapter's engine on Ubuntu's own ladder. 
 
 See `adapters/el.toml`. Notes that matter:
 
-- The ladder crosses vendors: `centos5 centos6 centos7 centos8 alma8 alma9 alma10`. A family isn't a distro; release
+- The ladder crosses vendors: `centos4 centos5 centos6 centos7 centos8 alma8 alma9 alma10`. A family isn't a distro; release
   ids carry the vendor. CentOS 8 and AlmaLinux 8 sit side by side: routes from EL7 and earlier skip both (EL8 is
   crossed inside the hop to EL9), and a route from CentOS 8 goes straight to EL9 with its own dnf. Scientific Linux 7
   (`sl7`) is off the ladder and joins it at `centos7` (see Route): its boxes take the CentOS 7 routes.
 - The package manager changes mid-ladder (yum through 7, dnf from 8), and so does the upgrade verb: `upgrade` on EL6,
   `distro-sync` from EL7 (EL6's grep is newer than EL7's). Each release can set its own `upgrade` in the adapter.
+- EL4 to EL5 runs EL4's yum 2.4 (`upgrade`; it has no distro-sync). Two of EL5's yum's own modules are installed as
+  EL4's Python 2.3 builds at a version yum won't replace (python-elementtree, python-sqlite), and EL4's yum imports
+  elementtree, so they can't go first: `releases.centos5.upgrade` drops their records only, the transaction installs
+  EL5's as yum's dependencies, and the old builds' Python 2.3 files go after. Like the kernel, a harness step: a
+  fix can't drop records.
 - The harness owns `/etc/yum.repos.d` and clears the vendor .repo files every release package drops (they point at
   dead mirrors). After each hop it also rebuilds the rpm database and, on EL10, moves it to `/usr/lib/sysimage/rpm`.
 - CentOS 5's yum can't speak today's TLS, so repos go through a mirror shim the harness runs on the host
@@ -986,7 +991,7 @@ other brace syntax is touched, so `${...}` and `%{...}` pass through). Values fo
 
 ## Kernels and the bootloader
 
-A chroot box has no kernel, and these steps do nothing there. A real machine's kernel and boot entries belong to the
+A chroot box has no kernel, and these steps do nothing there. The exception is a box whose release's own packages require one (EL4's initscripts require `kernel`, so a CentOS 4 box has one): CI's sandbox sets `WEND_CHROOT_BOX=1`, and `hop.kernel_before` drops its records there as it does on a booted machine, keeping the files; no kernel is installed in its place. Someone's disk walked in a chroot never gets it, so its kernel records stay. A real machine's kernel and boot entries belong to the
 harness, not to fixes, because the release's own tools can't carry them up the ladder:
 
 - **The old release's kernel can't stay in the rpm database.** EL5's kernels require `mkinitrd`, which is gone in EL6

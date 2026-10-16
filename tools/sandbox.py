@@ -20,7 +20,10 @@ import backends
 
 WORK = os.environ.get("WEND_WORK", "/var/tmp/wend")
 ENV = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "HOME": "/root",
-       "DEBIAN_FRONTEND": "noninteractive", "TERM": "dumb"}
+       "DEBIAN_FRONTEND": "noninteractive", "TERM": "dumb",
+       # a CI box, not someone's disk: EL's hop.kernel_before drops kernel records here as it does on a booted box
+       # (SPEC "Kernels and the bootloader"; only EL4's initscripts require a kernel, so only CentOS 4 boxes have one)
+       "WEND_CHROOT_BOX": "1"}
 # Every command runs in a UTS namespace of its own, named by the root's own /etc/hostname (or EL's
 # /etc/sysconfig/network), else HOSTNAME. Read inside the chroot, so a symlink there can't point at the host. Without
 # it a box takes the host's name, and a build depends on where it runs: etch's postfix postinst turns a bare host name
