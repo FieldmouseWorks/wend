@@ -340,15 +340,27 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
                 && full("[a-z0-9]+", n)
                 && fields.as_ref().is_some_and(|f| {
                     BTreeSet::from(["marker", "repos", "vendor"]).is_subset(f)
-                        && f.is_subset(&BTreeSet::from(["gpgkeys", "marker", "repos", "vendor"]))
+                        && f.is_subset(&BTreeSet::from(["gpgkeys", "libs", "marker", "repos", "vendor"]))
                 })
                 && get(ad, "marker").is_some_and(|m| full_v(PKG, m))
                 && get(ad, "vendor").is_some_and(|v| full_v("[A-Za-z0-9][A-Za-z0-9 .,-]*", v))
                 && repos_ok;
+            let libs_ok = match get(ad, "libs") {
+                None => true,
+                Some(Value::Object(l)) => l.iter().all(|(r, p)| {
+                    get(ad, "repos").is_some_and(|rs| get(rs, r).is_some()) && full_v("sha256:[0-9a-f]{64}", p)
+                }),
+                Some(_) => false,
+            };
             if !ok {
                 errs.push(format!(
                     "{wh}: addons.{n} needs a plain name, a marker package, a plain vendor, and repos (host/path) \
                      for releases the adapter has, on the rpm backend"
+                ));
+            } else if !libs_ok {
+                errs.push(format!(
+                    "{wh}: addons.{n}.libs must pin (sha256:<hex>) library tables for releases the add-on has a repo \
+                     for"
                 ));
             }
         }
@@ -758,23 +770,37 @@ fn check_runtimes(a: &Doc, wh: &str) -> Vec<String> {
     errs
 }
 
-/// Each release's library table is in the atlas (adapters/sonames/<family>/<release>.txt) at the pinned hash.
+/// The library tables an adapter pins: `(table, field, pin)`, a release's own (`runtimes.<r>.libs`, table `<r>`) and
+/// an add-on's for a release (`addons.<name>.libs.<r>`, table `<r>.<name>`).
+pub fn library_pins(a: &Doc) -> Vec<(String, String, String)> {
+    let mut out = vec![];
+    for (r, t) in get(a, "runtimes").and_then(Value::as_object).into_iter().flatten() {
+        if let Some(p) = get(t, "libs").and_then(Value::as_str) {
+            out.push((r.clone(), format!("runtimes.{r}.libs"), p.to_string()));
+        }
+    }
+    for (n, ad) in get(a, "addons").and_then(Value::as_object).into_iter().flatten() {
+        for (r, p) in get(ad, "libs").and_then(Value::as_object).into_iter().flatten() {
+            if let Some(p) = p.as_str() {
+                out.push((format!("{r}.{n}"), format!("addons.{n}.libs.{r}"), p.to_string()));
+            }
+        }
+    }
+    out
+}
+
+/// Each library table that is in the atlas (adapters/sonames/ or .wend/sonames/<family>/<table>.txt.xz) is at the
+/// pinned hash.
 pub fn library_table_errors(atlas: &Atlas, fam: &str, a: &Doc, wh: &str) -> Vec<String> {
     let mut errs = vec![];
-    let Some(Value::Object(rt)) = get(a, "runtimes") else {
-        return errs;
-    };
-    for (r, t) in rt {
-        let Some(want) = get(t, "libs").and_then(Value::as_str) else {
-            continue;
-        };
+    for (table, field, want) in library_pins(a) {
         // not in git: a table that isn't here is fine (preflight says its check was skipped); one that is must match
-        let Some(got) = atlas.sonames.get(&format!("{fam}/{r}")).map(|b| sha256_hex(b)) else {
+        let Some(got) = atlas.sonames.get(&format!("{fam}/{table}")).map(|b| sha256_hex(b)) else {
             continue;
         };
         if format!("sha256:{got}") != want {
             errs.push(format!(
-                "{wh}: runtimes.{r}.libs: the library table {fam}/{r}.txt.xz here has sha256 {}..., not the pinned one",
+                "{wh}: {field}: the library table {fam}/{table}.txt.xz here has sha256 {}..., not the pinned one",
                 &got[..12]
             ));
         }
