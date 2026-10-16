@@ -14,8 +14,9 @@
 #
 # A fix a chroot can't judge is one that touches what the chroot tier never boots (SPEC.md "Kernels and the
 # bootloader"): an op on networking (`net.*`) or the root's layout (`fs.layout`), or one that names a kernel,
-# bootloader, initramfs, storage, init or network package or unit in any argument (BOOTNET below). A changed route counts its newly
-# pinned fixes too, so an existing network fix pinned onto a new route needs remi as well.
+# bootloader, initramfs, storage, init, network or firewall package or unit in any argument (BOOTNET below). A fix
+# counts if it is one before or after the change, and a changed route counts the fixes it newly pins or unpins: an
+# existing network fix pinned onto a route, or dropped from one, changes a real boot as much as a new one.
 #
 # Trust: pull_request_target runs this file as it is on the base branch, with a token that can write statuses, so no PR
 # (fork or not) can change its own judge. It never checks out or runs the PR's code. What it reads from the PR (the file
@@ -115,6 +116,26 @@ jobs:
                           return f"{op} {k} {hit}"
               return None
 
+          def pinned_blind(route, pin, repo, ref):
+              """Why a chroot can't judge the fix a route pins, or None. meta.name is its file name (AGENTS.md
+              step 5), under one of the route's hops; two hops may each have a fix of that name, and any of them a
+              chroot can't judge counts. One that isn't there, or can't be read, counts as unreadable."""
+              name, fam, hops = (pin.get("name") if isinstance(pin, dict) else None), route.get("family"), route.get("hops")
+              if not (isinstance(hops, list) and all(isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", v)
+                                                     for v in [name, fam, *hops])):
+                  return "unreadable"
+              docs = []
+              for h in hops:
+                  try:
+                      docs.append(tomllib.loads(api(f"repos/{repo}/contents/fixes/{fam}/{h}/{name}.toml?ref={ref}",
+                                                    raw=True).decode()))
+                  except urllib.error.HTTPError as e:
+                      if e.code != 404:
+                          return "unreadable"
+                  except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+                      return "unreadable"
+              return "unreadable" if not docs else next(filter(None, map(blind, docs)), None)
+
           if not re.fullmatch(r"[0-9]+", PR):
               sys.exit(f"not a PR number: {PR}")
           pr = api(f"repos/{REPO}/pulls/{PR}")
@@ -153,35 +174,35 @@ jobs:
               if any(HARNESS.match(n) for n in names):
                   why.append(f"it changes {f['filename']}")
                   continue
-              for n in names:
-                  if not (n.startswith("fixes/") and n.endswith(".toml")):
-                      continue
-                  # a removed fix is judged by what it was; an added or changed one by what it is now
-                  doc = (toml_at(base_repo, n, base_sha) if f["status"] == "removed" or n != f["filename"]
-                         else toml_at(head_repo, n, sha))
-                  b = "unreadable" if doc is None else blind(doc)
+              # a fix is judged by what it was and what it is now: turning a network fix into a harmless one
+              # changes a real boot as much as the reverse
+              old = f.get("previous_filename") or f["filename"]
+              fix = lambda n: n.startswith("fixes/") and n.endswith(".toml")
+              if fix(old) or fix(f["filename"]):
+                  docs = ([toml_at(base_repo, old, base_sha)] if fix(old) and f["status"] != "added" else []) + \
+                         ([toml_at(head_repo, f["filename"], sha)] if fix(f["filename"]) and f["status"] != "removed"
+                          else [])
+                  b = "unreadable" if None in docs else next(filter(None, map(blind, docs)), None)
                   if b:
-                      why.append(f"{n}: {b}")
-              if f["filename"].startswith("routes/") and f["status"] != "removed":
-                  route = toml_at(head_repo, f["filename"], sha)
-                  old = toml_at(base_repo, f.get("previous_filename") or f["filename"], base_sha) or {}
-                  if route is None:
+                      why.append(f"{f['filename']}: {b}")
+              if old.startswith("routes/") or f["filename"].startswith("routes/"):
+                  route = ({} if f["status"] == "removed" or not f["filename"].startswith("routes/")
+                           else toml_at(head_repo, f["filename"], sha))
+                  base = ({} if f["status"] == "added" or not old.startswith("routes/")
+                          else toml_at(base_repo, old, base_sha))
+                  if route is None or base is None:
                       why.append(f"{f['filename']}: unreadable")
                       continue
-                  pinned = {x.get("id") for x in old.get("fixes", []) if isinstance(x, dict)}
-                  for x in route.get("fixes", []):
-                      if not isinstance(x, dict) or x.get("id") in pinned:
-                          continue
-                      # a newly pinned fix: meta.name is its file name (AGENTS.md step 5), under one of the route's hops
-                      name, fam = x.get("name"), route.get("family")
-                      ok = all(isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", v)
-                               for v in [name, fam, *route.get("hops", [])])
-                      # two hops may each have a fix of that name: any of them a chroot can't judge counts
-                      docs = [d for h in route.get("hops", []) if ok
-                              for d in [toml_at(head_repo, f"fixes/{fam}/{h}/{name}.toml", sha)] if d]
-                      b = "unreadable" if not docs else next(filter(None, map(blind, docs)), None)
-                      if b:
-                          why.append(f"{f['filename']} pins {name}: {b}")
+                  # a pin added or dropped: dropping a network fix from a route changes a real boot too
+                  for doc, other, repo, ref, verb in ((route, base, head_repo, sha, "pins"),
+                                                      (base, route, base_repo, base_sha, "drops")):
+                      kept = {x.get("id") for x in other.get("fixes", []) if isinstance(x, dict)}
+                      for x in doc.get("fixes", []):
+                          if isinstance(x, dict) and x.get("id") in kept:
+                              continue
+                          b = pinned_blind(doc, x, repo, ref)
+                          if b:
+                              why.append(f"{f['filename']} {verb} {x.get('name') if isinstance(x, dict) else x}: {b}")
           if any(l["name"] == "needs-remi" for l in pr["labels"]):
               why.append("it's labeled needs-remi")
 

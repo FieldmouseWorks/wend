@@ -77,10 +77,10 @@ PRs pass at once: the gate's replays are their proof. A PR stays pending until s
 verdict on its exact head commit when it:
 
 - touches `tools/`, `adapters/`, `boxes/` or `wend`;
-- adds, changes or newly pins a fix a chroot can't judge, because it works on what a chroot never boots: a `net.*` or
-  `fs.layout` op, or one that names a kernel, bootloader, initramfs, storage, init, network or firewall package or
-  unit in any argument (`install`'s packages, `rpm.transit`'s reinstall, `service.enable`'s unit: the workflow's
-  `BOOTNET` list);
+- adds, changes, removes, pins or unpins a fix a chroot can't judge (before or after the change), because it works
+  on what a chroot never boots: a `net.*` or `fs.layout` op, or one that names a kernel, bootloader, initramfs,
+  storage, init, network or firewall package or unit in any argument (`install`'s packages, `rpm.transit`'s
+  reinstall, `service.enable`'s unit: the workflow's `BOOTNET` list);
 - or is labeled `needs-remi`, which a maintainer adds to any other PR that needs a real boot.
 
 Statuses belong to a commit, so every push is judged again from scratch.
