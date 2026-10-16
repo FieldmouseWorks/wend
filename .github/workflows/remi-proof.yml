@@ -1,0 +1,87 @@
+# The `remi-proof` commit status: has this PR's exact head been proven on remi, the maintainer's lab machine?
+#
+# The gate judges a PR's data with the BASE branch's tools and adapters, so a PR that changes the harness itself is
+# never exercised by CI. Only a maintainer-run proof on remi (tools/vm.py's real installs and reboots, or whatever the
+# change needs) tests it. This workflow turns that rule into a status branch protection can require:
+#   - the PR doesn't touch the harness and has no `needs-remi` label: success at once
+#   - otherwise: pending ("needs a remi pass at <sha>") until a maintainer, or a Claude session working for one,
+#     records remi's verdict on that exact commit (CONTRIBUTING.md, layer 4, "Proof on remi"). Statuses belong to a commit, so
+#     every push starts over.
+# A verdict someone recorded by hand is never overwritten here, whatever the state.
+#
+# remi is never reached from here, and nothing here can start a run there: remi only runs what a maintainer starts.
+#
+# Trust: pull_request_target runs this file as it is on the base branch, with a token that can write statuses, so no PR
+# (fork or not) can change its own judge. It never checks out or runs the PR's code. The only PR data it reads is the
+# file list and labels from the API, and file names reach nothing but jq and the log. People without push access, fork
+# authors included, can't set a commit status at all.
+name: remi-proof
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
+    # re-judge an open PR, e.g. one opened before this workflow existed
+    inputs:
+      pr: { description: "PR number", required: true }
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  group: remi-proof-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: true
+
+jobs:
+  classify:
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          GH_TOKEN: "${{ github.token }}"
+          REPO: "${{ github.repository }}"
+          PR: "${{ github.event.pull_request.number || inputs.pr }}"
+          # what remi proves and CI can't: the harness the gate copies from base, the boxes its VM tier installs,
+          # and the entry point that runs them
+          HARNESS: '^(tools/|adapters/|boxes/|wend$)'
+          CONTEXT: remi-proof
+        run: |
+          set -euo pipefail
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "not a PR number: $PR"; exit 1; }
+          pr=$(gh api "repos/$REPO/pulls/$PR")
+          [ "$(jq -r .state <<<"$pr")" = open ] || { echo "#$PR is not open"; exit 0; }
+          sha=$(jq -r .head.sha <<<"$pr")
+          echo "#$PR head $sha"
+
+          # a verdict recorded by hand stands; only this workflow's own success/pending is ours to replace
+          last=$(gh api "repos/$REPO/commits/$sha/statuses?per_page=100" \
+                 --jq "[.[] | select(.context == \"$CONTEXT\")][0] // empty | \"\(.creator.login) \(.state)\"")
+          if [ -n "$last" ] && [ "${last%% *}" != 'github-actions[bot]' ]; then
+            echo "already recorded by hand: $last"
+            exit 0
+          fi
+
+          # a rename counts at both ends. The API lists at most 3000 files; if it lists fewer than the PR changed,
+          # assume the harness is among the missing ones.
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR/files?per_page=100" --jq '.[]')
+          harness=$(jq -r --arg re "$HARNESS" '.filename, (.previous_filename // empty) | select(test($re))' <<<"$files")
+          why=
+          if [ -n "$harness" ]; then
+            why="it touches the harness"
+            echo "harness files:"; sed 's/^/  /' <<<"$harness"
+          elif [ "$(jq -s length <<<"$files")" -lt "$(jq -r .changed_files <<<"$pr")" ]; then
+            why="the API didn't list every changed file"
+          elif jq -e '.labels | any(.name == "needs-remi")' <<<"$pr" >/dev/null; then
+            why="it's labeled needs-remi"
+          fi
+
+          url="https://github.com/$REPO/blob/main/CONTRIBUTING.md#4-proof-on-remi-harness-changes-only"
+          if [ -n "$why" ]; then
+            state=pending desc="needs a remi pass at ${sha:0:7}: $why"
+          else
+            state=success desc="no harness change: the gate's replays are the proof"
+          fi
+          echo "$state: $desc"
+          gh api -X POST "repos/$REPO/statuses/$sha" -f state="$state" -f context="$CONTEXT" \
+             -f description="$desc" -f target_url="$url" >/dev/null
