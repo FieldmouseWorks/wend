@@ -252,6 +252,15 @@ vendor. EL's `sl7` (Scientific Linux 7) joins `centos7`, so an SL7 box takes eve
 decoy for its fixes; what SL does differently is handled by fixes gated on SL's own packages (`sl-release`). No hop
 ever lands on a joined release, so it has no `upgrade`, `bootstrap`, `transit`, `reboot` or keys of its own.
 
+A machine can also join a route **partway**: one sitting on a rung the route passes through, short of `to`, takes
+the hops after that rung. A CentOS 6 machine takes `centos5-to-alma10` from `centos6` (centos7, alma9, alma10), a
+Debian 10 one `etch-to-trixie` from `buster`. The client judges and walks only what's left: `wend share` offers
+the rest of every route passing through when no route starts at the machine's release (and says those hops were
+proven on machines that walked up from `from`, not ones installed on the rung), `wend preflight` on the machine
+judges from its release, and `wend walk` starts from the release its checks name or its root's release files say,
+refusing a route that doesn't pass through it. The fixes are the route's, pinned by the same id, and the run's
+`from` is the rung the walk started at. A gate replay still starts every box at `from`.
+
 A route is a **map, not a playlist**. It pins a *set* of fixes by id, and the client applies whichever ones hold on
 each hop. In dep-lab, stitching fixes from three different runs into one map beat replaying any single run, and the
 same map served two different boxes. Which fixes actually fired on which box is recorded in runs, not in the route.

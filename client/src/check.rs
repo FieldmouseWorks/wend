@@ -599,6 +599,25 @@ pub fn rung<'a>(a: &'a Doc, release: &'a str) -> &'a str {
         .unwrap_or(release)
 }
 
+/// What's left of `route` for a machine on `release` (SPEC "Route", joining partway): the route itself and `None` when
+/// the machine starts at its `from` (or joins it there), the hops after that rung and `Some(rung)` when the machine
+/// sits on one short of `to`, else nothing.
+pub fn rest_of_route(a: &Doc, route: &Doc, release: &str) -> Option<(Doc, Option<String>)> {
+    let rel = rung(a, release);
+    if get(route, "from").and_then(Value::as_str) == Some(rel) {
+        return Some((route.clone(), None));
+    }
+    let hops = get(route, "hops").and_then(strings)?;
+    let i = hops.iter().position(|h| h == rel)?;
+    if i + 1 == hops.len() {
+        return None;
+    }
+    let mut rest = route.clone();
+    rest["from"] = Value::String(rel.to_string());
+    rest["hops"] = Value::from(hops[i + 1..].to_vec());
+    Some((rest, Some(rel.to_string())))
+}
+
 /// Every release a route can boot a machine into: the ladder after its first release, less may_skip.
 pub fn booted_releases(a: &Doc) -> Vec<String> {
     let skip = str_list(get(a, "may_skip"));

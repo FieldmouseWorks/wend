@@ -51,7 +51,7 @@ sudo wend share centos7-to-alma10 --redact acme  # against a route you name; --r
 
 For a machine's owner who wants to say what their machine is without handing it over
 ([docs/try-it.md](../docs/try-it.md)). It names the release from the files the adapters read (`/etc/redhat-release`, `/etc/lsb-release`,
-`/etc/debian_version`), runs preflight against every route that starts there, scrubs the hostname (inside LVM names
+`/etc/debian_version`), runs preflight against every route that starts there (or, when none does, the rest of every route passing through it), scrubs the hostname (inside LVM names
 too), login accounts from `UID_MIN` up, home directories, cron spool names, addresses and anything shaped like a
 secret, prints the whole report, saves it as `wend-box-<id>.md`, and prints a prefilled `box-report.yml` issue link.
 It sends nothing and, like `facts`, touches nothing. Without an atlas beside it, the report has the facts and no
