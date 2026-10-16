@@ -180,33 +180,40 @@ On a relocated box:
   second disk is not the disk `/boot` is now on. Picking it by `grub-probe -t device /boot`, as the Debian step
   does, would leave EL7's `core.img` in the first disk's MBR and brick the box. Relocate records the boot disk (by
   `/dev/disk/by-id`) and this step uses it;
-- the prefix becomes the new root's `/boot/grub2`, and the rollback entry moves into the new root's
-  `/etc/grub.d/40_custom` (`search --no-floppy --fs-uuid --set=root <old /boot>`, `configfile
-  /grub2/grub.cfg.wend-old`; GRUB 2 still reads v4 XFS where the kernel can't). That runs EL7's entries (`linux16`,
-  `initrd16`) under the EL8+ GRUB with its `grubenv`, whose `saved_entry` is a BLS id, so the old config falls to its
-  entry 0. The rollback boot after the last hop is what proves this works;
-- from then on the prefix is on LVM, where GRUB can't `save_env`. One-shot boots stop working (`next_entry` would
-  stay set), so `wend rollback` is sticky from this point: it makes the rollback entry the default, it doesn't try it
-  once.
+- while the stub is in charge (until the old root is dropped, so through every hop `wend upgrade` walks, before and
+  after commit: SPEC.md, "Upgrading a running machine"), the install goes into the stub's home, with the stub's
+  prefix, never the new root's `/boot/grub2`: the new root is on LVM, where GRUB can't `save_env`, and the stub's
+  one-shot trials and one-shot rollback need it to. The stub's home is a plain partition every kernel on the route
+  mounts (the old `/boot` unless it's XFS v4, which Alma 9 and later can't mount; then a new XFS v5 partition on the
+  spare disk, see the SPEC). From then on the stub's entry 0 no longer moves `prefix` (the new root's modules are a
+  newer build than `core.img`) and reads the new root's `grubenv` (`load_env -f`, read-only) before its BLS config,
+  for EL8's `kernelopts`; entry 1 runs EL7's entries (`linux16`, `initrd16`) under the EL8+ GRUB, and since the stub
+  never writes `saved_entry`, the old config falls to its entry 0. The rollback boot after the last hop is what proves
+  this works;
+- once the old root is dropped (below), the stub is gone and the prefix is the new root's `/boot/grub2`, like any
+  in-place box. Commit alone doesn't do that.
 
 ## Rollback and commit
 
-The old root and old `/boot` are never written after the flip, except for `grubenv` on the old `/boot`.
+The old root and old `/boot` are never written after the flip, except for the stub's home when the old `/boot` is
+that home (its `grubenv`, and the modules each GRUB reinstall puts under its prefix).
 So:
 
 - **Before the trial boot passes**: reset. The trial was one-shot, on BIOS and UEFI alike.
-- **After**: boot the "wend rollback" entry (`wend rollback` sets it as the next boot while the stub is in charge, and
-  as the default once the EL8 GRUB reinstall has moved the prefix onto LVM, see above). Data written on the new root
-  since the flip stays there, readable from the old root only through the new LV (the old kernel mounts the new root
-  fine, it made it). The run says this in words: rollback loses what happened after the flip, unless you copy it back.
-  A rollback that stays for good (`wend rollback --permanent`) also renames `grub.cfg.wend-old` back over the stub:
-  the old root's `/etc/grub2.cfg` and `/etc/grub2-efi.cfg` still point at that path, so its next kernel update would
-  otherwise have grubby edit the stub.
-- **Commit** (`wend commit`, never automatic): drops the rollback entry and removes the old LVs that moved (`root`,
-  and `home` or `var` if they were v4), or tells the owner which partitions are now free (wend never repartitions).
-  On BIOS, if the route's GRUB reinstall hasn't already moved the prefix to the new root (a relocate committed before
-  the route reaches EL8), commit does that move, so the old `/boot` is no longer needed. The old `/boot` partition is
-  left unused and named. Reformatting it is the owner's call, since nothing needs it.
+- **After**: boot the stub's old entry (`wend rollback` sets it as the next boot, or as the default; the stub stays in
+  charge, with its home on a partition GRUB can write, through every hop until commit, see above). Data written on the
+  new root since the flip stays there, readable from the old root only through the new LV (the old kernel mounts the
+  new root fine, it made it). The run says this in words: rollback loses what happened after the flip, unless you copy
+  it back. A rollback that stays for good (`wend rollback --permanent`) also renames `grub.cfg.wend-old` back over the
+  stub: the old root's `/etc/grub2.cfg` and `/etc/grub2-efi.cfg` still point at that path, so its next kernel update
+  would otherwise have grubby edit the stub.
+- **Commit** (`wend commit`, never automatic): makes the new root the stub's default (`commit_trial`) and nothing
+  else. It deletes nothing: the stub, its old entry and the old root stay, so `wend rollback` still works after it.
+- **Drop the old root** (a separate step after commit, never automatic, and never part of commit): moves the prefix
+  to the new root's `/boot/grub2` with the running release's own `grub2-install` onto the boot disk, which retires
+  the stub and its rollback entry, then removes the old LVs that moved (`root`, and `home` or `var` if they were v4),
+  or tells the owner which partitions are now free (wend never repartitions). The old `/boot` partition is left
+  unused and named. Reformatting it is the owner's call, since nothing needs it.
 
 ## State movers (the second stage, sketched so the first doesn't block it)
 
