@@ -189,6 +189,9 @@ SOURCE_REPOS = (
     (r"^(https://dl\.fedoraproject\.org/pub/epel/\d+/Everything/)x86_64/$", r"\1source/tree/"),
     (r"^(https://archives\.fedoraproject\.org/pub/archive/epel/\d+/)x86_64/$", r"\1SRPMS/"),
     (r"^(https://archives\.fedoraproject\.org/pub/archive/epel/[0-9.]+/Everything/)x86_64/$", r"\1source/tree/"),
+    # Scientific Linux 7: one source repo for os and both update repos
+    (r"^(https://linux-mirrors\.fnal\.gov/linux/scientific/obsolete/7\.9/)x86_64/(os|updates/security|updates/fastbugs)/$",
+     r"\1SRPMS/"),
     (r"^(https://nginx\.org/packages/(?:centos|rhel)/\d+/)x86_64/$", r"\1SRPMS/"),
 )
 

@@ -77,7 +77,7 @@ PRs pass at once: the gate's replays are their proof. A PR stays pending until s
 verdict on its exact head commit when it:
 
 - touches `tools/`, `adapters/`, `boxes/` or `wend`, or the workflows behind the required checks (`gate.yml`,
-  `remi-proof.yml`; Dependabot's own action bumps excepted);
+  `remi-proof.yml`, `remi-verdict.yml`; Dependabot's own action bumps excepted);
 - adds, changes, removes, pins or unpins a fix a chroot can't judge (before or after the change), because it works
   on what a chroot never boots: a `net.*` or `fs.layout` op, or one that names a kernel, bootloader, initramfs,
   storage, init, network or firewall package or unit in any argument (`install`'s packages, `rpm.transit`'s
@@ -86,28 +86,32 @@ verdict on its exact head commit when it:
 
 Statuses belong to a commit, so every push is judged again from scratch.
 
-To record a verdict, check that the run's `run.json` `head` is the PR's current head and not dirty, then:
+To record a verdict, check that the run's `run.json` `head` is the PR's current head and not dirty, then run the
+`remi-verdict` workflow (Actions, remi-verdict, Run workflow). It needs write access, refuses a commit that isn't the
+PR's head, and posts the status as "remi verdict: <summary>":
 
 ```
-pr=123
-sha=$(gh pr view $pr -R FieldmouseWorks/wend --json headRefOid -q .headRefOid)   # must equal run.json head.commit
-state=success    # or failure
-desc="remi: trusty-to-resolute on ubuntu/trusty-web, BIOS, passed"            # 140 characters at most
-gh api -X POST repos/FieldmouseWorks/wend/statuses/$sha -f context=remi-proof -f state=$state \
-   -f description="$desc" -f target_url="<link to the write-up: the PR comment or thread>"
+gh workflow run remi-verdict.yml -R FieldmouseWorks/wend -f pr=123 -f sha=<run.json head.commit> -f state=success \
+   -f summary="trusty-to-resolute on ubuntu/trusty-web, BIOS, passed" -f link="<the write-up: PR comment or thread>"
 ```
 
-A Claude session whose `gh` isn't signed in but whose proxy authenticates GitHub API calls sends the same with curl:
+A Claude session whose `gh` isn't signed in but whose proxy authenticates GitHub API calls sends the same with curl
+(the proxy refuses a direct commit status write, but not this):
 
 ```
-curl -fsS -X POST -H "Content-Type: application/json" https://api.github.com/repos/FieldmouseWorks/wend/statuses/$sha \
-  -d "$(jq -n --arg s "$state" --arg d "$desc" --arg u "<link>" '{context:"remi-proof",state:$s,description:$d,target_url:$u}')"
+curl -fsS -X POST -H "Content-Type: application/json" \
+  https://api.github.com/repos/FieldmouseWorks/wend/actions/workflows/remi-verdict.yml/dispatches \
+  -d "$(jq -n --arg pr 123 --arg sha <full sha> --arg s success --arg m "<summary>" --arg l "<link>" \
+        '{ref:"main",inputs:{pr:$pr,sha:$sha,state:$s,summary:$m,link:$l}}')"
 ```
 
-A verdict recorded this way stands: the workflow never overwrites a status a person or a session set. Record it with
-a person's own credentials, never from an Actions job's `GITHUB_TOKEN`: the workflow tells its own statuses apart by
-that token's account. To re-judge an
-open PR that was opened before the workflow existed, run it by hand: Actions, remi-proof, Run workflow, PR number.
+Then check the run in Actions (it fails, posting nothing, on a stale or wrong commit) and the PR's `remi-proof` status.
+Someone with a token that can write statuses may also post the status directly (`gh api -X POST
+repos/FieldmouseWorks/wend/statuses/<sha> -f context=remi-proof -f state=success -f description=...`). A recorded
+verdict stands: remi-proof.yml never overwrites a status a person posted or one whose description starts with
+"remi verdict:". Never post one from any other workflow: the classifier treats the rest of github-actions[bot]'s
+statuses as its own. To re-judge an open PR that was opened before the workflow existed, run it by hand: Actions,
+remi-proof, Run workflow, PR number.
 
 ### 5. Claude review (automatic, minutes)
 
@@ -136,6 +140,28 @@ Only after every required check is green **and** the Claude review has signed of
 (CODEOWNERS) can merge, and so can Claude, under a standing permission from the maintainer. Either way the bar is
 the same: a red check, an unresolved review finding, or no review at all means no merge. Nobody, human or bot, can
 push to `main` directly.
+
+## What a cloud Claude session can write on GitHub
+
+Claude sessions in the cloud (project threads included) reach GitHub through Anthropic's GitHub proxy. It sends
+the maintainer's credentials, so GitHub sees every write as the maintainer's, and it lets only some writes through:
+
+- **Direct.** Pushing a branch; opening, editing and merging PRs; comments and review replies; labels; and
+  dispatching a workflow (`POST .../actions/workflows/<file>/dispatches`). From `gh api` or curl, only GitHub's REST
+  API works: the proxy refuses GraphQL, so `gh pr` and `gh issue` (including `gh pr merge`) fail; merge with
+  `PUT .../pulls/N/merge`. Resolving a review thread exists only in GraphQL, so a session does it with its built-in
+  GitHub tools, not `gh` or curl.
+- **Through a dispatched workflow.** The proxy refuses `POST /statuses`, so:
+  - recording remi's verdict on a PR is `remi-verdict.yml` (layer 4);
+  - re-judging a PR's `remi-proof` status is `remi-proof.yml`, input `pr`.
+- **The maintainer, by hand.** Tags, deleting branches, and repository settings. The proxy refuses tag pushes and
+  branch deletion over git, and refused branch protection writes; tags and branch deletion stay with the maintainer
+  as policy too, even though a workflow token could do them.
+
+A new kind of write a session needs goes in a workflow_dispatch workflow with the narrowest `permissions:` that does
+it and checks on its inputs, like `remi-verdict.yml`, and gets added to `CHECKS` in `remi-proof.yml` so changing it
+needs a remi pass. Its run log names the maintainer as the actor whether a session or the maintainer started it, so
+say in the inputs (a link, a summary) where the request came from.
 
 ## How runs land
 

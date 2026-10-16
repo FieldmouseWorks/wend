@@ -18,14 +18,22 @@ ROUTE is a path like routes/debian/etch-to-trixie.toml; BOX is an id like debian
 Python 3.11+, standard library only. The sandbox needs root, chroot, unshare and rsync, plus debootstrap for Debian
 boxes or rpm2cpio, cpio, curl and ip (iproute2) for EL boxes.
 """
-import contextlib
-import glob
-import json
-import os
-import shutil
-import subprocess
+import os  # os and sys are built in or frozen: nothing beside this script can stand in for them
 import sys
-import tomllib
+
+# Python looks for modules beside the script it runs before the standard library, and this script sits at the top
+# of the checkout. Run as root on someone's PR (CI's replay, or `sudo ./wend` on a branch under review), a json.py
+# planted beside it would run too. Drop that entry before importing anything else; `python3 -P` already has.
+if __name__ == "__main__" and sys.path and \
+        os.path.realpath(sys.path[0] or ".") == os.path.dirname(os.path.realpath(__file__)):
+    del sys.path[0]
+
+import contextlib  # noqa: E402
+import glob  # noqa: E402
+import json  # noqa: E402
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+import tomllib  # noqa: E402
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.dont_write_bytecode = True
@@ -197,7 +205,7 @@ def cmd_verify(base=None, all_=False, jobs=2):
     need_root({d["family"] for d in repo.boxes.values()})
     if all_ or not base:
         matrix = [{"route": r, "box": b} for r, d in repo.routes.items() for b, x in repo.boxes.items()
-                  if check.starts(x, d)]
+                  if check.starts(x, d, repo.adapters)]
     else:
         r = subprocess.run([sys.executable, "-B", f"{ROOT}/tools/affected.py", base], capture_output=True, text=True)
         if r.returncode:
@@ -216,7 +224,7 @@ def cmd_verify(base=None, all_=False, jobs=2):
             m = queue.pop(0)
             out = f"{ROOT}/.wend/verify/{m['route'].replace('/', '_')}--{m['box'].replace('/', '_')}.json"
             log = open(out[:-5] + ".log", "w")
-            running.append((m, out, subprocess.Popen([sys.executable, "-B", __file__, "replay", m["route"], m["box"],
+            running.append((m, out, subprocess.Popen([sys.executable, "-P", "-B", __file__, "replay", m["route"], m["box"],
                                                       "--out", out], stdout=log, stderr=subprocess.STDOUT)))
         for item in list(running):
             if item[2].poll() is not None:

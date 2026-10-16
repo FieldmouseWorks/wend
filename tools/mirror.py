@@ -27,7 +27,8 @@ import urllib.request
 
 ALLOWED = {"vault.centos.org", "repo.almalinux.org", "vault.almalinux.org", "archives.fedoraproject.org",
            "dl.fedoraproject.org", "snapshot.debian.org", "deb.debian.org", "archive.ubuntu.com",
-           "old-releases.ubuntu.com", "nginx.org", "archive.apache.org", "download.redis.io", "files.pythonhosted.org"}
+           "old-releases.ubuntu.com", "linux-mirrors.fnal.gov", "nginx.org", "archive.apache.org", "download.redis.io",
+           "files.pythonhosted.org"}
 # The sha256 of this file, served at /.wend-shim: tools/sandbox.py reuses a shim already on the port only if it is this
 # one (one from another checkout would answer with its own allow-list and rules).
 with open(os.path.abspath(__file__), "rb") as _f:

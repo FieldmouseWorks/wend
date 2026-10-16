@@ -314,11 +314,12 @@ def route_path(repo, name):
 
 
 def main(repo, rest):
+    import check
     as_json = "--json" in rest
     rest = [x for x in rest if x != "--json"]
     if rest == ["--all"]:
         jobs = [(r, b) for r, d in sorted(repo.routes.items()) for b, bd in sorted(repo.boxes.items())
-                if d["family"] == bd["family"] and bd["release"] == d["from"] and os.path.isdir(f"{DATA}/{d['family']}")]
+                if check.starts(bd, d, repo.adapters) and os.path.isdir(f"{DATA}/{d['family']}")]
     elif len(rest) == 3 and rest[1] == "--packages" and route_path(repo, rest[0]):
         f = rest[2]
         try:
@@ -335,7 +336,7 @@ def main(repo, rest):
         return 0
     elif len(rest) == 2 and route_path(repo, rest[0]) and rest[1] in repo.boxes:
         r, b = route_path(repo, rest[0]), rest[1]
-        if (repo.boxes[b]["family"], repo.boxes[b]["release"]) != (repo.routes[r]["family"], repo.routes[r]["from"]):
+        if not check.starts(repo.boxes[b], repo.routes[r], repo.adapters):
             print(f"{b} doesn't start where {r} starts ({repo.routes[r]['family']} {repo.routes[r]['from']})")
             return 2
         jobs = [(r, b)]

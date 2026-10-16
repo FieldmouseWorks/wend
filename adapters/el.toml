@@ -88,6 +88,18 @@ install = { tree = "vault.centos.org/7.9.2009/os/x86_64", pxeboot = "images/pxeb
 # el6's grep is newer than el7's, so `upgrade` leaves it behind; distro-sync takes everything to el7's version
 upgrade = ["yum -y distro-sync"]
 
+# Scientific Linux 7 (Fermilab's EL7 rebuild, ended 2024): off the ladder, it joins it at centos7. Same EL7 packages
+# rebuilt and signed by SL, so its boxes take the routes from centos7, and the fixes that differ say so in their own
+# `when` (sl-release, not centos-release). Fermilab keeps the final tree under obsolete/; ftp.scientificlinux.org's
+# https certificate doesn't name that host, so it is fetched from Fermilab's own mirror host. The installer is EL7's
+# anaconda, so the VM install is centos7's.
+[releases.sl7]
+joins = "centos7"
+major = 7
+pm = "yum"
+repos = { os = "linux-mirrors.fnal.gov/linux/scientific/obsolete/7.9/x86_64/os", security = "linux-mirrors.fnal.gov/linux/scientific/obsolete/7.9/x86_64/updates/security", fastbugs = "linux-mirrors.fnal.gov/linux/scientific/obsolete/7.9/x86_64/updates/fastbugs" }
+install = { tree = "linux-mirrors.fnal.gov/linux/scientific/obsolete/7.9/x86_64/os", pxeboot = "images/pxeboot", packages = ["grub2"], ks_end = true, append = "net.ifnames=0 biosdevname=0", ifname = true, boot_part_mib = 1024, uefi = true, root_fs = ["ext3", "xfs", "xfs-v4"] }
+
 [releases.centos8]
 major = 8
 pm = "dnf"

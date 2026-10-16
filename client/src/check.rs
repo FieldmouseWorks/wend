@@ -415,6 +415,24 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
                 ));
             }
         }
+        // a release off the ladder that boxes start at, on the rung it joins: never a hop's target
+        if let Some(j) = get(rel, "joins") {
+            let on = j.as_str().and_then(|j| get(a, "releases").and_then(|rs| get(rs, j)));
+            let ok = !ladder.contains(r)
+                && j.as_str().is_some_and(|j| ladder.iter().any(|x| x == j))
+                && on.is_some_and(|on| {
+                    on.is_object() && get(on, "joins").is_none() && get(rel, "major") == get(on, "major")
+                })
+                && ["upgrade", "bootstrap", "transit", "reboot", "gpgkeys", "drop_keys"]
+                    .iter()
+                    .all(|k| get(rel, k).is_none());
+            if !ok {
+                errs.push(format!(
+                    "{wh}: releases.{r}.joins must name a ladder release with the same major, from a release off the \
+                     ladder with no upgrade, bootstrap, transit, reboot, gpgkeys or drop_keys"
+                ));
+            }
+        }
     }
     // SPEC "Adapter format": the mirrors land in root shell commands as {mirror}
     if get(a, "backend").and_then(Value::as_str) == Some("apt") {
@@ -576,6 +594,16 @@ fn check_signed(a: &Doc, wh: &str) -> Vec<String> {
         }
     }
     errs
+}
+
+/// The ladder release a machine that starts at `release` stands on: the release itself, or the one it `joins`
+/// (SPEC "Adapter format"): Scientific Linux 7 is off the EL ladder and takes the routes from centos7.
+pub fn rung<'a>(a: &'a Doc, release: &'a str) -> &'a str {
+    get(a, "releases")
+        .and_then(|rs| get(rs, release))
+        .and_then(|r| get(r, "joins"))
+        .and_then(Value::as_str)
+        .unwrap_or(release)
 }
 
 /// Every release a route can boot a machine into: the ladder after its first release, less may_skip.
