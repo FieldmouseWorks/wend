@@ -2,10 +2,11 @@
 
 Upgrade a 2007 server to today, one release at a time, along a path someone already proved works.
 
-wend is for people running fleets of old servers on distros that stopped getting updates years ago. ELevate upgrades
-the OS, wend upgrades the server: every hop carries the box's services and data along (Apache, PHP, MySQL or
-MariaDB, BIND) and checks they still answer before the next one. CentOS 5, 7 and 8 to AlmaLinux 10, Debian etch to
-trixie and Ubuntu trusty to resolute have each passed on real installs in a VM, with a real reboot after every hop.
+wend is for people running fleets of old servers on Linux releases that stopped getting updates years ago. A
+distro's own upgrader moves the OS; wend moves the server: every hop carries the box's services and data along (web
+server, PHP, database, DNS) and checks they still answer before the next one. Debian etch to trixie, Ubuntu trusty to
+resolute and CentOS 5, 7 and 8 to AlmaLinux 10 have each passed on real installs in a VM, with a real reboot after
+every hop.
 
 This repo is **the map**: small, reviewed fixes for the places where a plain release upgrade breaks, and routes that
 pin those fixes into release-to-release paths. Each route carries evidence (runs) that it was replayed from scratch on
