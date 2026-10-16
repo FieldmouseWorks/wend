@@ -1021,7 +1021,11 @@ pub fn evaluate(atlas: &Atlas, route: &Doc, facts: &Value) -> Result<Value, Stri
                         "adapters/{fam}.toml: releases.{r}.transit.boot_mib must be a whole number of MiB"
                     ))?,
                 };
-                out.push((format!("{r}'s transit kernel"), mib));
+                // several fixes may transit the same release (one per vendor's release package): one kernel
+                let k = (format!("{r}'s transit kernel"), mib);
+                if !out.contains(&k) {
+                    out.push(k);
+                }
             }
         }
         Ok(out)

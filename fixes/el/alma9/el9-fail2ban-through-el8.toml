@@ -25,4 +25,4 @@ like = ["fail2ban"]
 name = "el9-fail2ban-through-el8"
 author = "claude-code / opus 5.5 (agent, hand-written)"
 note = "EPEL 8's fail2ban-server needs /usr/bin/python3.6, which only EL8's python36 module stream provides, and the EL8 pass-through of rpm.transit enables no module streams: it never downloads fail2ban, so the transit refuses. So fail2ban sits out EL8: removed before the transit without its scriptlets (the boot enablement link stays, and so do the owner's jail.local and any edited packaged config, as .rpmsave), and installed again from EPEL 9 after the EL9 transaction, which makes the link live again. service.enable then asserts it starts at boot where it did before."
-fires_on = ["el/centos7-lamp"]
+fires_on = ["el/centos7-lamp", "el/sl7-lamp"]

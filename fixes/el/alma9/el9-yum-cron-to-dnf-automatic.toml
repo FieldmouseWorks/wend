@@ -1,0 +1,27 @@
+# Hand-written for el/sl7-lamp: Scientific Linux installs yum-cron with its daily run applying updates.
+schema = "wend.fix/0"
+family = "el"
+hop = "alma9"
+when = { all = [{ installed = "yum-cron" }, { file-contains = { path = "/etc/yum/yum-cron.conf", text = "apply_updates = yes" } }] }
+restores = ["box:autoupdate"]
+adds = ["dnf"]
+
+[[pre]]
+op = "remove"
+packages = ["yum-cron"]
+purge = false
+
+[[post]]
+op = "install"
+packages = ["dnf-automatic"]
+
+[[post]]
+op = "service.enable"
+unit = "dnf-automatic-install.timer"
+like = ["yum-cron"]
+
+[meta]
+name = "el9-yum-cron-to-dnf-automatic"
+author = "claude-code / opus 5.5 (agent, hand-written)"
+note = "yum-cron is yum's (EL9 has no yum-cron and no python 2), so rpm.transit would drop it from the database and leave its cron jobs calling a script that can't run: a box that patched itself every night quietly stops. Removed while EL7's rpm still owns it (pinned before the transit; an edited yum-cron.conf is kept as .rpmsave), then EL9's dnf-automatic installed and its install timer enabled where yum-cron started at boot (el9-record-boot-services' record). Gated on yum-cron.conf applying updates, which is Scientific Linux's default (CentOS ships apply_updates = no, so its yum-cron boxes don't match): a box that only downloads or notifies needs its own variant."
+fires_on = ["el/sl7-lamp"]
