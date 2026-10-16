@@ -561,7 +561,7 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
     let checks = walk::Checks::from_doc(&cdoc, a)?;
     if let Some(rel) = &checks.release {
         let from = str_of(r, "from")?;
-        if rel != from {
+        if check::rung(a, rel) != from {
             return Err(format!(
                 "{checks_path} is for a {rel} machine, and this route starts at {from}: wrong route or wrong checks"
             ));

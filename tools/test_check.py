@@ -130,6 +130,10 @@ for name, mutate in {
         centos5="RPM-GPG-KEY-EPEL-8"),
     "signing keys the hops never write": lambda a: a["hop"].update(
         set_release=a["hop"]["set_release"].replace("{keys} && ", "")),
+    "a joined release that is on the ladder too": lambda a: a["ladder"].insert(3, "sl7"),
+    "a release that joins one off the ladder": lambda a: a["releases"]["sl7"].update(joins="rhel7"),
+    "a release that joins another major": lambda a: a["releases"]["sl7"].update(joins="centos6"),
+    "a joined release a hop could land on": lambda a: a["releases"]["sl7"].update(upgrade=["yum -y distro-sync"]),
 }.items():
     a = copy.deepcopy(adapters["el"])
     mutate(a)
@@ -288,6 +292,12 @@ for name, args, want in (
          True),
         ("a fires_on box that is not a box",
          ({rpath: route}, boxes_, {cpath: {**claimed, "meta": {**claimed["meta"], "fires_on": ["debian/no"]}}}), True),
+        ("a box at a release that joins the route's from (sl7 at centos7)",
+         ({"routes/el/x.toml": {"family": "el", "from": "centos7", "fixes": []}},
+          {"el/x": {"family": "el", "release": "sl7"}}, {}), False),
+        ("a box at a release that joins another rung than the route's from",
+         ({"routes/el/x.toml": {"family": "el", "from": "centos5", "fixes": []}},
+          {"el/x": {"family": "el", "release": "sl7"}}, {}), True),
         ("the real routes, boxes and claims", (routes_, boxes_, fixes_), False)):
     got = bool(check.pairing_errors(*args))
     print(("refused " if got else "passed  ") + name if got == want else "WRONG   " + name)
