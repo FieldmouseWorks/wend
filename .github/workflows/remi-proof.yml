@@ -8,7 +8,7 @@
 #   - otherwise: pending ("needs a remi pass at <sha>") until a maintainer, or a Claude session working for one,
 #     records remi's verdict on that exact commit (CONTRIBUTING.md, layer 4, "Proof on remi"). Statuses belong to a commit, so
 #     every push starts over.
-# A verdict someone recorded by hand is never overwritten here, whatever the state.
+# A recorded verdict (remi-verdict.yml's, or one a person posted) is never overwritten here, whatever the state.
 #
 # remi is never reached from here, and nothing here can start a run there: remi only runs what a maintainer starts.
 #
@@ -60,8 +60,9 @@ jobs:
           # the entry point that runs them
           HARNESS = re.compile(r"(tools/|adapters/|boxes/|wend$)")
           # the workflows that define the required checks run from the PR (gate.yml) or become the next judge
-          # (this file): nothing in CI judges a change to them either. Dependabot's own action bumps are exempt.
-          CHECKS = re.compile(r"\.github/workflows/(gate|remi-proof)\.yml$")
+          # (this file, and remi-verdict.yml, which records verdicts): nothing in CI judges a change to them either.
+          # Dependabot's own action bumps are exempt.
+          CHECKS = re.compile(r"\.github/workflows/(gate|remi-proof|remi-verdict)\.yml$")
           # package and unit names (a prefix of the name, any case)
           BOOTNET = re.compile(
               r"(kernel|linux-(image|headers|modules|generic|server|virtual|signed)|linux-firmware|grub|shim|efibootmgr"
@@ -165,10 +166,12 @@ jobs:
           print(f"#{PR} head {sha}")
 
           def stand_by_hand_verdict():
-              """A verdict recorded by hand stands; only this workflow's own success/pending is ours to replace."""
+              """A recorded verdict stands: one a person posted, or one remi-verdict.yml posted for them (it's
+              github-actions[bot]'s too, and says so). Only this workflow's own success/pending is ours to replace."""
               mine = [s for s in api(f"repos/{REPO}/commits/{sha}/statuses?per_page=100") if s["context"] == CONTEXT]
-              if mine and (mine[0].get("creator") or {}).get("login") != "github-actions[bot]":
-                  print(f"already recorded by hand: {mine[0]['creator']['login']} {mine[0]['state']}")
+              if mine and ((mine[0].get("creator") or {}).get("login") != "github-actions[bot]"
+                           or (mine[0].get("description") or "").startswith("remi verdict:")):
+                  print(f"verdict already recorded: {mine[0]['state']}: {mine[0].get('description')}")
                   sys.exit(0)
 
           stand_by_hand_verdict()
