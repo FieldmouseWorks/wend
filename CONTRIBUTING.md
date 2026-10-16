@@ -20,7 +20,7 @@ Agents: [AGENTS.md](AGENTS.md) is the step-by-step version of this file, with on
 
 ## The gate
 
-A PR merges only after all five layers pass, in this order.
+A PR merges only after all six layers pass, in this order.
 
 ### 1. Schema check (automatic, seconds)
 
@@ -65,7 +65,51 @@ the loose precondition: in dep-lab, a fix gated on `/etc/mysql/my.cnf` installed
 every health check passed. If your fix is honest and the decoy is still wrong, the fix is too broad. Narrow the `when`;
 don't widen `fires_on`.
 
-### 4. Claude review (automatic, minutes)
+### 4. Proof on remi
+
+The gate judges a PR with the base branch's tools and adapters, so a PR that changes them is never exercised by CI.
+remi, the maintainer's lab machine, is where they get tested: VM replays on real installs with real reboots
+(`tools/vm.py`, SPEC.md "VM tier"), or whatever else the change needs. remi only runs what a maintainer starts. It is
+never a CI runner, and nothing a PR does can reach it.
+
+The `remi-proof` commit status carries the verdict to GitHub (`.github/workflows/remi-proof.yml`). Most fix and route
+PRs pass at once: the gate's replays are their proof. A PR stays pending until someone with push access records remi's
+verdict on its exact head commit when it:
+
+- touches `tools/`, `adapters/`, `boxes/` or `wend`, or the workflows behind the required checks (`gate.yml`,
+  `remi-proof.yml`; Dependabot's own action bumps excepted);
+- adds, changes, removes, pins or unpins a fix a chroot can't judge (before or after the change), because it works
+  on what a chroot never boots: a `net.*` or `fs.layout` op, or one that names a kernel, bootloader, initramfs,
+  storage, init, network or firewall package or unit in any argument (`install`'s packages, `rpm.transit`'s
+  reinstall, `service.enable`'s unit: the workflow's `BOOTNET` list);
+- or is labeled `needs-remi`, which a maintainer adds to any other PR that needs a real boot.
+
+Statuses belong to a commit, so every push is judged again from scratch.
+
+To record a verdict, check that the run's `run.json` `head` is the PR's current head and not dirty, then:
+
+```
+pr=123
+sha=$(gh pr view $pr -R FieldmouseWorks/wend --json headRefOid -q .headRefOid)   # must equal run.json head.commit
+state=success    # or failure
+desc="remi: trusty-to-resolute on ubuntu/trusty-web, BIOS, passed"            # 140 characters at most
+gh api -X POST repos/FieldmouseWorks/wend/statuses/$sha -f context=remi-proof -f state=$state \
+   -f description="$desc" -f target_url="<link to the write-up: the PR comment or thread>"
+```
+
+A Claude session whose `gh` isn't signed in but whose proxy authenticates GitHub API calls sends the same with curl:
+
+```
+curl -fsS -X POST -H "Content-Type: application/json" https://api.github.com/repos/FieldmouseWorks/wend/statuses/$sha \
+  -d "$(jq -n --arg s "$state" --arg d "$desc" --arg u "<link>" '{context:"remi-proof",state:$s,description:$d,target_url:$u}')"
+```
+
+A verdict recorded this way stands: the workflow never overwrites a status a person or a session set. Record it with
+a person's own credentials, never from an Actions job's `GITHUB_TOKEN`: the workflow tells its own statuses apart by
+that token's account. To re-judge an
+open PR that was opened before the workflow existed, run it by hand: Actions, remi-proof, Run workflow, PR number.
+
+### 5. Claude review (automatic, minutes)
 
 Every PR is labeled `needs-claude-review`. A standing Claude reviewer reruns the PR's replays and reads the diff,
 hunting specifically for:
@@ -86,7 +130,7 @@ CI waits for the verdict, so branch protection can't enforce it yet. Until a `cl
 is required, whoever merges checks for the review comment first. The review is one layer among several, not a
 shortcut past them.
 
-### 5. The maintainer or Claude merges
+### 6. The maintainer or Claude merges
 
 Only after every required check is green **and** the Claude review has signed off on the PR. The maintainer
 (CODEOWNERS) can merge, and so can Claude, under a standing permission from the maintainer. Either way the bar is

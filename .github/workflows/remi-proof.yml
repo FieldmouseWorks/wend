@@ -1,0 +1,238 @@
+# The `remi-proof` commit status: has this PR's exact head been proven on remi, the maintainer's lab machine?
+#
+# The gate judges a PR's data with the BASE branch's tools and adapters, so a PR that changes the harness itself is
+# never exercised by CI. Only a maintainer-run proof on remi (tools/vm.py's real installs and reboots, or whatever the
+# change needs) tests it. This workflow turns that rule into a status branch protection can require:
+#   - the PR doesn't touch the harness, adds or changes no fix a chroot can't judge, and has no `needs-remi` label:
+#     success at once
+#   - otherwise: pending ("needs a remi pass at <sha>") until a maintainer, or a Claude session working for one,
+#     records remi's verdict on that exact commit (CONTRIBUTING.md, layer 4, "Proof on remi"). Statuses belong to a commit, so
+#     every push starts over.
+# A verdict someone recorded by hand is never overwritten here, whatever the state.
+#
+# remi is never reached from here, and nothing here can start a run there: remi only runs what a maintainer starts.
+#
+# A fix a chroot can't judge is one that touches what the chroot tier never boots (SPEC.md "Kernels and the
+# bootloader"): an op on networking (`net.*`) or the root's layout (`fs.layout`), or one that names a kernel,
+# bootloader, initramfs, storage, init, network or firewall package or unit in any argument (BOOTNET below). A fix
+# counts if it is one before or after the change, and a changed route counts the fixes it newly pins or unpins: an
+# existing network fix pinned onto a route, or dropped from one, changes a real boot as much as a new one.
+#
+# Trust: pull_request_target runs this file as it is on the base branch, with a token that can write statuses, so no PR
+# (fork or not) can change its own judge. It never checks out or runs the PR's code. What it reads from the PR (the file
+# list, labels, and the fix and route files as TOML data) comes from the API and is only parsed, never run or passed to
+# a shell; anything it can't read or parse counts as needing remi. People without push access, fork authors included,
+# can't set a commit status at all.
+name: remi-proof
+
+on:
+  pull_request_target:
+    # edited: a new base branch changes what the PR's diff holds
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+  workflow_dispatch:
+    # re-judge an open PR, e.g. one opened before this workflow existed
+    inputs:
+      pr: { description: "PR number", required: true }
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  group: remi-proof-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: true
+
+jobs:
+  classify:
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          GH_TOKEN: "${{ github.token }}"
+          REPO: "${{ github.repository }}"
+          PR: "${{ github.event.pull_request.number || inputs.pr }}"
+        shell: python3 -I {0}
+        run: |
+          import json, os, re, sys, tomllib, urllib.error, urllib.parse, urllib.request
+
+          REPO, PR, CONTEXT = os.environ["REPO"], os.environ["PR"], "remi-proof"
+          # what remi proves and CI can't: the harness the gate copies from base, the boxes its VM tier installs, and
+          # the entry point that runs them
+          HARNESS = re.compile(r"(tools/|adapters/|boxes/|wend$)")
+          # the workflows that define the required checks run from the PR (gate.yml) or become the next judge
+          # (this file): nothing in CI judges a change to them either. Dependabot's own action bumps are exempt.
+          CHECKS = re.compile(r"\.github/workflows/(gate|remi-proof)\.yml$")
+          # package and unit names (a prefix of the name, any case)
+          BOOTNET = re.compile(
+              r"(kernel|linux-(image|headers|modules|generic|server|virtual|signed)|linux-firmware|grub|shim|efibootmgr"
+              r"|os-prober|dracut|initramfs-tools|mkinitrd|module-init-tools|kmod|lvm2|mdadm|cryptsetup|sysvinit|upstart"
+              r"|systemd($|-sysv|-boot|-udev|-networkd|-resolved)|udev|initscripts|network($|-scripts|-manager)"
+              r"|NetworkManager|netbase|ifupdown|ifenslave|netplan|resolvconf|isc-dhcp|dhcp3|dhcp-client|dhclient"
+              r"|dhcpcd|net-tools|iproute|firewalld|iptables|ip6tables|ebtables|arptables|nftables|ufw)", re.I)
+          NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+@-]*")
+
+          def api(path, method="GET", body=None, raw=False):
+              req = urllib.request.Request("https://api.github.com/" + path, method=method,
+                                           data=json.dumps(body).encode() if body else None)
+              req.add_header("Authorization", "Bearer " + os.environ["GH_TOKEN"])
+              req.add_header("Accept", "application/vnd.github.raw" if raw else "application/vnd.github+json")
+              req.add_header("X-GitHub-Api-Version", "2022-11-28")
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  data = r.read()
+              return data if raw else json.loads(data)
+
+          def toml_at(repo, path, ref):
+              """The file's TOML, or None if it isn't there or isn't TOML."""
+              try:
+                  return tomllib.loads(api(f"repos/{repo}/contents/{urllib.parse.quote(path)}?ref={ref}",
+                                           raw=True).decode())
+              except (urllib.error.HTTPError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+                  return None
+
+          def steps(doc):
+              if isinstance(doc, dict):
+                  if isinstance(doc.get("op"), str):
+                      yield doc
+                  for v in doc.values():
+                      yield from steps(v)
+              elif isinstance(doc, list):
+                  for v in doc:
+                      yield from steps(v)
+
+          def strings(v):
+              """Every string in a step's argument, at any depth."""
+              if isinstance(v, str):
+                  yield v
+              elif isinstance(v, (list, dict)):
+                  for x in (v.values() if isinstance(v, dict) else v):
+                      yield from strings(x)
+
+          def blind(doc):
+              """Why a chroot can't judge this fix, or None."""
+              for st in steps(doc):
+                  op = st["op"]
+                  if op.startswith("net.") or op == "fs.layout":
+                      return op
+                  # whatever the op: install's packages, rpm.transit's reinstall and remove, service.enable's unit
+                  for k, v in st.items():
+                      hit = next((n for n in strings(v) if k != "op" and NAME.fullmatch(n) and BOOTNET.match(n)), None)
+                      if hit:
+                          return f"{op} {k} {hit}"
+              return None
+
+          def pinned_blind(route, pin, repo, ref):
+              """Why a chroot can't judge the fix a route pins, or None. meta.name is its file name (AGENTS.md
+              step 5), under one of the route's hops; two hops may each have a fix of that name, and any of them a
+              chroot can't judge counts. One that isn't there, or can't be read, counts as unreadable."""
+              name, fam, hops = (pin.get("name") if isinstance(pin, dict) else None), route.get("family"), route.get("hops")
+              if not (isinstance(hops, list) and all(isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", v)
+                                                     for v in [name, fam, *hops])):
+                  return "unreadable"
+              docs = []
+              for h in hops:
+                  try:
+                      docs.append(tomllib.loads(api(f"repos/{repo}/contents/fixes/{fam}/{h}/{name}.toml?ref={ref}",
+                                                    raw=True).decode()))
+                  except urllib.error.HTTPError as e:
+                      if e.code != 404:
+                          return "unreadable"
+                  except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+                      return "unreadable"
+              return "unreadable" if not docs else next(filter(None, map(blind, docs)), None)
+
+          def dependabot():
+              """Only Dependabot touched this PR: GitHub says Dependabot opened it, and every commit is authored and
+              committed by dependabot[bot] with a signature GitHub verified (gate.yml's dco job, the same rule)."""
+              bot = "49699333+dependabot[bot]@users.noreply.github.com"
+              if pr["user"]["login"] != "dependabot[bot]":
+                  return False
+              commits, page = [], 1
+              while batch := api(f"repos/{REPO}/pulls/{PR}/commits?per_page=100&page={page}"):
+                  commits += batch
+                  page += 1
+              return bool(commits) and all(
+                  c["commit"]["author"]["email"] == bot and c["commit"]["committer"]["email"] in (bot, "noreply@github.com")
+                  and c["commit"]["verification"]["verified"] for c in commits)
+
+          if not re.fullmatch(r"[0-9]+", PR):
+              sys.exit(f"not a PR number: {PR}")
+          pr = api(f"repos/{REPO}/pulls/{PR}")
+          if pr["state"] != "open":
+              print(f"#{PR} is not open")
+              sys.exit(0)
+          sha, head_repo = pr["head"]["sha"], pr["head"]["repo"]["full_name"]
+          base_repo, base_sha = pr["base"]["repo"]["full_name"], pr["base"]["sha"]
+          print(f"#{PR} head {sha}")
+
+          def stand_by_hand_verdict():
+              """A verdict recorded by hand stands; only this workflow's own success/pending is ours to replace."""
+              mine = [s for s in api(f"repos/{REPO}/commits/{sha}/statuses?per_page=100") if s["context"] == CONTEXT]
+              if mine and (mine[0].get("creator") or {}).get("login") != "github-actions[bot]":
+                  print(f"already recorded by hand: {mine[0]['creator']['login']} {mine[0]['state']}")
+                  sys.exit(0)
+
+          stand_by_hand_verdict()
+
+          files, page = [], 1
+          while batch := api(f"repos/{REPO}/pulls/{PR}/files?per_page=100&page={page}"):
+              files += batch
+              page += 1
+
+          # judge the files of the commit the status goes on: a push meanwhile has its own run
+          if api(f"repos/{REPO}/pulls/{PR}")["head"]["sha"] != sha:
+              print("the PR moved on while its files were listed; the newer push's run judges it")
+              sys.exit(0)
+
+          why = []
+          # The API lists at most 3000 files; if it lists fewer than the PR changed, the harness may be among the rest.
+          if len(files) < pr["changed_files"]:
+              why.append("the API didn't list every changed file")
+          for f in files:
+              names = [f["filename"]] + ([f["previous_filename"]] if f.get("previous_filename") else [])
+              if any(HARNESS.match(n) for n in names) or (any(CHECKS.match(n) for n in names) and not dependabot()):
+                  why.append(f"it changes {f['filename']}")
+                  continue
+              # a fix is judged by what it was and what it is now: turning a network fix into a harmless one
+              # changes a real boot as much as the reverse
+              old = f.get("previous_filename") or f["filename"]
+              fix = lambda n: n.startswith("fixes/") and n.endswith(".toml")
+              if fix(old) or fix(f["filename"]):
+                  docs = ([toml_at(base_repo, old, base_sha)] if fix(old) and f["status"] != "added" else []) + \
+                         ([toml_at(head_repo, f["filename"], sha)] if fix(f["filename"]) and f["status"] != "removed"
+                          else [])
+                  b = "unreadable" if None in docs else next(filter(None, map(blind, docs)), None)
+                  if b:
+                      why.append(f"{f['filename']}: {b}")
+              if old.startswith("routes/") or f["filename"].startswith("routes/"):
+                  route = ({} if f["status"] == "removed" or not f["filename"].startswith("routes/")
+                           else toml_at(head_repo, f["filename"], sha))
+                  base = ({} if f["status"] == "added" or not old.startswith("routes/")
+                          else toml_at(base_repo, old, base_sha))
+                  if route is None or base is None:
+                      why.append(f"{f['filename']}: unreadable")
+                      continue
+                  # a pin added or dropped: dropping a network fix from a route changes a real boot too
+                  for doc, other, repo, ref, verb in ((route, base, head_repo, sha, "pins"),
+                                                      (base, route, base_repo, base_sha, "drops")):
+                      kept = {x.get("id") for x in other.get("fixes", []) if isinstance(x, dict)}
+                      for x in doc.get("fixes", []):
+                          if isinstance(x, dict) and x.get("id") in kept:
+                              continue
+                          b = pinned_blind(doc, x, repo, ref)
+                          if b:
+                              why.append(f"{f['filename']} {verb} {x.get('name') if isinstance(x, dict) else x}: {b}")
+          if any(l["name"] == "needs-remi" for l in pr["labels"]):
+              why.append("it's labeled needs-remi")
+
+          for w in why:
+              print("  " + w)
+          if why:
+              state, desc = "pending", f"needs a remi pass at {sha[:7]}: {why[0]}"
+          else:
+              state, desc = "success", "nothing a chroot can't judge: the gate's replays are the proof"
+          desc = desc if len(desc) <= 140 else desc[:139] + "…"
+          print(f"{state}: {desc}")
+          stand_by_hand_verdict()   # again: one may have landed while this run read the PR
+          api(f"repos/{REPO}/statuses/{sha}", method="POST", body={
+              "state": state, "context": CONTEXT, "description": desc,
+              "target_url": f"https://github.com/{REPO}/blob/main/CONTRIBUTING.md#4-proof-on-remi"})
