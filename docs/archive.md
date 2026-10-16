@@ -67,7 +67,10 @@ Only files that proven routes and boxes reference. Never a mirror of a whole dis
    index entry names it (`"source": {"url", "digest"}`):
    - **Debian, Ubuntu:** the `.dsc` and every file it lists, from the `<comp>/source/Sources` index the pinned
      `Release` lists, so the chain runs from the run's pin as the binaries' does. The binary's `Source:` field names
-     the source and its version.
+     the source and its version. A suite whose run pins only its package index (wheezy) has its `Release` read live,
+     and used only when it lists that pinned index at the pinned digest; it is recorded `"live": true`. A source
+     `Sources` names only by md5 (lenny and squeeze still list pre-2008 uploads that way) is stored by its md5: good
+     enough for a licence copy nobody installs, and accepted nowhere else.
    - **EL:** the `.src.rpm` its `primary.xml` names (`<rpm:sourcerpm>`), or for a package a run pins directly (old
      EPEL 5 builds no repo serves) the one its own RPM header names, from the repo's source repo, checked against
      that repo's own metadata. Source repos aren't pinned by any run, so their `repomd.xml` is taken live and recorded
@@ -75,10 +78,14 @@ Only files that proven routes and boxes reference. Never a mirror of a whole dis
      `tools/archive.py` (`SOURCE_REPOS`): `vault.centos.org/<v>/<repo>/Source/` (`SRPMS/` for CentOS 5), AlmaLinux's
      current sources under `vault.almalinux.org/<major>/<repo>/Source/`, EPEL's `source/tree/`.
 
-   When upstream no longer has a source (a rotted vault, an EPEL build since replaced, etch's md5-only `Sources`,
-   wheezy whose `Release` is gone), the index records `"source": {"missing": why}` rather than inventing one, and
+   When upstream no longer has a source (a rotted vault, an EPEL build since replaced), the index records `"source": {"missing": why}` rather than inventing one, and
    `ingest` lists the gaps. They don't fail an ingest. They are what has to be filled (from snapshot.debian.org,
    Koji's source RPMs, or a minor-release vault) before that release goes public.
+
+   One gap is known and stays: runs recorded before the capture shim (#105) pin 28 AlmaLinux 8-10 and EPEL 8-10
+   `repomd.xml` digests (under 9 URLs; `ingest` lists gaps by URL) that upstream replaced before anything kept them,
+   and no CI artifact or copy on remi holds them. Their packages are stored, but `wend walk --run` can't replay those
+   runs from the archive. The next recording of each EL route is captured whole and closes it for that route.
 
 "Referenced" means: by a run file on main whose `result` is `pass`, or by a box file on main. The archive never
 evicts a blob that such a file references. No eviction at all in the first version: storage is cheap and the set is
