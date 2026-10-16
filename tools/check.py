@@ -304,6 +304,22 @@ def driver_table_errors(fam, a, where):
     return errs
 
 
+def root_module_errors(root=None):
+    """CI runs `wend` from the PR's checkout as root, and Python looks for modules next to the script it runs before
+    anywhere else. The workflows pass -P, which stops that; this refuses the files it would have picked up anyway: a
+    module or package at the top of the repo."""
+    root = root or ROOT
+    errs = []
+    for n in sorted(os.listdir(root)):
+        p = os.path.join(root, n)
+        if os.path.isfile(p) and n.endswith((".py", ".pyc", ".pyw", ".so", ".pyd")):
+            errs.append(f"{n}: a Python module at the repo root; tools go in tools/")
+        elif os.path.isdir(p) and not n.startswith(".") and \
+                any(os.path.isfile(os.path.join(p, f)) for f in ("__init__.py", "__init__.pyc")):
+            errs.append(f"{n}/: a Python package at the repo root; tools go in tools/")
+    return errs
+
+
 def pes_errors(root=None):
     """SPEC "Package evolution data": each family's leapp-data extract is the pinned one and parses strictly."""
     import leappdata
@@ -840,6 +856,7 @@ def main(argv):
         errs += check_adapter(a, f"adapters/{fam}.toml")
         errs += driver_table_errors(fam, a, f"adapters/{fam}.toml")
     errs += pes_errors()
+    errs += root_module_errors()
     by_id = {}
     for p, d in fixes.items():
         rel = os.path.relpath(p, ROOT)

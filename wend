@@ -216,7 +216,7 @@ def cmd_verify(base=None, all_=False, jobs=2):
             m = queue.pop(0)
             out = f"{ROOT}/.wend/verify/{m['route'].replace('/', '_')}--{m['box'].replace('/', '_')}.json"
             log = open(out[:-5] + ".log", "w")
-            running.append((m, out, subprocess.Popen([sys.executable, "-B", __file__, "replay", m["route"], m["box"],
+            running.append((m, out, subprocess.Popen([sys.executable, "-P", "-B", __file__, "replay", m["route"], m["box"],
                                                       "--out", out], stdout=log, stderr=subprocess.STDOUT)))
         for item in list(running):
             if item[2].poll() is not None:

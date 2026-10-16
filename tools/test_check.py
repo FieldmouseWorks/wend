@@ -775,4 +775,17 @@ _pes_case("a leapp-data extract in the directory but not pinned", extra=True)
 _pes_case("a leapp-data source dropped from the manifest and the directory",
           man=_man[:_man.index("[files.epel]")], ext=None)
 _sh.rmtree(_t)
+
+# a module at the repo root would be imported by `wend` ahead of the standard library's (CI runs it as root)
+_ok = check.root_module_errors() == []
+print(("passed  " if _ok else f"WRONG   {check.root_module_errors()} ") + "the repo root holds no Python module")
+bad += not _ok
+for _n, _what in (("json.py", "a json.py at the repo root"), ("tomllib/__init__.py", "a tomllib package at the repo root")):
+    _t = _tf.mkdtemp()
+    os.makedirs(os.path.dirname(os.path.join(_t, _n)), exist_ok=True)
+    open(os.path.join(_t, _n), "w").write("raise SystemExit('planted')\n")
+    _e = check.root_module_errors(_t)
+    print(("refused " if _e else "MISSED  ") + _what + (f"  ({_e[0]})" if _e else ""))
+    bad += not _e
+    _sh.rmtree(_t)
 sys.exit(1 if bad else 0)
