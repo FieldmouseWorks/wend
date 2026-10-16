@@ -2023,9 +2023,9 @@ An owner with several machines rehearses each one. A plan belongs to one machine
 A live machine has no snapshot to restore a red hop from. So `upgrade` never walks the machine's own root: it runs
 relocate ("Relocate") first, which copies the running root onto a new one beside it and boots the copy through a
 stub, and walks the copy. Once the copy is made, nothing on the old root changes, and nothing in the old `/boot`
-does but the stub and its one-shot variables beside the old config, so rolling back boots the old kernel with the old
-GRUB config on the old root, exactly as it was. That holds on every hop, every
-reboot and every failure, until `wend commit`.
+does but the stub, its one-shot variables and (GRUB 2 only) the GRUB modules beside them, so rolling back boots the
+old kernel with the old GRUB config on the old root, exactly as it was. That holds on every hop, every reboot and
+every failure, until `wend commit`.
 
 Why relocate, and not an LVM snapshot of `/`: a snapshot has to hold every block a distro upgrade rewrites, so a safe
 one is as big as a copy anyway; it doesn't cover `/boot` or the bootloader, which the route rewrites; undoing a walk on
@@ -2049,8 +2049,22 @@ The new root's filesystem is made by the machine's own `mkfs`, of the type its r
 relocate does; ext3 stays ext3, which every kernel on the EL routes mounts and the in-place routes already keep), so
 the old kernel can still read it. Where the new `/boot` goes depends on what the machine's bootloader can read:
 
-- **GRUB 2** (CentOS 7): a directory on the new root, and the old `/boot`'s `grub.cfg` becomes relocate's stub, as
-  built.
+- **GRUB 2** (CentOS 7): a directory on the new root, and relocate's stub as built, with one change. Here the stub
+  stays in charge for the whole route, not just until a commit made before the walk, so its home (its `grub.cfg`,
+  its `grubenv`, and the modules under `core.img`'s prefix) has to be a plain partition that GRUB can save `grubenv`
+  on and that every kernel on the route mounts, since `arm_new` writes it from the new root at every hop. The old
+  `/boot` is that when it's ext4 or XFS v5 (CentOS 7.3 and later installs). An XFS v4 `/boot` (7.0 to 7.2) isn't,
+  because Alma 9's kernel and later can't mount it. Then the stub's home is a new plain XFS v5 partition at the start
+  of the spare disk, `refresh` installs `core.img` onto the boot disk with that prefix (`grub2-install
+  --boot-directory`), and entry 1 finds the old `/boot` by UUID (GRUB 2 still reads v4). With free extents and no
+  spare disk, an XFS v4 `/boot` is refused, naming a disk to add. The route's GRUB reinstall from EL8 on (the BIOS
+  step `docs/rebuild-and-carry.md` describes) installs into the stub's home on a relocated machine, never the new
+  root's `/boot`: that is on LVM, where GRUB can't save `grubenv`, so one-shot trials would stop. Each release's
+  `core.img` and modules land beside the stub, the stub's entry 0 stops moving `prefix` (the new root's modules come
+  from a newer `grub2` package than `core.img` from then on), and it loads the new root's BLS config; entry 1 loads
+  the old EL7 config under the newer GRUB, as the doc describes. `wend commit` moves the prefix to the new root's
+  `/boot` with the landing release's own `grub2-install`, as the doc's commit does. This home and the reinstall into
+  it have no proof yet either; step 3 proves them with the GRUB legacy stub, and refuses what fails.
 - **GRUB legacy** (CentOS 5 and 6, and every release after them on those machines, since GRUB legacy stays: "Kernels
   and the bootloader") can't read LVM, so the new `/boot` is a plain ext3 filesystem made by the machine's own
   `mkfs.ext3`: the first partition of the spare disk, or, with free extents and no spare disk, a directory
@@ -2094,7 +2108,7 @@ Weighed for owners with no free extents and no spare disk, none in the first bui
 
 Relocate's own limits shrink to fit: the free-extents placement, a plain-partition root on a spare disk, and the GRUB
 legacy stub are built in this work; LUKS, `/boot` on md or LVM, and UEFI stay refused. An XFS v4 CentOS 7 machine
-needs nothing extra any more: the copy is XFS v5 either way.
+needs a spare disk: the copy is XFS v5 either way, but its old `/boot` can't hold the stub past Alma 9.
 
 ### The rehearsal
 
@@ -2293,7 +2307,8 @@ between boots) is a red.
 
 The VM tier's proven layouts, nothing else. Today that refuses:
 
-- no room for the new root and its `/boot` ("The undo"), with what to add;
+- no room for the new root and its `/boot` ("The undo"), with what to add, and an XFS v4 `/boot` with no spare disk
+  for the stub's home;
 - UEFI firmware, until relocate's UEFI stub and EL on UEFI have VM tier passes;
 - LUKS anywhere; `/boot` on md or LVM; `/usr` or `/var` on a filesystem of its own (relocate carries `/` and `/boot`
   only, and EL7's UsrMove and the boot need them on `/`);
@@ -2330,6 +2345,9 @@ plain partition; GRUB 2 on CentOS 7, GRUB legacy on CentOS 5):
 - a reset from outside (QEMU `system_reset`) during a trial boot comes back on the old system, and `wend upgrade` says
   so and goes on;
 - the owner's ssh session killed mid-transaction changes nothing;
+- on `el/centos7-lamp`, the hop made to fail is the last one, on Alma 10's kernel after the route's GRUB reinstall,
+  so the rollback goes through the stub after the reinstall; and one layout has an XFS v4 `/boot` (`--root-fs
+  xfs-v4`), its stub's home on the spare disk, with a trial armed from Alma 10;
 - the binary runs at all on CentOS 5's 2.6.18 and CentOS 6's 2.6.32 kernels (the cheap remi job already queued).
 
 A native CentOS 6 box (`el/centos6-lamp`, from the 6.10 installer) and its proof come before anyone is told CentOS 6
@@ -2357,10 +2375,10 @@ client; the plan and the state file; the generated checks; the rehearsal's kerne
 2. The mid-route join in `share`, preflight and `walk` (its own PR, in flight), so a CentOS 6 machine hears where it
    joins.
 3. Relocate widened, in the VM tier first (`vm.py relocate`, then `vm.py --relocate replay`): free extents, a plain
-   root on a spare disk, and GRUB legacy's stub and `/boot` on `el/centos5-web` (with `--lvm` made to work on the
-   CentOS 5 kickstart), each with its trial, reset, commit and rollback, and a route walked on the copy and rolled back
-   after a red made on purpose. Alongside it, the same-filesystem copy and its swap at boot ("Other places for the
-   undo"), proved or refused.
+   root on a spare disk, the GRUB 2 stub's home on a plain partition kept through the route's GRUB reinstall, and
+   GRUB legacy's stub and `/boot` on `el/centos5-web` (with `--lvm` made to work on the CentOS 5 kickstart), each with
+   its trial, reset, commit and rollback, and a route walked on the copy and rolled back after a red made on purpose.
+   Alongside it, the same-filesystem copy and its swap at boot ("Other places for the undo"), proved or refused.
 4. `wend rehearse`, the plan and the generated checks, proved by rehearsing VM guests from remi's host and comparing
    the walk with CI's run of the same route.
 5. `wend upgrade`, `wend rollback`, `wend commit` and `vm.py upgrade`, on `el/centos7-lamp`, then `el/centos5-web`,
