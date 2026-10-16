@@ -175,14 +175,14 @@ On a relocated box:
   does, would leave EL7's `core.img` in the first disk's MBR and brick the box. Relocate records the boot disk (by
   `/dev/disk/by-id`) and this step uses it;
 - while the stub is in charge (until the old root is dropped, so through every hop `wend upgrade` walks, before and
-  after commit: SPEC.md, "Upgrading a running machine"), the install goes into the stub's home, with the stub's prefix, never the new root's
-  `/boot/grub2`: the new root is on LVM, where GRUB can't `save_env`, and the stub's one-shot trials and one-shot
-  rollback need it to. The stub's home is a plain partition every kernel on the route mounts (the old `/boot`
-  unless it's XFS v4, which Alma 9 and later can't mount; then a new XFS v5 partition on the spare disk, see the
-  SPEC). From then on the stub's entry 0 no longer moves `prefix` (the new root's modules are a newer build than
-  `core.img`) and reads the new root's `grubenv` (`load_env -f`, read-only) before its BLS config, for EL8's
-  `kernelopts`; entry 1 runs EL7's entries (`linux16`, `initrd16`) under the EL8+ GRUB, and since the stub never
-  writes `saved_entry`, the old config falls to its entry 0. The rollback boot after the last hop is what proves
+  after commit: SPEC.md, "Upgrading a running machine"), the install goes into the stub's home, with the stub's
+  prefix, never the new root's `/boot/grub2`: the new root is on LVM, where GRUB can't `save_env`, and the stub's
+  one-shot trials and one-shot rollback need it to. The stub's home is a plain partition every kernel on the route
+  mounts (the old `/boot` unless it's XFS v4, which Alma 9 and later can't mount; then a new XFS v5 partition on the
+  spare disk, see the SPEC). From then on the stub's entry 0 no longer moves `prefix` (the new root's modules are a
+  newer build than `core.img`) and reads the new root's `grubenv` (`load_env -f`, read-only) before its BLS config,
+  for EL8's `kernelopts`; entry 1 runs EL7's entries (`linux16`, `initrd16`) under the EL8+ GRUB, and since the stub
+  never writes `saved_entry`, the old config falls to its entry 0. The rollback boot after the last hop is what proves
   this works;
 - once the old root is dropped (below), the stub is gone and the prefix is the new root's `/boot/grub2`, like any
   in-place box. Commit alone doesn't do that.
