@@ -491,17 +491,34 @@ fn checksig(adapter: &Doc, release: &str, k: &str, files: &str) -> Result<Option
     ))
 }
 
+/// SPEC "Add-on repositories": shell that is true when the add-on is on the box: its marker package is installed,
+/// or, for an add-on without one, some installed package carries its vendor.
+fn addon_installed(a: &Value) -> String {
+    match get(a, "marker") {
+        Some(m) => format!("rpm -q {} >/dev/null 2>&1", scalar(m)),
+        None => format!(
+            "rpm -qa --qf '%{{VENDOR}}\\n' 2>/dev/null | grep -qxF '{}'",
+            get(a, "vendor").map(scalar).unwrap_or_default()
+        ),
+    }
+}
+
 /// SPEC "Add-on repositories": shell that appends each add-on's repo for `release` to `file`, as
-/// [<release>-<addon>], when the add-on's marker package is installed. Empty when no add-on has one.
+/// [<release>-<addon>], when the add-on is installed (addon_installed). Empty when no add-on has one.
 fn addon_repos(adapter: &Doc, release: &str, shim: &str, file: &str) -> String {
     let mut out = vec![];
     for (n, a) in get(adapter, "addons").and_then(Value::as_object).into_iter().flatten() {
         if let Some(u) = get(a, "repos").and_then(|r| get(r, release)) {
             let rid = format!("{release}-{n}");
-            let marker = get(a, "marker").map(scalar).unwrap_or_default();
+            let hotfixes = if get(a, "module_hotfixes").and_then(Value::as_bool) == Some(true) {
+                "module_hotfixes=true\\n"
+            } else {
+                ""
+            };
             out.push(format!(
-                "if rpm -q {marker} >/dev/null 2>&1; then printf '[{rid}]\\nname={rid}\\nbaseurl={shim}/{}/\\n\
-                 {}enabled=1\\n\\n' >> {file}; fi",
+                "if {}; then printf '[{rid}]\\nname={rid}\\nbaseurl={shim}/{}/\\n\
+                 {}{hotfixes}enabled=1\\n\\n' >> {file}; fi",
+                addon_installed(a),
                 scalar(u),
                 gpg(&get(a, "gpgkeys")
                     .and_then(|g| get(g, release))
@@ -512,11 +529,11 @@ fn addon_repos(adapter: &Doc, release: &str, shim: &str, file: &str) -> String {
             ));
         }
     }
-    // each `if` is true when its marker is absent
+    // each `if` is true when its add-on is absent
     out.join(" && ")
 }
 
-/// Shell that sets A to |vendor|vendor|... for every add-on whose marker package is installed.
+/// Shell that sets A to |vendor|vendor|... for every add-on that is installed (addon_installed).
 fn addon_vendors(adapter: &Doc) -> String {
     let mut out = String::from("A='|'; ");
     for a in get(adapter, "addons")
@@ -525,11 +542,8 @@ fn addon_vendors(adapter: &Doc) -> String {
         .flatten()
         .map(|(_, a)| a)
     {
-        let (m, v) = (
-            get(a, "marker").map(scalar).unwrap_or_default(),
-            get(a, "vendor").map(scalar).unwrap_or_default(),
-        );
-        out.push_str(&format!("rpm -q {m} >/dev/null 2>&1 && A=\"${{A}}{v}|\"; "));
+        let v = get(a, "vendor").map(scalar).unwrap_or_default();
+        out.push_str(&format!("{} && A=\"${{A}}{v}|\"; ", addon_installed(a)));
     }
     out
 }
@@ -964,6 +978,13 @@ fn transit(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
                 "L=$(rpm -qa --qf '%{{NAME}}-%{{VERSION}}-%{{RELEASE}}.%{{ARCH}}\\n' | grep -v '^gpg-pubkey' | grep -v '{tag}' || true); "
             ),
             "[ -z \"$L\" ] || { echo \"dropped from the rpm database (files kept): $L\"; ",
+            // their %postun never runs, so the alternatives they registered stay, at the priority they had
+            &format!(
+                "printf '%s\\n' $L > {b}/dropped; for a in /var/lib/alternatives/*; do [ -f \"$a\" ] || continue; \
+                 g=${{a##*/}}; for p in $(alternatives --display \"$g\" 2>/dev/null | awk '/^\\// && / - / {{print $1}}'); do \
+                 rpm -qf --qf '%{{NAME}}-%{{VERSION}}-%{{RELEASE}}.%{{ARCH}}\\n' \"$p\" 2>/dev/null | grep -qxF -f {b}/dropped && \
+                 alternatives --remove \"$g\" \"$p\" && echo \"dropped alternative $g: $p\"; done; done; "
+            ),
             "rpm -e --nodeps --noscripts --justdb $L; }",
         ]
         .concat(),

@@ -77,7 +77,7 @@ Only files that proven routes and boxes reference. Never a mirror of a whole dis
      in the index, marked `"live": true`; the index signature (step 8) is what vouches for it. Where each repo's sources live is a table in
      `tools/archive.py` (`SOURCE_REPOS`): `vault.centos.org/<v>/<repo>/Source/` (`SRPMS/` for CentOS 5), AlmaLinux's
      current sources under `vault.almalinux.org/<major>/<repo>/Source/`, EPEL's `source/tree/`, Scientific Linux 7's
-     one `SRPMS/` for all three of its repos.
+     one `SRPMS/` for all three of its repos, nginx.org's `SRPMS/`.
 
    When upstream no longer has a source (a rotted vault, an EPEL build since replaced), the index records `"source": {"missing": why}` rather than inventing one, and
    `ingest` lists the gaps. They don't fail an ingest. They are what has to be filled (from snapshot.debian.org,

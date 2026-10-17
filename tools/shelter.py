@@ -364,8 +364,11 @@ def build(box, adapter, release, app, plan, scratch, log):
         files = sorted(f for f in files if not f.startswith(skip) and f not in ("/tmp/wend-shelter-runner.py",))
         _host_write(scratch, "/tmp/wend-files", "\n".join(files + [
             os.path.realpath(f"{scratch}{i}")[len(os.path.realpath(scratch)):] for i in interps]) + "\n")
-        rc, out = s.run("while read f; do [ -f \"$f\" ] || continue; o=$(rpm -qf --qf '%{NAME}\\n' \"$f\" 2>/dev/null "
-                        "| head -n1) && echo \"OWNED $o $f\" || echo \"UNOWNED - $f\"; done < /tmp/wend-files")
+        # rpm -qf's own status says whether a package owns the file (for one nobody owns, it still prints a line:
+        # "file ... is not owned by any package"); pip's modules are the usual unowned ones
+        rc, out = s.run("while read f; do [ -f \"$f\" ] || continue; "
+                        "if o=$(rpm -qf --qf '%{NAME}\\n' \"$f\" 2>/dev/null); "
+                        "then echo \"OWNED $(echo \"$o\" | head -n1) $f\"; else echo \"UNOWNED - $f\"; fi; done < /tmp/wend-files")
         owners, unowned = set(), []
         for line in out.splitlines():
             k, _, rest = line.partition(" ")
