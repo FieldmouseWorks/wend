@@ -12,6 +12,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// A rehearsal's walk (SPEC "The rehearsal"): the copy is walked as a CI box is, `WEND_CHROOT_BOX=1`, so EL's
+/// `hop.kernel_before` drops the kernel records the machine's own walk will drop; and each command runs in a PID
+/// namespace of its own with its own /proc, so a step's `pkill -x mysqld` or `pgrep` sees only its own processes,
+/// never the scratch host's daemons or another rehearsal's, and nothing it starts outlives it. So every pid file in
+/// the copy is stale when a command starts, and the next namespace's small pids make one name a live process (httpd
+/// -k start then says it is already running): they go before each command (rehearse::stale_pids).
+pub static REHEARSAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 const ENV: &[(&str, &str)] = &[
     ("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"),
     ("LANG", "C"),
@@ -331,7 +339,15 @@ impl Root {
     }
 
     fn run_mounted(&self, cmd: &str, timeout: u64, isolated: bool) -> (i32, String) {
-        let argv = chroot_argv(&self.dir.to_string_lossy(), cmd, isolated);
+        let rehearsal = REHEARSAL.load(std::sync::atomic::Ordering::Relaxed);
+        let argv = if rehearsal {
+            if let Err(e) = crate::rehearse::stale_pids(&self.dir) {
+                return (-1, e);
+            }
+            rehearsal_argv(&self.dir.to_string_lossy(), cmd, isolated)
+        } else {
+            chroot_argv(&self.dir.to_string_lossy(), cmd, isolated)
+        };
         // output to a file, not a pipe: a daemon a command leaves running would hold a pipe open forever
         let out = match tempfile() {
             Ok(f) => f,
@@ -342,6 +358,9 @@ impl Root {
             .env_clear()
             .envs(ENV.iter().copied())
             .stdin(Stdio::null());
+        if rehearsal {
+            c.env("WEND_CHROOT_BOX", "1");
+        }
         c.stdout(out.0.try_clone().unwrap()).stderr(out.0.try_clone().unwrap());
         let mut child = match c.spawn() {
             Ok(ch) => ch,
@@ -531,8 +550,49 @@ fn chroot_argv(root: &str, cmd: &str, isolated: bool) -> Vec<String> {
     pre.iter().map(|s| s.to_string()).chain(argv).collect()
 }
 
+/// chroot_argv's command in a PID and mount namespace of its own (REHEARSAL): a fresh /proc is mounted over the
+/// root's in that mount namespace only, so the root's processes are the command's own.
+fn rehearsal_argv(root: &str, cmd: &str, isolated: bool) -> Vec<String> {
+    let inner = chroot_argv(root, cmd, false);
+    let lo = if isolated { " && ip link set lo up" } else { "" };
+    let mut v: Vec<String> = ["unshare", "-u", "-p", "-f", "-m"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    if isolated {
+        v.push("-n".into());
+    }
+    v.extend([
+        "sh".into(),
+        "-c".into(),
+        format!("mount -t proc proc \"$0/proc\"{lo} && exec \"$@\""),
+        root.into(),
+    ]);
+    v.extend(inner.into_iter().skip(2)); // chroot ROOT /bin/sh -c NAME_SELF x CMD, without its own unshare -u
+    v
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rehearsal_argv_has_its_own_pids_and_proc() {
+        let tail = ["chroot", "/r", "/bin/sh", "-c", super::NAME_SELF, "x", "echo hi"];
+        let a = super::rehearsal_argv("/r", "echo hi", false);
+        assert_eq!(a[..5], ["unshare", "-u", "-p", "-f", "-m"]);
+        assert_eq!(
+            a[5..9],
+            ["sh", "-c", "mount -t proc proc \"$0/proc\" && exec \"$@\"", "/r"]
+        );
+        assert_eq!(a[9..], tail);
+        let a = super::rehearsal_argv("/r", "echo hi", true);
+        assert_eq!(a[5], "-n");
+        assert_eq!(
+            a[8],
+            "mount -t proc proc \"$0/proc\" && ip link set lo up && exec \"$@\""
+        );
+        assert_eq!(a[a.len() - tail.len()..], tail);
+    }
+
     #[test]
     fn chroot_argv_names_the_box() {
         let tail = ["chroot", "/r", "/bin/sh", "-c", super::NAME_SELF, "x", "echo hi"];

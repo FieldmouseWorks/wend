@@ -881,9 +881,10 @@ fn transit(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
         .join(" ");
     let remove = str_of(s, "remove")?;
     let relpkg = str_of(boot, "release_package")?;
-    let mut succ: Vec<String> = table(t, "repos")?
+    // the release's repos, then each installed add-on's (the only add-on repos the transaction below has)
+    let mut succ: Vec<(String, Option<String>)> = table(t, "repos")?
         .values()
-        .map(|u| format!("{shim}/{}", scalar(u)))
+        .map(|u| (format!("{shim}/{}", scalar(u)), None))
         .collect();
     for a in get(adapter, "addons")
         .and_then(Value::as_object)
@@ -892,7 +893,7 @@ fn transit(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
         .map(|(_, a)| a)
     {
         if let Some(u) = get(a, "repos").and_then(|r| get(r, target)) {
-            succ.push(format!("{shim}/{}", scalar(u)));
+            succ.push((format!("{shim}/{}", scalar(u)), Some(addon_installed(a))));
         }
     }
     let mut repo_lines =
@@ -925,7 +926,13 @@ fn transit(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
              done); [ -z \"$M\" ] || {{ echo \"refusing, no {target} package for these add-on packages (a fix must \
              remove or replace them first):\" $M; exit 1; }}; fi",
             succ.iter()
-                .map(|u| format!("{}; ", package_names(u, &format!("{b}/names"))))
+                .map(|(u, on)| {
+                    let names = package_names(u, &format!("{b}/names"));
+                    match on {
+                        Some(on) => format!("if {on}; then {names}; fi; "),
+                        None => format!("{names}; "),
+                    }
+                })
                 .collect::<String>()
         ),
         repo_lines,

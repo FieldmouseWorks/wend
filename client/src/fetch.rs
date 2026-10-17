@@ -72,6 +72,8 @@ struct State {
     archives: Vec<String>,
     offline: bool,
     refused: Mutex<Vec<String>>,
+    /// every "host/path" served, with the cache file it came from (a rehearsal's plan carries these: SPEC "The plan")
+    served: Mutex<std::collections::BTreeMap<String, PathBuf>>,
     /// the run's own pins, for learning every index once when a package turns up unknown
     tops: Vec<(String, Pin)>,
     learned_all: Mutex<bool>,
@@ -136,6 +138,7 @@ impl Proxy {
             archives,
             offline,
             refused: Mutex::new(vec![]),
+            served: Mutex::new(Default::default()),
         });
         let s = state.clone();
         std::thread::spawn(move || {
@@ -175,6 +178,14 @@ impl Proxy {
     pub fn take_refused(&self) -> Vec<String> {
         std::mem::take(&mut *lock(&self.state.refused))
     }
+
+    /// Every "host/path" served so far and the cache file it was served from, sorted by key.
+    pub fn served(&self) -> Vec<(String, PathBuf)> {
+        lock(&self.state.served)
+            .iter()
+            .map(|(k, f)| (k.clone(), f.clone()))
+            .collect()
+    }
 }
 
 /// One connection: requests in order (keep-alive, as apt pipelines them), one response each.
@@ -207,6 +218,10 @@ fn serve(s: &State, c: TcpStream) -> std::io::Result<()> {
         };
         match r {
             Ok(file) => {
+                if file.starts_with(&s.cache) {
+                    let key = unescape(path.split('?').next().unwrap_or("").trim_start_matches('/'));
+                    lock(&s.served).insert(key, file.clone());
+                }
                 let len = std::fs::metadata(&file)?.len();
                 write!(
                     out,
