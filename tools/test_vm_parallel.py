@@ -2,8 +2,9 @@
 ssh forwards on different host ports and both run; a guest whose port another process takes first asks again for
 another one; the mirror shim can't be stopped while a run uses it, whatever its WEND_WORK (shim-stop); a second run
 that needs a box another run is installing waits for it; and the box cache key follows what the install runs, not the
-whole file (build_source). QEMU is a stand-in that binds its hostfwd port as QEMU does and says what QEMU says when
-it can't. It runs the PR's own vm.py, so the gate's schema job doesn't run it: the client job does.
+whole file (build_source). A hop's kernel check matches uname -r with or without the arch (kernel_is). QEMU is a
+stand-in that binds its hostfwd port as QEMU does and says what QEMU says when it can't. It runs the PR's own vm.py,
+so the gate's schema job doesn't run it: the client job does.
 python3 tools/test_vm_parallel.py"""
 import os
 import re
@@ -29,6 +30,16 @@ def say(ok, what, detail=""):
     print(("passed  " if ok else "WRONG   ") + what + ("" if ok or not detail else f"\n        {detail}"))
     bad += not ok
 
+
+# the hop's kernel check: uname -r against the adapter's newest-kernel query, with and without the arch on either side
+for running, newest, want in [("3.10.0-1160.el7.x86_64", "3.10.0-1160.el7.x86_64", True),
+                              ("2.6.18-419.el5", "2.6.18-419.el5.x86_64", True),
+                              ("2.6.18-419.el5.x86_64", "2.6.18-419.el5", True),
+                              ("2.6.9-103.ELsmp", "2.6.18-419.el5.x86_64", False),
+                              ("2.6.18-398.el5", "2.6.18-419.el5.x86_64", False),
+                              ("6.12.0-55.el10.x86_64", None, False), (None, "6.12.0-55.el10.x86_64", False)]:
+    say(vm.kernel_is(running, newest) == want,
+        f"uname -r {running} {'is' if want else 'is not'} the newest kernel {newest}")
 
 bin_dir = os.path.join(tmp, "bin")
 os.makedirs(bin_dir)
