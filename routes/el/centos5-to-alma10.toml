@@ -36,6 +36,10 @@ id = "sha256:65fa037cf383daaea92a5df836657d378a0563702358e04fb271dc50f0b47377"
 name = "el7-drop-hal-info"
 
 [[fixes]]
+id = "sha256:49c074276a60f6d998ea585d981eb75e16d7023f7a4e43eca7a614458e10d0c1"
+name = "el7-drop-superseded-firmware"
+
+[[fixes]]
 id = "sha256:397a077d5ce43514ebee2d4c21a0237c9cf4278ca621c4c7bc7bcdd05ea980a6"
 name = "el7-carry-boot-services"
 

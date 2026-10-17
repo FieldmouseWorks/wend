@@ -1,0 +1,19 @@
+# Found replaying the route on a native CentOS 6.10 install in a VM (wend#160).
+schema = "wend.fix/0"
+family = "el"
+hop = "centos7"
+when = { any = [{ installed = "bfa-firmware" }, { installed = "ql2400-firmware" }, { installed = "ql2500-firmware" }, { installed = "xorg-x11-drv-ati-firmware" }] }
+restores = []
+adds = []
+
+[[pre]]
+op = "remove"
+packages = ["bfa-firmware", "ql2400-firmware", "ql2500-firmware", "xorg-x11-drv-ati-firmware"]
+purge = true
+
+[meta]
+name = "el7-drop-superseded-firmware"
+author = "claude (wend#160, hand-written from the VM replay)"
+source = "wend#160"
+note = "EL7's linux-firmware ships these packages' files and obsoletes them, but only up to the versions EL7 started from (bfa-firmware <= 3.2.21.1, ql2400/ql2500-firmware <= 5.08.00, xorg-x11-drv-ati-firmware <= 6.13.0). CentOS 6.10's builds are newer (3.2.23.0, 7.03.00, 7.6.1), so yum keeps them and the transaction stops on file conflicts with linux-firmware. Checked against 6.10's and 7.9's repo metadata: these four are the only EL6 firmware packages whose files linux-firmware ships and that its obsoletes miss. A stock 6.10 install has them (@core); a box upgraded from CentOS 5 doesn't. rpm -e, before the transaction: nothing else requires them, and linux-firmware comes in with EL7's kernel. It fires on el/centos6-lamp, which joins this route at centos6: CI's chroot gate replays the route from centos5 only, so the claim is the VM tier's (tools/vm.py) and fires_on stays empty."
+fires_on = []
