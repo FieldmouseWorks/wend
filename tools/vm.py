@@ -10,7 +10,8 @@ code on the host that runs it: never wire it to a CI runner a pull request can t
 not runs/ (runs/ holds what CI proved).
 
   python3 tools/vm.py build BOX            install the box in a VM (cached by box file + adapter)
-  python3 tools/vm.py replay ROUTE BOX     walk ROUTE on a fresh copy of it, rebooting after every hop
+  python3 tools/vm.py replay ROUTE BOX     walk ROUTE on a fresh copy of it, rebooting after every hop (a box on a
+                                           rung ROUTE passes through walks the hops after it: SPEC "Route")
   python3 tools/vm.py shim-stop PID        stop the mirror shim (tools/mirror.py) running as PID, unless a VM run is
                                            using it (exit 3: left running); runs that start meanwhile wait, then start
                                            a fresh one from their own checkout
@@ -20,7 +21,7 @@ not runs/ (runs/ holds what CI proved).
                                            relocate a fresh copy of BOX onto the first extra disk and prove the trial
                                            boot, a reset back to the old root, commit and a rollback boot (SPEC
                                            "Relocate"; with --root-fs xfs-v4 --lvm, an EL 7.0-7.2 install; on a
-                                           CentOS 5 box, the adapter's [relocate_grub_legacy])
+                                           CentOS 5 or 6 box, the adapter's [relocate_grub_legacy])
   python3 tools/vm.py --extra-disk GB --relocate replay ROUTE BOX
                                            the same relocate (trial, commit) before ROUTE's first hop, every hop on the
                                            new root, then a rollback to the old root and forward again after the last
@@ -31,9 +32,9 @@ not runs/ (runs/ holds what CI proved).
   --root-fs FS, --lvm, --extra-disk GB     (before the command, EL7 kickstart on) the box installed another way:
                                            FS overrides [vm].root_fs; --lvm puts / and swap on LVM in a VG `centos`
                                            filling the disk, beside /boot, as a default EL7 install does (on CentOS
-                                           5, VolGroup00 with LogVol00 and LogVol01, as its installer names them);
-                                           --extra-disk adds an empty disk of GB (repeatable; on CentOS 5, added
-                                           after its installer, which can't be told to skip it). Its own box and runs
+                                           5 and 6, as their installers name them: releases.<release>.install.lvm);
+                                           --extra-disk adds an empty disk of GB (repeatable; on CentOS 5 and 6,
+                                           added after the installer). Its own box and runs
 
 A box with a [shelter] plan (SPEC "Sheltering an app", Proof) needs root: its shelter is built and proved in a chroot copy
 of the box first, copied into the guest before the hop that drops Python 2, and probed for confinement after every
@@ -589,7 +590,8 @@ def kickstart(box_doc, adapter, key_pub):
     rel = adapter["releases"][box_doc["release"]]
     inst = rel["install"]
     end = ["%end"] if inst.get("ks_end") else []
-    fs = ROOT_FS[LAYOUT["root_fs"] or box_doc.get("vm", {}).get("root_fs", "ext3")]
+    # unset, the first filesystem the installer makes (CentOS 6's ext4), else ext3
+    fs = ROOT_FS[LAYOUT["root_fs"] or box_doc.get("vm", {}).get("root_fs") or (inst.get("root_fs") or ["ext3"])[0]]
     efi = ["part /boot/efi --fstype efi --size=200"] if FIRMWARE == "uefi" else []
     boot = f"part /boot {fs} --size={inst.get('boot_part_mib', 200)}"
     if LAYOUT["lvm"]:  # anaconda's autopart: /boot, then one PV with swap and a root that fills it, named as it names them
@@ -627,8 +629,12 @@ def kickstart(box_doc, adapter, key_pub):
 
 # [vm].root_fs: the filesystem anaconda makes for / and /boot. xfs-v4 is EL 7.0 to 7.2's XFS (no metadata CRCs, no
 # d_type), which later releases still mount but can't make by default; xfs is v5, EL 7.3's default and on.
-ROOT_FS = {"ext3": "--fstype ext3", "xfs": "--fstype xfs", "xfs-v4": '--fstype xfs --mkfsoptions="-m crc=0 -n ftype=0"'}
+ROOT_FS = {"ext3": "--fstype ext3", "ext4": "--fstype ext4", "xfs": "--fstype xfs",
+           "xfs-v4": '--fstype xfs --mkfsoptions="-m crc=0 -n ftype=0"'}
 ROOT_FS_IS = {"ext3": "for m in / /boot; do [ \"$(findmnt -no FSTYPE $m)\" = ext3 ] || { findmnt $m; exit 1; }; done",
+              # CentOS 6's util-linux may have no findmnt
+              "ext4": "for m in / /boot; do awk -v m=$m '$2 == m && $1 != \"rootfs\" {t = $3} END {exit t != \"ext4\"}' "
+                      "/proc/mounts || { grep \" $m \" /proc/mounts; exit 1; }; done",
               **{k: "for m in / /boot; do X=$(xfs_info $m) || exit 1; echo \"$X\" | grep -q 'crc=%s' && "
                     "echo \"$X\" | grep -q 'ftype=%s' || { echo \"$X\"; exit 1; }; done" % c
                  for k, c in (("xfs", ("1", "1")), ("xfs-v4", ("0", "0")))}}
@@ -1050,6 +1056,16 @@ def shelter_confine(g, box_doc, a, plan, passing):
     return out
 
 
+def joins(a, route, release):
+    """The rung a box at RELEASE stands on, and the hops it walks on ROUTE from there: all of them from the route's
+    `from`, the ones after it from a rung the route passes through short of `to` (SPEC "Route": a CentOS 6 box joins
+    centos5-to-alma10 at centos6), none from anywhere else. The run says the rung it started at."""
+    start = check.rung(a, release)
+    if start == route["from"]:
+        return start, list(route["hops"])
+    return start, list(route["hops"][route["hops"].index(start) + 1:]) if start in route["hops"][:-1] else []
+
+
 def replay(route_path, box_id, resume=None):
     """resume = (an earlier run's directory, HOP): start from that run's disk after the hop before HOP, to iterate on
     a late hop without replaying the early ones. Such a run is recorded as partial and never counts as a pass."""
@@ -1066,10 +1082,12 @@ def replay(route_path, box_id, resume=None):
     w = type("W", (), {})()  # the harness's own hop_cmds (tools/walk.py), on a walk with no chroot box
     w.adapter = a
     key, prev = os.path.join(d, "key"), os.path.join(d, "base.qcow2")
-    todo = route["hops"]
+    start, todo = joins(a, route, box_doc["release"])
+    if not todo:
+        raise SystemExit(f"{box_id} starts at {start}: {route_path} neither starts there nor passes through it")
     if resume:
-        if resume[1] not in route["hops"][1:]:
-            raise SystemExit(f"--from needs one of {route['hops'][1:]}; for the whole route, replay without it")
+        if resume[1] not in todo[1:]:
+            raise SystemExit(f"--from needs one of {todo[1:]}; for the whole route, replay without it")
         i = route["hops"].index(resume[1])
         # only from a hop that passed, on the same box: a failed hop's disk would make lost checks vacuous
         if not os.path.exists(os.path.join(resume[0], "run.json")):
@@ -1094,7 +1112,7 @@ def replay(route_path, box_id, resume=None):
     if RELOCATE:
         relocate_ready(a)
         reloc = Relocation(a, box_doc, box_doc.get("shelter", {}))
-        reloc.fills = {"new_disk": new_disk(hardware(a, route["from"])), "route_mib": route_mib(a, route, pinned),
+        reloc.fills = {"new_disk": new_disk(hardware(a, box_doc["release"])), "route_mib": route_mib(a, route, pinned),
                        "boot_mib": route_boot_mib(a, route, pinned)}
         if resume and not all(x["ok"] for x in src.get("relocate", {}).get("stages", [{"ok": False}])):
             raise SystemExit(f"{resume[0]} didn't relocate the box: resume a --relocate run from one that did")
@@ -1111,7 +1129,7 @@ def replay(route_path, box_id, resume=None):
     log(f"replaying at {at.get('commit', 'no git head')}{' (with local changes)' if at.get('dirty') else ''}")
     os.makedirs(out_dir)
     port = box_doc.get("vm", {}).get("ssh_port", 22)
-    hw = hardware(a, route["from"])
+    hw = hardware(a, box_doc["release"])
     # SPEC "Sheltering an app": a box with a plan gets its shelters built (in a chroot copy, so as root) before the hop
     # that drops Python 2, and every hop from that one on proves confinement after its reboot
     plan = box_doc.get("shelter", {})
@@ -1119,7 +1137,7 @@ def replay(route_path, box_id, resume=None):
     sheltered = set(route["hops"][route["hops"].index(drop):]) if drop else set()
     rw = sh_steps = None
     if drop in todo:
-        if shelter.keeps_runtimes_on(a, route) != route["from"]:
+        if shelter.keeps_runtimes_on(a, route) != route["from"] or start != route["from"]:
             raise SystemExit("the VM tier builds a shelter only on the route's start release so far")
         if os.geteuid() != 0:
             raise SystemExit(f"{box_id} has a shelter plan: building it takes a chroot copy of the box, so run this as "
@@ -1128,7 +1146,7 @@ def replay(route_path, box_id, resume=None):
         w.shelter_steps = {drop: sh_steps} if sh_steps else {}
     try:
         return walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_dir, stamp, key, prev,
-                       port, hw, plan, drop, sheltered, rw, sh_steps, reloc)
+                       port, hw, plan, drop, sheltered, rw, sh_steps, reloc, start)
     finally:
         if rw:
             rw.close()
@@ -1146,7 +1164,7 @@ def kernel_is(running, newest):
 
 
 def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_dir, stamp, key, prev, port, hw,
-            plan, drop, sheltered, rw, sh_steps, reloc=None):
+            plan, drop, sheltered, rw, sh_steps, reloc=None, start=None):
     """replay's hops, once the shelters (if any) are built; with reloc (replay --relocate), on the relocated root."""
     hops, start_net, efi_start = [], None, None
     if reloc and not resume:
@@ -1270,7 +1288,7 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
     complete = bool(todo) and len(hops) == len(todo) + bool(route.get("finish", {}).get("prune_obsolete"))
     if reloc:
         complete = complete and walked and reloc.ok()
-    run = {"schema": "wend.vmrun/0", "route": check.content_id(route), "box": box_id, "from": route["from"],
+    run = {"schema": "wend.vmrun/0", "route": check.content_id(route), "box": box_id, "from": start or route["from"],
            "to": route["to"], "started": stamp, "head": w.head, "firmware": FIRMWARE,
            **({"efi_start": efi_start} if FIRMWARE == "uefi" else {}),
            "layout": {k: v for k, v in LAYOUT.items() if v},

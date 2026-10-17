@@ -1,0 +1,85 @@
+# A CentOS 6 LAMP server built natively on 6.10 (SPEC "Upgrading a running machine", Proof): the only CentOS 6 rung
+# proved before it was a CentOS 5 box upgraded to 6. It joins centos5-to-alma10 at centos6 (SPEC "Route").
+# Box files are trusted test code: humans review them, clients never run them.
+schema = "wend.box/0"
+family = "el"
+release = "centos6"
+arch = "x86_64"
+summary = "CentOS 6.10 LAMP: httpd 2.2 + mod_php 5.3 (mysqli), MySQL 5.1 with a real row, postfix, ssh on 2222, cron"
+packages = ["httpd", "php", "php-mysql", "mysql-server", "openssh-server", "openssh-clients", "postfix", "cronie", "crontabs", "sudo", "perl", "curl", "rsync", "python", "logrotate", "ntp", "which"]
+customize = '''
+set -e
+grep -q localhost /etc/hosts 2>/dev/null || printf '127.0.0.1 localhost localhost.localdomain\n' >> /etc/hosts
+mkdir -p /var/www/mysite
+cat > /var/www/mysite/index.php <<'EOF'
+<?php
+$c = @mysqli_connect("localhost", "app", "apppw", "app");
+$r = $c ? mysqli_fetch_row(mysqli_query($c, "select msg from t")) : array("no db");
+echo "hello from oldbox " . strtoupper("ok") . " " . $r[0] . "\n";
+?>
+EOF
+cat > /etc/httpd/conf.d/mysite.conf <<'EOF'
+NameVirtualHost *:80
+<VirtualHost *:80>
+    ServerName mysite.local
+    DocumentRoot /var/www/mysite
+    DirectoryIndex index.php
+    <Directory /var/www/mysite>
+        Order allow,deny
+        Allow from all
+    </Directory>
+</VirtualHost>
+EOF
+sed -i 's/^#\?ServerName .*/ServerName oldbox.example.org/' /etc/httpd/conf/httpd.conf
+grep -q '^ServerName' /etc/httpd/conf/httpd.conf || echo 'ServerName oldbox.example.org' >> /etc/httpd/conf/httpd.conf
+/usr/bin/mysql_install_db --user=mysql --force >/dev/null
+(/usr/libexec/mysqld --user=mysql >/tmp/b.log 2>&1 &)
+i=0; while [ $i -lt 60 ] && [ ! -S /var/lib/mysql/mysql.sock ]; do sleep 1; i=$((i+1)); done
+mysql -uroot -e "create database app; create table app.t (msg varchar(64)); insert into app.t values ('row from 2011'); grant select on app.* to 'app'@'localhost' identified by 'apppw'; flush privileges;"
+mysqladmin -uroot shutdown
+sleep 3
+for t in rsa dsa; do ssh-keygen -q -t $t -N '' -f /etc/ssh/ssh_host_${t}_key; done
+sed -i 's/^#\?Port 22$/Port 2222/' /etc/ssh/sshd_config
+grep -q '^Port 2222' /etc/ssh/sshd_config
+postconf -e myhostname=oldbox.example.org
+useradd -m -s /bin/bash alice
+mkdir -p /home/alice/backup
+echo '0 3 * * * /usr/bin/rsync -a /var/www/ /home/alice/backup/ # nightly-backup' | crontab -u alice -
+# the owner runs these at boot (stock CentOS 6 installs httpd and mysqld switched off)
+chkconfig httpd on
+chkconfig mysqld on
+yum clean all >/dev/null
+mkdir -p /etc/wend/secrets && printf 'apppw' > /etc/wend/secrets/app-db && chmod 600 /etc/wend/secrets/app-db
+# the static address and MAC pin anaconda writes for a static install (QEMU's default MAC) (the VM's kickstart has written its own)
+mkdir -p /etc/sysconfig/network-scripts
+[ -f /etc/sysconfig/network-scripts/ifcfg-eth0 ] || printf 'DEVICE=eth0\nHWADDR=52:54:00:12:34:56\nBOOTPROTO=static\nIPADDR=10.0.2.20\nNETMASK=255.255.255.0\nGATEWAY=10.0.2.2\nONBOOT=yes\n' > /etc/sysconfig/network-scripts/ifcfg-eth0
+'''
+# The services role flags service packages whose family wasn't on the box at the start. It skips EL7+'s own
+# base-system service packages by exact name (dbus-daemon, dbus-broker, hostname, readonly-root, netconsole-service,
+# systemd, systemd-udev, and systemd-container, which EL8 split out of systemd so upgraded boxes keep machinectl). Every
+# real EL7+ machine has these; the lab removed some in the chroot, which a real box must not copy. Any other
+# systemd-* package, or a stray daemon from a fix (mysql on a DNS box), is still caught.
+start_hook = "rpm -qa --qf '%{NAME}\\n' | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 's/^mariadb$/mysql/' -e 's/^chrony$/ntp/' -e 's/^cronie$/vixie/' -e 's/^openssh$/openssh/' | sort -u > /var/lib/wend-expected-families"
+isolate = ["db", "site"]
+
+[roles]
+# offline, as a chroot allows: SysV runlevel 3 before EL7, systemd unit enablement after (wend#6)
+boot = "M=$(grep -o '[0-9][0-9]*' /etc/redhat-release | head -n1); if [ $M -lt 7 ]; then for s in httpd mysqld sshd postfix crond; do chkconfig --list $s 2>/dev/null | grep -q '3:on' || { echo \"$s does not start at boot\"; exit 1; }; done; else for u in httpd mariadb sshd postfix crond $(test -f /usr/lib/systemd/system/php-fpm.service && echo php-fpm); do [ \"$(systemctl is-enabled $u 2>/dev/null)\" = enabled ] || { echo \"$u does not start at boot\"; exit 1; }; done; fi"
+ssh = "mkdir -p /var/run/sshd /run/sshd; /usr/sbin/sshd -t && grep -q '^Port 2222' /etc/ssh/sshd_config"
+cron = "test -x /usr/sbin/crond && crontab -l -u alice | grep nightly-backup"
+python = "python3 -c 'print(6*7)' | grep 42 || python -c 'print 6*7' | grep 42"
+tools = "perl -e 1 && curl -s file:///etc/redhat-release && rsync --version && sudo -V && id alice"
+mail = "postfix check && test \"$(postconf -h myhostname)\" = oldbox.example.org"
+php = "php /var/www/mysite/index.php | grep 'hello from oldbox OK'"
+db = "mkdir -p /var/run/mysqld /run/mariadb /var/run/mariadb 2>/dev/null; chown mysql /var/run/mysqld /run/mariadb 2>/dev/null; D=$(ls /usr/libexec/mariadbd /usr/libexec/mysqld /usr/sbin/mariadbd /usr/sbin/mysqld 2>/dev/null | head -n1); rm -f /var/lib/mysql/mysql.sock /var/lib/mysql/*.pid; ($D --user=mysql >/tmp/db.log 2>&1 &); i=0; while [ $i -lt 60 ] && [ ! -S /var/lib/mysql/mysql.sock ]; do sleep 1; i=$((i+1)); done; C=$(command -v mariadb || command -v mysql); i=0; while [ $i -lt 30 ] && ! $C -uapp -papppw -N -e 'select 1' >/dev/null 2>&1; do sleep 1; i=$((i+1)); done; C=$(command -v mariadb || command -v mysql); $C -uapp -papppw -N -e 'select msg from app.t' | grep 'row from 2011'; rc=$?; A=$(command -v mariadb-admin || command -v mysqladmin); $A -uroot shutdown >/dev/null 2>&1; i=0; while [ $i -lt 120 ] && pgrep -x 'mariadbd|mysqld' >/dev/null; do sleep 1; i=$((i+1)); done; [ $rc = 0 ] || tail -n 15 /tmp/db.log; exit $rc"
+site = "mkdir -p /var/run/mysqld /run/mariadb /var/run/mariadb 2>/dev/null; chown mysql /var/run/mysqld /run/mariadb 2>/dev/null; D=$(ls /usr/libexec/mariadbd /usr/libexec/mysqld /usr/sbin/mariadbd /usr/sbin/mysqld 2>/dev/null | head -n1); rm -f /var/lib/mysql/mysql.sock /var/lib/mysql/*.pid; ($D --user=mysql >/tmp/db.log 2>&1 &); i=0; while [ $i -lt 60 ] && [ ! -S /var/lib/mysql/mysql.sock ]; do sleep 1; i=$((i+1)); done; C=$(command -v mariadb || command -v mysql); i=0; while [ $i -lt 30 ] && ! $C -uapp -papppw -N -e 'select 1' >/dev/null 2>&1; do sleep 1; i=$((i+1)); done; mkdir -p /run/php-fpm /var/run/httpd 2>/dev/null; test -x /usr/sbin/php-fpm && /usr/sbin/php-fpm -D; /usr/sbin/httpd -k start; i=0; while [ $i -lt 20 ] && ! curl -s http://127.0.0.1/ >/dev/null; do sleep 1; i=$((i+1)); done; curl -s -H 'Host: mysite.local' http://127.0.0.1/ | tee /tmp/site.out | grep 'hello from oldbox OK row from 2011'; rc=$?; A=$(command -v mariadb-admin || command -v mysqladmin); $A -uroot shutdown >/dev/null 2>&1; i=0; while [ $i -lt 120 ] && pgrep -x 'mariadbd|mysqld' >/dev/null; do sleep 1; i=$((i+1)); done; [ $rc = 0 ] || { head -c 400 /tmp/site.out; tail -n 8 /var/log/httpd/error_log; }; exit $rc"
+current = "M=$(grep -o '[0-9][0-9]*' /etc/redhat-release | head -n1); for f in $(command -v php) /usr/sbin/httpd $(ls /usr/sbin/php-fpm /usr/libexec/mariadbd /usr/libexec/mysqld /usr/sbin/mariadbd 2>/dev/null | head -n2) $(cd /etc/httpd && grep -h '^ *LoadModule php' conf.d/*.conf conf.modules.d/*.conf 2>/dev/null | awk '{print \"/etc/httpd/\" $3}' | while read m; do [ -e \"$m\" ] && echo \"$m\"; done); do p=$(rpm -qf --qf '%{NAME}-%{VERSION}-%{RELEASE}' \"$(readlink -f $f)\" 2>/dev/null); echo \"$p\" | grep -qE \"[._]el${M}([._]|$)\" || { echo \"$f comes from '$p', not a release-$M package\"; exit 1; }; done"
+network = "M=$(grep -o '[0-9][0-9]*' /etc/redhat-release | head -n1); if [ $M -ge 10 ]; then K=$(grep -lx 'interface-name=eth0' /etc/NetworkManager/system-connections/*.nmconnection 2>/dev/null | head -n1); [ -n \"$K\" ] && [ \"$(stat -c %a \"$K\")\" = 600 ] && awk '/^\\[/ {s = $0} s == \"[ipv4]\" && $0 == \"method=manual\" {m = 1} END {exit !m}' \"$K\" && grep -iqx 'mac-address=52:54:00:12:34:56' \"$K\" && ! grep -qx 'autoconnect=false' \"$K\" && grep -iqx 'MACAddress=52:54:00:12:34:56' /etc/systemd/network/10-wend-eth0.link && grep -qx 'Name=eth0' /etc/systemd/network/10-wend-eth0.link && grep -Eqx 'address1=10\\.0\\.2\\.20/24(,10\\.0\\.2\\.2)?' \"$K\" && grep -Eqx '(address1=10\\.0\\.2\\.20/24,10\\.0\\.2\\.2|gateway=10\\.0\\.2\\.2)' \"$K\" || { echo 'eth0 has no 0600 autoconnecting keyfile for its MAC with the static 10.0.2.20/24 via 10.0.2.2, or no .link pinning eth0 to that MAC'; exit 1; }; else grep -Eqx 'IPADDR=\"?10\\.0\\.2\\.20\"?' /etc/sysconfig/network-scripts/ifcfg-eth0 || { echo 'ifcfg-eth0 lost the static 10.0.2.20'; cat /etc/sysconfig/network-scripts/ifcfg-eth0; exit 1; }; fi"
+services = "for p in $(ls /etc/rc.d/init.d/* /usr/lib/systemd/system/*.service 2>/dev/null | xargs rpm -qf --qf '%{NAME}\\n' 2>/dev/null | grep -v 'not owned' | sort -u); do case $p in dbus-daemon|dbus-broker|hostname|readonly-root|netconsole-service|systemd|systemd-udev|systemd-container) continue;; esac; f=$(echo $p | sed -e 's/[0-9.]*//g' -e 's/-.*//' -e 's/^mariadb$/mysql/' -e 's/^chrony$/ntp/' -e 's/^cronie$/vixie/' -e 's/^openssh$/openssh/'); grep -qxs \"$f\" /var/lib/wend-expected-families /var/lib/wend/added-families && continue; for c in $p $(rpm -q --provides $p | awk '{print $1}'); do rpm -q --whatrequires \"$c\" >/dev/null 2>&1 && continue 2; done; echo \"unexpected new service package: $p\"; exit 1; done"
+
+# tools/vm.py: the same box installed in a VM. db and site start their own daemons, which a running box already has;
+# the live checks below ask the running ones instead, after every reboot.
+[vm]
+ssh_port = 2222
+skip = ["db", "site"]
+live = { ipv6 = "f=/var/lib/wend/check-ipv6; for i in $(seq 1 30); do a=$( (ip -o -6 addr 2>/dev/null || /sbin/ip -o -6 addr) | awk '$2 != \"lo\" && ($6 == \"global\" || $6 == \"site\") && !/temporary|deprecated|tentative/ {print $2, $4}' | LC_ALL=C sort); [ -n \"$a\" ] && { [ ! -f $f ] || [ \"$a\" = \"$(cat $f)\" ]; } && break; sleep 2; done; [ -n \"$a\" ] || { echo 'no global or site IPv6 address'; exit 1; }; if [ -f $f ]; then [ \"$a\" = \"$(cat $f)\" ] && exit 0; echo \"IPv6 addresses were: $(cat $f)\"; echo \"now: $a\"; exit 1; fi; mkdir -p /var/lib/wend && echo \"$a\" > $f", daemons = "for i in $(seq 1 30); do ok=1; for p in httpd master crond sshd; do pgrep -x $p >/dev/null || ok=0; done; pgrep -x 'mysqld|mariadbd' >/dev/null || ok=0; [ $ok = 1 ] && exit 0; sleep 2; done; for p in httpd master crond sshd; do pgrep -x $p >/dev/null || echo \"$p is not running\"; done; exit 1", db = "for i in $(seq 1 30); do (mysql -uapp -papppw -N -e 'select msg from app.t' 2>/dev/null || mariadb -uapp -papppw -N -e 'select msg from app.t' 2>/dev/null) | grep -q 'row from 2011' && exit 0; sleep 2; done; exit 1", site = "for i in $(seq 1 30); do curl -s -H 'Host: mysite.local' http://127.0.0.1/ | grep -q 'hello from oldbox OK row from 2011' && exit 0; sleep 2; done; curl -s -H 'Host: mysite.local' http://127.0.0.1/ | head -c 300; exit 1" }

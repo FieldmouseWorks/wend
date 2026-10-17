@@ -470,4 +470,16 @@ print(("passed  " if got == want else "WRONG   ") + f"route_mib for centos7-to-a
       ("" if got == want else f" (got {got})"))
 bad += got != want
 
+# the hops a VM replay walks: all of them from the route's start, the rest from a rung it passes through, none elsewhere
+c5 = tomllib.load(open(os.path.join(ROOT, "routes", "el", "centos5-to-alma10.toml"), "rb"))
+for name, r, release, want in (("a CentOS 5 box walks every hop", c5, "centos5", ("centos5", c5["hops"])),
+                               ("a CentOS 6 box joins at centos6", c5, "centos6", ("centos6", ["centos7", "alma9", "alma10"])),
+                               ("an SL7 box joins the CentOS 5 route at centos7", c5, "sl7", ("centos7", ["alma9", "alma10"])),
+                               ("an SL7 box walks every hop of the CentOS 7 route", route, "sl7", ("centos7", route["hops"])),
+                               ("a box at the route's end walks nothing", c5, "alma10", ("alma10", [])),
+                               ("a box before the route walks nothing", route, "centos6", ("centos6", []))):
+    got = vm.joins(a, r, release)
+    print(("passed  " if got == want else "WRONG   ") + name + ("" if got == want else f" (got {got})"))
+    bad += got != want
+
 sys.exit(1 if bad else 0)

@@ -81,6 +81,11 @@ upgrade = ["L=/var/lib/wend/py23-leftovers; for p in python-elementtree python-s
 major = 6
 pm = "yum"
 repos = { base = "vault.centos.org/6.10/os/x86_64", updates = "vault.centos.org/6.10/updates/x86_64" }
+# tools/vm.py: as CentOS 5's, with 6.10's defaults: a 500 MiB /boot, ext4 (a box's default is the first root_fs), and
+# the names its autopartitioning gives the VG and LVs on a host called wend-vm (vg_ and the hostname without its
+# dash). system-config-firewall-base is lokkit, which EL6's anaconda runs to write the selinux and firewall lines:
+# without it (%packages --nobase) neither is written.
+install = { tree = "vault.centos.org/6.10/os/x86_64", pxeboot = "images/pxeboot", packages = ["grub", "system-config-firewall-base"], boot_part_mib = 500, root_fs = ["ext4"], lvm = { vg = "vg_wendvm", root = "lv_root", swap = "lv_swap" } }
 upgrade = ["yum -y upgrade"]
 # EL6 binaries can't run on the EL5 kernel (EL6's apr asks for SOCK_CLOEXEC): on a real machine, boot the new kernel
 # before the post steps run them (SPEC "Kernels and the bootloader")
@@ -968,12 +973,14 @@ mkdir -p /mnt/wend/new && mount ${P}2 /mnt/wend/new && mkdir -p /mnt/wend/new/bo
 printf 'NEW_DEV=%s\nNEW_UUID=%s\nNEW_BOOT_UUID=%s\n' ${P}2 "$(blkid -s UUID -o value ${P}2)" "$(blkid -s UUID -o value ${P}1)" >> /var/lib/wend/relocate.env
 ''']
 # One pass, with every running service stopped except what keeps the machine reachable and safe; they stay stopped
-# until the trial boot. tar, not rsync: CentOS 5's rsync (2.6.8) has no -X, and tar --selinux keeps the labels.
-# --one-file-system leaves out /proc, /sys, /dev, /selinux, /boot and the new root itself; the old /boot goes into the
-# new /boot. tar's create side may say a file changed as it read it (a log): that's 1, anything worse stops the copy.
+# until the trial boot. CentOS 6's blk-availability says it's running whenever asked, and stopping it deactivates the
+# machine's LVs (blkdeactivate), so it's kept too. tar, not rsync: CentOS 5's rsync (2.6.8) has no -X, and tar
+# --selinux keeps the labels. --one-file-system leaves out /proc, /sys, /dev, /selinux, /boot and the new root itself;
+# the old /boot goes into the new /boot. tar's create side may say a file changed as it read it (a log): that's 1,
+# anything worse stops the copy.
 copy = ['''
 set -e
-K='^(sshd|network|NetworkManager|iptables|ip6tables|auditd|messagebus|haldaemon|syslog|rsyslog|lvm2-monitor|udev-post|mcstrans|restorecond)$'
+K='^(sshd|network|NetworkManager|iptables|ip6tables|auditd|messagebus|haldaemon|syslog|rsyslog|lvm2-monitor|blk-availability|udev-post|mcstrans|restorecond)$'
 L=$(runlevel | awk '{print $2}')
 chkconfig --list 2>/dev/null | awk -v l="$L:on" '{for (i = 2; i <= NF; i++) if ($i == l) print $1}' | grep -Ev "$K" | while read s; do service "$s" status >/dev/null 2>&1 && echo "$s"; done > /var/lib/wend/relocate-stopped || true
 for s in $(cat /var/lib/wend/relocate-stopped); do service "$s" stop || exit 1; done
