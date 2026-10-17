@@ -2104,8 +2104,8 @@ at once); a client will have to hold kernel updates while the stub is in charge.
 **On GRUB legacy** (CentOS 5 and 6), the adapter's `[relocate_grub_legacy]` table has the same steps and commands,
 and `tools/vm.py` takes it when the machine boots from `/boot/grub/grub.conf` with no `/boot/grub2`. Built for BIOS,
 `/boot` on a plain ext partition, `/` on one or on a plain linear LV (CentOS 5's default install puts it on
-`VolGroup00/LogVol00`), and the new root on a whole empty disk the owner names (on a CentOS 5 box
-the VM tier adds it after the installer, which can't be told to leave it alone). What differs from `[relocate]`:
+`VolGroup00/LogVol00`, CentOS 6's on `vg_<hostname>/lv_root`), and the new root on a whole empty disk the owner names
+(on a CentOS 5 or 6 box the VM tier adds it after the installer). What differs from `[relocate]`:
 
 - `preflight` reads which partitions `/` and `/boot` are by device number (EL5 has no `lsblk` or `findmnt`); a `/`
   on no partition is the device-mapper device of that number (`dmsetup ls`, which prints it `(253, 0)` on EL5 and
@@ -2122,7 +2122,8 @@ the VM tier adds it after the installer, which can't be told to leave it alone).
   `/mnt/wend/new` (EL5 has no `/run`).
 - `copy` is one `tar --selinux --numeric-owner` pass of `/` and one of `/boot`, with every running service stopped
   but sshd, the network, the firewall, auditd, messagebus, haldaemon, syslog, LVM's and SELinux's own (CentOS 5's
-  rsync has no `-X`).
+  rsync has no `-X`). CentOS 6's `blk-availability` stays too: its status always says running, and stopping it
+  deactivates the machine's LVs.
 - `fixup`: the copy's fstab names the new root and `/boot` by label; its `grub.conf` points every entry at the new
   `/boot`'s disk, boots the new root and adds `panic=10` where a kernel line has no `panic=`; its `device.map` names
   the new disk; every kernel's initrd is rebuilt by the release's own `mkinitrd` in the copy (a kernel that can't
@@ -2151,6 +2152,13 @@ An LV root under GRUB legacy relocates the same way, onto a plain partition: the
 `LABEL=wend-root` instead of the LV, and the swap LV stays where it is (the copy's fstab still names it, and both
 roots activate the volume group at boot). The helper tells the old root by its UUID, found through device-mapper's
 name for the root's device number. `tools/vm.py --lvm --extra-disk GB relocate el/centos5-web` runs it.
+
+On CentOS 6, `el/centos6-lamp` is a native 6.10 install (ext4 `/` and `/boot`, `vg_wendvm/lv_root` with `--lvm`, as
+its installer lays out a host called `wend-vm`), and its initrds are dracut's, built by the `mkinitrd` wrapper in the
+copy. `tools/vm.py --lvm --extra-disk GB relocate el/centos6-lamp` runs the stages, and `tools/vm.py --lvm
+--extra-disk GB --relocate replay routes/el/centos5-to-alma10.toml el/centos6-lamp` joins the CentOS 5 route at
+`centos6` ("Route") and walks its last three hops on the relocated root, with the rollback from Alma 10 to the old
+CentOS 6 system after them.
 
 Not built yet: free extents in the volume group instead of a disk, a root on a plain partition under GRUB 2, other v4
 filesystems,
