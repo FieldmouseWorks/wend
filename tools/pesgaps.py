@@ -149,7 +149,8 @@ def walk(repo, route_path, packages, data=None, own=None, streams=()):
     data = load(route["family"]) if data is None else data
     pkgs = set(packages)
     own = set(pkgs if own is None else own)
-    addons = {n for n, a in adapter.get("addons", {}).items() if a["marker"] in pkgs}
+    # names alone can't show an add-on found by vendor (nginx): only marker add-ons count here
+    addons = {n for n, a in adapter.get("addons", {}).items() if a.get("marker") in pkgs}
     sources = [s for s in data if s not in adapter.get("addons", {}) or s in addons]
     enabled = enabled_repos(adapter, route, addons)
     fixes = [repo.fixes_by_id[f["id"]] for f in route["fixes"]]

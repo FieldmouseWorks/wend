@@ -25,6 +25,8 @@ not runs/ (runs/ holds what CI proved).
                                            new root, then a rollback to the old root and forward again after the last
   --uefi (before the command)              the same on UEFI firmware (OVMF) instead of BIOS: its own box, install
                                            and NVRAM, and after every boot the guest must still be running on UEFI
+  --no-hwaddr                              (before the command, EL7 kickstart) the installer isn't told the NIC
+                                           by MAC, so ifcfg-eth0 has no HWADDR, as a stock install (wend#74)
   --root-fs FS, --lvm, --extra-disk GB     (before the command, EL7 kickstart on) the box installed another way:
                                            FS overrides [vm].root_fs; --lvm puts / and swap on LVM in a VG `centos`
                                            filling the disk, beside /boot, as a default EL7 install does;
@@ -96,7 +98,9 @@ FW_NOW = "{ [ -d /sys/firmware/efi ] && echo uefi || echo bios; } 2>/dev/null"
 # The disk layout, from the command line (main): how anaconda lays out the first disk, and the empty disks beside it.
 # The chroot box is the same either way (a chroot has no disks), so these are install choices, not other boxes: CentOS 7
 # from 7.0 to 7.2 media is XFS v4 on LVM, and rebuild-and-carry (docs/rebuild-and-carry.md) needs room on a second disk.
-LAYOUT = {"root_fs": None, "lvm": False, "extra_disks": []}
+# no_hwaddr (--no-hwaddr): the installer isn't told the NIC by MAC (no ifname=), so its ifcfg-eth0 has no HWADDR, as
+# a plain kickstart or interactive EL7 install writes it (wend#74); an install choice too: the chroot box writes its own.
+LAYOUT = {"root_fs": None, "lvm": False, "extra_disks": [], "no_hwaddr": False}
 # replay --relocate (main): relocate the box onto the first extra disk before the route's first hop, and roll back to
 # the old root and forward again after its last (SPEC "Relocate", "Walking a route on a relocated root")
 RELOCATE = False
@@ -357,7 +361,8 @@ def extras(disk):
 def layout_tag():
     """LAYOUT as a short name for directories (empty for the box's own layout), e.g. xfs-v4-lvm-x1."""
     return "-".join(([LAYOUT["root_fs"]] if LAYOUT["root_fs"] else []) + (["lvm"] if LAYOUT["lvm"] else []) +
-                    ([f"x{len(LAYOUT['extra_disks'])}"] if LAYOUT["extra_disks"] else []))
+                    ([f"x{len(LAYOUT['extra_disks'])}"] if LAYOUT["extra_disks"] else []) +
+                    (["nohwaddr"] if LAYOUT["no_hwaddr"] else []))
 
 
 def overlay(prev, disk):
@@ -770,6 +775,9 @@ def install(box_id, box_doc, d):
     if (LAYOUT["lvm"] or LAYOUT["extra_disks"]) and not (load(f"adapters/{fam}.toml")["backend"] == "rpm" and
                                                           inst.get("ks_end")):
         raise SystemExit("--lvm and --extra-disk are EL7-and-later kickstart choices (logvol, ignoredisk --only-use)")
+    if LAYOUT["no_hwaddr"] and not inst.get("ifname"):
+        raise SystemExit(f"--no-hwaddr is for a release whose installer is told the NIC by MAC (releases."
+                         f"{box_doc['release']}.install.ifname)")
     if FIRMWARE == "uefi" and not inst.get("uefi"):
         raise SystemExit(f"{box_doc['release']}'s installer doesn't install on UEFI (adapter: releases."
                          f"{box_doc['release']}.install.uefi)")
@@ -801,7 +809,8 @@ def install(box_id, box_doc, d):
         try:
             g.start(["-kernel", os.path.join(d, "vmlinuz"), "-initrd", os.path.join(d, "initrd.img"), "-no-reboot",
                      "-append", f"ks=http://{GUEST_HOST}:{srv.port}/ks.cfg ksdevice=eth0 console=ttyS0,115200 text "
-                     f"{inst.get('append', '')}{f' ifname=eth0:{MAC}' if inst.get('ifname') else ''}".strip()])
+                     f"{inst.get('append', '')}{f' ifname=eth0:{MAC}' if inst.get('ifname') and not LAYOUT['no_hwaddr'] else ''}"
+                     .strip()])
             g.proc.wait(3600)
         finally:
             srv.httpd.shutdown()
@@ -850,6 +859,11 @@ def install(box_id, box_doc, d):
     fw = g.ssh(FW_NOW)[1].strip()
     if fw != FIRMWARE:
         raise RuntimeError(f"the installed box booted on {fw!r}, not {FIRMWARE}")
+    if LAYOUT["no_hwaddr"]:  # the installer wrote no MAC pin, or this isn't the install it says
+        rc, out = g.ssh("test -f /etc/sysconfig/network-scripts/ifcfg-eth0 && "
+                        "! grep -E '^[[:space:]]*HWADDR=' /etc/sysconfig/network-scripts/ifcfg-eth0")
+        if rc:
+            raise RuntimeError(f"--no-hwaddr: the installed ifcfg-eth0 is missing or has a HWADDR: {out[-600:]}")
     if root_fs:  # the box has the filesystem it says, or it isn't that box
         rc, out = g.ssh(ROOT_FS_IS[root_fs])
         if rc:
@@ -1531,6 +1545,8 @@ def main(args):
             for f in (OVMF_CODE, OVMF_VARS):
                 if not os.path.exists(f):
                     raise SystemExit(f"--uefi needs OVMF ({f}; Debian and Ubuntu: the ovmf package)")
+        elif args[0] == "--no-hwaddr":
+            LAYOUT["no_hwaddr"], args = True, args[1:]
         elif args[0] == "--lvm":
             LAYOUT["lvm"], args = True, args[1:]
         elif args[0] == "--root-fs" and len(args) > 1 and args[1] in ROOT_FS:

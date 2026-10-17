@@ -29,13 +29,23 @@ STATIC = ["type", "ethernet", "con-name", "System eth0", "ifname", "eth0", "ethe
           "ipv4.dns-search", "example.org"]
 
 
-def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=(), link_dirs=None):
-    """Run the converter on a fresh root; return (exit message or None, {keyfile: nmcli args}, files left, printed)."""
+IP = """#!/bin/sh
+cat "$(dirname "$0")/addr-$6" 2>/dev/null
+"""
+NIC = {"type": "1", "addr_assign_type": "0", "address": "52:54:00:12:34:56"}
+ON_NIC = "2: eth0    inet 10.0.2.20/24 brd 10.0.2.255 scope global noprefixroute eth0\\       valid_lft forever\n"
+
+
+def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=(), link_dirs=None, nics=None,
+        addrs=None):
+    """Run the converter on a fresh root; return (exit message or None, {keyfile: nmcli args}, files left, printed).
+    nics: {name: sysfs attributes} of the running NICs (a "device" link unless physical=False); addrs: {name: what
+    `ip -o -4 addr show dev <name>` prints}."""
     loader = importlib.machinery.SourceFileLoader("net_ifcfg_to_keyfile", SRC)
     m = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
     loader.exec_module(m)
     with tempfile.TemporaryDirectory() as t:
-        for k in ("D", "K", "L", "SAVED", "NETWORK", "RESOLV"):
+        for k in ("D", "K", "L", "SAVED", "NETWORK", "RESOLV", "SYS"):
             setattr(m, k, t + getattr(m, k))
         m.LINK_DIRS = tuple(t + d for d in m.LINK_DIRS)
         os.makedirs(m.D)
@@ -58,6 +68,20 @@ def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=()
         with open(f"{t}/bin/nmcli", "w") as out:
             out.write(NMCLI)
         os.chmod(f"{t}/bin/nmcli", 0o755)
+        with open(f"{t}/bin/ip", "w") as out:
+            out.write(IP)
+        os.chmod(f"{t}/bin/ip", 0o755)
+        for n, text in (addrs or {}).items():
+            with open(f"{t}/bin/addr-{n}", "w") as out:
+                out.write(text)
+        for n, attrs in (nics or {}).items():
+            os.makedirs(os.path.join(m.SYS, n))
+            if attrs.get("physical", True):
+                os.makedirs(os.path.join(m.SYS, n, "device"))
+            for a, x in attrs.items():
+                if a != "physical":
+                    with open(os.path.join(m.SYS, n, a), "w") as out:
+                        out.write(x + "\n")
         path, msg, printed = os.environ["PATH"], None, io.StringIO()
         os.environ["PATH"] = f"{t}/bin:{path}"
         try:
@@ -81,7 +105,7 @@ def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=()
                 f = os.path.join(m.K, n)
                 keyfiles[n] = (oct(os.stat(f).st_mode & 0o777), open(f).read().splitlines()[4:])  # after "[connection]", "--offline connection add"
         left = sorted(os.path.relpath(os.path.join(r, n), t).replace(t.lstrip("/") + "/", "")  # SAVED keeps the path
-                      for r, _, ns in os.walk(t) for n in ns if not r.startswith(f"{t}/bin"))
+                      for r, _, ns in os.walk(t) for n in ns if not r.startswith((f"{t}/bin", f"{t}/sys")))
         run.links = links
         return msg, keyfiles, left, printed.getvalue()
 
@@ -189,12 +213,42 @@ for name, text, why in (
         ("a host mask", KS.replace("255.255.255.0", "0.0.0.255"), "isn't a netmask"),
         ("a prefix past 32", KS.replace("NETMASK=255.255.255.0", "PREFIX=40"), "isn't 0 to 32"),
         ("a static address on DHCP", "DEVICE=eth0\nHWADDR=52:54:00:12:34:57\nBOOTPROTO=dhcp\nIPADDR=10.0.2.20\n", "IPADDR beside"),
-        ("no HWADDR", KS.replace("HWADDR=52:54:00:12:34:56\n", ""), "no HWADDR to pin eth0 to"),
+        ("no HWADDR and no NIC by that name", KS.replace("HWADDR=52:54:00:12:34:56\n", ""), "no physical NIC named eth0"),
         ("a dot as the device", KS.replace("DEVICE=eth0", "DEVICE=.."), "not a plain interface"),
         ("an alias", KS, "not a plain interface")):
     profiles = {"ifcfg-eth0:1" if name == "an alias" else "ifcfg-eth0": text}
     msg, kf, left, out = run(profiles)
     case(f"{name} is refused before anything changes", refused(msg, why) and not kf and len(left) == 3)
+# wend#74: EL7's installer writes no HWADDR unless told the NIC by MAC; the NIC running the profile is pinned
+STOCK = KS.replace("HWADDR=52:54:00:12:34:56\n", "")
+msg, kf, left, out = run({"ifcfg-eth0": STOCK}, nics={"eth0": NIC}, addrs={"eth0": ON_NIC})
+case("no HWADDR: the NIC named eth0 that has the static address now is pinned by its own MAC",
+     msg is None and kf == {"eth0.nmconnection": ("0o600", STATIC + ["ipv6.method", "ignore",
+                                                                     "connection.autoconnect", "yes"])}
+     and run.links == {"10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\n\n[Link]\nName=eth0\n")})
+msg, kf, left, out = run({"ifcfg-eth0": STOCK}, nics={"eth0": {**NIC, "address": "52:54:00:AB:CD:EF"}},
+                         addrs={"eth0": ON_NIC})
+case("no HWADDR: the running NIC's MAC is lower-cased",
+     msg is None and arg(kf, "eth0.nmconnection", "ethernet.mac-address") == "52:54:00:ab:cd:ef")
+msg, kf, left, out = run({"ifcfg-eth0": "DEVICE=eth0\nBOOTPROTO=dhcp\n"}, nics={"eth0": NIC})
+case("no HWADDR on DHCP: the NIC named eth0 is pinned (no address to compare)",
+     msg is None and arg(kf, "eth0.nmconnection", "ethernet.mac-address") == "52:54:00:12:34:56"
+     and "10-wend-eth0.link" in run.links)
+for why, nics, addrs, text in (
+        ("a NIC that isn't physical", {"eth0": {**NIC, "physical": False}}, {"eth0": ON_NIC}, "no physical NIC"),
+        ("a random MAC", {"eth0": {**NIC, "addr_assign_type": "1"}}, {"eth0": ON_NIC}, "permanent MAC"),
+        ("a MAC someone set", {"eth0": {**NIC, "addr_assign_type": "3"}}, {"eth0": ON_NIC}, "permanent MAC"),
+        ("a NIC that isn't Ethernet", {"eth0": {**NIC, "type": "772"}}, {"eth0": ON_NIC}, "permanent MAC"),
+        ("a bad MAC in sysfs", {"eth0": {**NIC, "address": "52:54:00:12:34"}}, {"eth0": ON_NIC}, "isn't a MAC"),
+        ("another address on the NIC (another machine's eth0)", {"eth0": NIC},
+         {"eth0": ON_NIC.replace("10.0.2.20/24", "10.0.2.21/24")}, "doesn't have 10.0.2.20/24 now"),
+        ("the address under another prefix", {"eth0": NIC}, {"eth0": ON_NIC.replace("/24", "/16")}, "doesn't have"),
+        ("no address on the NIC", {"eth0": NIC}, {}, "doesn't have 10.0.2.20/24 now")):
+    msg, kf, left, out = run({"ifcfg-eth0": STOCK}, nics=nics, addrs=addrs)
+    case(f"no HWADDR and {why} is refused before anything changes", refused(msg, text) and not kf and not run.links)
+msg, kf, left, out = run({"ifcfg-eth0": STOCK, "ifcfg-eth0-old": KS.replace("12:34:56", "99:99:99")
+                          .replace(".20", ".21")}, nics={"eth0": NIC}, addrs={"eth0": ON_NIC})
+case("no HWADDR beside a profile pinning eth0 to another MAC is refused", refused(msg, "pin eth0 differently") and not kf)
 msg, kf, left, out = run({"ifcfg-eth0": KS.replace("12:34:56", "AB:CD:EF")})
 case("HWADDR is lower-cased", msg is None and arg(kf, "eth0.nmconnection", "ethernet.mac-address") == "52:54:00:ab:cd:ef")
 msg, kf, left, out = run({"ifcfg-eth0": KS}, keyfiles=["eth0.nmconnection"])

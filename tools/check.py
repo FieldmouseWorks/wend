@@ -150,14 +150,16 @@ def check_adapter(a, where):
     for n, ad in a.get("addons", {}).items():  # SPEC "Add-on repositories": their values land in root shell commands
         rels = a.get("releases", {})
         if a.get("backend") != "rpm" or not re.fullmatch(r"[a-z0-9]+", n) or not isinstance(ad, dict) or \
-                not {"marker", "vendor", "repos"} <= set(ad) <= {"marker", "vendor", "repos", "gpgkeys", "libs"} or \
-                not isinstance(ad["marker"], str) or \
-                not re.fullmatch(PKG, ad["marker"]) or not isinstance(ad["vendor"], str) or \
-                not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 .,-]*", ad["vendor"]) or not isinstance(ad["repos"], dict) or \
+                not {"vendor", "repos"} <= set(ad) <= {"marker", "vendor", "repos", "gpgkeys", "libs",
+                                                       "module_hotfixes"} or \
+                "marker" in ad and not (isinstance(ad["marker"], str) and re.fullmatch(PKG, ad["marker"])) or \
+                not isinstance(ad.get("module_hotfixes", False), bool) or not isinstance(ad["vendor"], str) or \
+                not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 .,@<>-]*", ad["vendor"]) or \
+                not isinstance(ad["repos"], dict) or \
                 not ad["repos"] or not all(r in rels and isinstance(u, str) and re.fullmatch(REPO_URL, u) and
                                            n not in rels[r].get("repos", {}) for r, u in ad["repos"].items()):
-            errs.append(f"{where}: addons.{n} needs a plain name, a marker package, a plain vendor, and repos "
-                        "(host/path) for releases the adapter has, on the rpm backend")
+            errs.append(f"{where}: addons.{n} needs a plain name, a plain vendor, and repos (host/path) for releases "
+                        "the adapter has, on the rpm backend; optionally a marker package and module_hotfixes = true")
         elif not (isinstance(ad.get("libs", {}), dict) and all(
                 r in ad["repos"] and isinstance(p, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", p)
                 for r, p in ad.get("libs", {}).items())):

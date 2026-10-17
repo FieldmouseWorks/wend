@@ -27,11 +27,14 @@ import urllib.request
 
 ALLOWED = {"vault.centos.org", "repo.almalinux.org", "vault.almalinux.org", "archives.fedoraproject.org",
            "dl.fedoraproject.org", "snapshot.debian.org", "deb.debian.org", "archive.ubuntu.com",
-           "old-releases.ubuntu.com", "linux-mirrors.fnal.gov"}
+           "old-releases.ubuntu.com", "linux-mirrors.fnal.gov", "nginx.org", "archive.apache.org", "download.redis.io",
+           "files.pythonhosted.org"}
 # The sha256 of this file, served at /.wend-shim: tools/sandbox.py reuses a shim already on the port only if it is this
 # one (one from another checkout would answer with its own allow-list and rules).
 with open(os.path.abspath(__file__), "rb") as _f:
     VERSION = hashlib.sha256(_f.read()).hexdigest()
+# download.redis.io (behind Cloudflare) answers urllib's default User-Agent with a 403
+UA = "wend-mirror (+https://github.com/FieldmouseWorks/wend)"
 FROZEN = {"snapshot.debian.org"}  # dated trees: a path's bytes never change, metadata included
 CACHE = sys.argv[2] if len(sys.argv) > 2 else "/var/tmp/wend/mirror"
 STORE = os.path.join(CACHE, ".sha256")  # not reachable through the shim: a request's first segment must be a host
@@ -46,7 +49,7 @@ def fetch(url, local, sha256=None):
     os.makedirs(os.path.dirname(local), exist_ok=True)
     tmp = f"{local}.tmp{os.getpid()}-{threading.get_ident()}"
     try:
-        with urllib.request.urlopen(url, timeout=300) as r:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=300) as r:
             size, h = 0, hashlib.sha256()
             with open(tmp, "wb") as f:
                 while chunk := r.read(1 << 20):

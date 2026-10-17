@@ -481,6 +481,11 @@ stuck EL7 fleet is counted). The adapter's `[addons.<name>]` tables name the one
 `marker` (the package whose presence means the box uses it, EPEL: `epel-release`), `vendor` (the rpm `VENDOR` of its
 packages, EPEL: `Fedora Project`), `repos` (release id = host/path, through the shim, like `releases.*.repos`) and,
 optionally, `libs` (release id = the sha256 of the add-on's library table for that release, "Runtime preflight").
+An add-on with no release package to mark it (nginx.org's, which owners set up with a hand-written repo file) leaves
+`marker` out: it is installed when any installed package's `VENDOR` is exactly `vendor`. Below, "its marker is
+installed" means that test for such an add-on. `module_hotfixes = true` adds `module_hotfixes=true` to each of the
+add-on's repo sections: on EL8, dnf hides every package that shares a name with a default module stream's (AppStream's
+nginx) in other repos unless their repo says so.
 
 - Every hop's `set_release` appends `{addons}`: for each add-on with a repo for the release being entered, the add-on's
   repo goes into the harness's repo file as `[<release>-<name>]` if its marker is installed at that moment. A box
@@ -760,7 +765,9 @@ repos kept in private `reposdir`s so `/etc/yum.repos.d` stays the harness's:
 10. `rpm -e --nodeps --noscripts --justdb` every package (but `gpg-pubkey`) without the `el{major}` tag, listing them
     in the output; delete the work dir; `CLEAN_REPOS`. That drops the old release's leftovers from the database and
     keeps their files. It would also drop a third-party package the owner installed, which is why the list is printed
-    (and recorded in the run's step output): a client must show it to the owner.
+    (and recorded in the run's step output): a client must show it to the owner. Since their `%postun` never runs, first remove (`alternatives
+    --remove`) every alternative whose path one of them owns: it would otherwise outrank the release's own at its old
+    priority (EL7's Java 8 outranks EL9's, priority 1) and keep the link on their unowned files.
 
 **`rpm.adopt-rpmnew`** `paths` (on the adapter's `managed` list; globs allowed). For each file that has a
 `FILE.rpmnew` next to it, keep the old file under `SAVED` and put the `.rpmnew` in its place. Files without one are
@@ -867,7 +874,13 @@ digits). Effect, for each:
   NetworkManager's own serializer (`nmcli --offline connection add`, which needs no daemon);
 - `/etc/systemd/network/10-wend-<DEVICE>.link` pins the interface name to the profile's `HWADDR`. Once the ifcfg
   file is gone, nothing else keeps an `eth0` from becoming `ens3`, and the keyfile is bound to the old name and the
-  MAC. (Renaming several NICs to kernel names like `eth1` can race the kernel; only single-NIC boxes are proven.)
+  MAC. A profile with no `HWADDR` (EL7's installer writes one only when told the NIC by MAC: `network --bindto=mac`
+  or `ifname=`) matches its interface by name alone, so the NIC it runs on is the one with that name now: the op pins
+  that NIC's MAC, read from `/sys/class/net/<DEVICE>/address`, which keeps the binding the box runs on. Only a
+  physical NIC (a `device` link) of type 1 (Ethernet) with its permanent address (`addr_assign_type` 0) is pinned,
+  and a static profile's address and prefix must be on it now (`ip -o -4 addr show dev <DEVICE>`), so the op on a
+  copy of the box on another machine refuses instead of pinning that machine's NIC. A DHCP profile has nothing to
+  compare, so the op must run on the box itself, as every engine runs it. (Renaming several NICs to kernel names like `eth1` can race the kernel; only single-NIC boxes are proven.)
   The pin is written even when an earlier `.link` already pins exactly that MAC to that name (EL8's installer writes
   `10-anaconda-ifname-<DEVICE>.link` when booted with `ifname=`): that one wins and does the same, and ours takes
   over if it goes.
@@ -875,7 +888,7 @@ digits). Effect, for each:
 
 The files are read as `KEY=VALUE` lines and never executed; a value that isn't one word, or holds `$`, a backquote or
 `#`, fails, and an empty value is an unset key. Each key has the meaning the ifcfg-rh plugin gives it:
-- `DEVICE` and `HWADDR` (both required), `TYPE` (`Ethernet` only), `NAME` (the profile's name, else `System <name>`),
+- `DEVICE` (required) and `HWADDR` (else the running NIC's, above), `TYPE` (`Ethernet` only), `NAME` (the profile's name, else `System <name>`),
   `UUID` (the profile's uuid);
 - `BOOTPROTO`: `static`, `none` or empty with `IPADDR` and `PREFIX` or `NETMASK` (a real netmask), plus `GATEWAY` (or
   `/etc/sysconfig/network`'s); `dhcp` or `bootp` (read as `dhcp`) with none of those;
@@ -1964,7 +1977,8 @@ The rules:
   `releases.<id>.install.uefi` says it can (trusty, CentOS 7; not etch or CentOS 5, whose installers predate UEFI on
   x86-64, so no machine running them boots that way). A run records its `firmware`, and resumes only a run on the same.
 - Disk layout: by default anaconda makes `/boot` (the release's default size), swap and `/` as plain partitions on one
-  disk. Three install choices, given before the command, change that for an EL7-and-later kickstart: `--root-fs`
+  disk. Three install choices, given before the command, change that for an EL7-and-later kickstart (a fourth,
+  `--no-hwaddr`, the network profile): `--root-fs`
   overrides the box's `root_fs` (one the installer makes); `--lvm` lays the disk out as EL7's own autopart does
   (`/boot`, then one PV in a volume group
   `centos` holding `swap` and a `root` that fills it, so no extents are free); `--extra-disk GB` (repeatable) adds an
@@ -1973,6 +1987,9 @@ The rules:
   and its checks are the same either way. A layout is built and cached apart, a run records its `layout`, and resumes
   only a run with the same. This is how the VM tier makes a CentOS 7 machine installed from 7.0 to 7.2 media (`--root-fs
   xfs-v4 --lvm`) and gives rebuild and carry its room (`--extra-disk`, see `docs/rebuild-and-carry.md`).
+  `--no-hwaddr` boots the installer without `ifname=` (for a release whose `install.ifname` is on), so its ifcfg has
+  no `HWADDR`, as a plain kickstart or interactive EL7 install writes it (wend#74); the build fails if the installed
+  `ifcfg-eth0` has one anyway. It is an install choice too: the chroot box writes its own profile.
 - `replay ROUTE BOX --from RUN HOP` starts from an earlier run's disk after the hop before HOP, to iterate on a late
   hop. It only resumes from a hop that passed on the same box, logs in with the ssh key of the box build that disk
   came from, and is recorded as `partial-pass` at best, never `pass`.
@@ -2082,6 +2099,445 @@ Not built yet: free extents in the volume group instead of a disk, a root on a p
 UEFI (the same stub on the ESP), a GRUB reinstall onto the new root (so the old `/boot` can go; until then commit keeps
 it), the client's preflight verdict, `wend commit` and `wend rollback`.
 
+## Upgrading a running machine (draft: design only)
+
+Everything that has upgraded a real machine so far is the VM tier: `tools/vm.py` on remi, driving a guest from
+outside over ssh, with a qcow2 overlay per hop to fall back on. The client a machine's owner runs reports (`share`,
+`preflight`) and walks copies (`walk --root`), and refuses to walk `/`. This section moves the VM tier's live walk
+into the client, so the owner runs it on the machine itself, with an undo the machine carries itself: **the old
+system stays bootable until the owner commits.** It ports the harness and relocate; it doesn't invent a second
+mechanism of either. Each step below names what it comes from, and the short list of what's new is at the end.
+
+The first target is Enterprise Linux on BIOS: `centos5-to-alma10` and `centos7-to-alma10`, the routes the VM tier has
+proved, and CentOS 6 machines joining the first one at its `centos6` rung. EL on UEFI, Debian and Ubuntu come after,
+each once its own proof below has run. Nothing here is built. It moves into the sections it changes, piece by piece,
+in the PRs that build it.
+
+### Four verbs
+
+1. **`wend share`** (built) on the machine: which route it's on and where it joins, the hops left, the reboots, the
+   download size, where the new root would go (or what to add for one), and preflight's verdict.
+2. **`wend rehearse`** on a scratch host: walks a copy of the machine's root, writes the checks the machine will be
+   held to, fills a cache with every byte the walk needs, and writes a **plan**. A red rehearsal costs nothing and
+   gives a gap report.
+3. **`wend upgrade`** on the machine: relocates it onto a new root beside the old one, walks the new root from the
+   plan and its cache, offline, rebooting where the VM tier reboots, and rolls back to the old root on the first red.
+4. **`wend rollback`** and **`wend commit`** on the machine, once it has landed: boot the old system again, or make
+   the new one stay.
+
+An owner with several machines rehearses each one. A plan belongs to one machine (see "The plan").
+
+### The undo: relocate first, then walk the copy
+
+A live machine has no snapshot to restore a red hop from. So `upgrade` never walks the machine's own root: it runs
+relocate ("Relocate") first, which copies the running root onto a new one beside it and boots the copy through a
+stub, and walks the copy. Once the copy is made, nothing on the old root changes, and nothing in the old `/boot`
+does but the stub, its one-shot variables and (GRUB 2 only) the GRUB modules beside them, so rolling back boots the
+old kernel with the old GRUB config on the old root, exactly as it was. That holds on every hop, every reboot and
+every failure, until `wend commit`.
+
+Why relocate, and not an LVM snapshot of `/`: a snapshot has to hold every block a distro upgrade rewrites, so a safe
+one is as big as a copy anyway; it doesn't cover `/boot` or the bootloader, which the route rewrites; undoing a walk on
+the origin means merging the snapshot back (device mapper's snapshot merge, which CentOS 5's kernel doesn't have), and
+walking on the snapshot instead means merging forward to commit. Relocate is built, proved on remi with a route
+walked on the copy and a rollback after the last hop (wend#133), and keeps both roots whole. One mechanism, not two.
+
+Where the new root goes, picked by preflight from the machine's facts (the order of `docs/rebuild-and-carry.md`):
+
+1. **Free extents in the root's volume group**: a new LV `wend-root` there.
+2. **A whole spare disk the owner names** (`--new-root-disk /dev/disk/by-id/...`, never picked on its own), held to
+   relocate's rules for a new disk. With `/` on LVM it joins the root's volume group, as relocate does today; with `/`
+   on a plain partition it gets a partition table and the new root goes on a partition.
+3. **Nothing else.** No room for either refuses, touching nothing, and says exactly what to add: "free N GiB in volume
+   group X, or attach a spare disk of N GiB and name it with --new-root-disk". N is relocate's sum (1.2 times what `/`
+   and `/boot` use, plus the route's `disk_mib` and `boot_mib` over its hops and transits) plus the plan's cache. There
+   is no way past this: a machine wend can't keep an undo for isn't upgraded live. The places under "Other places for
+   the undo" join this list only once remi proves them.
+
+The new root's filesystem is made by the machine's own `mkfs`, of the type its root has now (XFS made v5, as
+relocate does; ext3 stays ext3, which every kernel on the EL routes mounts and the in-place routes already keep), so
+the old kernel can still read it. Where the new `/boot` goes depends on what the machine's bootloader can read:
+
+- **GRUB 2** (CentOS 7): a directory on the new root, and relocate's stub as built, with one change. Here the stub
+  stays in charge for the whole route, not just until a commit made before the walk, so its home (its `grub.cfg`, its
+  `grubenv`, and the modules under `core.img`'s prefix) has to be a plain partition that GRUB can save `grubenv` on
+  and that every kernel on the route mounts, since `arm_new` writes it from the new root at every hop. The old `/boot`
+  is that when it's ext4 or XFS v5 (CentOS 7.3 and later installs). An XFS v4 `/boot` (7.0 to 7.2) isn't, because Alma
+  9's kernel and later can't mount it. Then a new step, `stub_home`, runs before `refresh`: it splits the spare disk
+  into a first partition for the stub's home, sized like the old `/boot` plus the route's `boot_mib`, made XFS v5 by
+  the running release's `mkfs.xfs` and mounted at `/run/wend/stub`, and a second partition that `place` makes the new
+  root's PV instead of the whole disk; it copies the old `/boot/grub2` (config, `grubenv`) into the home and records
+  its UUID. `refresh` then installs `core.img` onto the boot disk with the home as its prefix (`grub2-install
+  --boot-directory=/run/wend/stub`); until the flip the home's copy of the old config boots the old system as before
+  (EL7's entries find their kernel by `search --fs-uuid`), and `cleanup` after a failure before the flip runs the
+  refresh again with the old `/boot` as the prefix, so the old system's own kernel updates keep reaching its menu.
+  From the flip on, every relocate step that writes the stub (`flip`'s stub, its `grub.cfg.wend-old` and its first
+  `grubenv` writes) writes the stub's home, `/run/wend/stub/grub2`, where `core.img` now reads, not the old
+  `/boot/grub2`. Entry 1 finds the old `/boot` by UUID (GRUB 2 still reads v4). With free extents and no spare disk,
+  an XFS v4 `/boot` is refused, naming a disk to add. `relocate.env` records the home's UUID as `STUB_UUID` (the old
+  `/boot`'s own when that is the home), and every write to the stub's variables after the flip (`arm_new`,
+  `commit_trial`, `rollback_next`) mounts that, never `BOOT_UUID`. The route's GRUB reinstall from EL8 on (the BIOS
+  step `docs/rebuild-and-carry.md` describes) installs into the stub's home on a relocated machine, never the new
+  root's `/boot`: that is on LVM, where GRUB can't save `grubenv`, so one-shot trials would stop. Each release's
+  `core.img` and modules land beside the stub, the stub's entry 0 stops moving `prefix` (the new root's modules come
+  from a newer `grub2` package than `core.img` from then on). Before it loads the new root's BLS config, entry 0 reads
+  the new root's own `grubenv` (`load_env -f` on the new root's `/boot/grub2/grubenv`, read-only, which GRUB can do on
+  LVM), so EL8's `kernelopts` (its root and `rd.lvm.lv=`) come from the root that the kernel and package tools keep
+  them on, and the stub's own variables stay in the stub's home; the proof checks `/proc/cmdline`. Entry 1 loads the
+  old EL7 config under the newer GRUB, as the doc describes. Dropping the old root, a step of its own after `wend
+  commit` ("The upgrade"), moves the prefix to the new root's `/boot` with the landing release's own `grub2-install`;
+  commit leaves the stub in place. This home and the reinstall into it have no proof yet either; step 3 proves them
+  with the GRUB legacy stub, and refuses what fails.
+- **GRUB legacy** (CentOS 5 and 6, and every release after them on those machines, since GRUB legacy stays: "Kernels
+  and the bootloader") can't read LVM, so the new `/boot` is a plain ext3 filesystem made by the machine's own
+  `mkfs.ext3`: the first partition of the spare disk, or, with free extents and no spare disk, a directory
+  `/boot/wend/` on the old `/boot` partition when that partition has room for the route's kernels beside the old ones
+  (CentOS 5's installer makes 100 MiB, which doesn't; CentOS 6's 500 MiB does), bind-mounted at the new root's
+  `/boot`. The old `grub.conf` becomes a stub with the same two entries and the same rules as relocate's: entry 0
+  loads the new `/boot`'s `grub.conf` (`configfile`), entry 1 the old one, saved as `grub.conf.wend-old`. The one-shot
+  is GRUB legacy's documented once-only boot, not `savedefault --once`: the stub says `default saved`, entry 0 carries
+  `savedefault 1` (so once it has been taken, the saved default is the old system again, whatever happens next), and
+  arming the trial is writing 0 as the saved default in the stub's home's `/boot/grub/default`, the file
+  `grub-set-default` writes. wend writes that file itself, in `grub-set-default`'s format, so it doesn't depend on the
+  route keeping the `grub` package: `arm` from the old system, `arm_new` from the new root (mounting the stub's home
+  by `STUB_UUID`, as for GRUB 2); `rollback_next` writes 1; `commit_trial` removes entry 0's `savedefault 1` and
+  writes 0, so the new root stays the default and entry 1 stays in the menu. The copy's initramfs comes from the
+  release's own tool (CentOS 5's `mkinitrd`, CentOS 6's dracut), not host-only, so it finds the new root. This stub,
+  and the new kernels' entries landing in the new `/boot`'s config with the right paths (`hop.kernel_after` takes them
+  from the default entry; EL6's grubby from `/boot`'s mount), are the parts of this section with no proof yet, and the
+  first thing step 3 of the order of work proves. If one of them can't be made to work, that layout is refused, not
+  patched over.
+
+#### Other places for the undo
+
+Weighed for owners with no free extents and no spare disk, none in the first build unless its proof passes:
+
+- **The machine's own root filesystem.** Most old machines use a fraction of their disk. When `/` has room for a
+  second copy of itself plus what the route needs, the old system is copied into `/.wend-old/` on the same filesystem
+  (the old `/boot` beside it), and this time the hops walk the real root in place, as the VM tier walks it; the copy
+  is the old system. No initramfs on these routes boots a root from a subdirectory (CentOS 5's `mkinitrd` can't, and
+  GRUB legacy only loads the kernel), so rollback swaps instead: a GRUB entry boots the last kernel that booted green,
+  with `init=` the static wend binary, which as PID 1 renames the top-level directories of `/` and the old `/boot`'s
+  files back into place, keeping a journal so a power cut mid-swap finishes on the next boot, then reboots into the old
+  system. While an upgrade is under way that entry is the default and every boot of the new system is a one-shot, so a
+  power cut rolls back, as with relocate. Nothing about it is proven yet. Step 3 of the order of work proves it on
+  remi (a red made on purpose, the swap, the old system's checks green), or it's refused. If it works, it covers more
+  machines than any other place.
+- **An external disk** (a USB SSD). Turned around: the old system is relocated out onto it and boots from it through
+  the stub's entry 1, and the hops walk the internal disk in place, so production never runs from USB. Rollback boots
+  the old system from the external disk, then copies it back. Open question 1.
+- **An admin box on the same network.** The rehearsal's copy already lives there, pinned to the plan's fingerprint,
+  so keeping it as the machine's restore image costs nothing; one admin host could hold one for each machine in a
+  closet. It isn't a bootable undo: a rollback would be a boot entry whose initramfs brings up the network and pulls
+  the image back (rsync or nbd), which CentOS 5's `mkinitrd` can't do and EL6's and EL7's dracut can only with work.
+  Open question 2. Until then, the copy the rehearsal took is the backup the docs tell the owner to keep.
+- **A cloud drive.** A backup, not an undo: getting a root back from it means a rescue boot and a long download, so
+  it can't bring the old system back by itself after a panic. Not part of this design.
+
+#### Limits
+
+Relocate's own limits shrink to fit: the free-extents placement, a plain-partition root on a spare disk, and the GRUB
+legacy stub are built in this work; LUKS, `/boot` on md or LVM, and UEFI stay refused. An XFS v4 CentOS 7 machine
+needs a spare disk: the copy is XFS v5 either way, but its old `/boot` can't hold the stub past Alma 9.
+
+### The rehearsal
+
+It runs on a scratch host, never on the machine: the later releases' binaries can't run under the machine's own
+kernel (EL6's apr already needs `SOCK_CLOEXEC`, which CentOS 5's kernel doesn't have), and that's every release the
+route walks through. The scratch host is any machine the chroot harness runs on ("Sandbox requirements"), root
+needed.
+
+- **The copy.** `wend rehearse ROUTE --from root@machine` pulls the machine's root over ssh with rsync, with the
+  snapshot's flags (`-aHx --numeric-ids`, and `-AX` where both ends' rsync have them). `-x` is
+  `--one-file-system`: each pass copies one filesystem and crosses no mount point, so `/proc`, `/sys`, `/dev` and
+  `/run` come over as the empty directories they are underneath, and `/` is copied first, then `/boot` and each other
+  mounted disk filesystem into its place in the copy, once each. `--root DIR` takes a copy made another
+  way (a mounted image or snapshot). The machine keeps running and nothing on it is written.
+- **The walk** is `walk --run` on the copy, unchanged: the pinned run the route was proved by, the verifying proxy,
+  the generated checks, rollback per hop. A rehearsal never takes `--live`: `upgrade` installs only bytes a passing run
+  pinned. One addition: the kernel steps act only on a machine booted from the root (`[ / -ef /proc/1/root ]`), so in
+  the copy they do nothing and fetch nothing. After each hop the rehearsal downloads, without installing, what
+  `hop.kernel_after` would install (the release's `kernel` and what it pulls in, through the same proxy), so the
+  machine's offline walk finds it in the cache.
+- **The checks** it holds the copy to are the machine's ("Checks the machine is held to"), run first on the machine
+  itself (their live forms, read-only) and then on the copy before the first hop. A check that fails on the machine
+  is dropped and listed with its output: it guards nothing that works today. A check that passes on the machine but
+  whose offline form can't pass on the copy (it needs another host, or hardware the copy hasn't got) fails the
+  rehearsal, naming it, unless the owner has marked it `live_only` in `checks.toml`. A `live_only` check isn't run on
+  the copy, but it still judges every boot of the upgrade, so nothing that worked at the start leaves the verdict
+  without the owner saying so.
+- **The result.** A pass writes the plan directory. A fail writes the run and the scrubbed gap report (`wend report`'s,
+  with its issue link) and no plan.
+
+### The plan
+
+A directory, `wend-plan-<machine id>/`, carried to the machine (scp, or a USB stick for a closet with no network):
+
+- `plan.json` (schema `wend.plan/0`): the route's content id, the run it was pinned by, the wend version, and per hop
+  the fix ids that fired, the commands' seconds, and whether its kernel steps found the kernel in the cache;
+- the machine's **fingerprint** at the moment of the copy: the adapter's `installed_list` (names, versions and
+  architectures, and their sha256), the running kernel, the release file, and which pinned fixes' preconditions hold.
+  It holds nothing particular to one machine (addresses, disks, hostnames), so another machine can match it ("Fleets");
+- the facts preflight read on the rehearsed machine, kept for the report only: every machine is judged on its own
+  facts, read when `upgrade` starts, never on these;
+- `checks.toml`, the checks, in the format a box's `[roles]` and `[vm].live` use, so `walk` and the VM tier read it
+  as they read a box;
+- `cache/`, files named by their sha256, with a list of every file the walk and the kernel downloads fetched.
+
+The fingerprint is checked once, when `upgrade` starts with no state file: a plan whose fingerprint isn't the
+machine's as it is then (a package installed since, a kernel update, a reboot onto another kernel) is refused, since
+the machine isn't the one rehearsed, and the answer is a fresh rehearsal. Every later `upgrade` goes by the state file
+instead ("State across reboots"), since the hops change it on purpose.
+
+### Checks the machine is held to
+
+This answers open question 8 for a client. A boot is green on a running machine when all of these hold:
+
+- **What the VM tier checks with no box at all:** the machine is booted from a new `boot_id`, on the root it should
+  be on (relocate's `booted`); the release's newest kernel is the one running (`hop.kernel_newest`); it runs on the
+  firmware it started on; its addresses, default route and resolvers are the ones it had before the first hop (the VM
+  tier's `NET` read, systemd-resolved's stub standing for its upstreams); and sshd answers a new connection on its port.
+- **The adapter's checks:** `pkgdb`, `current`, and `services` once the family map is in the adapter (open question 11).
+- **Generated checks**, written by the rehearsal from what the machine runs at the moment of the copy, read from
+  the machine over the same ssh:
+  - every TCP port a packaged service listens on, by program family and port, listens again;
+  - every service that was enabled and running is enabled and running, by family (`mysqld` is `mariadb` later on);
+  - a web server's config test passes, and each local vhost's `/` answers on localhost with the status it gave before;
+  - a MySQL or MariaDB server answers, and every database lists the tables it listed before;
+  - `/etc/crontab`, `/etc/cron.d` and the cron spool hold the entries they held.
+
+  Each has a live form (asks the running service, as `[vm].live` does) and an offline form for the copy (starts the
+  daemon inside the root and asks it, as a CI box's roles do).
+- **The owner's own**, added to `checks.toml` as roles before the rehearsal. `upgrade` refuses a `checks.toml` whose
+  sha256 isn't the plan's: a check the rehearsal never ran proves nothing.
+
+The same checks judge the old system after a rollback: they passed on it before the first hop, so they must pass on
+it again.
+
+### The upgrade
+
+`sudo wend upgrade PLAN` refuses, touching nothing, unless all of this holds:
+
+- it runs as root on a machine booted from its own root (not a container, not a chroot);
+- the plan passed, is pinned, is for a route this atlas has, and its fingerprint is this machine's now (on a first
+  start; "The plan");
+- every file the plan lists is in its cache and hashes right (the walk's check of every pinned top file, extended
+  to every file, since nothing is fetched from a network);
+- relocate's preflight passes, with a place for the new root and the new `/boot` ("The undo");
+- hardware preflight passes for the whole route, judged with the relocation assumed (as `docs/rebuild-and-carry.md`
+  has it): the filesystems relocate carries count as the new ones it makes (XFS v5, or the same type for ext3), and
+  `/boot`'s room is the new `/boot`'s, not the old one's. So an XFS v4 CentOS 7 machine, which preflight stops at
+  Alma 9 today, is judged on the root it will walk;
+- the plan and the cache aren't under `/tmp` or `/run` (they must survive reboots).
+
+It asks for no backup. It says once, before it starts, that an undo on the same disk is no help against that disk
+dying, and that a backup is still the owner's to take.
+
+Then:
+
+1. **Detach.** It copies itself, the atlas and the plan's `plan.json` and `checks.toml` to `/var/lib/wend/upgrade/`,
+   starts the work as a detached process (`setsid`, the VM tier's `RUNNER`), and follows its log in the foreground.
+   The transaction replaces sshd and glibc under the owner's session; when ssh drops, the work goes on, and running
+   `wend upgrade` again follows it. The binary is static, so the glibc it was started beside going away changes
+   nothing for it. It prints the downtime it expects (relocate's second copy pass, the rehearsal's seconds per hop,
+   and a reboot each) before it starts.
+2. **Relocate** runs as built (preflight, refresh, place, copy, fixup, flip, release), the cache copied into the new
+   root with the rest, and the machine boots the copy on trial. Its first judgment is relocate's own and the checks
+   above, on the copy still at the start release. From here the old root's default stays the old system.
+3. **Each hop** runs on the new root, booted: exactly the commands the VM tier runs (`hop_parts`, with `hop.after`
+   whatever happened), from the cache through the verifying proxy, `--offline`. Before a hop touches anything, its
+   fixes' preconditions are evaluated, and the fixes that hold must be exactly the ones that fired in the rehearsal.
+   Any difference refuses the hop there, before its first command, and the old system is the next boot.
+4. **Every reboot is a trial.** Before each reboot (after a hop, and between the transaction and the post steps on a
+   hop whose release says `reboot = "before-post"`, centos6) it arms the stub's one-shot boot of the new root. It
+   runs on the new root, whose fstab no longer has the stub's `/boot`, so this is `arm_new`: `arm`'s write, made
+   the way `commit_trial` and `rollback_next` make theirs (mount the stub's home by `STUB_UUID`, write the flag
+   there, sync, freeze and thaw, unmount); relocate's own `arm` writes the running root's `/boot` and only arms
+   from the old system. The stub's default stays the old system until `wend commit`, so a new kernel that hangs or
+   panics, a power cut, or anyone's reboot at a bad moment brings back the old system, whole. When `reboot` returns
+   and the old boot is still running two minutes later (the first boot onto systemd, and EL8 to EL9), it does what the
+   VM tier does from outside, from inside: stops every process but itself (`kill -TERM -1`, then `-KILL`), syncs,
+   remounts read-only and resets with sysrq ("VM tier").
+5. **After each boot**, the owner runs `wend upgrade` again (decided for the first build: a boot unit that did it
+   would have to start under SysV init, upstart and systemd on one route, three places for it to break). It reads the
+   state, judges the boot, and goes on with the next hop. Until the end, the new root's `/etc/motd` carries one line
+   saying an upgrade is under way and how to go on. If the old system came up instead, `upgrade` says so, and arms
+   the trial again only once (a second failure is a red).
+6. **At the end**, the prune removes exactly the packages the rehearsal's prune removed (no bisecting on the machine),
+   then the checks run once more. The package manager is pointed at the landing release's own repositories (the
+   release package's repo files, as a fresh install has them), never left on the proxy. The run (`wend.vmrun/0`'s
+   shape, `runner.kind = "live"`, the real downtime) goes to `/var/lib/wend/runs/` on the new root, where `wend share`
+   can attach it. The machine now runs the landed system, booted on trial each time until the owner commits.
+
+**The first red rolls back.** A hop's commands failing, a check lost, the network changed, the wrong kernel running,
+or a trial boot that comes back on the old system twice: wend stops, makes the old system the stub's default and its
+next boot (relocate's `rollback_next`, made sticky as in #133), reboots, and judges the old system against the checks
+it passed at the start. It writes the run and the gap report on the old root and leaves the new root as it was for a
+look (relocate never deletes it). The machine is back where it started, serving. The next try is a fresh rehearsal
+once the gap is closed. A rollback whose old system fails its checks is the one case wend can't fix, and it says so
+loudly, with the run.
+
+**`wend rollback`** does the same by hand, any time before commit: the old system, its kernel and its GRUB config
+come back, and the new root stays for a look or a later `wend upgrade --resume`. **`wend commit`** makes the new root
+the stub's default (relocate's `commit_trial`) and ends the trials, and that is all it does: it deletes nothing, and
+the stub, its old entry and the old root stay. After commit `wend rollback` still works, until the old root is
+dropped; dropping it (to get its disk back, moving the bootloader's prefix onto the new root, and removing the stub
+and the old LVs) is a later step of its own, never part of commit.
+
+### Fleets: one admin box, many identical machines
+
+An owner with a closet of machines built the same way wants to take all of them up from one laptop. wend's part of
+that is small on purpose: **a plan one machine's rehearsal made can be reused on another machine that matches it**, and
+`upgrade` has exit codes a plain loop can drive. Everything else is the owner's loop. No agent, no daemon on the
+machines, no inventory format, no scheduler: fleet orchestration is where a tool like this turns into a platform, and
+wend stays out of it.
+
+- **Reuse.** A plan made on machine A may be used on machine B when B matches its fingerprint ("The plan"), which
+  is the same check `upgrade` makes on A itself: the same `installed_list`, release and running kernel, every pinned
+  fix's precondition holding on B as it did on A, and the same `checks.toml` when B's checks are generated (so B runs
+  the same services, ports, vhosts, databases and cron entries). B's own facts must
+  pass hardware preflight on their own; they don't have to equal A's (addresses, disks and hostnames differ). On a
+  mismatch `upgrade` refuses before it touches anything, naming what differs, and B gets its own rehearsal. What a
+  match can't see (a hand-edited config file the rehearsal walked on A but not on B) is what each hop's fix match, its
+  checks and B's own undo are for.
+- **The cache** goes to each machine with the plan, copied (scp, rsync): nothing on the machines listens, and each
+  machine's offline walk is the same as a single machine's. Each machine needs room for its own undo, as always.
+- **Exit codes**, so the loop needs no parsing: `upgrade` exits 0 when the machine has landed (or is committed), 10
+  when it is about to reboot or has just rebooted and needs running again, 20 when it refused before touching
+  anything (with why on stderr, and 21 for a plan that doesn't match: rehearse this one), and 30 when it rolled back.
+  `wend upgrade --status` prints the state file's phase and exits the same way without doing anything.
+- **The loop** is a shell script in `docs/` (not a wend verb): push the binary and the plan to each machine over ssh,
+  run `wend upgrade` until it exits 0, 20 or 30, waiting out each reboot, and collect each machine's run and report.
+  One canary first, then batches of a size the owner picks, and the first 20 or 30 anywhere stops the loop before the
+  next batch starts. Ansible or anything else that runs a command over ssh and reads its exit code drives the same
+  commands.
+- **Rollback stays per machine,** local and automatic, as above. The admin box drives the rollout; it is never the
+  path back.
+
+Built after a single machine's upgrade and rollback are proved (step 6 of the order of work). The proof: two or three
+guests from one box on remi, driven from the host by the loop, with one guest changed on purpose before the start (a
+package installed) so it's refused as not matching, and a hop failed on purpose on one guest, which rolls that guest
+back and stops the loop before the next batch.
+
+### State across reboots
+
+`/var/lib/wend/upgrade/state.json`, on the new root: the plan's sha256, the hop, the phase (relocated, before the hop,
+rebooted mid-hop, after the transaction, booting on trial, landed, committed, rolled back), the `boot_id` before each
+reboot, and the network and the checks that passed before the first hop. It's written to a new file, synced and
+renamed over the old one before every reboot and every change of phase. The old system reads it by mounting the new
+root read-only (relocate's `relocate.env` says where), which is how `upgrade` and `rollback` know where things stand
+from either root. A second plan refuses while a state file is there.
+
+Each phase records what the next `upgrade` must find, and that replaces the plan's fingerprint from the first hop on:
+the root it should be booted from (`booted`), a `boot_id` other than the one recorded before the reboot, the release
+file and newest kernel the hop just finished should have left, and the sha256 of `installed_list` written at the end
+of the hop's transaction. A machine that matches none of what the state expects (someone ran the package manager
+between boots) is a red.
+
+### Refused
+
+The VM tier's proven layouts, nothing else. Today that refuses:
+
+- no room for the new root and its `/boot` ("The undo"), with what to add, and an XFS v4 `/boot` with no spare disk
+  for the stub's home;
+- UEFI firmware, until relocate's UEFI stub and EL on UEFI have VM tier passes;
+- LUKS anywhere; `/boot` on md or LVM; `/usr` or `/var` on a filesystem of its own (relocate carries `/` and `/boot`
+  only, and EL7's UsrMove and the boot need them on `/`);
+- a box whose route needs a shelter or a lifeboat (the VM tier builds them in a chroot copy first; a live machine's
+  path for that isn't designed);
+- everything hardware preflight already refuses (32-bit, a CPU or driver the landing release drops, `/boot` too small).
+
+- a database server's data directory (MySQL, MariaDB, PostgreSQL, from the running server's own settings), or the
+  state directory of any other running service a hop migrates, on a filesystem other than `/`: the hops' data
+  upgrades (`mysql.upgrade-data`) would rewrite it in place, and a rollback would hand the old server files a newer one
+  had already migrated.
+
+Other mounted filesystems (`/home`, `/srv`, a data disk) aren't copied: both roots mount them, and since only one
+root runs at a time, the new system's writes to them stay after a rollback. That's fine for files and fatal for a
+database, hence the refusal above. `share` and `upgrade` say so, and name them. The proof includes one.
+
+### Proof
+
+A VM tier run of the client, not of the harness: the release workflow's static binary, its atlas, and a plan,
+inside a remi guest, upgrading it. `tools/vm.py upgrade ROUTE BOX --client TARBALL` (new) builds the box as `replay`
+does, rehearses it from the host with `wend rehearse --from` the running guest, pushes the plan in, and then plays
+the owner: runs `wend upgrade` over ssh, waits out each reboot, and runs it again after each boot until it ends. The
+harness judges every boot on its own as `replay` does (which root, network, checks, newest kernel, firmware), and the
+run passes only if every hop is green by both the client's verdict and the harness's. Its run goes to `.wend/vm/`,
+schema `wend.vmrun/0`, `runner.kind = "vm-client"`.
+
+What it has to show, BIOS first, for each layout it allows (free extents, and a spare disk with `/` on LVM and on a
+plain partition; GRUB 2 on CentOS 7, GRUB legacy on CentOS 5):
+
+- `el/centos7-lamp` and `el/centos5-web` land on Alma 10, with an extra data disk mounted throughout, then commit;
+- **a real rollback:** a hop made to fail on purpose (a harness flag that breaks a check in the guest after the hop)
+  rolls back by itself, the old system boots its old kernel with its old GRUB config, and every check it passed at the
+  start passes again; and `wend rollback` by hand after landing does the same;
+- a reset from outside (QEMU `system_reset`) during a trial boot comes back on the old system, and `wend upgrade` says
+  so and goes on;
+- the owner's ssh session killed mid-transaction changes nothing;
+- on `el/centos7-lamp`, the hop made to fail is the last one, on Alma 10's kernel after the route's GRUB reinstall,
+  so the rollback goes through the stub after the reinstall; and one layout has an XFS v4 `/boot` (`--root-fs
+  xfs-v4`), its stub's home on the spare disk, with a trial armed from Alma 10;
+- the binary runs at all on CentOS 5's 2.6.18 and CentOS 6's 2.6.32 kernels (the cheap remi job already queued).
+
+A native CentOS 6 box (`el/centos6-lamp`, from the 6.10 installer) and its proof come before anyone is told CentOS 6
+is a proven start: the only C6 rung proved so far is a C5 box upgraded to C6.
+
+### What's ported and what's new
+
+| piece | from |
+|---|---|
+| hop commands, fixes, kernel steps, sshd watcher, network carry | the adapters, unchanged; the client already compiles them (`client/parity.py`) |
+| the undo: copy, stub, trial boot, commit, rollback | relocate (`[relocate]`, wend#72, wend#133) |
+| verified offline fetch | the client's `walk --run --cache --offline` |
+| the rehearsal's walk | the client's `walk --root` |
+| the detached hop, reboot points, forced reset | `tools/vm.py` (`RUNNER`, `Guest.reboot`, the forced reset) |
+| judging a boot | `tools/vm.py` `walk_vm` (`NET`, `kernel_newest`, `FW_NOW`, the checks) |
+| gap report | `wend report`, `wend share` |
+
+New: relocate's free-extents placement, a plain-partition root on a spare disk, its GRUB legacy stub and `/boot`, the
+new root's `arm_new`, and `stub_home` for an XFS v4 `/boot` (the adapter's `[relocate]` table, reviewed as a spec
+change); relocate run by the client; the plan and the state file; the generated checks; the rehearsal's kernel
+downloads. Nothing else.
+
+### Order of work
+
+1. This section, reviewed.
+2. The mid-route join in `share`, preflight and `walk` (its own PR, in flight), so a CentOS 6 machine hears where it
+   joins.
+3. Relocate widened, in the VM tier first (`vm.py relocate`, then `vm.py --relocate replay`): free extents, a plain
+   root on a spare disk, the GRUB 2 stub's home on a plain partition kept through the route's GRUB reinstall, and
+   GRUB legacy's stub and `/boot` on `el/centos5-web` (with `--lvm` made to work on the CentOS 5 kickstart), each with
+   its trial, reset, commit and rollback, and a route walked on the copy and rolled back after a red made on purpose.
+   Alongside it, the same-filesystem copy and its swap at boot ("Other places for the undo"), proved or refused.
+4. `wend rehearse`, the plan and the generated checks, proved by rehearsing VM guests from remi's host and comparing
+   the walk with CI's run of the same route.
+5. `wend upgrade`, `wend rollback`, `wend commit` and `vm.py upgrade`, on `el/centos7-lamp`, then `el/centos5-web`,
+   with the proof above.
+6. Fleets: plan reuse, the exit codes and the loop in `docs/`, with the proof in "Fleets".
+7. `el/centos6-lamp` and its proof.
+8. README and docs/try-it.md say what's real.
+
+Later, each as its own design: EL on UEFI (relocate's stub on the ESP); Debian and Ubuntu (the VM tier has proved
+their routes; relocate needs their bootloaders' stubs); dropping the old root after commit; a boot unit that goes on
+by itself after each boot.
+
+### Open questions
+
+1. **An external disk as the undo.** BIOS has to boot it through GRUB on the internal disk, under a device order that
+   changes when it's unplugged, and a cheap thumb drive is too slow to run a server from even for a day. Refuse below
+   a write rate measured during the copy? How long may the old system run from it after a rollback before it's copied
+   back?
+2. **The admin box's image as the undo.** Worth building as the fallback for machines with no room, instead of
+   refusing them, only if remi proves a restore entry that brings back the old system after a hop broken on purpose,
+   with no one at the console. Which transport (rsync over ssh, nbd), and what does CentOS 5 do, whose initramfs has
+   no network?
+3. **How close is a match.** A fleet plan matches on packages, checks and preconditions, not on config files.
+   Should it also compare the files the rpm database says differ from their packages (`rpm -Va`'s config changes),
+   less the ones every machine has its own of (network, hostname, host keys)? Stricter means more rehearsals; looser
+   leans on the canary and the undo.
+
 ## Open questions
 
 Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them as follows; 7 to 12 are still open.
@@ -2109,6 +2565,8 @@ Questions 1 to 6 were the ones RPM could answer. The CentOS round answered them 
    form". Do we add a `for-each` over files, or keep local fixes out of the shared library?
 8. **Client-side checks.** CI boxes have rich roles. A real machine has only the adapter checks plus whatever the
    user supplies. What is the minimum check set a client runs before it calls a hop healthy?
+   Proposed for a running machine in "Upgrading a running machine": the VM tier's box-free checks, the adapter's,
+   checks generated from what the machine runs, and the owner's own.
 9. **Signing.** Sigstore attestation from GitHub Actions on each run file, or a project key held by the verifier
    box? The client trusts a run only if it is attested and refers to the route id it is about to apply.
 10. **Booting.** A chroot can't test init. `drop-sysvinit-for-trixie` is fine in a chroot and dangerous on a real
