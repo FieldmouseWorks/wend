@@ -1401,7 +1401,9 @@ was meant to run on. The plan says when that's newer than what the box runs now.
    python2.7`, a vendored module tree), and packaged files the box has changed (what `rpm -V` or dpkg's md5sums
    flag: a file pip overwrote), are copied in as a separate layer, plus the app's user and group lines for
    `/etc/passwd` and `/etc/group`. Each is listed with its sha256, so the owner sees exactly what came from
-   outside the vendor's archive.
+   outside the vendor's archive. A module Python loaded from its bytecode goes in as its `.py` when the box has it:
+   bytecode is a cache the interpreter rebuilds, and two compiles of one source (two installs of the same wheel)
+   needn't match byte for byte. Bytecode with no source goes in as it is.
 5. **Lock.** `/var/lib/wend/shelter/<app>/shelter.lock` records the release, the index digests and signing keys,
    every package with its version and sha256, every carried file with its sha256, and the built image's ID. The run
    records the lock too.
@@ -1623,8 +1625,7 @@ route itself causes.
   shelters only from the start release so far), and copies the built shelter into the guest before the drop hop.
   Then it checks that the code and data directories are on a filesystem that can be idmapped (ext4, XFS, btrfs; so
   the box's `[vm].root_fs` is `xfs`), and that the guest's passwd and group lines for the app's user and every carried
-  file are the ones the lock was built from (compiled Python by its magic and code: its header holds the source's
-mtime, which two installs of the same wheel don't share). The drop hop then runs `stop-native` and `start` in the guest like any other step, and after
+  file are the ones the lock was built from. The drop hop then runs `stop-native` and `start` in the guest like any other step, and after
   that hop's reboot and every later one, besides the box's checks, the guest has to pass the confinement probe
   (`shelter.vm_probe`): the table unit, the shelter and its timers enabled and active and the native unit and cron
   line off; one `wend-<app>` range in `/etc/subuid` and `/etc/subgid`; the container running the image tagged with the
