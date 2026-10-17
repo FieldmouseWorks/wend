@@ -124,6 +124,8 @@ for name, mutate in {
     "a relocate table with a step tools/vm.py doesn't run": lambda a: a["relocate"].update(extra=["true"]),
     "a relocate step that's one command, not a list": lambda a: a["relocate"].update(place="true"),
     "a relocate step with no commands": lambda a: a["relocate"].update(copy=[]),
+    "a GRUB legacy relocate table missing a command": lambda a: a["relocate_grub_legacy"].pop("rollback"),
+    "a GRUB legacy relocate command that's a list": lambda a: a["relocate_grub_legacy"].update(arm=["true"]),
     "a signing key that would break out of the harness's printf (SPEC \"Signed packages\")": lambda a: a["keys"].update(
         {"RPM-GPG-KEY-x": "-----BEGIN PGP PUBLIC KEY BLOCK-----\n'; rm -rf /; '\n-----END PGP PUBLIC KEY BLOCK-----\n"}),
     "a signing key that isn't an armoured public key": lambda a: a["keys"].update({"RPM-GPG-KEY-x": "hello"}),
