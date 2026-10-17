@@ -59,7 +59,8 @@ major = 5
 pm = "yum"
 repos = { base = "vault.centos.org/5.11/os/x86_64", updates = "vault.centos.org/5.11/updates/x86_64" }
 # tools/vm.py installs a VM box with the release's own installer: its tree (through the shim) and the pxeboot dir in it
-install = { tree = "vault.centos.org/5.11/os/x86_64", pxeboot = "images/pxeboot", packages = ["grub"] }
+# lvm: the names CentOS 5's own autopartitioning gives the VG and the LVs for / and swap (tools/vm.py --lvm)
+install = { tree = "vault.centos.org/5.11/os/x86_64", pxeboot = "images/pxeboot", packages = ["grub"], lvm = { vg = "VolGroup00", root = "LogVol00", swap = "LogVol01" } }
 # EL4's yum 2.4 has no distro-sync; upgrade (update with obsoletes) is what took EL4 boxes to 5. Two of the modules
 # EL5's yum needs are installed as EL4's Python 2.3 builds at a version yum won't replace: python-elementtree
 # (1.2.6-5.el4.centos sorts above EL5's 1.2.6-5) and python-sqlite (the same 1.1.7-1.2.1 in both). Left alone, EL5's
@@ -818,9 +819,11 @@ forward = '''. /var/lib/wend/relocate.env; N=/run/wend/new; lvchange -ay "$VG/we
 
 # Relocate on GRUB legacy (SPEC "Relocate", "Upgrading a running machine"): CentOS 5 and 6, whose GRUB can't read LVM
 # and whose util-linux has no lsblk or findmnt. The same steps and commands as [relocate], run the same way; tools/vm.py
-# takes this table when the machine boots from /boot/grub/grub.conf and has no /boot/grub2. Built for BIOS, `/` and
-# `/boot` on plain partitions, and the new root on a whole empty disk the owner names, split into a plain ext3 /boot
-# (GRUB legacy reads it) and a root of the old root's type, each made by the running release's own mkfs. The old
+# takes this table when the machine boots from /boot/grub/grub.conf and has no /boot/grub2. Built for BIOS, `/boot` on
+# a plain partition, `/` on one or on a plain LV (the installers' default: CentOS 5's VolGroup00/LogVol00), and the new
+# root on a whole empty disk the owner names, split into a plain ext3 /boot (GRUB legacy reads it) and a plain root of
+# the old root's type, each made by the running release's own mkfs. An LV root's swap stays where it is: the copy's
+# fstab still names it, and both roots activate the VG at boot. The old
 # grub.conf becomes the stub. GRUB legacy keeps the saved default in stage2's header (`default saved` reads it): the
 # saved default stays 1 (the old system) and the trial is grub's own one-shot. Those header bytes are written in place
 # with dd, the same bytes the grub shell's `savedefault --default=N [--once]` writes (remi, CentOS 5), since the route
@@ -842,8 +845,16 @@ command -v grub >/dev/null || fail "no grub shell: wend checks stage2 keeps the 
 B=$(partof /boot) || fail "/boot isn't a plain partition"
 set -- $B; BOOT_DISK=$1 BOOT_DEV=$2 BOOT_N=${3##*[!0-9]}
 case "$BOOT_DISK" in /dev/md*|/dev/dm-*) fail "/boot isn't on a plain disk ($BOOT_DISK)";; esac
-R=$(partof /) || fail "/ isn't a plain partition (an LVM root isn't built yet for GRUB legacy)"
-set -- $R; OLD_DEV=$2
+# or device-mapper's name for that number (EL5's dmsetup prints it "(253, 0)", later ones "(253:0)")
+dmof() { s=$(stat -c %d "$1") || return 1; ma=$(( (s >> 8) & 4095 )) mi=$(( (s & 255) | ((s >> 12) & 1048320) )); dmsetup ls 2>/dev/null | awk -v a="($ma, $mi)" -v b="($ma:$mi)" '{x = $2; if (NF > 2) x = $2 " " $3} x == a || x == b {print $1; f = 1; exit} END {exit !f}'; }
+if R=$(partof /); then
+  set -- $R; OLD_DEV=$2
+elif command -v dmsetup >/dev/null && n=$(dmof /); then
+  dmsetup table "$n" | awk '$3 != "linear" {b = 1} END {exit b || !NR}' || fail "/ is on $n, which isn't a plain linear LV (a snapshot, RAID or crypt)"
+  OLD_DEV=/dev/mapper/$n
+else
+  fail "/ is on neither a plain partition nor an LV"
+fi
 ROOT_FS=$(awk '$2 == "/" && $1 != "rootfs" {t = $3} END {print t}' /proc/mounts)
 case "$ROOT_FS" in ext3|ext4) ;; *) fail "/ is ${ROOT_FS:-unknown}, not ext3 or ext4";; esac
 command -v mkfs.$ROOT_FS >/dev/null && command -v mkfs.ext3 >/dev/null && command -v sfdisk >/dev/null || fail "no mkfs.$ROOT_FS, mkfs.ext3 or sfdisk"
@@ -892,6 +903,9 @@ cat > /var/lib/wend/relocate-grub <<'EOF'
 . /var/lib/wend/relocate.env
 s=$(stat -c %d /)
 for f in /sys/block/*/*/dev; do IFS=: read ma mi < "$f"; [ $(( (mi & 255) | (ma << 8) | ((mi >> 8) << 20) )) = "$s" ] || continue; p=${f%/dev}; U=$(blkid -s UUID -o value "/dev/${p##*/}"); break; done
+# an old root on an LV: device-mapper's name for the number
+dmof() { s=$(stat -c %d "$1") || return 1; ma=$(( (s >> 8) & 4095 )) mi=$(( (s & 255) | ((s >> 12) & 1048320) )); dmsetup ls 2>/dev/null | awk -v a="($ma, $mi)" -v b="($ma:$mi)" '{x = $2; if (NF > 2) x = $2 " " $3} x == a || x == b {print $1; f = 1; exit} END {exit !f}'; }
+[ -n "$U" ] || ! n=$(dmof /) || U=$(blkid -s UUID -o value "/dev/mapper/$n")
 if [ -n "$NEW_UUID" ] && [ "$U" = "$NEW_UUID" ]; then W=new; elif [ "$U" = "$OLD_UUID" ]; then W=old; else W="neither: ${U:-unknown}"; fi
 case "$1 $2 $3" in
   "which  ") echo "$W"; exit 0;;

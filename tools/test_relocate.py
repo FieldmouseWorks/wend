@@ -380,6 +380,60 @@ for name, on, cmd, start, want_rc, want in (
                              f"{header(f'{t}/oldboot/grub/stage2')} {mounted!r}"))
         bad += not ok
 
+# an LV root (CentOS 5's default install): the copy's fstab and kernel lines name the new plain root, the swap LV stays
+with tempfile.TemporaryDirectory() as t:
+    os.makedirs(f"{t}/new/etc")
+    os.makedirs(f"{t}/new/boot/grub")
+    os.makedirs(f"{t}/state")
+    open(f"{t}/new/etc/fstab", "w").write(
+        "/dev/VolGroup00/LogVol00 /                       ext3    defaults        1 1\n"
+        "LABEL=/boot             /boot                   ext3    defaults        1 2\n"
+        "/dev/VolGroup00/LogVol01 swap                    swap    defaults        0 0\n")
+    open(f"{t}/new/boot/grub/grub.conf", "w").write(C5_GRUB.replace("root=LABEL=/", "root=/dev/VolGroup00/LogVol00"))
+    open(f"{t}/state/relocate.env", "w").write(C5_ENV)
+    open(f"{t}/state/grub.map", "w").write("(hd0) /dev/vda\n(hd1) /dev/vdb\n")
+    rc, out = run(legacy(L["fixup"][0], t), t)
+    fstab = [line.split()[:3] for line in open(f"{t}/new/etc/fstab")]
+    g = open(f"{t}/new/boot/grub/grub.conf").read()
+    ok = rc == 0 and fstab == [["LABEL=wend-root", "/", "ext3"], ["LABEL=wend-boot", "/boot", "ext3"],
+                               ["/dev/VolGroup00/LogVol01", "swap", "swap"]] and \
+        "VolGroup00" not in g and g.count("root=LABEL=wend-root") == 2
+    print(("passed  " if ok else "WRONG   ") + "GRUB legacy, LV root: the copy boots the plain new root, its swap LV stays" +
+          ("" if ok else f"\n        rc={rc} {out[-300:]!r} {fstab!r} {g!r}"))
+    bad += not ok
+
+# device-mapper's name for the root's device number, as EL5's dmsetup and later ones print it (a minor past 255 too),
+# in preflight and in the helper, which then tells the old LV root by its UUID
+pre_l = L["preflight"][0]
+dmof = next(x for x in pre_l.splitlines() if x.startswith("dmof() "))
+for name, ls, dev, want in (("EL5's dmsetup", "VolGroup00-LogVol01\t(253, 1)\nVolGroup00-LogVol00\t(253, 0)", 253 << 8,
+                             "VolGroup00-LogVol00"),
+                            ("a later dmsetup", "vg-swap\t(253:1)\nvg-root\t(253:300)",
+                             (300 & 255) | (253 << 8) | ((300 >> 8) << 20), "vg-root"),
+                            ("no LV of that number", "vg-root\t(253:1)", 253 << 8, "")):
+    with tempfile.TemporaryDirectory() as t:
+        shims(t, {"stat": f'echo {dev}', "dmsetup": f"printf '{ls}\\n'"})
+        rc, out = run(dmof + "\ndmof /", t)
+        ok = out.strip() == want and (rc == 0) == bool(want)
+        print(("passed  " if ok else "WRONG   ") + f"GRUB legacy: the root's LV by its device number, {name}" +
+              ("" if ok else f"\n        rc={rc} {out!r}"))
+        bad += not ok
+with tempfile.TemporaryDirectory() as t:
+    os.makedirs(f"{t}/state")
+    os.makedirs(f"{t}/sys/block/vda/vda1")
+    open(f"{t}/sys/block/vda/vda1/dev", "w").write("253:1\n")
+    open(f"{t}/state/relocate.env", "w").write(C5_ENV + "NEW_UUID=9e1\n")
+    h = helper
+    for old, new in (("/sys/block", f"{t}/sys/block"), ("/var/lib/wend", f"{t}/state")):
+        h = h.replace(old, new)
+    shims(t, {"stat": f'echo {253 << 8}', "dmsetup": "printf 'VolGroup00-LogVol00\\t(253, 0)\\n'",
+              "blkid": f'[ "$5" = /dev/mapper/VolGroup00-LogVol00 ] && echo 01d || echo vda1'})
+    rc, out = run(f"set -- which\n{h}", t)
+    ok = rc == 0 and out.strip() == "old"
+    print(("passed  " if ok else "WRONG   ") + "GRUB legacy helper: an old root on an LV is the old root" +
+          ("" if ok else f"\n        rc={rc} {out[-300:]!r}"))
+    bad += not ok
+
 # refresh checks the layout with the grub shell before any write: Red Hat's savedefault lands where the helper writes,
 # a GRUB whose shell has no --once (upstream's) is refused, and either way the header is back as it was
 probe = L["refresh"][0].split("\nEOF\n", 1)[1].split('echo "STAGE2=', 1)[1].split("\n", 1)[1]
