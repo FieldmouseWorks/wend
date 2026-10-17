@@ -2280,8 +2280,8 @@ the old kernel can still read it. Where the new `/boot` goes depends on what the
   grub shell, by contrast, writes the `stage2` of whatever is mounted at `/boot`, and from the new root changed
   nothing unless the old `/boot` was bound over `/boot` first.) Every new-root kernel line gets `panic=10`,
   so a kernel or init that dies reboots by itself and the spent one-shot lands on the old system. The copy keeps its
-  SELinux labels: CentOS 5's rsync (2.6.8) has no `-X`, so the copy is `tar --selinux` on both ends (or rsync where it
-  has `-X`), and it's checked, not trusted: if the copy's `/bin/bash`, `/usr/sbin/sshd` or `/etc/shadow` is `file_t`
+  SELinux labels: CentOS 5.0 to 5.5's rsync (2.6.8) has no `-X` (5.6 and later ship 3.0.6, which has), so there the
+  copy is `tar --selinux` on both ends (rsync where both ends have `-X`), and it's checked, not trusted: if the copy's `/bin/bash`, `/usr/sbin/sshd` or `/etc/shadow` is `file_t`
   or `unlabeled_t`, `setfiles -r` labels the copy from the release's own `file_contexts`, and if they still are,
   relocate stops before the flip (an unlabeled root boots, and on an enforcing machine nobody can log in). The checks
   after every trial boot include the same three labels. The copy's initramfs comes from the release's own tool (CentOS
@@ -2416,6 +2416,20 @@ This answers open question 8 for a client. A boot is green on a running machine 
 
   Each has a live form (asks the running service, as `[vm].live` does) and an offline form for the copy (starts the
   daemon inside the root and asks it, as a CI box's roles do).
+
+  What they cover comes from the adapter's `[hop.generated]`: the services held (each with every name it goes by on
+  the routes, `mysqld` or `mariadb`), which of them serve sites (`web`) and hold databases (`db`), and how to tell a
+  package-owned file. A service counts when it is enabled at boot and running. The ports have a live form only: on
+  the copy no daemon runs, and the services the copy can start answer the site and database checks instead. The
+  sites are the port-80 name-based virtual hosts `httpd -S` lists that answer on localhost, with the status each
+  gave; nginx gets its config test. The databases are the data directory's, without its own (`mysql`,
+  `performance_schema`, `sys`), and the offline form starts the server with `--skip-grant-tables --skip-networking`
+  on a socket of its own, so it needs no password. The cron entries are the owner's: every user crontab, the
+  `/etc/cron.d` files no package owns, and `/etc/crontab` when its package says it was changed (less its stock
+  `run-parts` lines), each line as it is, comments and variable settings left out. They go into the plan's
+  `checks.toml` as `[generated]` (`roles` and `isolate` for the walk, `live` for `upgrade`), after the given file's
+  own text, so its sha256 covers them; the given file can't have a `[generated]` table. The rehearsal writes no plan
+  unless every generated check passes on the upgraded copy: one that doesn't holds the machine to nothing.
 - **The owner's own**, added to `checks.toml` as roles before the rehearsal. `upgrade` refuses a `checks.toml` whose
   sha256 isn't the plan's: a check the rehearsal never ran proves nothing.
 

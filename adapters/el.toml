@@ -599,8 +599,9 @@ after = [
   "[ / -ef /proc/1/root ] && [ -d /run/systemd/system ] && case $(systemctl is-active sshd 2>/dev/null) in inactive|failed|unknown) false;; esac || { echo \"sshd: not a running systemd service on this root, left alone\"; exit 0; }; /usr/sbin/sshd -t || { echo \"the installed sshd rejects its configuration: restarting it would lock ssh out\"; exit 1; }; timeout 120 systemctl restart sshd || { echo \"systemctl restart sshd failed or hung\"; exit 1; }; L=$(/usr/sbin/sshd -T 2>/dev/null | awk '$1 == \"listenaddress\" {print $2}'); A=$(echo \"$L\" | grep -v '^\\[' | head -n1); [ -n \"$A\" ] || A=$(echo \"$L\" | head -n1); H=${A%:*}; P=${A##*:}; H=${H#[}; H=${H%]}; case \"$H\" in 0.0.0.0|\"\") H=127.0.0.1;; ::) H=::1;; esac; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do timeout 5 bash -c \"exec 3<>/dev/tcp/$H/${P:-22} && head -c 4 <&3\" 2>/dev/null | grep -q '^SSH-' && { echo \"sshd restarted: a new connection to $H port ${P:-22} gets its greeting\"; exit 0; }; sleep 1; done; echo \"sshd restarted, but a new connection to $H port ${P:-22} gets no greeting\"; exit 1",
 ]
 installed_list = "rpm -qa --qf '%{NAME}\\n' | sort -u"
-# SPEC "The plan": a rehearsed machine's fingerprint, every package with its version and architecture
-installed_versions = "rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\\n' | sort"
+# SPEC "The plan": a rehearsed machine's fingerprint, every package with its epoch, version and architecture
+# (%{EPOCH}, "(none)" when unset: CentOS 5's rpm 4.4 has no %{EPOCHNUM})
+installed_versions = "rpm -qa --qf '%{NAME}-%{EPOCH}:%{VERSION}-%{RELEASE}.%{ARCH}\\n' | sort"
 # tools/vm.py: the newest installed kernel, as `uname -r` would name it; after every reboot it has to be the running one
 kernel_newest = "rpm -q --qf '%{INSTALLTIME} %{VERSION}-%{RELEASE}.%{ARCH}\\n' kernel-core kernel 2>/dev/null | grep -v 'is not installed' | sort -n | tail -n1 | cut -d' ' -f2"
 # A real machine's kernel (SPEC "Kernels and the bootloader"). A chroot box has none, and these do nothing there. The
@@ -629,6 +630,19 @@ kernel_after = [
   "[ / -ef /proc/1/root ] || { [ \"$WEND_CHROOT_BOX\" != 1 ] || rm -f /var/lib/wend/kernel-handover; exit 0; }; [ -e /var/lib/wend/kernel-handover ] || exit 0; {clean_repos}; rm -f /var/lib/rpm/__db.*; rpm --rebuilddb; if command -v dnf >/dev/null 2>&1; then dnf -y {dnf_opts} install kernel; else yum -y install kernel; fi && rpm -q kernel && rm -f /var/lib/wend/kernel-handover",
   "[ / -ef /proc/1/root ] || exit 0; G=/boot/grub/grub.conf; [ -f $G ] || exit 0; V=$(rpm -q --qf '%{INSTALLTIME} %{VERSION}-%{RELEASE}.%{ARCH}\\n' kernel-core kernel 2>/dev/null | grep -v 'is not installed' | sort -n | tail -n1 | cut -d' ' -f2); [ -n \"$V\" ] || exit 0; [ -f \"/boot/vmlinuz-$V\" ] || V=${V%.*}; [ -f \"/boot/vmlinuz-$V\" ] || { echo \"no /boot/vmlinuz for the installed kernel $V\"; exit 1; }; if ! grep -q \"vmlinuz-$V[[:space:]]\" $G; then E=$(awk -F= '/^default=/ {d = $2} /^title/ {t++} $1 ~ /^[ \\t]*kernel / && $0 ~ /vmlinuz-/ {if (!f) f = $0; if (t - 1 == d) {print; x = 1; exit}} END {if (!x) print f}' $G | sed 's/^[ \\t]*//'); P=$(echo \"$E\" | awk '{sub(/vmlinuz-.*/, \"\", $2); print $2}'); A=$(echo \"$E\" | awk '{for (i = 3; i <= NF; i++) printf \"%s \", $i}'); R=$(awk -F= '/^default=/ {d = $2} /^title/ {t++; r = \"\"} $1 ~ /^[ \\t]*root[ \\t]/ {r = $0} $1 ~ /^[ \\t]*kernel / && $0 ~ /vmlinuz-/ {if (!f) {f = 1; q = r} if (t - 1 == d) {print r; x = 1; exit}} END {if (!x) print q}' $G | sed 's/^[ \\t]*//'); [ -n \"$E\" ] && [ -n \"$R\" ] || { echo \"no kernel entry in $G to copy the root and arguments from\"; exit 1; }; I=initramfs-$V.img; [ -f \"/boot/$I\" ] || I=initrd-$V.img; awk -v v=\"$V\" -v p=\"$P\" -v a=\"$A\" -v r=\"$R\" -v i=\"$I\" 'BEGIN {d = 0} /^title/ && !d {print \"title \" v; print \"\\t\" r; print \"\\tkernel \" p \"vmlinuz-\" v \" \" a; print \"\\tinitrd \" p i; d = 1} {print}' $G > $G.wend && cat $G.wend > $G && rm -f $G.wend || exit 1; fi; awk 'function flush() {if (n && keep) printf \"%s\", b; b = \"\"; n = 0; keep = 1} /^title/ {flush(); n = 1} n && $1 == \"kernel\" && $2 ~ /vmlinuz-/ {f = $2; sub(/.*vmlinuz-/, \"/boot/vmlinuz-\", f); if (system(\"test -e \" f) != 0) keep = 0} n {b = b $0 \"\\n\"; next} {print} END {flush()}' $G > $G.wend && cat $G.wend > $G && rm -f $G.wend || exit 1; D=$(awk -v v=\"vmlinuz-$V\" '/^title/ {t++} $1 == \"kernel\" && index($2, v) {print t - 1; exit}' $G); [ -n \"$D\" ] || { echo \"no entry for $V in $G\"; exit 1; }; awk -v d=\"$D\" '/^default=/ {print \"default=\" d; next} {print}' $G > $G.wend && cat $G.wend > $G && rm -f $G.wend || exit 1; grep -E '^(default|title)' $G",
 ]
+
+
+# SPEC "Checks the machine is held to", the generated checks (client/src/generated.rs): the services a rehearsal
+# holds the machine to when it finds them enabled and running, each with every name it goes by on the routes (MySQL
+# is mariadb from CentOS 7 on; either enabled at boot is the same service); which of them serve web sites and which
+# hold databases; and how to tell a file a package owns (left out of the cron check) or a package file the owner
+# changed (/etc/crontab).
+[hop.generated]
+services = { httpd = ["httpd"], nginx = ["nginx"], mysqld = ["mysqld", "mariadb"], mariadb = ["mariadb", "mysqld"], postgresql = ["postgresql"], sshd = ["sshd"], postfix = ["postfix"], sendmail = ["sendmail"], crond = ["crond"], named = ["named"], php-fpm = ["php-fpm"], vsftpd = ["vsftpd"], dovecot = ["dovecot"], redis = ["redis"], memcached = ["memcached"], squid = ["squid"], smb = ["smb"], fail2ban = ["fail2ban"] }
+web = ["httpd"]
+db = ["mysqld", "mariadb"]
+owned = "rpm -qf"
+modified = "rpm -Vf"
 
 
 # Relocate (SPEC "Relocate", docs/rebuild-and-carry.md): copy the running root onto a fresh XFS v5 filesystem on a disk

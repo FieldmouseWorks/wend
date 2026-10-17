@@ -6,7 +6,7 @@
 use crate::atlas::{get, str_of, Atlas};
 use crate::canon::{canonical, content_id, sha256_hex};
 use crate::sandbox::{plain_path, q};
-use crate::{cmd_walk, WalkOpts};
+use crate::{cmd_walk, generated, WalkOpts};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -48,7 +48,7 @@ fn unescape_mount(s: &str) -> String {
         .replace("\\134", "\\")
 }
 
-/// Whether an `rsync --version` says it can copy ACLs and extended attributes (rsync 3; CentOS 5's 2.6.8 can't).
+/// Whether an `rsync --version` says it can copy ACLs and extended attributes (rsync 3: CentOS 5.6 and later ship 3.0.6; 5.0 to 5.5's 2.6.8 can't).
 fn acl_xattr(version: &str) -> bool {
     version.contains("ACLs")
         && version.contains("xattrs")
@@ -205,6 +205,43 @@ impl Machine<'_> {
     }
 }
 
+fn strings_of(v: &Value) -> Vec<String> {
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|x| x.as_str().map(String::from))
+        .collect()
+}
+
+/// SPEC "Checks the machine is held to": read what the machine runs (the adapter's `[hop.generated]`) and render the
+/// generated checks; none when the adapter names no services.
+fn generate(atlas: &Atlas, route: &str, m: &Machine) -> Result<Option<Value>, String> {
+    let (_, rdoc) = atlas.route(route)?;
+    let a = crate::adapter_of(atlas, rdoc)?;
+    let Some(g) = get(a, "hop").and_then(|h| get(h, "generated")) else {
+        return Ok(None);
+    };
+    let mut seen = generated::read(g, &m.run(&generated::probe(g))?);
+    let hosts: Vec<String> = seen.vhosts.iter().map(|(h, _)| h.clone()).collect();
+    if !hosts.is_empty() {
+        generated::read_status(&mut seen, &m.run(&generated::status_probe(&hosts))?);
+    }
+    eprintln!(
+        "{} runs {} ({} ports, {} sites, {} databases, {} cron entries)",
+        m.from,
+        seen.services
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+        seen.ports.len(),
+        seen.vhosts.len(),
+        seen.dbs.len(),
+        seen.cron.len()
+    );
+    Ok(Some(generated::render(g, &seen)))
+}
+
 pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) -> Result<bool, String> {
     if o.live || o.run.is_none() {
         return Err(
@@ -224,6 +261,7 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
     if unsafe { libc::geteuid() } != 0 {
         return Err("rehearsing needs root (the copy keeps the machine's owners; the walk chroots)".into());
     }
+    let mut gen = None;
     let kernel = match (&r.from, &r.kernel) {
         (Some(from), k) => {
             let m = Machine { from, ssh: &r.ssh };
@@ -249,6 +287,7 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
                     k.as_ref().unwrap()
                 ));
             }
+            gen = generate(atlas, route, &m)?;
             m.copy(dir)?;
             running
         }
@@ -266,10 +305,48 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
     let n = boot_clean(&crate::sandbox::Root::new(Path::new(root))?.dir)?;
     eprintln!("cleaned the copy as a boot would: {n} runtime files and cached packages");
     crate::sandbox::REHEARSAL.store(true, std::sync::atomic::Ordering::Relaxed);
-    let checks_bytes = std::fs::read(checks_path).map_err(|e| format!("{checks_path}: {e}"))?;
+    // the checks the walk and the plan hold the machine to: the given file, plus the generated checks
+    let mut checks_bytes = std::fs::read(checks_path).map_err(|e| format!("{checks_path}: {e}"))?;
+    let mut o = o.clone();
+    let mut generated_names: Vec<String> = vec![];
+    match gen {
+        Some(g) => {
+            let given = crate::atlas::parse_toml(&String::from_utf8_lossy(&checks_bytes))?;
+            if get(&given, "generated").is_some() {
+                return Err(format!(
+                    "{checks_path} has a [generated] table: that is the rehearsal's to write"
+                ));
+            }
+            generated_names = get(&g, "roles")
+                .and_then(Value::as_object)
+                .map(|r| r.keys().cloned().collect())
+                .unwrap_or_default();
+            let n = generated_names.len();
+            let text = toml::to_string(&json!({ "generated": g })).map_err(|e| e.to_string())?;
+            checks_bytes.extend_from_slice(
+                format!("\n# SPEC \"Checks the machine is held to\": what the machine ran when it was copied\n{text}")
+                    .as_bytes(),
+            );
+            let merged = Path::new(&o.work).join("checks.toml");
+            std::fs::create_dir_all(&o.work).map_err(|e| format!("{}: {e}", o.work))?;
+            std::fs::write(&merged, &checks_bytes).map_err(|e| format!("{}: {e}", merged.display()))?;
+            eprintln!("generated {n} checks from what the machine runs ({})", merged.display());
+            o.checks = Some(merged.to_string_lossy().into_owned());
+        }
+        None => eprintln!("no generated checks: they are read from the running machine (--from)"),
+    }
+    let o = &o;
     let w = cmd_walk(atlas, route, o)?;
     if w.run["result"] != "pass" {
         eprintln!("the rehearsal failed: no plan written. The run says where it stopped; `wend share` makes a report.");
+        return Ok(false);
+    }
+    // a generated check that doesn't pass on the copy at the end holds the machine to nothing (its offline form
+    // can't judge this machine, or the route lost what it checks): no plan
+    let passed = strings_of(&w.run["final"]["passed"]);
+    let lost: Vec<&String> = generated_names.iter().filter(|n| !passed.contains(n)).collect();
+    if !lost.is_empty() {
+        eprintln!("the rehearsal failed: generated checks {lost:?} don't pass on the upgraded copy; no plan written");
         return Ok(false);
     }
     let (_, rdoc) = atlas.route(route)?;
@@ -311,7 +388,8 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
         "wend": format!("wend {} (rust)", env!("CARGO_PKG_VERSION")), "machine": id, "rehearsed": w.run["started"],
         "from": w.run["from"], "to": get(rdoc, "to"), "hops": hops,
         "fingerprint": fp, "fingerprint_sha256": fingerprint,
-        "checks_sha256": format!("sha256:{}", sha256_hex(&checks_bytes)), "cache_files": listed.len(),
+        "checks_sha256": format!("sha256:{}", sha256_hex(&checks_bytes)), "generated_checks": generated_names,
+        "cache_files": listed.len(),
     });
     let write = |name: &str, text: &[u8]| -> Result<(), String> {
         std::fs::write(dir.join(name), text).map_err(|e| format!("{}: {e}", dir.join(name).display()))

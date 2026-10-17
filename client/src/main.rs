@@ -8,6 +8,7 @@ mod backend;
 mod canon;
 mod check;
 mod fetch;
+mod generated;
 mod hardware;
 mod hop;
 mod native;
@@ -437,6 +438,7 @@ fn cmd_parity(atlas: &Atlas, input: &str) -> Result<bool, String> {
     Ok(true)
 }
 
+#[derive(Clone)]
 struct WalkOpts {
     root: Option<String>,
     checks: Option<String>,
