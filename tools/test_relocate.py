@@ -325,28 +325,60 @@ with tempfile.TemporaryDirectory() as t:
           "trial after the old system is the saved default" + ("" if ok else f"\n        rc={rc} {out[-300:]!r} {stub!r} {calls!r}"))
     bad += not ok
 
-with tempfile.TemporaryDirectory() as t:
-    os.makedirs(f"{t}/state")
-    open(f"{t}/state/relocate.env", "w").write(C5_ENV + "NEW_UUID=9e1\n")
-    helper = L["refresh"][0].split("<<'EOF'\n", 1)[1].split("\nEOF\n", 1)[0]
-    open(f"{t}/state/relocate-grub", "w").write(legacy(helper, t))
-    os.chmod(f"{t}/state/relocate-grub", 0o755)
-    shims(t, {"stat": "echo 7", "blkid": "echo 01d", "grub": f'cat > {t}/grub-in; echo " Filesystem type is ext2fs"',
-              "mount": f"echo mount >> {t}/mounted", "sync": "exit 0"})
-    r1 = run(f"{t}/state/relocate-grub which", t)
-    r2 = run(f"{t}/state/relocate-grub set 0 --once", t)
-    sent = open(f"{t}/grub-in").read() if os.path.exists(f"{t}/grub-in") else ""
-    r3 = run(f"{t}/state/relocate-grub set 2", t)
-    shims(t, {"grub": "echo 'grub: something went wrong'; exit 127"})
-    r4 = run(f"{t}/state/relocate-grub set 1", t)
-    ok = r2[0] == 0 and sent == "root (hd0,0)\nsavedefault --default=0 --once\nquit\n" and \
-        not os.path.exists(f"{t}/mounted") and r3[0] == 2 and r4[0] == 1
-    # stat says 7 and /sys/block has no such device here, so `which` can't say old or new: it says what it found
-    ok = ok and r1[0] == 0 and r1[1].startswith("neither")
-    print(("passed  " if ok else "WRONG   ") + "GRUB legacy: the helper sends the one-shot to the grub shell, mounts "
-          "nothing off the new root, refuses an entry the stub hasn't, and fails when the grub shell does" +
-          ("" if ok else f"\n        {r1} {r2} {r3} {r4} {sent!r}"))
-    bad += not ok
+# the helper, on a stage2 of its own: the header bytes it writes from the old root and (through the old /boot it
+# mounts) from the new one, a one-shot that keeps the saved entry, and every write it refuses
+def stage2(path, saved):
+    b = bytearray(1024)
+    b[518:520] = b"\x03\x02"
+    b[524] = saved
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "wb").write(bytes(b))
+
+
+def header(path):
+    return list(open(path, "rb").read()[524:527])
+
+
+helper = L["refresh"][0].split("<<'EOF'\n", 1)[1].split("\nEOF\n", 1)[0]
+for name, on, cmd, start, want_rc, want in (
+        ("a one-shot of 0 from the old root keeps the saved 1", "01d", "set 0 --once", 1, 0, ("boot", [1, 0, 1])),
+        ("a sticky 1 from the old root clears the one-shot", "01d", "set 1", 0, 0, ("boot", [1, 0, 0])),
+        ("a sticky 0 from the new root lands in the old /boot's stage2", "9e1", "set 0", 1, 0, ("oldboot", [0, 0, 0])),
+        ("a one-shot of 1 from the new root", "9e1", "set 1 --once", 0, 0, ("oldboot", [0, 1, 1])),
+        ("an entry the stub hasn't", "01d", "set 2", 1, 2, ("boot", [1, 0, 0])),
+        ("booted from neither root", "beef", "set 0", 1, 1, ("boot", [1, 0, 0])),
+        ("a stage2 replaced since the flip", "01d", "set 0", 1, 1, ("boot", [1, 0, 0]))):
+    with tempfile.TemporaryDirectory() as t:
+        os.makedirs(f"{t}/state")
+        os.makedirs(f"{t}/sys/block/vda/vda3")
+        open(f"{t}/sys/block/vda/vda3/dev", "w").write("253:3\n")
+        for d in ("boot", "oldboot"):
+            stage2(f"{t}/{d}/grub/stage2", start)
+        ino = os.stat(f"{t}/{'oldboot' if on == '9e1' else 'boot'}/grub/stage2")
+        if name.startswith("a stage2 replaced"):
+            os.rename(f"{t}/boot/grub/stage2", f"{t}/boot/grub/stage2.old")
+            stage2(f"{t}/boot/grub/stage2", start)
+        open(f"{t}/state/relocate.env", "w").write(C5_ENV + f'NEW_UUID=9e1\nSTUB_UUID=b00t\nSTAGE2="{ino.st_ino} 1024"\n')
+        h = helper.replace("O=/boot\n", f"O={t}/boot\n").replace("/mnt/wend/oldboot", f"{t}/oldboot")
+        for old, new in (("/sys/block", f"{t}/sys/block"), ("/var/lib/wend", f"{t}/state"),
+                         ("/proc/sys/vm/drop_caches", f"{t}/drop")):
+            h = h.replace(old, new)
+        open(f"{t}/state/relocate-grub", "w").write(h)
+        os.chmod(f"{t}/state/relocate-grub", 0o755)
+        dev = (253 << 8) | 3
+        shims(t, {"stat": f'[ "$*" = "-c %d /" ] && echo {dev} || exec /usr/bin/stat "$@"', "blkid": f"echo {on}",
+                  "findfs": "echo /dev/vda1", "mount": f"echo \"$*\" >> {t}/mounted", "umount": "exit 0",
+                  "sync": "exit 0"})
+        rc, out = run(f"{t}/state/relocate-grub {cmd}", t)
+        mounted = open(f"{t}/mounted").read() if os.path.exists(f"{t}/mounted") else ""
+        where, bytes_ = want
+        other = "oldboot" if where == "boot" else "boot"
+        ok = rc == want_rc and header(f"{t}/{where}/grub/stage2") == bytes_ and \
+            header(f"{t}/{other}/grub/stage2") == [start, 0, 0] and bool(mounted) == (on == "9e1" and rc == 0)
+        print(("passed  " if ok else "WRONG   ") + f"GRUB legacy helper: {name}" +
+              ("" if ok else f"\n        rc={rc} {out[-300:]!r} {header(f'{t}/boot/grub/stage2')} "
+                             f"{header(f'{t}/oldboot/grub/stage2')} {mounted!r}"))
+        bad += not ok
 
 # the room a relocated root needs for the CentOS 7 route: both hops' disk and /boot room, and EL8's transit kernel
 import vm  # noqa: E402
