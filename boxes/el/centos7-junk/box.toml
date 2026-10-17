@@ -228,7 +228,7 @@ root_fs = "xfs"  # the shelter's mounts are idmapped, which the ext3 the VM tier
 skip = ["nginx", "redis", "tomcat", "app"]
 # nginx serves /srv/www (default_t, no httpd label) and proxies to 8080 and 8081 without httpd_can_network_connect: the
 # owner followed nginx.org's instructions on a permissive box, so under enforcing nginx answers 403 and everything
-# behind it is unreachable. The shelter's enforcing window judges the shelter, not that.
+# behind it is unreachable. The shelter's enforcing window judges the shelter, not that: live.shortener asks it directly.
 permissive_only = ["nginx", "tomcat", "app"]
 
 [vm.live]
@@ -237,3 +237,5 @@ nginx = '''curl -s http://127.0.0.1/ | grep -q 'oldbox junk drawer' && curl -s h
 redis = '''/usr/local/bin/redis-cli -s /var/lib/redis/redis.sock get link:wend | grep -x 'https://example.org/from-2016' || { tail -n 8 /var/log/redis_6379.log; systemctl status redis_6379 2>&1 | tail -n 10; exit 1; }'''
 tomcat = '''for i in $(seq 1 60); do curl -sf http://127.0.0.1/inventory/ > /tmp/tc.out 2>/dev/null && grep -q 'inventory: RACK 12 SPARE DISKS' /tmp/tc.out && exit 0; sleep 2; done; head -c 300 /tmp/tc.out; systemctl status tomcat 2>&1 | tail -n 15; exit 1'''
 app = '''for i in $(seq 1 60); do curl -s http://127.0.0.1/go/wend > /tmp/app.out 2>/dev/null && grep -q '"url": "https://example.org/from-2016"' /tmp/app.out && break; sleep 2; done; H=$(grep -o '"hits": [0-9]*' /tmp/app.out | grep -o '[0-9]*$'); [ -n "$H" ] && grep -q " wend $H\$" /var/lib/shortener/access.log || { echo 'no link over HTTP through nginx, or the hit is not in the app log'; head -c 400 /tmp/app.out; systemctl status shortener wend-shelter-shortener 2>&1 | tail -n 20; exit 1; }'''
+# the shortener on its own port, not through nginx: the enforcing window judges this one (app needs nginx)
+shortener = '''for i in $(seq 1 60); do curl -s http://127.0.0.1:8081/wend > /tmp/sh.out 2>/dev/null && grep -q '"url": "https://example.org/from-2016"' /tmp/sh.out && break; sleep 2; done; H=$(grep -o '"hits": [0-9]*' /tmp/sh.out | grep -o '[0-9]*$'); [ -n "$H" ] && grep -q " wend $H\$" /var/lib/shortener/access.log || { echo 'no link from the shortener on 127.0.0.1:8081, or the hit is not in the app log'; head -c 400 /tmp/sh.out; systemctl status shortener wend-shelter-shortener 2>&1 | tail -n 20; exit 1; }'''
