@@ -51,12 +51,13 @@ pm = "yum"
 repos = { base = "vault.centos.org/4.9/os/x86_64", updates = "vault.centos.org/4.9/updates/x86_64" }
 # tools/vm.py: as CentOS 5's, but EL4's anaconda stops to ask about dependencies unless %packages has --resolvedeps,
 # and at its language support screen unless the kickstart has langsupport (EL5 dropped the command); a --nobase
-# install has no yum unless it is asked for (EL5's pulls it in); and the kickstart's selinux and firewall lines are
-# run through lokkit (system-config-securitylevel-tui), so without it the box keeps the policy package's enforcing
-# (EL5's anaconda writes /etc/selinux/config itself). An enforcing box with no loadable policy freezes at EL7's
-# first boot; the VM tier installs every box permissive.
+# install has no yum unless it is asked for (EL5's pulls it in), and no SELinux policy either: EL4's
+# /etc/selinux/config is written by selinux-policy-targeted's %post (as enforcing), and the kickstart's selinux and
+# firewall lines are then applied by lokkit (system-config-securitylevel-tui). A box with neither has no config at
+# all, and EL5's selinux-policy %post then writes SELINUX=enforcing with no targeted policy beside it, which freezes
+# EL7's first boot (wend#158). The VM tier installs every box permissive, with its policy.
 # 4.8 and later carry virtio drivers, so the VM tier's default virtio disk and NIC stand.
-install = { tree = "vault.centos.org/4.9/os/x86_64", pxeboot = "images/pxeboot", packages = ["grub", "yum", "system-config-securitylevel-tui"], packages_flags = ["--resolvedeps"], ks = ["langsupport --default=en_US.UTF-8 en_US.UTF-8"] }
+install = { tree = "vault.centos.org/4.9/os/x86_64", pxeboot = "images/pxeboot", packages = ["grub", "yum", "selinux-policy-targeted", "system-config-securitylevel-tui"], packages_flags = ["--resolvedeps"], ks = ["langsupport --default=en_US.UTF-8 en_US.UTF-8"] }
 
 [releases.centos5]
 major = 5
