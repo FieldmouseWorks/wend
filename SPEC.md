@@ -2095,7 +2095,45 @@ Between the flip and commit, the old root must not install a kernel: its grubby 
 `/etc/grub2.cfg` to the stub. The harness never does (the services are stopped and the trial boot follows the flip
 at once); a client will have to hold kernel updates while the stub is in charge.
 
-Not built yet: free extents in the volume group instead of a disk, a root on a plain partition, other v4 filesystems,
+**On GRUB legacy** (CentOS 5 and 6), the adapter's `[relocate_grub_legacy]` table has the same steps and commands,
+and `tools/vm.py` takes it when the machine boots from `/boot/grub/grub.conf` with no `/boot/grub2`. Built for BIOS,
+`/` and `/boot` on plain ext partitions, and the new root on a whole empty disk the owner names (on a CentOS 5 box
+the VM tier adds it after the installer, which can't be told to leave it alone). What differs from `[relocate]`:
+
+- `preflight` reads which partitions `/` and `/boot` are by device number (EL5 has no `lsblk` or `findmnt`), refuses
+  an LVM root (not built yet here) and a `/` that isn't ext3 or ext4, wants `/boot/grub/device.map` to name the boot
+  disk as `(hd0)`, and takes the new disk's GRUB name from there, or the next disk after the ones it lists. The new
+  disk's emptiness is its first MiB being zeros (EL5's `blkid` has no `-p`), and `{boot_mib}` (the route's
+  `boot_mib` over its hops and transits) sizes the new `/boot` on top of the old one's size.
+- `refresh` reinstalls nothing (the boot disk's stage1 and the old `/boot`'s stage2 stay). It writes the grub shell's
+  device map and `/var/lib/wend/relocate-grub`, the helper every write to the saved default goes through, and checks
+  the grub shell finds the old `/boot` with them.
+- `place` splits the disk: a first partition for the new `/boot` (ext3, labelled `wend-boot`), a second for the new
+  root (the old root's type, `wend-root`), each made by the running release's `mkfs`, both mounted under
+  `/mnt/wend/new` (EL5 has no `/run`).
+- `copy` is one `tar --selinux --numeric-owner` pass of `/` and one of `/boot`, with every running service stopped
+  but sshd, the network, the firewall, auditd, messagebus, haldaemon, syslog, LVM's and SELinux's own (CentOS 5's
+  rsync has no `-X`).
+- `fixup`: the copy's fstab names the new root and `/boot` by label; its `grub.conf` points every entry at the new
+  `/boot`'s disk, boots the new root and adds `panic=10` where a kernel line has no `panic=`; its `device.map` names
+  the new disk; every kernel's initrd is rebuilt by the release's own `mkinitrd` in the copy (a kernel that can't
+  get one stops the relocate, since a dead entry would stay in `grub.conf`); and the labels are checked as "Upgrading
+  a running machine" describes.
+- `flip`: the old `grub.conf` moves beside the stub as `grub.conf.wend-old`. The stub keeps the old header less any
+  `default` or `fallback`, says `default saved`, and has entry 0 (`configfile` on the new `/boot`) and entry 1 (the
+  old config). The helper sets the saved default to 1, then arms the trial with grub's own one-shot.
+- Between boots, every command is the helper: `booted` compares the booted root's UUID with the two recorded;
+  `arm` (`--default=0 --once`) and `rollback_next` (`--default=1 --once`) work from either root; `commit_trial`
+  (`--default=0`) and `rollback` (`--default=1`, sticky) only from the new root; `forward` (`--default=0`) only from
+  the old one. From the new root, the helper mounts the old `/boot` by UUID over `/boot` for the write. Every kernel
+  on these routes mounts the old ext `/boot`, so a rollback from the last release is the same write, as long as that
+  release still has a grub shell. Keeping one through a route isn't built yet; the helper fails on a missing or
+  failing grub shell rather than reporting a write it didn't make.
+
+`tools/vm.py --extra-disk GB relocate el/centos5-web` runs the same stages as on CentOS 7.
+
+Not built yet: free extents in the volume group instead of a disk, a root on a plain partition under GRUB 2, an LVM
+root under GRUB legacy, other v4 filesystems,
 UEFI (the same stub on the ESP), a GRUB reinstall onto the new root (so the old `/boot` can go; until then commit keeps
 it), the client's preflight verdict, `wend commit` and `wend rollback`.
 
@@ -2200,8 +2238,9 @@ the old kernel can still read it. Where the new `/boot` goes depends on what the
   `stage2`, which the grub shell's `savedefault --default=N [--once]` writes (`root (hd0,0)` first, through an
   explicit device map). So the stub says `default saved`, the saved default stays 1 (the old system), and the trial is
   `savedefault --default=0 --once`, grub's own one-shot: a reset, a panic or a power cut during the trial brings back
-  the old system. `arm` and `arm_new` write that, `rollback_next` writes `--default=1`, and `commit_trial` writes
-  `--default=0`. The grub shell writes the `stage2` of whatever filesystem is mounted at `/boot`, so from the new root
+  the old system. `arm` writes that from either root (so GRUB legacy needs no `arm_new`), `rollback_next`
+  writes `--default=1 --once`, `commit_trial` `--default=0`, and the sticky `rollback` `--default=1`. The grub
+  shell writes the `stage2` of whatever filesystem is mounted at `/boot`, so from the new root
   (whose `/boot` is the new one) every write mounts the stub's home by `STUB_UUID` and bind-mounts it over `/boot` for
   the write; without that the write prints no error and changes nothing. Every new-root kernel line gets `panic=10`,
   so a kernel or init that dies reboots by itself and the spent one-shot lands on the old system. The copy keeps its

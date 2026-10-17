@@ -79,6 +79,7 @@ const ADAPTER_KEYS: &[&str] = &[
     "addons",
     "runtimes",
     "relocate",
+    "relocate_grub_legacy",
     "keys",
 ];
 /// SPEC "Hardware preflight"
@@ -373,8 +374,10 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
             }
         }
     }
-    // SPEC "Relocate": the harness's steps (lists of scripts) and the commands it runs between boots
-    if let Some(r) = get(a, "relocate") {
+    // SPEC "Relocate": the harness's steps (lists of scripts) and the commands it runs between boots, in [relocate]
+    // and in [relocate_grub_legacy] (GRUB legacy machines)
+    for t in ["relocate", "relocate_grub_legacy"] {
+        let Some(r) = get(a, t) else { continue };
         const STEPS: &[&str] = &[
             "preflight",
             "refresh",
@@ -394,16 +397,16 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
                         .as_array()
                         .is_some_and(|l| !l.is_empty() && l.iter().all(Value::is_string))
                     {
-                        errs.push(format!("{wh}: relocate.{k} must be a list of commands"));
+                        errs.push(format!("{wh}: {t}.{k} must be a list of commands"));
                     }
                 }
                 for k in COMMANDS {
                     if !o[*k].is_string() {
-                        errs.push(format!("{wh}: relocate.{k} must be a command"));
+                        errs.push(format!("{wh}: {t}.{k} must be a command"));
                     }
                 }
             }
-            _ => errs.push(format!("{wh}: relocate needs exactly {want:?}")),
+            _ => errs.push(format!("{wh}: {t} needs exactly {want:?}")),
         }
     }
     if let Some(Value::Object(kv)) = get(a, "kv") {
