@@ -16,4 +16,4 @@ reinstall = ["perl", "curl", "rsync", "sudo", "openssh-server", "postfix", "cron
 name = "el8-transit-epel"
 author = "claude-code / opus 5.5 (agent)"
 note = "The same transit as el8-transit, for a box with epel-release installed: the adapter's EPEL add-on brings EPEL 7's repo into the download and EPEL 8's into the EL8 transaction, and rpm.transit refuses before changing anything if an EPEL package has no EPEL 8 or EL8 package of the same name. Gated on the same packages as el8-transit, whose epel-release gate keeps the two apart."
-fires_on = ["el/centos7-lamp", "el/centos7-pyapp"]
+fires_on = ["el/centos7-junk", "el/centos7-lamp", "el/centos7-pyapp"]
