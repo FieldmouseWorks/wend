@@ -1112,8 +1112,9 @@ def replay(route_path, box_id, resume=None):
     if RELOCATE:
         relocate_ready(a)
         reloc = Relocation(a, box_doc, box_doc.get("shelter", {}))
-        reloc.fills = {"new_disk": new_disk(hardware(a, box_doc["release"])), "route_mib": route_mib(a, route, pinned),
-                       "boot_mib": route_boot_mib(a, route, pinned)}
+        joined = joins(a, route, box_doc["release"])[1]
+        reloc.fills = {"new_disk": new_disk(hardware(a, box_doc["release"])), "route_mib": route_mib(a, route, pinned, joined),
+                       "boot_mib": route_boot_mib(a, route, pinned, joined)}
         if resume and not all(x["ok"] for x in src.get("relocate", {}).get("stages", [{"ok": False}])):
             raise SystemExit(f"{resume[0]} didn't relocate the box: resume a --relocate run from one that did")
         if resume:  # the table that relocated it: a resumed run never runs Relocation.start's pick before its hops
@@ -1388,22 +1389,26 @@ class Relocation:
         return bool(self.stages) and all(x["ok"] for x in self.stages)
 
 
-def route_mib(a, route, pinned):
+def route_mib(a, route, pinned, hops=None):
     """The room a relocated root needs for ROUTE on top of the copy (docs/rebuild-and-carry.md, "Where the new root
     lives"): every hop's disk_mib and boot_mib (/boot is a directory on the new root, and SPEC leaves a /boot on / to
-    disk_mib), and the kernel of each release a pinned fix passes through with rpm.transit."""
+    disk_mib), and the kernel of each release a pinned fix passes through with rpm.transit. HOPS, when given, are the
+    ones a replay walks: a box that joins the route partway needs room for those only."""
     hw = a.get("hardware", {})
-    n = sum(hw.get(h, {}).get("disk_mib", 0) + hw.get(h, {}).get("boot_mib", 0) for h in route["hops"])
-    transit = {s["release"] for f in pinned for k in ("pre", "post") for s in f.get(k, []) if s["op"] == "rpm.transit"}
+    n = sum(hw.get(h, {}).get("disk_mib", 0) + hw.get(h, {}).get("boot_mib", 0)
+            for h in route["hops"] if hops is None or h in hops)
+    transit = {s["release"] for f in pinned if hops is None or f["hop"] in hops
+               for k in ("pre", "post") for s in f.get(k, []) if s["op"] == "rpm.transit"}
     return n + sum(a["releases"][t]["transit"]["boot_mib"] for t in sorted(transit))
 
 
-def route_boot_mib(a, route, pinned):
+def route_boot_mib(a, route, pinned, hops=None):
     """The part of route_mib that lands in /boot: every hop's boot_mib and each transit kernel's. GRUB legacy's
     relocate gives the new root a /boot of its own, sized like the old one plus this."""
     hw = a.get("hardware", {})
-    transit = {s["release"] for f in pinned for k in ("pre", "post") for s in f.get(k, []) if s["op"] == "rpm.transit"}
-    return sum(hw.get(h, {}).get("boot_mib", 0) for h in route["hops"]) + \
+    transit = {s["release"] for f in pinned if hops is None or f["hop"] in hops
+               for k in ("pre", "post") for s in f.get(k, []) if s["op"] == "rpm.transit"}
+    return sum(hw.get(h, {}).get("boot_mib", 0) for h in route["hops"] if hops is None or h in hops) + \
         sum(a["releases"][t]["transit"]["boot_mib"] for t in sorted(transit))
 
 
