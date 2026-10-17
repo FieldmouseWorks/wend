@@ -55,6 +55,7 @@ def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=()
                 os.makedirs(os.path.dirname(os.path.join(d, n)), exist_ok=True)  # a name may be in a drop-in dir
                 with open(os.path.join(d, n), "w") as out:  # names may map to a .link's text
                     out.write(names[n] if isinstance(names, dict) else "")
+                os.chmod(os.path.join(d, n), 0o644)  # as installers write them, whatever the umask (wend#128)
         os.makedirs(os.path.dirname(m.NETWORK), exist_ok=True)
         for name, text in profiles.items():
             with open(os.path.join(m.D, name), "w") as out:

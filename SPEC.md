@@ -2276,7 +2276,11 @@ needed.
   pinned. One addition: the kernel steps act only on a machine booted from the root (`[ / -ef /proc/1/root ]`), so in
   the copy they do nothing and fetch nothing. After each hop the rehearsal downloads, without installing, what
   `hop.kernel_after` would install (the release's `kernel` and what it pulls in, through the same proxy), so the
-  machine's offline walk finds it in the cache.
+  machine's offline walk finds it in the cache. `net.ifcfg-to-keyfile` reads a profile's missing `HWADDR` from the
+  running machine's `/sys/class/net`, which on the copy is the scratch host's NIC (a static profile refuses there, a
+  DHCP one pins that NIC). That is harmless only because nothing the copy wrote reaches the machine: `upgrade` runs
+  the op again on the machine itself. An engine that ever deploys a copy's output must supply the machine's own NIC
+  identity instead.
 - **The checks** it holds the copy to are the machine's ("Checks the machine is held to"), run first on the machine
   itself (their live forms, read-only) and then on the copy before the first hop. A check that fails on the machine
   is dropped and listed with its output: it guards nothing that works today. A check that passes on the machine but
