@@ -22,6 +22,11 @@ not runs/ (runs/ holds what CI proved).
                                            boot, a reset back to the old root, commit and a rollback boot (SPEC
                                            "Relocate"; with --root-fs xfs-v4 --lvm, an EL 7.0-7.2 install; on a
                                            CentOS 5 or 6 box, the adapter's [relocate_grub_legacy])
+  python3 tools/vm.py rehearse ROUTE BOX --client WEND
+                                           `wend rehearse` (the client binary WEND, run as root on this host) from a
+                                           fresh copy of BOX, running: copies its root over ssh, walks ROUTE on the
+                                           copy pinned by CI's newest passing run in runs/, writes the plan, and
+                                           compares each hop's fired fixes with that run's; the guest is only read
   python3 tools/vm.py --extra-disk GB --relocate replay ROUTE BOX
                                            the same relocate (trial, commit) before ROUTE's first hop, every hop on the
                                            new root, then a rollback to the old root and forward again after the last
@@ -54,6 +59,7 @@ harness, run as root, may own: point WEND_WORK somewhere the user can write). Ev
 """
 import ast
 import fcntl
+import glob
 import gzip
 import hashlib
 import http.client
@@ -1613,6 +1619,73 @@ def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net, plan):
     return [{"to": "prune", "ok": True, "obsolete_before": len(pkgs), "obsolete_after": len(left), "attempts": steps}]
 
 
+def rehearse(route_path, box_id, client):
+    """SPEC "Order of work" 4: `wend rehearse` from this host on a fresh copy of BOX, running. The client copies the
+    guest's root over ssh, walks ROUTE on the copy, verified against CI's newest passing run of ROUTE on BOX
+    (runs/), and writes a plan; this compares the fixes each hop fired with that run's. The guest is only read."""
+    if os.geteuid() != 0:
+        raise SystemExit("rehearse runs the client's walk, which needs root (sudo -E)")
+    d, box_doc = build(box_id)
+    route = load(route_path)
+    a = guest_adapter(route["family"])
+    sandbox.ensure_mirror(load(f"adapters/{route['family']}.toml"))
+    rid = check.content_id(route)
+    name = os.path.basename(route_path)[:-len(".toml")]
+    runs = sorted(glob.glob(os.path.join(ROOT, "runs", route["family"], name, box_id.split("/")[1], "*.json")))
+    ci = [p for p in runs if (j := json.load(open(p)))["route"] == rid and j["result"] == "pass"]
+    if not ci:
+        raise SystemExit(f"runs/ has no passing CI run of this {route_path} on {box_id} to pin the rehearsal by")
+    ci_path, ci_run = ci[-1], json.load(open(ci[-1]))
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    out_dir = os.path.join(ROOT, ".wend", "vm", f"{stamp}-{box_id.replace('/', '_')}-{FIRMWARE}-rehearse-{os.getpid()}")
+    os.makedirs(out_dir)
+    disk = os.path.join(out_dir, "rehearse.qcow2")
+    overlay(os.path.join(d, "base.qcow2"), disk)
+    g = Guest(disk, os.path.join(d, "key"), box_doc.get("vm", {}).get("ssh_port", 22), hardware(a, box_doc["release"]))
+    g.start()
+    run = {"schema": "wend.vmrehearse/0", "box": box_id, "route": rid, "started": stamp, "head": head(),
+           "firmware": FIRMWARE, "pinned_by": os.path.relpath(ci_path, ROOT),
+           "runner": {"kind": "vm", "host": os.uname().nodename, "kernel": os.uname().release}}
+
+    def finish(result):
+        run["result"] = result
+        json.dump(run, open(os.path.join(out_dir, "run.json"), "w"), indent=1)
+        log(f"{result.upper()}: rehearse {box_id} on {route_path}; run and plan in {os.path.relpath(out_dir, ROOT)}")
+        g.stop()
+        return 0 if result == "pass" else 1
+
+    if not g.wait_ssh():
+        run["console_tail"] = open(g.console, errors="replace").read()[-4000:]
+        return finish("fail")
+    rc, before = g.ssh("cat /proc/sys/kernel/random/boot_id; rpm -qa 2>/dev/null | sort | sha256sum")
+    ssh = " ".join(shlex.quote(x) for x in g.ssh_argv("")[:-2])
+    argv = [client, "--atlas", ROOT, "rehearse", route_path, "--from", "root@127.0.0.1", "--ssh", ssh,
+            "--root", os.path.join(out_dir, "copy"), "--run", ci_path, "--checks", f"boxes/{box_id}/box.toml",
+            "--plan", os.path.join(out_dir, "plan"), "--out", os.path.join(out_dir, "walk.json"),
+            "--work", os.path.join(out_dir, "work")]
+    log("rehearsing: " + " ".join(shlex.quote(x) for x in argv))
+    t0 = time.time()
+    with open(os.path.join(out_dir, "rehearse.log"), "w") as f:
+        p = subprocess.run(argv, stdout=f, stderr=subprocess.STDOUT, cwd=ROOT)
+    run["client_rc"], run["seconds"] = p.returncode, round(time.time() - t0)
+    rc2, after = g.ssh("cat /proc/sys/kernel/random/boot_id; rpm -qa 2>/dev/null | sort | sha256sum")
+    # the machine is only read: the same boot, the same packages
+    run["machine_untouched"] = rc == 0 and rc2 == 0 and before == after
+    plan_path = os.path.join(out_dir, "plan", "plan.json")
+    if p.returncode != 0 or not os.path.exists(plan_path):
+        return finish("fail")
+    plan = json.load(open(plan_path))
+    want = {h["to"]: sorted(h["fired"]) for h in ci_run["hops"]}
+    got = {h["to"]: sorted(h["fired"]) for h in plan["hops"]}
+    run["fired"] = {h: {"ci": want.get(h), "rehearsal": got.get(h)} for h in sorted(set(want) | set(got))}
+    run["fired_match"] = want == got
+    run["plan"] = {k: plan[k] for k in ("machine", "fingerprint_sha256", "checks_sha256", "cache_files")}
+    run["plan"]["kernel"] = plan["fingerprint"]["kernel"]
+    log(f"fired {'the same fixes as' if want == got else 'other fixes than'} {os.path.relpath(ci_path, ROOT)}; "
+        f"{plan['cache_files']} files cached; machine untouched: {run['machine_untouched']}")
+    return finish("pass" if run["machine_untouched"] else "fail")
+
+
 def main(args):
     global FIRMWARE, RELOCATE
     while args[:1] and args[0].startswith("--"):
@@ -1635,7 +1708,7 @@ def main(args):
             return __doc__
     if args[:1] == ["shim-stop"] and len(args) == 2 and args[1].isdigit():
         return shim_stop(int(args[1]))
-    if args[:1] in (["build"], ["replay"], ["relocate"]):
+    if args[:1] in (["build"], ["replay"], ["relocate"], ["rehearse"]):
         use_shim()
     if args[:1] == ["build"] and len(args) == 2:
         build(args[1])
@@ -1644,6 +1717,8 @@ def main(args):
         return replay(args[1], args[2])
     if args[:1] == ["replay"] and len(args) == 6 and args[3] == "--from":
         return replay(args[1], args[2], (args[4], args[5]))
+    if args[:1] == ["rehearse"] and len(args) == 5 and args[3] == "--client" and not RELOCATE:
+        return rehearse(args[1], args[2], os.path.abspath(args[4]))
     if args[:1] == ["relocate"] and len(args) == 2 and not RELOCATE:
         return relocate(args[1])
     return __doc__

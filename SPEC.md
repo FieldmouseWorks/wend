@@ -2372,14 +2372,17 @@ A directory, `wend-plan-<machine id>/`, carried to the machine (scp, or a USB st
 
 - `plan.json` (schema `wend.plan/0`): the route's content id, the run it was pinned by, the wend version, and per hop
   the fix ids that fired, the commands' seconds, and whether its kernel steps found the kernel in the cache;
-- the machine's **fingerprint** at the moment of the copy: the adapter's `installed_list` (names, versions and
-  architectures, and their sha256), the running kernel, the release file, and which pinned fixes' preconditions hold.
+- the machine's **fingerprint** at the moment of the copy: the adapter's `installed_versions` (every package's name,
+  version and architecture, and their sha256), the running kernel, the release file, and which pinned fixes' preconditions hold.
   It holds nothing particular to one machine (addresses, disks, hostnames), so another machine can match it ("Fleets");
 - the facts preflight read on the rehearsed machine, kept for the report only: every machine is judged on its own
   facts, read when `upgrade` starts, never on these;
 - `checks.toml`, the checks, in the format a box's `[roles]` and `[vm].live` use, so `walk` and the VM tier read it
   as they read a box;
-- `cache/`, files named by their sha256, with a list of every file the walk and the kernel downloads fetched.
+- `cache/`, every file the walk and the kernel downloads fetched, laid out as the verifying proxy's cache (`sha256/`
+  by digest, `sha1/` for EL5's SHA-1 indexes, `named/` for the metadata it serves unverified), so `upgrade` serves
+  from it with the proxy offline as `walk --offline` does; `cache/files.txt` lists each file's sha256, its path there
+  and the host/path it was served as.
 
 The fingerprint is checked once, when `upgrade` starts with no state file: a plan whose fingerprint isn't the
 machine's as it is then (a package installed since, a kernel update, a reboot onto another kernel) is refused, since
@@ -2609,7 +2612,8 @@ downloads. Nothing else.
    its trial, reset, commit and rollback, and a route walked on the copy and rolled back after a red made on purpose.
    Alongside it, the same-filesystem copy and its swap at boot ("Other places for the undo"), proved or refused.
 4. `wend rehearse`, the plan and the generated checks, proved by rehearsing VM guests from remi's host and comparing
-   the walk with CI's run of the same route.
+   the walk with CI's run of the same route (`vm.py rehearse`). In three parts: the copy, the walk and the plan
+   first; then the generated checks; then the kernel downloads, the facts and the failed rehearsal's report.
 5. `wend upgrade`, `wend rollback`, `wend commit` and `vm.py upgrade`, on `el/centos7-lamp`, then `el/centos5-web`,
    with the proof above.
 6. Fleets: plan reuse, the exit codes and the loop in `docs/`, with the proof in "Fleets".

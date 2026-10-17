@@ -204,6 +204,37 @@ impl<'a> Walk<'a> {
         Ok(ok)
     }
 
+    /// The pinned fixes whose `when` holds on the root as it is now, by content id (SPEC "The plan": part of the
+    /// machine's fingerprint).
+    pub fn holding(&self) -> Result<Vec<String>, String> {
+        let mut out = vec![];
+        for (id, f) in pinned(self.route, &self.fixes_by_id)? {
+            if self.holds(f)? {
+                out.push(id);
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+
+    /// SPEC "The plan": every installed package with its version and architecture (the adapter's
+    /// `installed_versions`), sorted.
+    pub fn installed_versions(&self) -> Result<Vec<String>, String> {
+        let cmd = str_of(get(self.adapter, "hop").unwrap_or(&Value::Null), "installed_versions")?;
+        let (rc, out) = self.root.run(cmd, 1800, false);
+        if rc != 0 {
+            return Err(format!("listing the root's packages failed: {}", tail(&out, 400)));
+        }
+        let mut v: Vec<String> = out.split_whitespace().map(String::from).collect();
+        v.sort();
+        Ok(v)
+    }
+
+    /// The root's release file as the walk started from it.
+    pub fn start_release(&self) -> &str {
+        &self.health.release
+    }
+
     fn installed(&self) -> Vec<String> {
         let mut v = self.installed_list();
         v.dedup();
@@ -212,7 +243,7 @@ impl<'a> Walk<'a> {
 
     /// The installed list as tools/walk.py fingerprints it: sorted, duplicates kept (multilib rpm lists a name
     /// once per arch).
-    fn installed_list(&self) -> Vec<String> {
+    pub fn installed_list(&self) -> Vec<String> {
         let cmd = str_of(get(self.adapter, "hop").unwrap_or(&Value::Null), "installed_list").unwrap_or("true");
         let mut v: Vec<String> = self
             .root
