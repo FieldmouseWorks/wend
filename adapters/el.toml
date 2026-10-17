@@ -821,9 +821,11 @@ forward = '''. /var/lib/wend/relocate.env; N=/run/wend/new; lvchange -ay "$VG/we
 # takes this table when the machine boots from /boot/grub/grub.conf and has no /boot/grub2. Built for BIOS, `/` and
 # `/boot` on plain partitions, and the new root on a whole empty disk the owner names, split into a plain ext3 /boot
 # (GRUB legacy reads it) and a root of the old root's type, each made by the running release's own mkfs. The old
-# grub.conf becomes the stub. GRUB legacy keeps the saved default in stage2, which only the grub shell writes
-# (`savedefault --default=N [--once]`): the stub says `default saved`, the saved default stays 1 (the old system) and
-# the trial is grub's own one-shot. {boot_mib} is the room the route's kernels need on the new /boot.
+# grub.conf becomes the stub. GRUB legacy keeps the saved default in stage2's header (`default saved` reads it): the
+# saved default stays 1 (the old system) and the trial is grub's own one-shot. Those header bytes are written in place
+# with dd, the same bytes the grub shell's `savedefault --default=N [--once]` writes (remi, CentOS 5), since the route
+# loses the grub shell at CentOS 7 and every later release still has to arm and roll back. {boot_mib} is the room the
+# route's kernels need on the new /boot.
 [relocate_grub_legacy]
 preflight = ['''
 set -e
@@ -833,7 +835,8 @@ D={new_disk}
 partof() { s=$(stat -c %d "$1") || return 1; for f in /sys/block/*/*/dev; do IFS=: read ma mi < "$f"; [ $(( (mi & 255) | (ma << 8) | ((mi >> 8) << 20) )) = "$s" ] || continue; p=${f%/dev}; d=${p%/*}; case "${p##*/}" in "${d##*/}"*) echo "/dev/${d##*/} /dev/${p##*/} ${p##*/}"; return 0;; esac; done; return 1; }
 [ ! -d /sys/firmware/efi ] || fail "UEFI isn't built yet (BIOS only)"
 [ -f /boot/grub/grub.conf ] && [ ! -e /boot/grub2 ] || fail "not GRUB legacy (no /boot/grub/grub.conf, or a /boot/grub2 beside it)"
-command -v grub >/dev/null && [ -f /boot/grub/stage2 ] || fail "no grub shell, or no stage2 in /boot/grub"
+[ -f /boot/grub/stage2 ] && [ "$(od -An -tx1 -j 518 -N2 /boot/grub/stage2 | tr -d ' ')" = 0302 ] || fail "no GRUB legacy stage2 (compat 3.2) in /boot/grub"
+command -v grub >/dev/null || fail "no grub shell: wend checks stage2 keeps the saved default where it writes it with that shell first"
 [ ! -e /boot/grub/grub.conf.wend-old ] || fail "a relocate stub is already in /boot/grub"
 [ "$(stat -c %d /boot)" != "$(stat -c %d /)" ] || fail "/boot isn't a filesystem of its own"
 B=$(partof /boot) || fail "/boot isn't a plain partition"
@@ -871,9 +874,10 @@ mkdir -p /var/lib/wend
 printf 'BOOT_DISK=%s\nBOOT_DEV=%s\nBOOT_N=%s\nBOOT_UUID=%s\nSTUB_UUID=%s\nOLD_DEV=%s\nOLD_UUID=%s\nROOT_FS=%s\nNEW_DISK=%s\nNEW_HD=%s\nBOOT_MIB=%s\n' "$BOOT_DISK" "$BOOT_DEV" "$BOOT_N" "$(blkid -s UUID -o value "$BOOT_DEV")" "$(blkid -s UUID -o value "$BOOT_DEV")" "$OLD_DEV" "$(blkid -s UUID -o value "$OLD_DEV")" "$ROOT_FS" "$D" "$NEW_HD" "$BOOT_MIB" > /var/lib/wend/relocate.env
 echo "relocate: $OLD_DEV ($ROOT_FS) -> $D as $NEW_HD (/boot $BOOT_MIB MiB, the rest the root; $HAVE MiB, needs $NEED); boot disk $BOOT_DISK as hd0"
 ''']
-# No GRUB reinstall: the boot disk's stage1 and the old /boot's stage2 stay. This writes the device map and the helper
-# every later write to the saved default goes through (the copy carries both), and checks that the grub shell finds
-# the old /boot with them, before anything else is written.
+# No GRUB reinstall: the boot disk's stage1 and the old /boot's stage2 stay. This writes the device map (the copy's
+# device.map) and the helper every later write to the saved default goes through (the copy carries both), and records
+# which file stage2 is: GRUB reads it by the blocks it was installed with, so a stage2 replaced since (another inode)
+# would take writes GRUB never sees, and the helper refuses it.
 refresh = ['''
 set -e
 . /var/lib/wend/relocate.env
@@ -881,36 +885,56 @@ printf '(hd0) %s\n(%s) %s\n' "$BOOT_DISK" "$NEW_HD" "$NEW_DISK" > /var/lib/wend/
 cat > /var/lib/wend/relocate-grub <<'EOF'
 #!/bin/bash
 # wend relocate on GRUB legacy (adapters/el.toml [relocate_grub_legacy]). `which`: the root that's booted (new, old,
-# or what instead). `set N [--once]`: entry N of the stub becomes GRUB's saved default, or its next boot only. The grub
-# shell writes the stage2 of whatever is mounted at /boot, so on the new root (whose /boot is the new one) the old
-# /boot is mounted and bound over /boot for the write; without that it prints no error and changes nothing.
+# or what instead). `set N [--once]`: entry N of the stub becomes GRUB's saved default, or its next boot only. GRUB
+# legacy keeps that in stage2's header from offset 524: the saved entry, the one-shot entry and the one-shot flag, the
+# bytes the grub shell's savedefault writes (remi, CentOS 5). dd writes them into the old /boot's stage2 in place, on
+# the same inode and blocks, from any release; on the new root the old /boot is mounted for the write.
 . /var/lib/wend/relocate.env
 s=$(stat -c %d /)
 for f in /sys/block/*/*/dev; do IFS=: read ma mi < "$f"; [ $(( (mi & 255) | (ma << 8) | ((mi >> 8) << 20) )) = "$s" ] || continue; p=${f%/dev}; U=$(blkid -s UUID -o value "/dev/${p##*/}"); break; done
 if [ -n "$NEW_UUID" ] && [ "$U" = "$NEW_UUID" ]; then W=new; elif [ "$U" = "$OLD_UUID" ]; then W=old; else W="neither: ${U:-unknown}"; fi
 case "$1 $2 $3" in
   "which  ") echo "$W"; exit 0;;
-  set\ *) command -v grub >/dev/null || { echo "no grub shell on this root: GRUB legacy's saved default can't be written"; exit 1; };;
-esac
-case "$1 $2 $3" in
   "set 0 "|"set 1 "|"set 0 --once"|"set 1 --once") ;;
   *) echo "usage: relocate-grub which | set 0|1 [--once]"; exit 2;;
 esac
+O=/boot
 if [ "$W" = new ]; then
   O=/mnt/wend/oldboot
   mkdir -p $O && mount "$(findfs UUID=$STUB_UUID)" $O || exit 1
-  mount --bind $O /boot || { umount $O; exit 1; }
-  trap 'umount /boot; umount $O' EXIT
+  trap 'umount $O' EXIT
+elif [ "$W" != old ]; then
+  echo "booted from neither root ($W): nothing written"; exit 1
 fi
-o=$(printf 'root (hd0,%s)\nsavedefault --default=%s %s\nquit\n' $((BOOT_N - 1)) "$2" "$3" | grub --batch --device-map=/var/lib/wend/grub.map 2>&1); r=$?
-echo "$o"
-[ $r = 0 ] || { echo "the grub shell failed ($r)"; exit 1; }
-! echo "$o" | grep -qi error && sync
+F=$O/grub/stage2
+[ "$(stat -c '%i %s' $F)" = "$STAGE2" ] || { echo "$F isn't the stage2 GRUB was installed with (inode and size $(stat -c '%i %s' $F), not $STAGE2)"; exit 1; }
+[ "$(od -An -tx1 -j 518 -N2 $F | tr -d ' ')" = 0302 ] || { echo "$F isn't GRUB legacy's stage2 (compat 3.2)"; exit 1; }
+if [ "$3" = --once ]; then B="$(od -An -tu1 -j 524 -N1 $F | tr -d ' ') $2 1"; else B="$2 0 0"; fi
+set -- $B
+case "$1$2$3" in [01][01][01]) ;; *) echo "unexpected saved entry in $F: $B"; exit 1;; esac
+printf "\\00$1\\00$2\\00$3" | dd of=$F bs=1 seek=524 count=3 conv=notrunc 2>/dev/null || exit 1
+sync && echo 3 > /proc/sys/vm/drop_caches
+G=$(od -An -tu1 -j 524 -N3 $F | tr -s ' ' | sed 's/^ //; s/ $//')
+[ "$G" = "$B" ] || { echo "$F reads back $G, not $B"; exit 1; }
+echo "stage2: saved $1, one-shot $2, flag $3"
 EOF
 chmod 755 /var/lib/wend/relocate-grub
-o=$(printf 'root (hd0,%s)\nquit\n' $((BOOT_N - 1)) | grub --batch --device-map=/var/lib/wend/grub.map 2>&1)
-echo "$o"
-! echo "$o" | grep -qi error || { echo "the grub shell can't read the old /boot as (hd0,$((BOOT_N - 1)))"; exit 1; }
+echo "STAGE2=\"$(stat -c '%i %s' /boot/grub/stage2)\"" >> /var/lib/wend/relocate.env
+# The compat bytes only say GRUB legacy; the helper's writes need Red Hat's stage2, which keeps a one-shot entry and
+# flag beside the saved default. While this release still has its grub shell, have it write a sticky 1 and then a
+# one-shot of 0, check the bytes land where the helper writes them, and put the header back as it was with dd.
+command -v grub >/dev/null || { echo "no grub shell: can't check stage2 keeps the saved default where the helper writes it"; exit 1; }
+F=/boot/grub/stage2
+hdr() { od -An -tu1 -j 524 -N3 $F | tr -s ' ' | sed 's/^ //; s/ $//'; }
+gs() { o=$(printf 'root (hd0,%s)\nsavedefault --default=%s %s\nquit\n' $((BOOT_N - 1)) "$1" "$2" | grub --batch --device-map=/var/lib/wend/grub.map 2>&1) && ! echo "$o" | grep -qi error || { echo "the grub shell's savedefault --default=$1 $2 failed: $o" >&2; return 1; }; sync && echo 3 > /proc/sys/vm/drop_caches && hdr; }
+H=$(hdr)
+A=$(gs 1) && O1=$(gs 0 --once) || A=failed
+set -- $H
+printf "\\$(printf %03o $1)\\$(printf %03o $2)\\$(printf %03o $3)" | dd of=$F bs=1 seek=524 count=3 conv=notrunc 2>/dev/null
+sync && echo 3 > /proc/sys/vm/drop_caches
+[ "$(hdr)" = "$H" ] || { echo "$F's header reads $(hdr) after putting back $H"; exit 1; }
+[ "$A" = "1 0 0" ] && [ "$O1" = "1 0 1" ] || { echo "$F isn't Red Hat's GRUB: the grub shell's sticky 1 and one-shot 0 read ${A:-nothing} and ${O1:-nothing} at 524, not 1 0 0 and 1 0 1"; exit 1; }
+echo "stage2 header: $H (Red Hat's layout: checked with the grub shell)"
 ''']
 place = ['''
 set -e
@@ -1006,8 +1030,8 @@ if [ ! -e /var/lib/wend/relocate-flipped ] && [ -s /var/lib/wend/relocate-stoppe
 ''']
 # Every write to the saved default goes through the helper, from either root. commit_trial and rollback (sticky) only
 # from the new root, forward only from the old; arm and rollback_next from either. Every kernel on these routes mounts
-# the old ext /boot, so a rollback from the last release is the same write as any other, as long as that release
-# still has a grub shell: keeping one through a route isn't built yet, and without it every write fails, loudly.
+# the old ext /boot, and every release has dd and od, so a rollback from the last release is the same write as any
+# other.
 booted = '''/var/lib/wend/relocate-grub which'''
 arm = '''/var/lib/wend/relocate-grub set 0 --once'''
 commit_trial = '''[ "$(/var/lib/wend/relocate-grub which)" = new ] || { echo "not booted from the relocated root"; exit 1; }; /var/lib/wend/relocate-grub set 0'''

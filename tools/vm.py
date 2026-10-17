@@ -1112,6 +1112,9 @@ def replay(route_path, box_id, resume=None):
                        "boot_mib": route_boot_mib(a, route, pinned)}
         if resume and not all(x["ok"] for x in src.get("relocate", {}).get("stages", [{"ok": False}])):
             raise SystemExit(f"{resume[0]} didn't relocate the box: resume a --relocate run from one that did")
+        if resume:  # the table that relocated it: a resumed run never runs Relocation.start's pick before its hops
+            reloc.table = src["relocate"].get("table", "relocate")
+            reloc.r, reloc.picked = a[reloc.table], True
     elif resume and "relocate" in src:
         raise SystemExit(f"{resume[0]} walked a relocated root: resume it with --relocate")
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -1304,15 +1307,18 @@ class Relocation:
 
     def __init__(self, a, box_doc, plan=None):
         self.r, self.a, self.box_doc, self.plan = a["relocate"], a, box_doc, plan or {}
-        self.table = "relocate"
+        self.table, self.picked = "relocate", False
         self.stages, self.g, self.before, self.start_net = [], None, None, None
 
     def start(self, g):
         """The box as it is before anything moves: what every later boot is held to. The table is the adapter's
-        [relocate], or [relocate_grub_legacy] on a machine that boots from /boot/grub/grub.conf with no /boot/grub2."""
+        [relocate], or [relocate_grub_legacy] on a machine that boots from /boot/grub/grub.conf with no /boot/grub2,
+        picked once, on the box as it was (a route's later releases add /boot/grub2 beside GRUB legacy's config)."""
         self.g = g
-        if "relocate_grub_legacy" in self.a and g.ssh("[ -f /boot/grub/grub.conf ] && [ ! -e /boot/grub2 ]")[0] == 0:
+        if not self.picked and "relocate_grub_legacy" in self.a and \
+                g.ssh("[ -f /boot/grub/grub.conf ] && [ ! -e /boot/grub2 ]")[0] == 0:
             self.table, self.r = "relocate_grub_legacy", self.a["relocate_grub_legacy"]
+        self.picked = True
         self.start_net = net_read(g, self.plan)
         if f"default via {GUEST_HOST}" not in self.start_net or ADDR not in self.start_net:  # never compare two empties
             raise RuntimeError(f"the box's network can't be read at the start (no `ip`?): {self.start_net!r}")
