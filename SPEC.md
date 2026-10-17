@@ -2105,9 +2105,10 @@ the VM tier adds it after the installer, which can't be told to leave it alone).
   disk as `(hd0)`, and takes the new disk's GRUB name from there, or the next disk after the ones it lists. The new
   disk's emptiness is its first MiB being zeros (EL5's `blkid` has no `-p`), and `{boot_mib}` (the route's
   `boot_mib` over its hops and transits) sizes the new `/boot` on top of the old one's size.
-- `refresh` reinstalls nothing (the boot disk's stage1 and the old `/boot`'s stage2 stay). It writes the grub shell's
-  device map and `/var/lib/wend/relocate-grub`, the helper every write to the saved default goes through, and checks
-  the grub shell finds the old `/boot` with them.
+- `refresh` reinstalls nothing (the boot disk's stage1 and the old `/boot`'s stage2 stay). It writes the device map
+  (the copy's `device.map`) and `/var/lib/wend/relocate-grub`, the helper every write to the saved default goes
+  through, and records the old `stage2`'s inode and size: GRUB reads `stage2` by the blocks it was installed with, so
+  the helper refuses a `stage2` replaced since, which would take writes GRUB never sees.
 - `place` splits the disk: a first partition for the new `/boot` (ext3, labelled `wend-boot`), a second for the new
   root (the old root's type, `wend-root`), each made by the running release's `mkfs`, both mounted under
   `/mnt/wend/new` (EL5 has no `/run`).
@@ -2125,10 +2126,16 @@ the VM tier adds it after the installer, which can't be told to leave it alone).
 - Between boots, every command is the helper: `booted` compares the booted root's UUID with the two recorded;
   `arm` (`--default=0 --once`) and `rollback_next` (`--default=1 --once`) work from either root; `commit_trial`
   (`--default=0`) and `rollback` (`--default=1`, sticky) only from the new root; `forward` (`--default=0`) only from
-  the old one. From the new root, the helper mounts the old `/boot` by UUID over `/boot` for the write. Every kernel
-  on these routes mounts the old ext `/boot`, so a rollback from the last release is the same write, as long as that
-  release still has a grub shell. Keeping one through a route isn't built yet; the helper fails on a missing or
-  failing grub shell rather than reporting a write it didn't make.
+  the old one. The helper writes `stage2`'s header bytes in place with `dd` (below), into the old `/boot`, which it
+  mounts by UUID when it runs on the new root, then drops the page cache and reads them back. The route loses the
+  grub shell at CentOS 7 (grub2 replaces the package), but every release has `dd` and `od`, and every kernel on these
+  routes mounts the old ext `/boot`, so a rollback from the last release is the same write as any other.
+
+`tools/vm.py --extra-disk GB --relocate replay routes/el/centos5-to-alma10.toml el/centos5-web` walks the CentOS 5
+route on the relocated root, as on CentOS 7. Each hop's kernel steps write the new `/boot`'s `grub.conf`
+(`hop.kernel_after` copies the default entry's `root (hd1,0)` and kernel line, EL6 and EL7 grubby read the copy's
+`device.map`), and after the last hop `rollback` from Alma 10 must boot the old CentOS 5 system and `forward` the walked
+root again.
 
 `tools/vm.py --extra-disk GB relocate el/centos5-web` runs the same stages as on CentOS 7.
 
@@ -2235,14 +2242,19 @@ the old kernel can still read it. Where the new `/boot` goes depends on what the
   `grub.conf` (`configfile`), entry 1 the old one, saved as `grub.conf.wend-old`. Neither entry carries `savedefault`:
   an entry's own `savedefault` does nothing when the entry hands off with `configfile` (remi, CentOS 5). EL5's
   grub-0.97 has no `grub-set-default` and no `/boot/grub/default`; `default saved` reads the saved entry kept in
-  `stage2`, which the grub shell's `savedefault --default=N [--once]` writes (`root (hd0,0)` first, through an
-  explicit device map). So the stub says `default saved`, the saved default stays 1 (the old system), and the trial is
+  `stage2`'s header, which the grub shell's `savedefault --default=N [--once]` writes: three bytes from offset 524
+  (the saved entry, the one-shot entry, the one-shot flag; found by `cmp` on remi). The same bytes written in place
+  with `dd`, on the same inode and blocks, drive GRUB exactly as the shell's do, sticky and one-shot, across reboots
+  and a reset (remi, CentOS 5), so the writes need no grub shell, which the route loses at CentOS 7. That layout is Red
+  Hat's patched GRUB, not upstream's, so before any write `refresh` has the release's own grub shell (still there at
+  CentOS 5 and 6) write a sticky 1 and a one-shot 0, refuses unless they read 1 0 0 and 1 0 1 at 524, and puts the
+  header back with `dd`. So the stub says `default saved`, the saved default stays 1 (the old system), and the trial is
   `savedefault --default=0 --once`, grub's own one-shot: a reset, a panic or a power cut during the trial brings back
   the old system. `arm` writes that from either root (so GRUB legacy needs no `arm_new`), `rollback_next`
-  writes `--default=1 --once`, `commit_trial` `--default=0`, and the sticky `rollback` `--default=1`. The grub
-  shell writes the `stage2` of whatever filesystem is mounted at `/boot`, so from the new root
-  (whose `/boot` is the new one) every write mounts the stub's home by `STUB_UUID` and bind-mounts it over `/boot` for
-  the write; without that the write prints no error and changes nothing. Every new-root kernel line gets `panic=10`,
+  writes `--default=1 --once`, `commit_trial` `--default=0`, and the sticky `rollback` `--default=1`. From the new
+  root (whose `/boot` is the new one) every write mounts the stub's home by `STUB_UUID` and writes its `stage2`. (The
+  grub shell, by contrast, writes the `stage2` of whatever is mounted at `/boot`, and from the new root changed
+  nothing unless the old `/boot` was bound over `/boot` first.) Every new-root kernel line gets `panic=10`,
   so a kernel or init that dies reboots by itself and the spent one-shot lands on the old system. The copy keeps its
   SELinux labels: CentOS 5's rsync (2.6.8) has no `-X`, so the copy is `tar --selinux` on both ends (or rsync where it
   has `-X`), and it's checked, not trusted: if the copy's `/bin/bash`, `/usr/sbin/sshd` or `/etc/shadow` is `file_t`
