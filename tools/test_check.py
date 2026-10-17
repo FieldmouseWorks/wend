@@ -369,14 +369,14 @@ for name in ("cmd_replay", "cmd_discover"):  # every command that walks a root; 
     print(("passed  " if ok else "WRONG   ") + f"wend {name} walks under umask 022, writes its files under the caller's")
     bad += not ok
 rs = open(os.path.join(check.ROOT, "client", "src", "main.rs")).read()
-walk = rs[rs.index("fn walk_root("):]  # cmd_walk and cmd_rehearse both walk through it
+walk = rs[rs.index("fn cmd_walk("):]
 walk = walk[:walk.index("\n}\n")]
 walk = re.sub(r"/\*.*?\*/", "", walk, flags=re.S)  # comments don't count
 code = "\n".join(ln.split("//")[0].strip() for ln in walk.split("\n")[1:])
 body = [ln for ln in code.split("\n") if ln]
 ok = (body[0] == "let mask = RootUmask::set();" and "drop(mask);" in code
       and code.index("drop(mask);") < code.index("&o.steps") < code.index("&o.out"))
-print(("passed  " if ok else "WRONG   ") + "client walk_root walks under RootUmask, drops it before --steps and --out")
+print(("passed  " if ok else "WRONG   ") + "client cmd_walk walks under RootUmask, drops it before --steps and --out")
 bad += not ok
 # a box's [vm] table (tools/vm.py): only ssh_port, skip, live, pockets and root_fs, each well formed
 web = check.load_all()[3]["el/centos5-web"]

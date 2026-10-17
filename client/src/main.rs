@@ -172,7 +172,7 @@ fn main() -> ExitCode {
         ("compile", [fix]) => cmd_compile(&atlas, &root, fix),
         ("hop", [route, hop]) => cmd_hop(&atlas, route, hop, fired.as_deref()),
         ("parity", [input]) => cmd_parity(&atlas, input),
-        ("walk", [route]) => cmd_walk(&atlas, route, &walk_opts),
+        ("walk", [route]) => cmd_walk(&atlas, route, &walk_opts).map(|w| w.run["result"] == "pass"),
         ("rehearse", [route]) => rehearse::cmd_rehearse(&atlas, route, &walk_opts, &rehearse_opts),
         ("preflight", [route]) => cmd_preflight(&atlas, route, facts.as_deref(), as_json),
         _ => Err(format!(
@@ -513,10 +513,6 @@ fn joins_at(a: &Doc, r: &Doc, release: Option<&String>) -> Result<Option<String>
     }
 }
 
-fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
-    Ok(walk_root(atlas, route, o)?.run["result"] == "pass")
-}
-
 /// What a walk leaves for a rehearsal's plan (SPEC "The plan"), besides its run.
 pub struct Walked {
     pub run: Value,
@@ -529,7 +525,8 @@ pub struct Walked {
     pub served: Vec<(String, PathBuf)>,
 }
 
-fn walk_root(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<Walked, String> {
+/// `wend walk` (and the walk `wend rehearse` makes): its run, and what a plan needs from the walk.
+fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<Walked, String> {
     let mask = RootUmask::set();
     let (rpath, r) = atlas.route(route)?;
     let a = adapter_of(atlas, r)?;

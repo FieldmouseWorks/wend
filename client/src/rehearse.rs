@@ -6,7 +6,7 @@
 use crate::atlas::{get, str_of, Atlas};
 use crate::canon::{canonical, content_id, sha256_hex};
 use crate::sandbox::{plain_path, q};
-use crate::{walk_root, WalkOpts};
+use crate::{cmd_walk, WalkOpts};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -204,7 +204,7 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
         }
     };
     let checks_bytes = std::fs::read(checks_path).map_err(|e| format!("{checks_path}: {e}"))?;
-    let w = walk_root(atlas, route, o)?;
+    let w = cmd_walk(atlas, route, o)?;
     if w.run["result"] != "pass" {
         eprintln!("the rehearsal failed: no plan written. The run says where it stopped; `wend share` makes a report.");
         return Ok(false);
