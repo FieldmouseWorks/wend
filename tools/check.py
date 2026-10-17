@@ -648,8 +648,12 @@ def check_box(doc, adapters, where):
     if not set(doc.get("isolate", [])) <= set(doc.get("roles", {})):
         errs.append(f"{where}: isolate names roles the box does not have")
     vm = doc.get("vm", {})  # tools/vm.py (SPEC "VM tier")
-    if not isinstance(vm, dict) or set(vm) - {"ssh_port", "skip", "live", "pockets", "root_fs"}:
-        errs.append(f"{where}: [vm] takes only ssh_port, skip, live, pockets and root_fs")
+    if not isinstance(vm, dict) or set(vm) - {"ssh_port", "skip", "live", "pockets", "root_fs", "permissive_only"}:
+        errs.append(f"{where}: [vm] takes only ssh_port, skip, live, pockets, root_fs and permissive_only")
+    elif not isinstance(vm.get("permissive_only", []), list) or \
+            not all(isinstance(n, str) for n in vm.get("permissive_only", [])) or \
+            not set(vm.get("permissive_only", [])) <= set(doc.get("roles", {})) | set(vm.get("live", {})):
+        errs.append(f"{where}: [vm] permissive_only names roles or live checks the box has")
     elif not isinstance(vm.get("pockets", []), list) or not all(isinstance(p, str) for p in vm.get("pockets", [])) or \
             not set(vm.get("pockets", [])) <= {"updates", "security", "backports"} or \
             len(set(vm.get("pockets", []))) != len(vm.get("pockets", [])) or \
