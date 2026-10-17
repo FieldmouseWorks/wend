@@ -548,8 +548,10 @@ class Rpm:
         tag = f"el{t['major']}"
         base = f"{shim}/{next(iter(t['repos'].values()))}"
         reinstall = " ".join(s["reinstall"])
-        succ = [f"{shim}/{u}" for u in t["repos"].values()] + \
-            [f"{shim}/{a['repos'][target]}" for a in adapter.get("addons", {}).values() if target in a["repos"]]
+        # the release's repos, then each installed add-on's (the only add-on repos the transaction below has)
+        succ = [package_names(f"{shim}/{u}", f"{b}/names") for u in t["repos"].values()] + \
+            ["if %s; then %s; fi" % (addon_installed(a), package_names(f"{shim}/{a['repos'][target]}", f"{b}/names"))
+             for a in adapter.get("addons", {}).values() if target in a["repos"]]
         return "\n".join([
             # The last step drops every package EL8 doesn't ship from the rpm database (files kept). That is only
             # acceptable for the old release's own packages: refuse up front if anything else is installed (EPEL,
@@ -569,7 +571,7 @@ class Rpm:
             f"P=$(rpm -qa --qf '%{{NAME}}|%{{NAME}}|%{{VENDOR}}\\n' | awk -F'|' -v a=\"$A\" '{VENDOR_LAST} index(a, \"|\" x \"|\") "
             "{print $1}' | "
             f"sort -u); if [ -n \"$P\" ]; then : > {b}/names; "
-            + "".join(f"{package_names(u, f'{b}/names')}; " for u in succ) +
+            + "".join(f"{u}; " for u in succ) +
             f"M=$(for n in $P; do grep -qxF \"$n\" {b}/names || echo $n; done); [ -z \"$M\" ] || {{ echo "
             f"\"refusing, no {target} package for these add-on packages (a fix must remove or replace them first):\" "
             "$M; exit 1; }; fi",

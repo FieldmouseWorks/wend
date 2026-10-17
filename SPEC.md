@@ -495,7 +495,7 @@ nginx) in other repos unless their repo says so.
   else unchecked (`gpgcheck=0` behind the shim).
 - `rpm.transit` lets the add-on vendor's packages through its refusal when the marker is installed, and then requires,
   before it changes anything, that each of them has a package of the same name in the release's repos or the
-  release's add-on repos (renames don't count). Anything without one is named and the op fails: a fix on the same hop
+  release's repos of the installed add-ons, the only ones its transaction has (renames don't count). Anything without one is named and the op fails: a fix on the same hop
   has to remove or replace it first, the same way it would for the vendor's own dropped packages. After the download
   it checks again that each of them was actually fetched.
 - The add-on repos' metadata is pinned in the hop's `sources` like the vendor's (repo ids `<release>-<name>` and, for
@@ -738,8 +738,8 @@ A fix with a non-empty `reinstall` must pass the install rule. Reference, with w
 repos kept in private `reposdir`s so `/etc/yum.repos.d` stays the harness's:
 1. Write a repo file for `transit.from`'s repos plus `transit.extra_repos` (`old`), and one for `release`'s repos
    (`new`). Installed add-ons add their repo for `release` to `new`. Before that, if any add-on vendor's package is
-   installed: read the package names in the primary metadata (gzip, xz or zstd) of `release`'s repos and its add-on repos,
-   and refuse, naming them, if any of those packages has no package of the same name there. Only the work dir has
+   installed: read the package names in the primary metadata (gzip, xz or zstd) of `release`'s repos and the installed
+   add-ons' repos for it, and refuse, naming them, if any of those packages has no package of the same name there. Only the work dir has
    changed at that point.
 2. `yum install dnf` from `old` (CentOS 7 extras ships an EL7 dnf).
 3. With that dnf and `new`: `--nogpgcheck --downloadonly` distro-sync into the work dir, `--releasever` = the release's major,

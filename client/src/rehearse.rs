@@ -254,7 +254,9 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
             )
         }
     };
-    let n = boot_clean(Path::new(root))?;
+    // the walk's own checks on the root (not the running system, a root filesystem, nothing mounted inside), before
+    // anything in it is removed
+    let n = boot_clean(&crate::sandbox::Root::new(Path::new(root))?.dir)?;
     eprintln!("cleaned the copy as a boot would: {n} runtime files and cached packages");
     crate::sandbox::REHEARSAL.store(true, std::sync::atomic::Ordering::Relaxed);
     let checks_bytes = std::fs::read(checks_path).map_err(|e| format!("{checks_path}: {e}"))?;
