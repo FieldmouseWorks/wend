@@ -30,7 +30,8 @@ not runs/ (runs/ holds what CI proved).
                                            by MAC, so ifcfg-eth0 has no HWADDR, as a stock install (wend#74)
   --root-fs FS, --lvm, --extra-disk GB     (before the command, EL7 kickstart on) the box installed another way:
                                            FS overrides [vm].root_fs; --lvm puts / and swap on LVM in a VG `centos`
-                                           filling the disk, beside /boot, as a default EL7 install does;
+                                           filling the disk, beside /boot, as a default EL7 install does (on CentOS
+                                           5, VolGroup00 with LogVol00 and LogVol01, as its installer names them);
                                            --extra-disk adds an empty disk of GB (repeatable; on CentOS 5, added
                                            after its installer, which can't be told to skip it). Its own box and runs
 
@@ -591,10 +592,11 @@ def kickstart(box_doc, adapter, key_pub):
     fs = ROOT_FS[LAYOUT["root_fs"] or box_doc.get("vm", {}).get("root_fs", "ext3")]
     efi = ["part /boot/efi --fstype efi --size=200"] if FIRMWARE == "uefi" else []
     boot = f"part /boot {fs} --size={inst.get('boot_part_mib', 200)}"
-    if LAYOUT["lvm"]:  # anaconda's EL7 autopart: /boot, then one PV with swap and a root that fills it
-        parts = [boot, *efi, "part pv.01 --size=1 --grow", "volgroup centos pv.01",
-                 "logvol swap --vgname=centos --name=swap --size=1024",
-                 f"logvol / {fs} --vgname=centos --name=root --size=1 --grow"]
+    if LAYOUT["lvm"]:  # anaconda's autopart: /boot, then one PV with swap and a root that fills it, named as it names them
+        lv = inst.get("lvm", {"vg": "centos", "root": "root", "swap": "swap"})
+        parts = [boot, *efi, "part pv.01 --size=1 --grow", f"volgroup {lv['vg']} pv.01",
+                 f"logvol swap --vgname={lv['vg']} --name={lv['swap']} --size=1024",
+                 f"logvol / {fs} --vgname={lv['vg']} --name={lv['root']} --size=1 --grow"]
     else:
         parts = [boot, *efi, "part swap --size=1024", f"part / {fs} --size=1 --grow"]
     # with extra disks, anaconda touches only the first; the others stay empty (no label, no signature). An installer
@@ -777,8 +779,9 @@ def install(box_id, box_doc, d):
     root_fs = LAYOUT["root_fs"] or box_doc.get("vm", {}).get("root_fs")
     if root_fs and root_fs not in inst.get("root_fs", []):
         raise SystemExit(f"{box_doc['release']}'s installer doesn't make {root_fs} (releases.<release>.install.root_fs)")
-    if LAYOUT["lvm"] and not (load(f"adapters/{fam}.toml")["backend"] == "rpm" and inst.get("ks_end")):
-        raise SystemExit("--lvm is an EL7-and-later kickstart choice (logvol)")
+    if LAYOUT["lvm"] and not (load(f"adapters/{fam}.toml")["backend"] == "rpm" and (inst.get("ks_end") or inst.get("lvm"))):
+        raise SystemExit("--lvm is a kickstart choice (logvol) for EL7 and later, or a release whose install names its "
+                         "LVs (releases.<release>.install.lvm)")
     if LAYOUT["extra_disks"] and load(f"adapters/{fam}.toml")["backend"] != "rpm":
         raise SystemExit("--extra-disk is a kickstart choice (EL)")
     # EL7's installer is told to leave the extra disks alone (ignoredisk --only-use); an older one doesn't see them
@@ -879,6 +882,12 @@ def install(box_id, box_doc, d):
         rc, out = g.ssh(ROOT_FS_IS[root_fs])
         if rc:
             raise RuntimeError(f"the installed box's / and /boot aren't {root_fs}: {out[-600:]}")
+    if LAYOUT["lvm"]:  # / is the LV the kickstart named (mtab: EL5's /proc/mounts says /dev/root)
+        lv = inst.get("lvm", {"vg": "centos", "root": "root"})
+        rc, out = g.ssh(f"awk '$2 == \"/\" {{r = $1}} END {{print r; exit !(r == \"/dev/mapper/{lv['vg']}-{lv['root']}\" "
+                        f"|| r == \"/dev/{lv['vg']}/{lv['root']}\")}}' /etc/mtab")
+        if rc:
+            raise RuntimeError(f"--lvm: the installed box's / isn't {lv['vg']}/{lv['root']}: {out[-600:]}")
     log("installed and updated; checking the box")
     failed = {n: o for n, (ok, o) in checks(g, box_doc, a).items() if not ok}
     g.stop()
