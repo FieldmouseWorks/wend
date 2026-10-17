@@ -470,6 +470,18 @@ print(("passed  " if got == want else "WRONG   ") + f"route_mib for centos7-to-a
       ("" if got == want else f" (got {got})"))
 bad += got != want
 
+# a CentOS 6 box joining the CentOS 5 route needs room for the hops after centos6 only, not the centos6 hop's
+c5r = tomllib.load(open(os.path.join(ROOT, "routes", "el", "centos5-to-alma10.toml"), "rb"))
+c5p = [fixes[x["id"]] for x in c5r["fixes"]]
+walk = vm.joins(a, c5r, "centos6")[1]
+want = sum(hw.get(h, {}).get("disk_mib", 0) + hw.get(h, {}).get("boot_mib", 0) for h in walk) + \
+    a["releases"]["alma8"]["transit"]["boot_mib"]
+got = vm.route_mib(a, c5r, c5p, walk)
+ok = got == want and got < vm.route_mib(a, c5r, c5p) and vm.route_boot_mib(a, c5r, c5p, walk) < vm.route_boot_mib(a, c5r, c5p)
+print(("passed  " if ok else "WRONG   ") + f"route_mib for a centos6 box joining centos5-to-alma10 is {want} MiB" +
+      ("" if ok else f" (got {got})"))
+bad += not ok
+
 # the hops a VM replay walks: all of them from the route's start, the rest from a rung it passes through, none elsewhere
 c5 = tomllib.load(open(os.path.join(ROOT, "routes", "el", "centos5-to-alma10.toml"), "rb"))
 for name, r, release, want in (("a CentOS 5 box walks every hop", c5, "centos5", ("centos5", c5["hops"])),
