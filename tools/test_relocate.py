@@ -337,12 +337,15 @@ with tempfile.TemporaryDirectory() as t:
     r2 = run(f"{t}/state/relocate-grub set 0 --once", t)
     sent = open(f"{t}/grub-in").read() if os.path.exists(f"{t}/grub-in") else ""
     r3 = run(f"{t}/state/relocate-grub set 2", t)
+    shims(t, {"grub": "echo 'grub: something went wrong'; exit 127"})
+    r4 = run(f"{t}/state/relocate-grub set 1", t)
     ok = r2[0] == 0 and sent == "root (hd0,0)\nsavedefault --default=0 --once\nquit\n" and \
-        not os.path.exists(f"{t}/mounted") and r3[0] == 2
+        not os.path.exists(f"{t}/mounted") and r3[0] == 2 and r4[0] == 1
     # stat says 7 and /sys/block has no such device here, so `which` can't say old or new: it says what it found
     ok = ok and r1[0] == 0 and r1[1].startswith("neither")
     print(("passed  " if ok else "WRONG   ") + "GRUB legacy: the helper sends the one-shot to the grub shell, mounts "
-          "nothing off the new root, and refuses an entry the stub hasn't" + ("" if ok else f"\n        {r1} {r2} {r3} {sent!r}"))
+          "nothing off the new root, refuses an entry the stub hasn't, and fails when the grub shell does" +
+          ("" if ok else f"\n        {r1} {r2} {r3} {r4} {sent!r}"))
     bad += not ok
 
 # the room a relocated root needs for the CentOS 7 route: both hops' disk and /boot room, and EL8's transit kernel

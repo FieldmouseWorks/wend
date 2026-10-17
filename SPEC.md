@@ -2126,7 +2126,9 @@ the VM tier adds it after the installer, which can't be told to leave it alone).
   `arm` (`--default=0 --once`) and `rollback_next` (`--default=1 --once`) work from either root; `commit_trial`
   (`--default=0`) and `rollback` (`--default=1`, sticky) only from the new root; `forward` (`--default=0`) only from
   the old one. From the new root, the helper mounts the old `/boot` by UUID over `/boot` for the write. Every kernel
-  on these routes mounts the old ext `/boot`, so a rollback from the last release is the same write.
+  on these routes mounts the old ext `/boot`, so a rollback from the last release is the same write, as long as that
+  release still has a grub shell. Keeping one through a route isn't built yet; the helper fails on a missing or
+  failing grub shell rather than reporting a write it didn't make.
 
 `tools/vm.py --extra-disk GB relocate el/centos5-web` runs the same stages as on CentOS 7.
 

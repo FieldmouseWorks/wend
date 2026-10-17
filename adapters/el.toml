@@ -890,6 +890,9 @@ for f in /sys/block/*/*/dev; do IFS=: read ma mi < "$f"; [ $(( (mi & 255) | (ma 
 if [ -n "$NEW_UUID" ] && [ "$U" = "$NEW_UUID" ]; then W=new; elif [ "$U" = "$OLD_UUID" ]; then W=old; else W="neither: ${U:-unknown}"; fi
 case "$1 $2 $3" in
   "which  ") echo "$W"; exit 0;;
+  set\ *) command -v grub >/dev/null || { echo "no grub shell on this root: GRUB legacy's saved default can't be written"; exit 1; };;
+esac
+case "$1 $2 $3" in
   "set 0 "|"set 1 "|"set 0 --once"|"set 1 --once") ;;
   *) echo "usage: relocate-grub which | set 0|1 [--once]"; exit 2;;
 esac
@@ -899,8 +902,9 @@ if [ "$W" = new ]; then
   mount --bind $O /boot || { umount $O; exit 1; }
   trap 'umount /boot; umount $O' EXIT
 fi
-o=$(printf 'root (hd0,%s)\nsavedefault --default=%s %s\nquit\n' $((BOOT_N - 1)) "$2" "$3" | grub --batch --device-map=/var/lib/wend/grub.map 2>&1)
+o=$(printf 'root (hd0,%s)\nsavedefault --default=%s %s\nquit\n' $((BOOT_N - 1)) "$2" "$3" | grub --batch --device-map=/var/lib/wend/grub.map 2>&1); r=$?
 echo "$o"
+[ $r = 0 ] || { echo "the grub shell failed ($r)"; exit 1; }
 ! echo "$o" | grep -qi error && sync
 EOF
 chmod 755 /var/lib/wend/relocate-grub
@@ -1002,7 +1006,8 @@ if [ ! -e /var/lib/wend/relocate-flipped ] && [ -s /var/lib/wend/relocate-stoppe
 ''']
 # Every write to the saved default goes through the helper, from either root. commit_trial and rollback (sticky) only
 # from the new root, forward only from the old; arm and rollback_next from either. Every kernel on these routes mounts
-# the old ext /boot, so a rollback from the last release is the same write as any other.
+# the old ext /boot, so a rollback from the last release is the same write as any other, as long as that release
+# still has a grub shell: keeping one through a route isn't built yet, and without it every write fails, loudly.
 booted = '''/var/lib/wend/relocate-grub which'''
 arm = '''/var/lib/wend/relocate-grub set 0 --once'''
 commit_trial = '''[ "$(/var/lib/wend/relocate-grub which)" = new ] || { echo "not booted from the relocated root"; exit 1; }; /var/lib/wend/relocate-grub set 0'''
