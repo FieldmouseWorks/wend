@@ -1134,6 +1134,17 @@ def replay(route_path, box_id, resume=None):
             rw.close()
 
 
+def kernel_is(running, newest):
+    """Whether `uname -r` (running) names the release's newest kernel (the adapter's kernel_newest): EL7 and later put
+    the arch on both, EL5's uname -r has none while the rpm query does, so a known arch suffix is dropped from both
+    sides before they are compared."""
+    def bare(k):
+        return re.sub(r"\.(x86_64|i[3-6]86|noarch|aarch64|ppc64le|s390x)$", "", k)
+    if not running or not newest:
+        return False
+    return newest in (running, running.rsplit(".", 1)[0]) or bare(newest) == bare(running)
+
+
 def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_dir, stamp, key, prev, port, hw,
             plan, drop, sheltered, rw, sh_steps, reloc=None):
     """replay's hops, once the shelters (if any) are built; with reloc (replay --relocate), on the relocated root."""
@@ -1223,7 +1234,7 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
             running, newest = (lines + [None, None])[:2]
             h["kernel_newest"] = newest
             # every VM box has a kernel: no answer from the query is a failure, never a pass
-            h["kernel_current"] = newest is not None and newest in (running, (running or "").rsplit(".", 1)[0])
+            h["kernel_current"] = kernel_is(running, newest)
             h["lost"] = lost
             h["failed_logs"] = {n: after_checks[n][1][-1500:] for n in lost}
             h["firmware"] = g.ssh(FW_NOW)[1].strip()

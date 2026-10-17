@@ -16,4 +16,4 @@ name = "el7-swap-release-package"
 author = "claude-opus-5-5 medium (dep-lab guided run A)"
 curated_by = "claude (wend port to typed ops)"
 source = "dep-lab centos/fixes-v3.json: c7-swap-release-distro-sync"
-fires_on = ["el/centos5-dns", "el/centos5-web"]
+fires_on = ["el/centos4-dns", "el/centos5-dns", "el/centos5-web"]

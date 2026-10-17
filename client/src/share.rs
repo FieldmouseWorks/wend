@@ -517,9 +517,9 @@ mod tests {
             "repo_packages": [], "mounts": []});
         let report =
             |fam: &str, rel: &str, route: Option<&str>| build(Some(&a), route, &sys(fam, rel), "k", &f, &[]).unwrap();
-        // CentOS 6: no route starts there, the CentOS 5 one passes through
+        // CentOS 6: no route starts there, the CentOS 4 and CentOS 5 ones pass through
         let (summary, _, _, names) = report("el", "centos6", None);
-        assert_eq!(names, "centos5-to-alma10");
+        assert_eq!(names, "centos4-to-alma10, centos5-to-alma10");
         assert!(
             summary.contains("joins this route at its centos6 rung, so it walks only centos7, alma9, alma10"),
             "{summary}"
@@ -545,10 +545,16 @@ mod tests {
             "AlmaLinux release 9.4 (Seafoam Ocelot)\n",
         )]));
         let (summary, _, _, names) = build(Some(&a), None, &alma9, "k", &f, &[]).unwrap();
-        assert_eq!(names, "centos5-to-alma10, centos7-to-alma10, centos8-to-alma10");
+        assert_eq!(
+            names,
+            "centos4-to-alma10, centos5-to-alma10, centos7-to-alma10, centos8-to-alma10"
+        );
         assert!(summary.contains("so it walks only alma10"), "{summary}");
         let c6 = system(&tree(&[("etc/redhat-release", "CentOS release 6.10 (Final)\n")]));
-        assert_eq!(build(Some(&a), None, &c6, "k", &f, &[]).unwrap().3, "centos5-to-alma10");
+        assert_eq!(
+            build(Some(&a), None, &c6, "k", &f, &[]).unwrap().3,
+            "centos4-to-alma10, centos5-to-alma10"
+        );
         // at the end of every route: nothing left
         let (summary, _, _, names) = report("el", "alma10", None);
         assert_eq!(names, "");

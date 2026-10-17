@@ -50,9 +50,14 @@ major = 4
 pm = "yum"
 repos = { base = "vault.centos.org/4.9/os/x86_64", updates = "vault.centos.org/4.9/updates/x86_64" }
 # tools/vm.py: as CentOS 5's, but EL4's anaconda stops to ask about dependencies unless %packages has --resolvedeps,
-# and at its language support screen unless the kickstart has langsupport (EL5 dropped the command).
+# and at its language support screen unless the kickstart has langsupport (EL5 dropped the command); a --nobase
+# install has no yum unless it is asked for (EL5's pulls it in), and no SELinux policy either: EL4's
+# /etc/selinux/config is written by selinux-policy-targeted's %post (as enforcing), and the kickstart's selinux and
+# firewall lines are then applied by lokkit (system-config-securitylevel-tui). A box with neither has no config at
+# all, and EL5's selinux-policy %post then writes SELINUX=enforcing with no targeted policy beside it, which freezes
+# EL7's first boot (wend#158). The VM tier installs every box permissive, with its policy.
 # 4.8 and later carry virtio drivers, so the VM tier's default virtio disk and NIC stand.
-install = { tree = "vault.centos.org/4.9/os/x86_64", pxeboot = "images/pxeboot", packages = ["grub"], packages_flags = ["--resolvedeps"], ks = ["langsupport --default=en_US.UTF-8 en_US.UTF-8"] }
+install = { tree = "vault.centos.org/4.9/os/x86_64", pxeboot = "images/pxeboot", packages = ["grub", "yum", "selinux-policy-targeted", "system-config-securitylevel-tui"], packages_flags = ["--resolvedeps"], ks = ["langsupport --default=en_US.UTF-8 en_US.UTF-8"] }
 
 [releases.centos5]
 major = 5
@@ -593,8 +598,9 @@ installed_list = "rpm -qa --qf '%{NAME}\\n' | sort -u"
 kernel_newest = "rpm -q --qf '%{INSTALLTIME} %{VERSION}-%{RELEASE}.%{ARCH}\\n' kernel-core kernel 2>/dev/null | grep -v 'is not installed' | sort -n | tail -n1 | cut -d' ' -f2"
 # A real machine's kernel (SPEC "Kernels and the bootloader"). A chroot box has none, and these do nothing there. The
 # old release's kernel can't stay in the rpm database: EL5's needs mkinitrd, EL6's /sbin/new-kernel-pkg, and dnf won't
-# remove the running one. So before the transaction its records go (its files stay: the running kernel and its boot
-# entry are the fallback), and the files of kernels no package owns and that aren't running or GRUB's default go too, so
+# remove the running one; and EL4's SMP, large-SMP and Xen guest kernels are packages of their own that provide kernel
+# 2.6.9, which EL5's initscripts, kudzu and hal conflict with. So before the transaction its records go (its files stay:
+# the running kernel and its boot entry are the fallback), and the files of kernels no package owns and that aren't running or GRUB's default go too, so
 # the release's kernel fits (the VM tier's CentOS 5 /boot is 200 MiB). After it the release's own kernel is installed,
 # and GRUB legacy, which can't read EL8+'s BLS entries and which GRUB2 can't replace on a sector-63 disk, gets an entry
 # for the new kernel as its default. Only vmlinuz entries are touched (memtest, Xen and chainloader entries stay). A
@@ -609,7 +615,7 @@ kernel_newest = "rpm -q --qf '%{INSTALLTIME} %{VERSION}-%{RELEASE}.%{ARCH}\\n' k
 # the release it runs, as EL does when none exists. Nothing is removed unless the machine is booted from this root: in a
 # chroot of someone's disk, uname -r is the host's kernel, not the box's.
 kernel_before = [
-  "[ / -ef /proc/1/root ] || [ \"$WEND_CHROOT_BOX\" = 1 ] || { echo \"not booted from this root: kernel records left as they are\"; exit 0; }; K=$(for p in kernel kernel-core kernel-modules kernel-modules-core kernel-modules-extra; do rpm -q $p 2>/dev/null | grep -v 'is not installed'; done); if [ -n \"$K\" ]; then mkdir -p /var/lib/wend && echo $K > /var/lib/wend/kernel-handover && rpm -e --justdb --nodeps --noscripts --notriggers $K && echo \"kernel records dropped, files kept: $K\"; fi",
+  "[ / -ef /proc/1/root ] || [ \"$WEND_CHROOT_BOX\" = 1 ] || { echo \"not booted from this root: kernel records left as they are\"; exit 0; }; K=$(for p in kernel kernel-smp kernel-largesmp kernel-xenU kernel-core kernel-modules kernel-modules-core kernel-modules-extra; do rpm -q $p 2>/dev/null | grep -v 'is not installed'; done); if [ -n \"$K\" ]; then mkdir -p /var/lib/wend && echo $K > /var/lib/wend/kernel-handover && rpm -e --justdb --nodeps --noscripts --notriggers $K && echo \"kernel records dropped, files kept: $K\"; fi",
   "[ / -ef /proc/1/root ] || { echo \"not booted from this root: the running kernel isn't its own, nothing removed\"; exit 0; }; R=$(uname -r); G=/boot/grub/grub.conf; D=\"\"; [ -f $G ] && D=$(awk -F= '/^default=/ {d = $2} /^title/ {t++} t - 1 == d && $0 ~ /vmlinuz-/ {sub(/.*vmlinuz-/, \"\"); sub(/[ \\t].*/, \"\"); print; exit}' $G); E=$(sed -n 's/^GRUB_DEFAULT=//p' /etc/default/grub 2>/dev/null | tail -n1 | tr -d \"\\\"'\\r\"); S=$(sed -n 's/^saved_entry=//p' /boot/grub2/grubenv 2>/dev/null | tail -n1); case \"$E\" in ''|saved) T=${S:-'#0'};; 0) T='#0';; *) T=$E;; esac; P=; for c in /boot/grub2/grub.cfg /boot/grub2/grubenv /boot/efi/EFI/*/grub.cfg; do [ -f \"$c\" ] && P=1; done; X=; if [ -f \"/boot/loader/entries/$T.conf\" ]; then X=$(awk '$1 == \"linux\" {print $2; exit}' \"/boot/loader/entries/$T.conf\"); else for c in /boot/grub2/grub.cfg /boot/efi/EFI/*/grub.cfg; do [ -f \"$c\" ] || continue; X=$(awk -v t=\"$T\" '/^[ \\t]*menuentry[ \\t]/ {n++; q = index($0, \"\\047\"); r = substr($0, q + 1); if (t == \"#0\") m = (n == 1); else m = (q > 0 && substr(r, 1, index(r, \"\\047\") - 1) == t); next} m && $1 ~ /^linux(16|efi)?$/ {print $2; exit}' \"$c\"); [ -n \"$X\" ] && break; done; fi; K=${X##*/vmlinuz-}; case \"$K\" in */*|0-rescue-*) K=;; esac; for f in /boot/vmlinuz-*; do [ -e \"$f\" ] || continue; v=${f#/boot/vmlinuz-}; [ -n \"$v\" ] || continue; case \"$v\" in 0-rescue-*|\"$R\"|\"$D\"|\"$K\") continue;; esac; rpm -qf \"$f\" >/dev/null 2>&1 && continue; echo \"removing an old kernel no package owns: $v\"; rm -f \"/boot/vmlinuz-$v\" \"/boot/.vmlinuz-$v.hmac\" \"/boot/System.map-$v\" \"/boot/config-$v\" \"/boot/symvers-$v.gz\" \"/boot/initrd-$v.img\" \"/boot/initramfs-$v.img\" \"/boot/initramfs-${v}kdump.img\" \"/boot/initrd-${v}kdump.img\" \"/etc/ld.so.conf.d/kernel-$v.conf\"; rm -rf \"/lib/modules/$v\"; for e in /boot/loader/entries/*.conf; do [ -f \"$e\" ] || continue; k=$(awk '$1 == \"linux\" {print $2; exit}' \"$e\"); [ \"${k##*/}\" = \"vmlinuz-$v\" ] || continue; echo \"removing its boot entry: $e\"; rm -f \"$e\"; done; done; mkdir -p /etc/dracut.conf.d && echo 'dracut_rescue_image=\"no\"' > /etc/dracut.conf.d/99-wend-no-rescue.conf || exit 1; case \"$D\" in 0-rescue-*) echo \"GRUB's default is the rescue image: left as it is\";; '') if [ -f $G ]; then echo \"GRUB's default (default=saved, or no such entry) may be the rescue image: left as it is\"; else D=none; fi;; esac; if [ -n \"$P\" ] && [ -z \"$K\" ]; then echo \"GRUB 2's default ($T) isn't the menu entry of a kernel, so it may be the rescue image: left as it is\"; D=''; fi; case \"$D\" in 0-rescue-*|'') ;; *) for f in /boot/vmlinuz-0-rescue-* /boot/.vmlinuz-0-rescue-*.hmac /boot/initramfs-0-rescue-*.img /boot/loader/entries/*-0-rescue.conf; do [ -e \"$f\" ] || continue; echo \"removing the old release's rescue image: $f\"; rm -f \"$f\"; done;; esac; df -h /boot | tail -n1",
 ]
 kernel_after = [

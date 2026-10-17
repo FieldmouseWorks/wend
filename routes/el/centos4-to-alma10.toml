@@ -1,0 +1,161 @@
+# Every fix is pinned by content id, in the order its steps run. ./wend check --repin after editing fixes.
+schema = "wend.route/0"
+family = "el"
+arch = "x86_64"
+from = "centos4"
+to = "alma10"
+hops = ["centos5", "centos6", "centos7", "alma9", "alma10"]
+finish = { prune_obsolete = false }
+
+[[fixes]]
+id = "sha256:5d981e254969f4c1cd7c8973e361d6ca8e69a603c839c5dae8a3a877e26c5967"
+name = "el5-drop-i386-multilib"
+
+[[fixes]]
+id = "sha256:321563b3b07c9abdd2444fc46c7549c93082420ae93ba3c1f9a361d0d1777513"
+name = "el6-drop-kudzu-rhpl"
+
+[[fixes]]
+id = "sha256:e0fb1a56cc91ead37da70377e4cd252fa583a5997f57b1f33304070a32060061"
+name = "el6-bootstrap-rpm-yum"
+
+[[fixes]]
+id = "sha256:ea3b6c527ca4f1d0de9f96071994cb09b9913315b40275cc918f71978b4dacec"
+name = "el6-drop-i386-multilib"
+
+[[fixes]]
+id = "sha256:c61cf3abbfe01b7f7f5590c5aa5e147d472135cac6c349920bc8d1f48ebb2882"
+name = "el6-swap-release-package"
+
+[[fixes]]
+id = "sha256:0c7ee7437e09c8f1175fd2ec9d74aa7f260575a3daf2107699e59f8e8bca1248"
+name = "httpd22-drop-missing-modules"
+
+[[fixes]]
+id = "sha256:1af03c89988a5ecfbac56d4e3da28c4da034f132a2949a0111bf2376c308f7de"
+name = "el6-mysql-upgrade-data"
+
+[[fixes]]
+id = "sha256:65fa037cf383daaea92a5df836657d378a0563702358e04fb271dc50f0b47377"
+name = "el7-drop-hal-info"
+
+[[fixes]]
+id = "sha256:397a077d5ce43514ebee2d4c21a0237c9cf4278ca621c4c7bc7bcdd05ea980a6"
+name = "el7-carry-boot-services"
+
+[[fixes]]
+id = "sha256:cfcc9948ba7c45b32e6b5deaae2d48b742000cd06db1f17a33c0f7b4f4ea3401"
+name = "el7-usrmove"
+
+[[fixes]]
+id = "sha256:628cb40ebdd9f0e5bf637aefc5537ce547e968f652eeea96428f0f728bded5d4"
+name = "el7-var-run"
+
+[[fixes]]
+id = "sha256:b56636fc8e156b0ef458eb128c435b2d70d46048869e4de4fb53fae8db29ee77"
+name = "el7-swap-release-package"
+
+[[fixes]]
+id = "sha256:85f7db6108e947a7c2e1c3fd5fa0efa62e5477a44f7ae4d6d4a76b8139a75c1a"
+name = "el7-drop-portreserve"
+
+[[fixes]]
+id = "sha256:06b4f94fd3afc25e27beee68d524af4b58b7f6a55d291f61e937ea2a31e9b0d6"
+name = "el7-drop-system-config-firewall"
+
+[[fixes]]
+id = "sha256:506d9872830c08ee699fa031fa7638dc0cc1dd00309be811af2b84b2159457b7"
+name = "el7-drop-unused-iptables-service"
+
+[[fixes]]
+id = "sha256:c5b86d0f7e45d75c73d4d0312ae2a37c62ec4010ac22db15568b55b636d2c5f9"
+name = "httpd24-config"
+
+[[fixes]]
+id = "sha256:60d1c0bac8fa3943cc9deffb6566143acc02937f3d711125221fa42755c453aa"
+name = "vsftpd3-standalone-ipv4"
+
+[[fixes]]
+id = "sha256:c960fa5a7c9754ce1cb43976d960123cabf2ffabe28126d94ad951ef45445835"
+name = "el7-mariadb-upgrade-data"
+
+[[fixes]]
+id = "sha256:279d163af02ab241345b5aa6b4678185637716b75c68394472d569ec1179f10d"
+name = "mariadb55-rehash-app-password"
+
+[[fixes]]
+id = "sha256:73acc8324fd1db83504a175c1fd293e5010f183c2c48b9200dfd7903accdbcde"
+name = "mariadb-slow-shutdown-alma9"
+
+[[fixes]]
+id = "sha256:035f0b28d9ddc9a18be4a58e77994d5f8e54079cd77528173150bfe14e29f000"
+name = "el8-transit"
+
+[[fixes]]
+id = "sha256:f8cd106d8585a364704f76301312db8bde4ebc9cc84713e2dbd3b31190b93e3c"
+name = "el9-php-fpm-stack"
+
+[[fixes]]
+id = "sha256:608d59864a7bbcc47c69815e74183389e4865933edae0fb17dcc9e3b9e6770b7"
+name = "el9-php-mysqlnd"
+
+[[fixes]]
+id = "sha256:f4341598b841b3e004c75aca526d92da77a6997f6164bc1b44423eb82f55c36a"
+name = "el9-mariadb-server"
+
+[[fixes]]
+id = "sha256:d99088da93a73b9606892e9b835938c7598c86e33c3918d7df079664690c310a"
+name = "el9-ssh-host-keys"
+
+[[fixes]]
+id = "sha256:e5628318d9da0c87e659f4d2316a01e2bb78ab5a2e4037f81e4edf2c49e1dfa5"
+name = "el9-mariadb-config"
+
+[[fixes]]
+id = "sha256:c5de001649525a86c2727b966232869401546ceb6cd0e982e39ec46ceb3fecf9"
+name = "el9-httpd-config"
+
+[[fixes]]
+id = "sha256:e8702cb424e0a946035342b9f09dd72dd3bebec98a8fe865b01818086ef02e6f"
+name = "vsftpd-drop-tcp-wrappers"
+
+[[fixes]]
+id = "sha256:7336db8eafd090f94ee758686fcf307d5aa26e454754f8213b3cf616bdac35d9"
+name = "el9-drop-orphaned-polkit"
+
+[[fixes]]
+id = "sha256:8d110d6e4770534ad468560ae02bd468542eed315f1b3a87a9e211b761ca2710"
+name = "el9-networkmanager"
+
+[[fixes]]
+id = "sha256:645af92e570ed65e10a8d48297fcc9012a6a2e7723cceb4eac2084a73a27522d"
+name = "el9-carry-boot-services"
+
+[[fixes]]
+id = "sha256:556ad7e8b1bfbbabb4c90f12396901dee97680bbb101e0854b1a31e628c1783d"
+name = "el9-enable-php-fpm"
+
+[[fixes]]
+id = "sha256:c1fb16715be095a9c4da5f4d1d32632118e80929ab1ef9d5e6bf9b1ccc85b768"
+name = "el10-network-keyfiles"
+
+[[fixes]]
+id = "sha256:78137ec7ec6f5a60306d6a0e9fc96233b3c27300458e41ff1e13ca6e00ddd207"
+name = "mariadb-slow-shutdown-alma10"
+
+[[fixes]]
+id = "sha256:9f480040978dfb8e301d1b399f32217d7ff38e0f8a2cc14c6ac08f0ea1cb613d"
+name = "el10-mariadb-upgrade"
+
+[[fixes]]
+id = "sha256:e149cac8858a9a4c42573ba0795f980b0154f1ab8587a9077a8011b0c04d5ee8"
+name = "el10-httpd-php-config"
+
+[[fixes]]
+id = "sha256:29a9351abc67c221a62927b21833dc85aaab6a5ac8b9d5ebdf52adf4248b1b62"
+name = "php81-mysqli-report-off"
+
+[meta]
+name = "centos4-to-alma10"
+summary = "CentOS 4.9 to AlmaLinux 10: one new hop onto CentOS 5, then the CentOS 5 route's fixes"
+note = "The CentOS 4 -> 5 hop is yum 2.4's upgrade (EL4 has no distro-sync), with the harness's steps for EL4 (adapters/el.toml releases.centos5.upgrade: CentOS 4's Python 2.3 builds of python-elementtree and python-sqlite, which yum won't replace with CentOS 5's) and one fix, el5-drop-i386-multilib. From CentOS 5 on, the fixes and their order are routes/el/centos5-to-alma10.toml's; see its note for what is carried and checked. Proven in chroots on el/centos4-dns."

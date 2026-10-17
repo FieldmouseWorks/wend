@@ -17,4 +17,4 @@ author = "claude-opus-5-5 medium (dep-lab guided run A)"
 curated_by = "claude (wend port to typed ops)"
 source = "dep-lab centos/fixes-v3.json: c6-drop-i386-swap-release-upgrade (second half)"
 note = "Swaps centos-release 5 for 6 so yum reads the EL6 repos."
-fires_on = ["el/centos5-dns", "el/centos5-web"]
+fires_on = ["el/centos4-dns", "el/centos5-dns", "el/centos5-web"]

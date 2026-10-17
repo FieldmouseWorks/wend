@@ -49,4 +49,4 @@ name = "el7-carry-boot-services"
 author = "claude (wend#6)"
 source = "wend#6"
 note = "EL7 replaces SysV init with systemd. The old packages remove their runlevel links and the presets leave httpd, mariadb, named and vsftpd disabled. Records what runlevel 3 started on EL6 (the box's own state), then enables each unit whose service started. Units whose service was off stay off."
-fires_on = ["el/centos5-dns", "el/centos5-web"]
+fires_on = ["el/centos4-dns", "el/centos5-dns", "el/centos5-web"]

@@ -17,4 +17,4 @@ name = "el7-drop-hal-info"
 author = "claude (wend#13, hand-written from the VM replay)"
 source = "wend#13"
 note = "EL7's systemd obsoletes hal, but EL6's hal-info requires hal and has no EL7 successor: yum's depsolve loops until it gives up. hal and hal-info require each other, so a plain remove is refused; the transaction then removes hal through the obsoletes."
-fires_on = ["el/centos5-web"]
+fires_on = ["el/centos4-dns", "el/centos5-web"]
