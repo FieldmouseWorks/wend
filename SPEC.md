@@ -2193,20 +2193,29 @@ the old kernel can still read it. Where the new `/boot` goes depends on what the
   `mkfs.ext3`: the first partition of the spare disk, or, with free extents and no spare disk, a directory
   `/boot/wend/` on the old `/boot` partition when that partition has room for the route's kernels beside the old ones
   (CentOS 5's installer makes 100 MiB, which doesn't; CentOS 6's 500 MiB does), bind-mounted at the new root's
-  `/boot`. The old `grub.conf` becomes a stub with the same two entries and the same rules as relocate's: entry 0
-  loads the new `/boot`'s `grub.conf` (`configfile`), entry 1 the old one, saved as `grub.conf.wend-old`. The one-shot
-  is GRUB legacy's documented once-only boot, not `savedefault --once`: the stub says `default saved`, entry 0 carries
-  `savedefault 1` (so once it has been taken, the saved default is the old system again, whatever happens next), and
-  arming the trial is writing 0 as the saved default in the stub's home's `/boot/grub/default`, the file
-  `grub-set-default` writes. wend writes that file itself, in `grub-set-default`'s format, so it doesn't depend on the
-  route keeping the `grub` package: `arm` from the old system, `arm_new` from the new root (mounting the stub's home
-  by `STUB_UUID`, as for GRUB 2); `rollback_next` writes 1; `commit_trial` removes entry 0's `savedefault 1` and
-  writes 0, so the new root stays the default and entry 1 stays in the menu. The copy's initramfs comes from the
-  release's own tool (CentOS 5's `mkinitrd`, CentOS 6's dracut), not host-only, so it finds the new root. This stub,
-  and the new kernels' entries landing in the new `/boot`'s config with the right paths (`hop.kernel_after` takes them
-  from the default entry; EL6's grubby from `/boot`'s mount), are the parts of this section with no proof yet, and the
-  first thing step 3 of the order of work proves. If one of them can't be made to work, that layout is refused, not
-  patched over.
+  `/boot`. The old `grub.conf` becomes a stub with the same two entries as relocate's: entry 0 loads the new `/boot`'s
+  `grub.conf` (`configfile`), entry 1 the old one, saved as `grub.conf.wend-old`. Neither entry carries `savedefault`:
+  an entry's own `savedefault` does nothing when the entry hands off with `configfile` (remi, CentOS 5). EL5's
+  grub-0.97 has no `grub-set-default` and no `/boot/grub/default`; `default saved` reads the saved entry kept in
+  `stage2`, which the grub shell's `savedefault --default=N [--once]` writes (`root (hd0,0)` first, through an
+  explicit device map). So the stub says `default saved`, the saved default stays 1 (the old system), and the trial is
+  `savedefault --default=0 --once`, grub's own one-shot: a reset, a panic or a power cut during the trial brings back
+  the old system. `arm` and `arm_new` write that, `rollback_next` writes `--default=1`, and `commit_trial` writes
+  `--default=0`. The grub shell writes the `stage2` of whatever filesystem is mounted at `/boot`, so from the new root
+  (whose `/boot` is the new one) every write mounts the stub's home by `STUB_UUID` and bind-mounts it over `/boot` for
+  the write; without that the write prints no error and changes nothing. Every new-root kernel line gets `panic=10`,
+  so a kernel or init that dies reboots by itself and the spent one-shot lands on the old system. The copy keeps its
+  SELinux labels: CentOS 5's rsync (2.6.8) has no `-X`, so the copy is `tar --selinux` on both ends (or rsync where it
+  has `-X`), and it's checked, not trusted: if the copy's `/bin/bash`, `/usr/sbin/sshd` or `/etc/shadow` is `file_t`
+  or `unlabeled_t`, `setfiles -r` labels the copy from the release's own `file_contexts`, and if they still are,
+  relocate stops before the flip (an unlabeled root boots, and on an enforcing machine nobody can log in). The checks
+  after every trial boot include the same three labels. The copy's initramfs comes from the release's own tool (CentOS
+  5's `mkinitrd`, CentOS 6's dracut), not host-only, so it finds the new root. All of this, on CentOS 5 with a spare
+  disk (a plain ext3 `/boot` and root), passed on remi: trial, reset (old), arm from the old system and from the new
+  one, commit, two boots on the new root, rollback (old), with the labels kept. Still to prove: the new kernels'
+  entries landing in the new `/boot`'s config with the right paths (`hop.kernel_after` takes them from the default
+  entry; EL6's grubby from `/boot`'s mount), CentOS 6, the `/boot/wend/` placement, and LVM roots; a layout that can't
+  be made to work is refused, not patched over.
 
 #### Other places for the undo
 
@@ -2217,12 +2226,21 @@ Weighed for owners with no free extents and no spare disk, none in the first bui
   (the old `/boot` beside it), and this time the hops walk the real root in place, as the VM tier walks it; the copy
   is the old system. No initramfs on these routes boots a root from a subdirectory (CentOS 5's `mkinitrd` can't, and
   GRUB legacy only loads the kernel), so rollback swaps instead: a GRUB entry boots the last kernel that booted green,
-  with `init=` the static wend binary, which as PID 1 renames the top-level directories of `/` and the old `/boot`'s
-  files back into place, keeping a journal so a power cut mid-swap finishes on the next boot, then reboots into the old
-  system. While an upgrade is under way that entry is the default and every boot of the new system is a one-shot, so a
-  power cut rolls back, as with relocate. Nothing about it is proven yet. Step 3 of the order of work proves it on
-  remi (a red made on purpose, the swap, the old system's checks green), or it's refused. If it works, it covers more
-  machines than any other place.
+  with `init=` a static program that, as PID 1, renames the top-level directories of `/` and the old `/boot`'s files
+  back into place, keeping a journal so a power cut mid-swap finishes on the next boot, then reboots into the old
+  system. It's offered only when every disk-backed filesystem but `/boot` is `/` itself: a separate `/var`, `/usr`,
+  `/home` or data mount is refused here as it is for relocate (the hops would change it in place and a swap couldn't
+  take it back). The copy skips the virtual mountpoints (`/proc`, `/sys`, `/dev`, `/selinux`) and `/boot`, which it
+  carries as files, and the swap skips the same list; any other top-level directory on a different device stops the
+  copy, naming it; it keeps and checks SELinux labels as relocate's does. The swap entry's kernel line has `panic=10`
+  and is only ever armed one-shot, so a swap that dies reboots by itself onto the system as it was instead of hanging.
+  While an upgrade is under way that entry is armed for every boot of the new system, so a power cut rolls back, as
+  with relocate. On remi, CentOS 5 with the swap as a busybox script (EL5's busybox 1.2.0 has no `sh` applet; the
+  shell applet is picked from busybox's own list and every applet the script uses is checked before it's armed, and
+  the script is parsed under that shell first): an init that fails on purpose panicked, rebooted by itself and came
+  back on the current system; the real swap brought back the old system with its packages, files and labels. Still to
+  prove: the swap done by the static wend binary instead of busybox, after a real hop, and the journal finishing a
+  swap cut short; or it's refused. If it works, it covers more machines than any other place.
 - **An external disk** (a USB SSD). Turned around: the old system is relocated out onto it and boots from it through
   the stub's entry 1, and the hops walk the internal disk in place, so production never runs from USB. Rollback boots
   the old system from the external disk, then copies it back. Open question 1.
