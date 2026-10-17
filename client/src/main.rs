@@ -11,6 +11,7 @@ mod fetch;
 mod hardware;
 mod hop;
 mod native;
+mod rehearse;
 mod runtime;
 mod sandbox;
 mod share;
@@ -42,6 +43,14 @@ wend: walk a proven upgrade route on a machine. No model, no network beyond your
                                     docs/archive.md; not with --offline or --no-archive), then the origin. A
                                     pinned file no source has refuses the walk before it touches anything.
                                     --live: no pins, today's mirrors, nothing verified; the run says so
+  wend rehearse ROUTE --root DIR --run RUN.json --checks FILE [--from [USER@]HOST [--ssh CMD]]
+                [--kernel VERSION] [--plan DIR] [--cache DIR] [--source URL|DIR]... [--archive URL|DIR]...
+                                    the walk `wend upgrade` will make, on a copy of the machine (root needed):
+                                    --from copies the machine's root into DIR over ssh (rsync, one filesystem
+                                    at a time; CMD defaults to ssh), else DIR is a copy made another way and
+                                    --kernel is the machine's uname -r. Walks it as walk --run does and, on a
+                                    pass, writes the plan (default wend-plan-<machine id>): plan.json with the
+                                    machine's fingerprint, the run, the checks, and every file the walk fetched
   wend facts                        what preflight reads about this machine: CPU level features, firmware, memory,
                                     free disk, PCI devices and their drivers, its own Python 2 programs (JSON)
   wend preflight ROUTE [--facts FILE] [--json]
@@ -106,6 +115,12 @@ fn main() -> ExitCode {
         offline: flag(&mut args, "--offline"),
         live: flag(&mut args, "--live"),
     };
+    let rehearse_opts = rehearse::RehearseOpts {
+        from: opt(&mut args, "--from"),
+        ssh: opt(&mut args, "--ssh").unwrap_or_else(|| "ssh".into()),
+        kernel: opt(&mut args, "--kernel"),
+        plan: opt(&mut args, "--plan"),
+    };
     let redact: Vec<String> = std::iter::from_fn(|| opt(&mut args, "--redact")).collect();
     let Some(cmd) = args.first().cloned() else {
         println!("{USAGE}");
@@ -157,7 +172,8 @@ fn main() -> ExitCode {
         ("compile", [fix]) => cmd_compile(&atlas, &root, fix),
         ("hop", [route, hop]) => cmd_hop(&atlas, route, hop, fired.as_deref()),
         ("parity", [input]) => cmd_parity(&atlas, input),
-        ("walk", [route]) => cmd_walk(&atlas, route, &walk_opts),
+        ("walk", [route]) => cmd_walk(&atlas, route, &walk_opts).map(|w| w.run["result"] == "pass"),
+        ("rehearse", [route]) => rehearse::cmd_rehearse(&atlas, route, &walk_opts, &rehearse_opts),
         ("preflight", [route]) => cmd_preflight(&atlas, route, facts.as_deref(), as_json),
         _ => Err(format!(
             "unknown command or wrong arguments: {}\n\n{USAGE}",
@@ -497,7 +513,20 @@ fn joins_at(a: &Doc, r: &Doc, release: Option<&String>) -> Result<Option<String>
     }
 }
 
-fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
+/// What a walk leaves for a rehearsal's plan (SPEC "The plan"), besides its run.
+pub struct Walked {
+    pub run: Value,
+    /// the root before the first hop: its packages with their versions, its release file, the pinned fixes that hold
+    pub installed: Vec<String>,
+    pub release: String,
+    pub holding: Vec<String>,
+    /// with --run: the proxy's cache and every "host/path" it served from it
+    pub cache: Option<PathBuf>,
+    pub served: Vec<(String, PathBuf)>,
+}
+
+/// `wend walk` (and the walk `wend rehearse` makes): its run, and what a plan needs from the walk.
+fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<Walked, String> {
     let mask = RootUmask::set();
     let (rpath, r) = atlas.route(route)?;
     let a = adapter_of(atlas, r)?;
@@ -678,7 +707,10 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
             if o.offline { ", offline" } else { "" }
         );
     }
-    let run = w.walk();
+    let start = w
+        .holding()
+        .and_then(|h| Ok((w.installed_versions()?, w.start_release().to_string(), h)));
+    let run = start.and_then(|s| w.walk().map(|r| (r, s)));
     if let Some(p) = &proxy {
         let refused = p.take_refused();
         if !refused.is_empty() {
@@ -708,7 +740,7 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
             serde_json::to_string_pretty(&Value::Array(w.steps().to_vec())).unwrap(),
         );
     }
-    let run = match run {
+    let (run, (installed, release, holding)) = match run {
         Ok(r) => r,
         // the walk stopped mid-hop: the root may be half-changed, and the snapshot is its last good state
         Err(e) if w.mid_step => {
@@ -763,7 +795,14 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<bool, String> {
             _ => String::new(),
         }
     );
-    Ok(run["result"] == "pass")
+    Ok(Walked {
+        run,
+        installed,
+        release,
+        holding,
+        cache: proxy.as_ref().map(|p| p.cache().to_path_buf()),
+        served: proxy.as_ref().map(|p| p.served()).unwrap_or_default(),
+    })
 }
 
 #[cfg(test)]

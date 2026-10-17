@@ -92,6 +92,8 @@ kernel_after = [
 ]
 obsolete = "apt-get update >/dev/null 2>&1; apt list '?obsolete' 2>/dev/null | grep / | cut -d/ -f1"
 installed_list = "dpkg-query -W -f '${Status} ${Package}\\n' | awk '$3==\"installed\"{print $4}'"
+# SPEC "The plan": a rehearsed machine's fingerprint, every package with its version and architecture
+installed_versions = "dpkg-query -W -f '${Status} ${Package}:${Architecture}=${Version}\\n' | awk '$3==\"installed\"{print $4}' | sort"
 # tools/vm.py: the newest installed kernel, as `uname -r` names it (the package name after linux-image-, compared by its
 # numbers); after every reboot it has to be the running one. Signed and unsigned builds of one kernel are the same.
 kernel_newest = "dpkg-query -W -f '${Status} ${Package}\\n' 'linux-image-[0-9]*' 2>/dev/null | awk '$3 == \"installed\" && $4 !~ /-dbg$/ {v = $4; sub(/^linux-image-/, \"\", v); sub(/-unsigned$/, \"\", v); split(v, n, /[.-]/); k = sprintf(\"%05d%05d%05d%05d\", n[1], n[2], n[3], n[4]); if (k > best) {best = k; out = v}} END {if (out != \"\") print out}'"

@@ -495,7 +495,7 @@ nginx) in other repos unless their repo says so.
   else unchecked (`gpgcheck=0` behind the shim).
 - `rpm.transit` lets the add-on vendor's packages through its refusal when the marker is installed, and then requires,
   before it changes anything, that each of them has a package of the same name in the release's repos or the
-  release's add-on repos (renames don't count). Anything without one is named and the op fails: a fix on the same hop
+  release's repos of the installed add-ons, the only ones its transaction has (renames don't count). Anything without one is named and the op fails: a fix on the same hop
   has to remove or replace it first, the same way it would for the vendor's own dropped packages. After the download
   it checks again that each of them was actually fetched.
 - The add-on repos' metadata is pinned in the hop's `sources` like the vendor's (repo ids `<release>-<name>` and, for
@@ -738,8 +738,8 @@ A fix with a non-empty `reinstall` must pass the install rule. Reference, with w
 repos kept in private `reposdir`s so `/etc/yum.repos.d` stays the harness's:
 1. Write a repo file for `transit.from`'s repos plus `transit.extra_repos` (`old`), and one for `release`'s repos
    (`new`). Installed add-ons add their repo for `release` to `new`. Before that, if any add-on vendor's package is
-   installed: read the package names in the primary metadata (gzip, xz or zstd) of `release`'s repos and its add-on repos,
-   and refuse, naming them, if any of those packages has no package of the same name there. Only the work dir has
+   installed: read the package names in the primary metadata (gzip, xz or zstd) of `release`'s repos and the installed
+   add-ons' repos for it, and refuse, naming them, if any of those packages has no package of the same name there. Only the work dir has
    changed at that point.
 2. `yum install dnf` from `old` (CentOS 7 extras ships an EL7 dnf).
 3. With that dnf and `new`: `--nogpgcheck --downloadonly` distro-sync into the work dir, `--releasever` = the release's major,
@@ -2348,8 +2348,14 @@ needed.
   way (a mounted image or snapshot). The machine keeps running and nothing on it is written.
 - **The walk** is `walk --run` on the copy, unchanged: the pinned run the route was proved by, the verifying proxy,
   the generated checks, rollback per hop. A rehearsal never takes `--live`: `upgrade` installs only bytes a passing run
-  pinned. One addition: the kernel steps act only on a machine booted from the root (`[ / -ef /proc/1/root ]`), so in
-  the copy they do nothing and fetch nothing. After each hop the rehearsal downloads, without installing, what
+  pinned. Two additions. The copy is cleaned first as a boot cleans the machine (EL's `rc.sysinit`): files under a
+  `/var/run` and `/var/lock` that are directories on disk go (a daemon's pid file there says it is running, and its
+  init script won't start it), and so does rpm's `__db.*` environment; so do the package manager's downloaded
+  packages (`/var/cache/apt/archives/*.deb`, `*.rpm` under `/var/cache/yum` and `/var/cache/dnf`), so every package
+  the walk installs comes through the proxy into the plan's cache. And the walk runs as on a CI box
+  (`WEND_CHROOT_BOX=1`, "Kernels and the bootloader"): `hop.kernel_before` drops the kernel packages' records and
+  keeps their files, as the machine's own walk will, and no kernel is installed in the copy (the steps that read the
+  running kernel or install one act only on a machine booted from the root, `[ / -ef /proc/1/root ]`). After each hop the rehearsal downloads, without installing, what
   `hop.kernel_after` would install (the release's `kernel` and what it pulls in, through the same proxy), so the
   machine's offline walk finds it in the cache. `net.ifcfg-to-keyfile` reads a profile's missing `HWADDR` from the
   running machine's `/sys/class/net`, which on the copy is the scratch host's NIC (a static profile refuses there, a
@@ -2372,14 +2378,17 @@ A directory, `wend-plan-<machine id>/`, carried to the machine (scp, or a USB st
 
 - `plan.json` (schema `wend.plan/0`): the route's content id, the run it was pinned by, the wend version, and per hop
   the fix ids that fired, the commands' seconds, and whether its kernel steps found the kernel in the cache;
-- the machine's **fingerprint** at the moment of the copy: the adapter's `installed_list` (names, versions and
-  architectures, and their sha256), the running kernel, the release file, and which pinned fixes' preconditions hold.
+- the machine's **fingerprint** at the moment of the copy: the adapter's `installed_versions` (every package's name,
+  version and architecture, and their sha256), the running kernel, the release file, and which pinned fixes' preconditions hold.
   It holds nothing particular to one machine (addresses, disks, hostnames), so another machine can match it ("Fleets");
 - the facts preflight read on the rehearsed machine, kept for the report only: every machine is judged on its own
   facts, read when `upgrade` starts, never on these;
 - `checks.toml`, the checks, in the format a box's `[roles]` and `[vm].live` use, so `walk` and the VM tier read it
   as they read a box;
-- `cache/`, files named by their sha256, with a list of every file the walk and the kernel downloads fetched.
+- `cache/`, every file the walk and the kernel downloads fetched, laid out as the verifying proxy's cache (`sha256/`
+  by digest, `sha1/` for EL5's SHA-1 indexes, `named/` for the metadata it serves unverified), so `upgrade` serves
+  from it with the proxy offline as `walk --offline` does; `cache/files.txt` lists each file's sha256, its path there
+  and the host/path it was served as.
 
 The fingerprint is checked once, when `upgrade` starts with no state file: a plan whose fingerprint isn't the
 machine's as it is then (a package installed since, a kernel update, a reboot onto another kernel) is refused, since
@@ -2609,7 +2618,8 @@ downloads. Nothing else.
    its trial, reset, commit and rollback, and a route walked on the copy and rolled back after a red made on purpose.
    Alongside it, the same-filesystem copy and its swap at boot ("Other places for the undo"), proved or refused.
 4. `wend rehearse`, the plan and the generated checks, proved by rehearsing VM guests from remi's host and comparing
-   the walk with CI's run of the same route.
+   the walk with CI's run of the same route (`vm.py rehearse`). In three parts: the copy, the walk and the plan
+   first; then the generated checks; then the kernel downloads, the facts and the failed rehearsal's report.
 5. `wend upgrade`, `wend rollback`, `wend commit` and `vm.py upgrade`, on `el/centos7-lamp`, then `el/centos5-web`,
    with the proof above.
 6. Fleets: plan reuse, the exit codes and the loop in `docs/`, with the proof in "Fleets".

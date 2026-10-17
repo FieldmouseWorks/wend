@@ -143,6 +143,8 @@ autoremove = "apt-get autoremove --purge"
 after = ["apt-get clean"]
 obsolete = "apt-get update >/dev/null 2>&1; apt list '?obsolete' 2>/dev/null | grep / | cut -d/ -f1"
 installed_list = "dpkg-query -W -f '${Status} ${Package}\\n' | awk '$3==\"installed\"{print $4}'"
+# SPEC "The plan": a rehearsed machine's fingerprint, every package with its version and architecture
+installed_versions = "dpkg-query -W -f '${Status} ${Package}:${Architecture}=${Version}\\n' | awk '$3==\"installed\"{print $4}' | sort"
 # tools/vm.py: the newest installed kernel, as `uname -r` names it (the package name after linux-image-, compared by its
 # numbers); after every reboot it has to be the running one. The signed image is linux-image-*, the unsigned one
 # linux-image-unsigned-*, which the pattern leaves out.
