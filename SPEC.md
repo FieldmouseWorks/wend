@@ -2228,17 +2228,19 @@ Weighed for owners with no free extents and no spare disk, none in the first bui
   GRUB legacy only loads the kernel), so rollback swaps instead: a GRUB entry boots the last kernel that booted green,
   with `init=` a static program that, as PID 1, renames the top-level directories of `/` and the old `/boot`'s files
   back into place, keeping a journal so a power cut mid-swap finishes on the next boot, then reboots into the old
-  system. The copy skips every top-level mountpoint (`/proc`, `/sys`, `/dev`, `/boot`, `/selinux` and any other
-  directory on a different device), and the swap skips the same list; it keeps and checks SELinux labels as relocate's
-  does. The swap entry's kernel line has `panic=10` and is only ever armed one-shot, so a swap that dies reboots by
-  itself onto the system as it was instead of hanging. While an upgrade is under way that entry is armed for every
-  boot of the new system, so a power cut rolls back, as with relocate. On remi, CentOS 5 with the swap as a busybox
-  script (EL5's busybox 1.2.0 has no `sh` applet; the shell applet is picked from busybox's own list and every applet
-  the script uses is checked before it's armed, and the script is parsed under that shell first): an init that fails
-  on purpose panicked, rebooted by itself and came back on the current system; the real swap brought back the old
-  system with its packages, files and labels. Still to prove: the swap done by the static wend binary instead of
-  busybox, after a real hop, and the journal finishing a swap cut short; or it's refused. If it works, it covers more
-  machines than any other place.
+  system. It's offered only when every disk-backed filesystem but `/boot` is `/` itself: a separate `/var`, `/usr`,
+  `/home` or data mount is refused here as it is for relocate (the hops would change it in place and a swap couldn't
+  take it back). The copy skips the virtual mountpoints (`/proc`, `/sys`, `/dev`, `/selinux`) and `/boot`, which it
+  carries as files, and the swap skips the same list; any other top-level directory on a different device stops the
+  copy, naming it; it keeps and checks SELinux labels as relocate's does. The swap entry's kernel line has `panic=10`
+  and is only ever armed one-shot, so a swap that dies reboots by itself onto the system as it was instead of hanging.
+  While an upgrade is under way that entry is armed for every boot of the new system, so a power cut rolls back, as
+  with relocate. On remi, CentOS 5 with the swap as a busybox script (EL5's busybox 1.2.0 has no `sh` applet; the
+  shell applet is picked from busybox's own list and every applet the script uses is checked before it's armed, and
+  the script is parsed under that shell first): an init that fails on purpose panicked, rebooted by itself and came
+  back on the current system; the real swap brought back the old system with its packages, files and labels. Still to
+  prove: the swap done by the static wend binary instead of busybox, after a real hop, and the journal finishing a
+  swap cut short; or it's refused. If it works, it covers more machines than any other place.
 - **An external disk** (a USB SSD). Turned around: the old system is relocated out onto it and boots from it through
   the stub's entry 1, and the hops walk the internal disk in place, so production never runs from USB. Rollback boots
   the old system from the external disk, then copies it back. Open question 1.
