@@ -226,6 +226,10 @@ services = "for p in $(ls /etc/rc.d/init.d/* /usr/lib/systemd/system/*.service 2
 ssh_port = 2222
 root_fs = "xfs"  # the shelter's mounts are idmapped, which the ext3 the VM tier installs by default can't be
 skip = ["nginx", "redis", "tomcat", "app"]
+# nginx serves /srv/www (default_t, no httpd label) and proxies to 8080 and 8081 without httpd_can_network_connect: the
+# owner followed nginx.org's instructions on a permissive box, so under enforcing nginx answers 403 and everything
+# behind it is unreachable. The shelter's enforcing window judges the shelter, not that.
+permissive_only = ["nginx", "tomcat", "app"]
 
 [vm.live]
 daemons = '''for i in $(seq 1 60); do ok=1; for p in master crond sshd nginx redis-server; do pgrep -x $p >/dev/null || ok=0; done; pgrep -u tomcat -x java >/dev/null || ok=0; [ $ok = 1 ] && exit 0; sleep 2; done; for p in master crond sshd nginx redis-server; do pgrep -x $p >/dev/null || echo "$p is not running"; done; pgrep -u tomcat -x java >/dev/null || echo 'Tomcat is not running'; exit 1'''
