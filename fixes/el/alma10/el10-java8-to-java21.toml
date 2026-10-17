@@ -1,0 +1,22 @@
+# Hand-written from the replay on el/centos7-junk: EL10 ships no Java 8, and its Tomcat runs on what /usr/lib/jvm/jre is.
+schema = "wend.fix/0"
+family = "el"
+hop = "alma10"
+when = { installed = "java-1.8.0-openjdk-headless" }
+restores = ["box:tomcat", "box:current"]
+adds = []
+
+[[pre]]
+op = "remove"
+packages = ["java-1.8.0-openjdk-headless"]
+purge = false
+
+[[post]]
+op = "install"
+packages = ["java-21-openjdk-headless"]
+
+[meta]
+name = "el10-java8-to-java21"
+author = "claude-code / opus 5.5 (agent, hand-written)"
+note = "EL10 ships Java 21 and 25, not 8, so EL9's Java 8 would stay behind on EL10 as a release-9 package. It leaves before the transaction, while EL9's own scriptlets can still take its alternatives with it, and Java 21 (the oldest LTS EL10 has) takes java and /usr/lib/jvm/jre. Code built for Java 8 runs on 21 unless it uses what 9 to 21 removed (the Java EE and CORBA modules, Nashorn, sun.misc internals the module system closes off): Tomcat 8.5 serving a JSP does."
+fires_on = ["el/centos7-junk"]
