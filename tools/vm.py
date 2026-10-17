@@ -980,9 +980,26 @@ def shelter_build(box_id, route, drop):
     return rw, (pre, post)
 
 
+def pyc_body(path, sha):
+    """(header length, magic as hex, sha256 of the bytes after the header) of a compiled Python file the shelter's lock
+    holds (sha256:<hex> of the chroot copy's bytes). The header is 8 bytes for Python 2 and 3.0-3.2, 12 for 3.3-3.6,
+    16 from 3.7, told apart by the magic. None when the file isn't the one the lock names, or isn't compiled Python, so
+    the caller compares it whole."""
+    try:
+        b = open(path, "rb").read()
+    except OSError:
+        return None
+    if f"sha256:{hashlib.sha256(b).hexdigest()}" != sha or len(b) < 16 or b[2:4] != b"\r\n":
+        return None
+    m = int.from_bytes(b[:2], "little")
+    n = 8 if m >= 20000 or m < 3230 else 12 if m < 3390 else 16
+    return n, b[:4].hex(), hashlib.sha256(b[n:]).hexdigest()
+
+
 def shelter_copy_check(rw, app, plan):
     """Shell for the guest: its own passwd and group lines for the app's user, and each carried file, are the ones the
-    shelter's lock was built from (the chroot copy), by sha256."""
+    shelter's lock was built from (the chroot copy), by sha256; compiled Python by its magic and code, not its header's
+    source timestamp."""
     lock = tomllib.load(open(f"{os.path.realpath(rw.box.root)}{shelter.SHELTER}/{app}/shelter.lock", "rb"))
     sha = lambda t: hashlib.sha256((t + "\n").encode()).hexdigest()  # noqa: E731
     gname = lock["group"].split(":", 1)[0]
@@ -995,8 +1012,18 @@ def shelter_copy_check(rw, app, plan):
            f"{{ echo 'the guest has another passwd line for {plan['user']} than the shelter was built with'; exit 1; }}",
            f"[ \"$(grep \"^$(id -gn {plan['user']}):\" /etc/group | sha256sum | cut -d' ' -f1)\" = {sha(lock['group'])} ] || "
            f"{{ echo 'the guest has another group line than the shelter was built with ({gname})'; exit 1; }}"]
+    root = os.path.realpath(rw.box.root)
     for c in lock.get("carried", []):
         q = shlex.quote(c["path"])
+        pyc = pyc_body(f"{root}{c['path']}", c["sha256"]) if c["path"].endswith((".pyc", ".pyo")) else None
+        if pyc:
+            # compiled Python embeds its source's mtime, which two installs of the same module (pip extracting a
+            # wheel) don't share: the magic and the code after the header must match, the timestamp may differ
+            n, magic, body = pyc
+            out.append(f"[ \"$(head -c 4 {q} | od -An -tx1 | tr -d ' \\n') $(tail -c +{n + 1} {q} | sha256sum | "
+                       f"cut -d' ' -f1)\" = '{magic} {body}' ] || "
+                       f"{{ echo carried file {q} differs in the guest beyond its compile timestamp; exit 1; }}")
+            continue
         out.append(f"[ \"sha256:$(sha256sum {q} | cut -d' ' -f1)\" = {c['sha256']} ] || "
                    f"{{ echo carried file {q} differs in the guest; exit 1; }}")
     return "\n".join(out) + "\necho the copy matches the guest\n"

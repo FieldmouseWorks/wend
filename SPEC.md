@@ -1623,7 +1623,8 @@ route itself causes.
   shelters only from the start release so far), and copies the built shelter into the guest before the drop hop.
   Then it checks that the code and data directories are on a filesystem that can be idmapped (ext4, XFS, btrfs; so
   the box's `[vm].root_fs` is `xfs`), and that the guest's passwd and group lines for the app's user and every carried
-  file are the ones the lock was built from. The drop hop then runs `stop-native` and `start` in the guest like any other step, and after
+  file are the ones the lock was built from (compiled Python by its magic and code: its header holds the source's
+mtime, which two installs of the same wheel don't share). The drop hop then runs `stop-native` and `start` in the guest like any other step, and after
   that hop's reboot and every later one, besides the box's checks, the guest has to pass the confinement probe
   (`shelter.vm_probe`): the table unit, the shelter and its timers enabled and active and the native unit and cron
   line off; one `wend-<app>` range in `/etc/subuid` and `/etc/subgid`; the container running the image tagged with the
