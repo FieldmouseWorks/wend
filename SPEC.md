@@ -481,6 +481,11 @@ stuck EL7 fleet is counted). The adapter's `[addons.<name>]` tables name the one
 `marker` (the package whose presence means the box uses it, EPEL: `epel-release`), `vendor` (the rpm `VENDOR` of its
 packages, EPEL: `Fedora Project`), `repos` (release id = host/path, through the shim, like `releases.*.repos`) and,
 optionally, `libs` (release id = the sha256 of the add-on's library table for that release, "Runtime preflight").
+An add-on with no release package to mark it (nginx.org's, which owners set up with a hand-written repo file) leaves
+`marker` out: it is installed when any installed package's `VENDOR` is exactly `vendor`. Below, "its marker is
+installed" means that test for such an add-on. `module_hotfixes = true` adds `module_hotfixes=true` to each of the
+add-on's repo sections: on EL8, dnf hides every package that shares a name with a default module stream's (AppStream's
+nginx) in other repos unless their repo says so.
 
 - Every hop's `set_release` appends `{addons}`: for each add-on with a repo for the release being entered, the add-on's
   repo goes into the harness's repo file as `[<release>-<name>]` if its marker is installed at that moment. A box
@@ -760,7 +765,9 @@ repos kept in private `reposdir`s so `/etc/yum.repos.d` stays the harness's:
 10. `rpm -e --nodeps --noscripts --justdb` every package (but `gpg-pubkey`) without the `el{major}` tag, listing them
     in the output; delete the work dir; `CLEAN_REPOS`. That drops the old release's leftovers from the database and
     keeps their files. It would also drop a third-party package the owner installed, which is why the list is printed
-    (and recorded in the run's step output): a client must show it to the owner.
+    (and recorded in the run's step output): a client must show it to the owner. Since their `%postun` never runs, first remove (`alternatives
+    --remove`) every alternative whose path one of them owns: it would otherwise outrank the release's own at its old
+    priority (EL7's Java 8 outranks EL9's, priority 1) and keep the link on their unowned files.
 
 **`rpm.adopt-rpmnew`** `paths` (on the adapter's `managed` list; globs allowed). For each file that has a
 `FILE.rpmnew` next to it, keep the old file under `SAVED` and put the `.rpmnew` in its place. Files without one are
