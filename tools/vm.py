@@ -26,7 +26,7 @@ not runs/ (runs/ holds what CI proved).
                                            `wend rehearse` (the client binary WEND, run as root on this host) from a
                                            fresh copy of BOX, running: copies its root over ssh, walks ROUTE on the
                                            copy pinned by CI's newest passing run in runs/, writes the plan, and
-                                           compares each hop's fired fixes with that run's; the guest is only read
+                                           passes only if each hop fired that run's fixes and the guest was only read
   python3 tools/vm.py --extra-disk GB --relocate replay ROUTE BOX
                                            the same relocate (trial, commit) before ROUTE's first hop, every hop on the
                                            new root, then a rollback to the old root and forward again after the last
@@ -1622,7 +1622,7 @@ def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net, plan):
 def rehearse(route_path, box_id, client):
     """SPEC "Order of work" 4: `wend rehearse` from this host on a fresh copy of BOX, running. The client copies the
     guest's root over ssh, walks ROUTE on the copy, verified against CI's newest passing run of ROUTE on BOX
-    (runs/), and writes a plan; this compares the fixes each hop fired with that run's. The guest is only read."""
+    (runs/), and writes a plan; it passes only if each hop fired the fixes that run did and the guest was only read."""
     if os.geteuid() != 0:
         raise SystemExit("rehearse runs the client's walk, which needs root (sudo -E)")
     d, box_doc = build(box_id)
@@ -1683,7 +1683,8 @@ def rehearse(route_path, box_id, client):
     run["plan"]["kernel"] = plan["fingerprint"]["kernel"]
     log(f"fired {'the same fixes as' if want == got else 'other fixes than'} {os.path.relpath(ci_path, ROOT)}; "
         f"{plan['cache_files']} files cached; machine untouched: {run['machine_untouched']}")
-    return finish("pass" if run["machine_untouched"] else "fail")
+    # the rehearsal reproduces CI's walk only if every hop fired the fixes CI proved on this box
+    return finish("pass" if run["machine_untouched"] and run["fired_match"] else "fail")
 
 
 def main(args):
