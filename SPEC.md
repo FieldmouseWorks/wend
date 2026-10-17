@@ -1401,7 +1401,9 @@ was meant to run on. The plan says when that's newer than what the box runs now.
    python2.7`, a vendored module tree), and packaged files the box has changed (what `rpm -V` or dpkg's md5sums
    flag: a file pip overwrote), are copied in as a separate layer, plus the app's user and group lines for
    `/etc/passwd` and `/etc/group`. Each is listed with its sha256, so the owner sees exactly what came from
-   outside the vendor's archive.
+   outside the vendor's archive. A module Python loaded from its bytecode goes in as its `.py` when the box has it:
+   bytecode is a cache the interpreter rebuilds, and two compiles of one source (two installs of the same wheel)
+   needn't match byte for byte. Bytecode with no source goes in as it is.
 5. **Lock.** `/var/lib/wend/shelter/<app>/shelter.lock` records the release, the index digests and signing keys,
    every package with its version and sha256, every carried file with its sha256, and the built image's ID. The run
    records the lock too.
@@ -1633,8 +1635,9 @@ route itself causes.
   loopback one, not on the guest's own; a TCP listener the guest reaches (the mirror shim) refused from inside; and the
   table and the published ports back after `systemctl reload nftables` and after a restart. The VM boxes install with
   SELinux permissive, so then comes an enforcing window: `setenforce 1` (a guard sets permissive again after 15
-  minutes whatever happens), the shelter restarted, the box's checks again (none that passed may fail), the probe
-  again (which has to see enforcing, so it didn't outlast the guard), then permissive, and no AVC denial in the window may touch the shelter (its domain, its files, its units).
+  minutes whatever happens), the shelter restarted, the box's checks again (none that passed may fail, except those the box's
+  `[vm].permissive_only` names: its own stack as the owner left it on a permissive box, which the window doesn't judge),
+  the probe again (which has to see enforcing, so it didn't outlast the guard), then permissive, and no AVC denial in the window may touch the shelter (its domain, its files, its units).
   The run's `shelters` say `tier = "vm"` and `confinement_proved` only when every hop from the drop hop on passed all
   of that.
 
@@ -1946,7 +1949,9 @@ The rules:
   its start release's installer offers (`releases.<id>.install.root_fs`; CentOS 7: `ext3`, `xfs`, v5 and EL 7.3's
   default, or `xfs-v4`, `-m crc=0 -n ftype=0`, EL 7.0 to 7.2's on-disk format made by 7.9's installer). Without it the
   kickstart makes ext3. The checker holds it to all that, and the build checks the installed box has its `root_fs`
-  (`xfs_info`'s `crc` and `ftype`).
+  (`xfs_info`'s `crc` and `ftype`). `permissive_only` names roles or live checks the box's own stack passes only with
+  SELinux permissive, as its owner ran it; the shelter's enforcing window doesn't count them (the run lists them as
+  `enforcing_excused`).
 - A route that ends with `prune_obsolete` gets the chroot walk's prune after its last hop: the packages the target
   no longer ships are purged and autoremoved, the set split in halves whenever a step fails or a check is lost, and
   each attempt first drops what an earlier autoremove already took. Each attempt runs on its own overlay of the last

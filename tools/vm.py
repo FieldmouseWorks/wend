@@ -1027,7 +1027,11 @@ def shelter_confine(g, box_doc, a, plan, passing):
         lost = []
         if rc == 0:
             ch = checks(g, box_doc, a)
-            lost = sorted(n for n in passing if not ch.get(n, (False,))[0])
+            # [vm].permissive_only: the box's own stack as its owner set it up on a permissive box (content with no
+            # httpd label, a proxy to a port httpd_t may not reach); the window judges the shelter, not those
+            po = set(box_doc.get("vm", {}).get("permissive_only", []))
+            r["enforcing_excused"] = sorted(n for n in passing if n in po or n.removeprefix("live:") in po)
+            lost = sorted(n for n in passing if not ch.get(n, (False,))[0] and n not in r["enforcing_excused"])
             r["enforcing_lost"], r["enforcing_failed_logs"] = lost, {n: ch.get(n, (False, ""))[1][-1500:] for n in lost}
             rc, o = g.ssh(shelter.vm_probe(app, p, outside), timeout=1200)
             # the guard sets permissive after 15 minutes: a probe that ran after it proves nothing about enforcing

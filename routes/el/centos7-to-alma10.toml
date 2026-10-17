@@ -24,6 +24,10 @@ id = "sha256:dc8ab830df9ba3d27b0b18113e5769c26c323621769c4422b81fdf160c8ac3c2"
 name = "el9-fail2ban-through-el8"
 
 [[fixes]]
+id = "sha256:e497e6a17743cc6936308c29d5d2bf3d290743c7411c92faade8bc76932af75c"
+name = "el9-drop-python2-pip"
+
+[[fixes]]
 id = "sha256:6649eef1d09962533b758d4bed8517c06be571a0223f016edd9f412b5253c76d"
 name = "el8-transit-epel"
 
@@ -84,6 +88,10 @@ id = "sha256:645af92e570ed65e10a8d48297fcc9012a6a2e7723cceb4eac2084a73a27522d"
 name = "el9-carry-boot-services"
 
 [[fixes]]
+id = "sha256:b8bf94276d1d17fcccff0d0b895276420f2befab02f93d7c8b296fffeee193cb"
+name = "el9-java8-again"
+
+[[fixes]]
 id = "sha256:556ad7e8b1bfbbabb4c90f12396901dee97680bbb101e0854b1a31e628c1783d"
 name = "el9-enable-php-fpm"
 
@@ -110,6 +118,10 @@ name = "php81-mysqli-report-off"
 [[fixes]]
 id = "sha256:748edb35d2c7568583fec3585e3b0526eac7e9a8921924976f63829b297496c1"
 name = "el10-drop-el8-iptables-ebtables"
+
+[[fixes]]
+id = "sha256:1879314ef3fcd5f1010fb2cf5da1a00c4d0f7effd76020e61d3bf750b22b179f"
+name = "el10-java8-to-java21"
 
 [meta]
 name = "centos7-to-alma10"

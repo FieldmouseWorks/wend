@@ -52,7 +52,11 @@ def dump():
     for m in list(sys.modules.values()):
         f = getattr(m, "__file__", None)
         if f:
-            files.add(os.path.abspath(f))
+            # bytecode is a cache of its source (two compiles of one .py needn't match byte for byte): carry the .py
+            f = os.path.abspath(f)
+            if f.endswith((".pyc", ".pyo")) and os.path.isfile(f[:-1]):
+                f = f[:-1]
+            files.add(f)
     try:
         for line in open("/proc/self/maps"):
             p = line.split(None, 5)
