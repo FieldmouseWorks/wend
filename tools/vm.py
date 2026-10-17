@@ -19,7 +19,8 @@ not runs/ (runs/ holds what CI proved).
   python3 tools/vm.py --extra-disk GB relocate BOX
                                            relocate a fresh copy of BOX onto the first extra disk and prove the trial
                                            boot, a reset back to the old root, commit and a rollback boot (SPEC
-                                           "Relocate"; with --root-fs xfs-v4 --lvm, an EL 7.0-7.2 install)
+                                           "Relocate"; with --root-fs xfs-v4 --lvm, an EL 7.0-7.2 install; on a
+                                           CentOS 5 box, the adapter's [relocate_grub_legacy])
   python3 tools/vm.py --extra-disk GB --relocate replay ROUTE BOX
                                            the same relocate (trial, commit) before ROUTE's first hop, every hop on the
                                            new root, then a rollback to the old root and forward again after the last
@@ -30,7 +31,8 @@ not runs/ (runs/ holds what CI proved).
   --root-fs FS, --lvm, --extra-disk GB     (before the command, EL7 kickstart on) the box installed another way:
                                            FS overrides [vm].root_fs; --lvm puts / and swap on LVM in a VG `centos`
                                            filling the disk, beside /boot, as a default EL7 install does;
-                                           --extra-disk adds an empty disk of GB (repeatable). Its own box and runs
+                                           --extra-disk adds an empty disk of GB (repeatable; on CentOS 5, added
+                                           after its installer, which can't be told to skip it). Its own box and runs
 
 A box with a [shelter] plan (SPEC "Sheltering an app", Proof) needs root: its shelter is built and proved in a chroot copy
 of the box first, copied into the guest before the hop that drops Python 2, and probed for confinement after every
@@ -398,6 +400,7 @@ class Guest:
         base = disk[:-len(".qcow2")]
         self.console, self.monitor_path, self.proc = base + ".console.log", None, None
         self.reboot_notes = []  # what went wrong reading boots in the last reboot(), for the run record
+        self.attach_extras = True  # LAYOUT's extra disks (install() leaves them off for an installer that can't skip them)
 
     def argv(self, extra=()):
         fw = [] if FIRMWARE == "bios" else [
@@ -405,7 +408,8 @@ class Guest:
             "-drive", f"if=pflash,format=raw,file={nvram(self.disk)}"]
         argv = ["qemu-system-x86_64", "-machine", "pc,accel=kvm", "-cpu", "host", "-smp", "2", "-m", "3072", *fw,
                 *[x.format(disk=self.disk) for x in DISKS[self.hw[0]]],
-                *[x.format(disk=e, i=i) for i, e in enumerate(extras(self.disk), 1) for x in DISKS_EXTRA[self.hw[0]]],
+                *[x.format(disk=e, i=i) for i, e in enumerate(extras(self.disk) if self.attach_extras else [], 1)
+                  for x in DISKS_EXTRA[self.hw[0]]],
                 "-netdev",
                 f"user,id=n0,hostfwd=tcp:127.0.0.1:{self.fwd}-{ADDR}:{self.ssh_port}",
                 "-device", f"{NICS[self.hw[1]]},netdev=n0,mac={MAC}", "-display", "none",
@@ -593,10 +597,11 @@ def kickstart(box_doc, adapter, key_pub):
                  f"logvol / {fs} --vgname=centos --name=root --size=1 --grow"]
     else:
         parts = [boot, *efi, "part swap --size=1024", f"part / {fs} --size=1 --grow"]
-    # with extra disks, anaconda touches only the first; the others stay empty (no label, no signature)
+    # with extra disks, anaconda touches only the first; the others stay empty (no label, no signature). An installer
+    # that can't be told so (before EL7's) never sees them: install() adds them after it.
     only = FIRST_DISK[hardware(adapter, box_doc["release"])[0]]
     disks = ([f"ignoredisk --only-use={only}"], f" --drives={only}", f" --boot-drive={only}") \
-        if LAYOUT["extra_disks"] else ([], "", "")
+        if LAYOUT["extra_disks"] and inst.get("ks_end") else ([], "", "")
     v = backends.of(adapter).hop_vars(adapter, box_doc["release"])
     shim = f"http://{GUEST_HOST}:{adapter['mirror']['shim'].rsplit(':', 1)[1]}"
     return "\n".join([
@@ -772,9 +777,12 @@ def install(box_id, box_doc, d):
     root_fs = LAYOUT["root_fs"] or box_doc.get("vm", {}).get("root_fs")
     if root_fs and root_fs not in inst.get("root_fs", []):
         raise SystemExit(f"{box_doc['release']}'s installer doesn't make {root_fs} (releases.<release>.install.root_fs)")
-    if (LAYOUT["lvm"] or LAYOUT["extra_disks"]) and not (load(f"adapters/{fam}.toml")["backend"] == "rpm" and
-                                                          inst.get("ks_end")):
-        raise SystemExit("--lvm and --extra-disk are EL7-and-later kickstart choices (logvol, ignoredisk --only-use)")
+    if LAYOUT["lvm"] and not (load(f"adapters/{fam}.toml")["backend"] == "rpm" and inst.get("ks_end")):
+        raise SystemExit("--lvm is an EL7-and-later kickstart choice (logvol)")
+    if LAYOUT["extra_disks"] and load(f"adapters/{fam}.toml")["backend"] != "rpm":
+        raise SystemExit("--extra-disk is a kickstart choice (EL)")
+    # EL7's installer is told to leave the extra disks alone (ignoredisk --only-use); an older one doesn't see them
+    later = LAYOUT["extra_disks"] and not inst.get("ks_end")
     if LAYOUT["no_hwaddr"] and not inst.get("ifname"):
         raise SystemExit(f"--no-hwaddr is for a release whose installer is told the NIC by MAC (releases."
                          f"{box_doc['release']}.install.ifname)")
@@ -790,12 +798,13 @@ def install(box_id, box_doc, d):
     inst = a["releases"][box_doc["release"]]["install"]
     disk = os.path.join(d, "install.qcow2")
     sandbox.host(f"qemu-img create -q -f qcow2 {disk} 30G")
-    for x, gb in zip(extras(disk), LAYOUT["extra_disks"]):
+    for x, gb in zip(extras(disk), [] if later else LAYOUT["extra_disks"]):
         sandbox.host(f"qemu-img create -q -f qcow2 {x} {gb}G")
     if FIRMWARE == "uefi":
         shutil.copyfile(OVMF_VARS, nvram(disk))
     hw = hardware(a, box_doc["release"])
     g = Guest(disk, key, box_doc.get("vm", {}).get("ssh_port", 22), hw)
+    g.attach_extras = not later
     log(f"installing {box_id} ({box_doc['release']}) in a VM; this takes 10 to 20 minutes")
     key_pub = open(key + ".pub").read().strip()
     if isinstance(backends.of(a), backends.Rpm):  # anaconda: the kickstart over http from the host, the tree via the shim
@@ -833,6 +842,8 @@ def install(box_id, box_doc, d):
             if proxy:
                 proxy.httpd.shutdown()
                 proxy.httpd.server_close()
+    for x, gb in zip(extras(disk), LAYOUT["extra_disks"] if later else []):  # empty, as the installer would have left them
+        sandbox.host(f"qemu-img create -q -f qcow2 {x} {gb}G")
     g = Guest(disk, key, g.ssh_port, hw)
     g.start()
     if not g.wait_ssh():
@@ -1070,7 +1081,8 @@ def replay(route_path, box_id, resume=None):
     if RELOCATE:
         relocate_ready(a)
         reloc = Relocation(a, box_doc, box_doc.get("shelter", {}))
-        reloc.fills = {"new_disk": new_disk(hardware(a, route["from"])), "route_mib": route_mib(a, route, pinned)}
+        reloc.fills = {"new_disk": new_disk(hardware(a, route["from"])), "route_mib": route_mib(a, route, pinned),
+                       "boot_mib": route_boot_mib(a, route, pinned)}
         if resume and not all(x["ok"] for x in src.get("relocate", {}).get("stages", [{"ok": False}])):
             raise SystemExit(f"{resume[0]} didn't relocate the box: resume a --relocate run from one that did")
     elif resume and "relocate" in src:
@@ -1235,7 +1247,7 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
            "to": route["to"], "started": stamp, "head": w.head, "firmware": FIRMWARE,
            **({"efi_start": efi_start} if FIRMWARE == "uefi" else {}),
            "layout": {k: v for k, v in LAYOUT.items() if v},
-           **({"relocate": {**reloc.fills, "stages": reloc.stages}} if reloc else {}), "hops": hops,
+           **({"relocate": {**reloc.fills, "table": reloc.table, "stages": reloc.stages}} if reloc else {}), "hops": hops,
            "result": "pass" if complete and all(h["ok"] for h in hops) and not resume else
            "partial-pass" if complete and all(h["ok"] for h in hops) else "fail",
            "runner": {"kind": "vm", "host": os.uname().nodename, "kernel": os.uname().release}}
@@ -1265,11 +1277,15 @@ class Relocation:
 
     def __init__(self, a, box_doc, plan=None):
         self.r, self.a, self.box_doc, self.plan = a["relocate"], a, box_doc, plan or {}
+        self.table = "relocate"
         self.stages, self.g, self.before, self.start_net = [], None, None, None
 
     def start(self, g):
-        """The box as it is before anything moves: what every later boot is held to."""
+        """The box as it is before anything moves: what every later boot is held to. The table is the adapter's
+        [relocate], or [relocate_grub_legacy] on a machine that boots from /boot/grub/grub.conf with no /boot/grub2."""
         self.g = g
+        if "relocate_grub_legacy" in self.a and g.ssh("[ -f /boot/grub/grub.conf ] && [ ! -e /boot/grub2 ]")[0] == 0:
+            self.table, self.r = "relocate_grub_legacy", self.a["relocate_grub_legacy"]
         self.start_net = net_read(g, self.plan)
         if f"default via {GUEST_HOST}" not in self.start_net or ADDR not in self.start_net:  # never compare two empties
             raise RuntimeError(f"the box's network can't be read at the start (no `ip`?): {self.start_net!r}")
@@ -1280,8 +1296,8 @@ class Relocation:
         ok, steps = run_hop(self.g, [backends.fill(c, fills) for k in check.RELOCATE_STEPS if k != "cleanup"
                                      for c in self.r[k]], [backends.fill(c, fills) for c in self.r["cleanup"]])
         open(os.path.join(out_dir, "relocate.steps.log"), "w").write(steps)
-        self.stages.append({"stage": "relocate", "ok": ok, "seconds": round(time.time() - t0),
-                            "route_mib": fills["route_mib"]})
+        self.stages.append({"stage": "relocate", "ok": ok, "seconds": round(time.time() - t0), "table": self.table,
+                            "route_mib": fills["route_mib"], "boot_mib": fills["boot_mib"]})
         log(f"relocate: {'OK' if ok else 'FAILED'} in {round(time.time() - t0)} s (route_mib {fills['route_mib']})")
         return ok
 
@@ -1334,6 +1350,15 @@ def route_mib(a, route, pinned):
     return n + sum(a["releases"][t]["transit"]["boot_mib"] for t in sorted(transit))
 
 
+def route_boot_mib(a, route, pinned):
+    """The part of route_mib that lands in /boot: every hop's boot_mib and each transit kernel's. GRUB legacy's
+    relocate gives the new root a /boot of its own, sized like the old one plus this."""
+    hw = a.get("hardware", {})
+    transit = {s["release"] for f in pinned for k in ("pre", "post") for s in f.get(k, []) if s["op"] == "rpm.transit"}
+    return sum(hw.get(h, {}).get("boot_mib", 0) for h in route["hops"]) + \
+        sum(a["releases"][t]["transit"]["boot_mib"] for t in sorted(transit))
+
+
 def new_disk(hw):
     """The first extra disk, as the guest names it: the new root's."""
     first = FIRST_DISK[hw[0]]
@@ -1360,7 +1385,7 @@ def relocate(box_id):
     a = guest_adapter(box_doc["family"])
     relocate_ready(a)
     hw = hardware(a, box_doc["release"])
-    fills = {"new_disk": new_disk(hw), "route_mib": 0}
+    fills = {"new_disk": new_disk(hw), "route_mib": 0, "boot_mib": 0}
     stamp = time.strftime("%Y%m%d-%H%M%S")
     tag = "-".join(filter(None, [FIRMWARE, layout_tag()]))
     out_dir = os.path.join(ROOT, ".wend", "vm", f"{stamp}-{box_id.replace('/', '_')}-{tag}-relocate-{os.getpid()}")
@@ -1370,7 +1395,6 @@ def relocate(box_id):
     g = Guest(disk, os.path.join(d, "key"), box_doc.get("vm", {}).get("ssh_port", 22), hw)
     g.start()
     rel = Relocation(a, box_doc)
-    r = rel.r
     run = {"schema": "wend.vmrelocate/0", "box": box_id, "started": stamp, "head": head(), "firmware": FIRMWARE,
            "layout": {k: v for k, v in LAYOUT.items() if v}, "new_disk": fills["new_disk"], "stages": rel.stages,
            "runner": {"kind": "vm", "host": os.uname().nodename, "kernel": os.uname().release}}
@@ -1387,6 +1411,7 @@ def relocate(box_id):
                            "console_tail": open(g.console, errors="replace").read()[-4000:]})
         return finish("fail")
     rel.start(g)
+    r, run["table"] = rel.r, rel.table
     if not rel.steps(fills, out_dir) or not rel.trial():
         return finish("fail")
     if not rel.came_up("reset during the trial", "old", g.reset()):
