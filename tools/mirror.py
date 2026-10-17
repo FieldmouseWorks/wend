@@ -144,7 +144,9 @@ class H(http.server.BaseHTTPRequestHandler):
             if body:
                 self.wfile.write(v)
             return
-        parts = self.path.lstrip("/").split("?")[0].split("/", 1)
+        # EL4's anaconda asks for <tree>//CentOS/RPMS/<rpm> (urlinstall.py joins the tree and "/CentOS/..." with a "/");
+        # web servers read a run of slashes as one, and so does the shim.
+        parts = re.sub("/{2,}", "/", self.path).lstrip("/").split("?")[0].split("/", 1)
         # Only <allowed host>/<relative path>: no empty or dot segments, so the path can't leave the cache
         # (os.path.join would throw CACHE away for "/etc/shadow"; the shim runs as root).
         if len(parts) < 2 or parts[0] not in ALLOWED or \

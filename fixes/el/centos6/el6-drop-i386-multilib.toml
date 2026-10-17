@@ -16,4 +16,4 @@ author = "claude-opus-5-5 medium (dep-lab guided run A)"
 curated_by = "claude (wend port to typed ops)"
 source = "dep-lab centos/fixes-v3.json: c6-drop-i386-swap-release-upgrade (first half)"
 note = "EL5 x86_64 installs carry i386 multilib copies (curl, glibc, ...) that conflict with EL6's x86_64 packages. This removes every i386-i686 package without running its scripts. rpm.drop-arch refuses first if any of them has no 64-bit twin (a 32-bit-only app or compat library), so such a box stops at this hop instead of losing it. 32-bit software not installed by rpm (a tarball in /opt) still loses its libraries."
-fires_on = ["el/centos5-dns", "el/centos5-web"]
+fires_on = ["el/centos4-dns", "el/centos5-dns", "el/centos5-web"]

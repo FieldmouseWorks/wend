@@ -1,0 +1,16 @@
+schema = "wend.fix/0"
+family = "el"
+hop = "centos5"
+when = { installed = "centos-release" }
+restores = ["pkgdb"]
+adds = []
+
+[[pre]]
+op = "rpm.drop-arch"
+arches = ["i386", "i486", "i586", "i686"]
+
+[meta]
+name = "el5-drop-i386-multilib"
+author = "claude-opus-5-5 (WEND_MODEL=agent, wend discover el centos4 centos5 el/centos4-dns)"
+note = "CentOS 4 x86_64 installs carry i386/i686 multilib copies (e2fsprogs, glibc, curl, ...). EL5 ships no 32-bit e2fsprogs, so yum leaves the i386 copy and its files conflict with EL5's x86_64 e2fsprogs. The same step as el6-drop-i386-multilib, one hop earlier: rpm.drop-arch refuses first if any 32-bit package has no 64-bit twin."
+fires_on = ["el/centos4-dns"]
