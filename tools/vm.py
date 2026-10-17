@@ -590,7 +590,8 @@ def kickstart(box_doc, adapter, key_pub):
     rel = adapter["releases"][box_doc["release"]]
     inst = rel["install"]
     end = ["%end"] if inst.get("ks_end") else []
-    fs = ROOT_FS[LAYOUT["root_fs"] or box_doc.get("vm", {}).get("root_fs", "ext3")]
+    # unset, the first filesystem the installer makes (CentOS 6's ext4), else ext3
+    fs = ROOT_FS[LAYOUT["root_fs"] or box_doc.get("vm", {}).get("root_fs") or (inst.get("root_fs") or ["ext3"])[0]]
     efi = ["part /boot/efi --fstype efi --size=200"] if FIRMWARE == "uefi" else []
     boot = f"part /boot {fs} --size={inst.get('boot_part_mib', 200)}"
     if LAYOUT["lvm"]:  # anaconda's autopart: /boot, then one PV with swap and a root that fills it, named as it names them

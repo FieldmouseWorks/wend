@@ -76,9 +76,10 @@ upgrade = ["L=/var/lib/wend/py23-leftovers; for p in python-elementtree python-s
 major = 6
 pm = "yum"
 repos = { base = "vault.centos.org/6.10/os/x86_64", updates = "vault.centos.org/6.10/updates/x86_64" }
-# tools/vm.py: as CentOS 5's, with 6.10's defaults: a 500 MiB /boot, ext4, and the names its autopartitioning gives the
-# VG and LVs on a host called wend-vm (vg_ and the hostname without its dash). system-config-firewall-base is lokkit,
-# which EL6's anaconda runs to write the selinux and firewall lines: without it (%packages --nobase) neither is written.
+# tools/vm.py: as CentOS 5's, with 6.10's defaults: a 500 MiB /boot, ext4 (a box's default is the first root_fs), and
+# the names its autopartitioning gives the VG and LVs on a host called wend-vm (vg_ and the hostname without its
+# dash). system-config-firewall-base is lokkit, which EL6's anaconda runs to write the selinux and firewall lines:
+# without it (%packages --nobase) neither is written.
 install = { tree = "vault.centos.org/6.10/os/x86_64", pxeboot = "images/pxeboot", packages = ["grub", "system-config-firewall-base"], boot_part_mib = 500, root_fs = ["ext4"], lvm = { vg = "vg_wendvm", root = "lv_root", swap = "lv_swap" } }
 upgrade = ["yum -y upgrade"]
 # EL6 binaries can't run on the EL5 kernel (EL6's apr asks for SOCK_CLOEXEC): on a real machine, boot the new kernel
