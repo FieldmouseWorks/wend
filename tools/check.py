@@ -41,7 +41,7 @@ REPO_URL = r"[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)+"
 APT_URL = r"https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._-]+)*"
 ADAPTER_KEYS = {"schema", "family", "backend", "release_file", "ladder", "may_skip", "harness_owned", "writable",
                 "managed", "force", "releases", "mirror", "hop", "predicates", "pm_options", "box", "ops", "checks",
-                "kv", "hardware", "addons", "runtimes", "relocate", "keys"}
+                "kv", "hardware", "addons", "runtimes", "relocate", "relocate_grub_legacy", "keys"}
 CPU_LEVELS = ("x86-64", "x86-64-v2", "x86-64-v3")  # SPEC "Hardware preflight"
 HARDWARE_KEYS = {"cpu", "ram_mib", "disk_mib", "boot_mib", "drivers", "note"}
 OLD_KERNELS = ("running", "autoremove")
@@ -235,14 +235,19 @@ RELOCATE_COMMANDS = ("booted", "arm", "commit_trial", "rollback_next", "rollback
 
 
 def check_relocate(a, where):
-    r = a.get("relocate")
-    if r is None:
-        return []
-    if not isinstance(r, dict) or set(r) != set(RELOCATE_STEPS + RELOCATE_COMMANDS):
-        return [f"{where}: relocate needs exactly {sorted(RELOCATE_STEPS + RELOCATE_COMMANDS)}"]
-    errs = [f"{where}: relocate.{k} must be a list of commands" for k in RELOCATE_STEPS
-            if not (isinstance(r[k], list) and r[k] and all(isinstance(c, str) for c in r[k]))]
-    return errs + [f"{where}: relocate.{k} must be a command" for k in RELOCATE_COMMANDS if not isinstance(r[k], str)]
+    """[relocate] and [relocate_grub_legacy] (GRUB legacy machines), each the same steps and commands."""
+    errs = []
+    for t in ("relocate", "relocate_grub_legacy"):
+        r = a.get(t)
+        if r is None:
+            continue
+        if not isinstance(r, dict) or set(r) != set(RELOCATE_STEPS + RELOCATE_COMMANDS):
+            errs.append(f"{where}: {t} needs exactly {sorted(RELOCATE_STEPS + RELOCATE_COMMANDS)}")
+            continue
+        errs += [f"{where}: {t}.{k} must be a list of commands" for k in RELOCATE_STEPS
+                 if not (isinstance(r[k], list) and r[k] and all(isinstance(c, str) for c in r[k]))]
+        errs += [f"{where}: {t}.{k} must be a command" for k in RELOCATE_COMMANDS if not isinstance(r[k], str)]
+    return errs
 
 
 def booted_releases(a):

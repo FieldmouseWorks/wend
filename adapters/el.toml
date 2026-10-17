@@ -816,6 +816,201 @@ rollback_next = '''. /var/lib/wend/relocate.env; O=/run/wend/oldboot; mkdir -p $
 rollback = '''L=$(lvs --noheadings -o lv_name "$(findmnt -no SOURCE /)" 2>/dev/null | tr -d ' '); [ "$L" = wend-root ] || { echo "not booted from the relocated root ($L)"; exit 1; }; F=/var/lib/wend/relocate.grubenv; { printf '# GRUB Environment Block\nwend_rollback=1\n'; head -c 1024 /dev/zero | tr '\0' '#'; } | head -c 1024 > $F.new && mv $F.new $F && sync && xfs_io -x -c freeze -c thaw /'''
 forward = '''. /var/lib/wend/relocate.env; N=/run/wend/new; lvchange -ay "$VG/wend-root" && mkdir -p $N && mount "/dev/$VG/wend-root" $N || exit 1; rm -f $N/var/lib/wend/relocate.grubenv && [ ! -e $N/var/lib/wend/relocate.grubenv ]; r=$?; umount $N && exit $r'''
 
+# Relocate on GRUB legacy (SPEC "Relocate", "Upgrading a running machine"): CentOS 5 and 6, whose GRUB can't read LVM
+# and whose util-linux has no lsblk or findmnt. The same steps and commands as [relocate], run the same way; tools/vm.py
+# takes this table when the machine boots from /boot/grub/grub.conf and has no /boot/grub2. Built for BIOS, `/` and
+# `/boot` on plain partitions, and the new root on a whole empty disk the owner names, split into a plain ext3 /boot
+# (GRUB legacy reads it) and a root of the old root's type, each made by the running release's own mkfs. The old
+# grub.conf becomes the stub. GRUB legacy keeps the saved default in stage2, which only the grub shell writes
+# (`savedefault --default=N [--once]`): the stub says `default saved`, the saved default stays 1 (the old system) and
+# the trial is grub's own one-shot. {boot_mib} is the room the route's kernels need on the new /boot.
+[relocate_grub_legacy]
+preflight = ['''
+set -e
+fail() { echo "relocate refused: $*"; exit 1; }
+D={new_disk}
+# the disk, the partition and its name a path is mounted from, by its device number (no lsblk or findmnt on EL5)
+partof() { s=$(stat -c %d "$1") || return 1; for f in /sys/block/*/*/dev; do IFS=: read ma mi < "$f"; [ $(( (mi & 255) | (ma << 8) | ((mi >> 8) << 20) )) = "$s" ] || continue; p=${f%/dev}; d=${p%/*}; case "${p##*/}" in "${d##*/}"*) echo "/dev/${d##*/} /dev/${p##*/} ${p##*/}"; return 0;; esac; done; return 1; }
+[ ! -d /sys/firmware/efi ] || fail "UEFI isn't built yet (BIOS only)"
+[ -f /boot/grub/grub.conf ] && [ ! -e /boot/grub2 ] || fail "not GRUB legacy (no /boot/grub/grub.conf, or a /boot/grub2 beside it)"
+command -v grub >/dev/null && [ -f /boot/grub/stage2 ] || fail "no grub shell, or no stage2 in /boot/grub"
+[ ! -e /boot/grub/grub.conf.wend-old ] || fail "a relocate stub is already in /boot/grub"
+[ "$(stat -c %d /boot)" != "$(stat -c %d /)" ] || fail "/boot isn't a filesystem of its own"
+B=$(partof /boot) || fail "/boot isn't a plain partition"
+set -- $B; BOOT_DISK=$1 BOOT_DEV=$2 BOOT_N=${3##*[!0-9]}
+case "$BOOT_DISK" in /dev/md*|/dev/dm-*) fail "/boot isn't on a plain disk ($BOOT_DISK)";; esac
+R=$(partof /) || fail "/ isn't a plain partition (an LVM root isn't built yet for GRUB legacy)"
+set -- $R; OLD_DEV=$2
+ROOT_FS=$(awk '$2 == "/" && $1 != "rootfs" {t = $3} END {print t}' /proc/mounts)
+case "$ROOT_FS" in ext3|ext4) ;; *) fail "/ is ${ROOT_FS:-unknown}, not ext3 or ext4";; esac
+command -v mkfs.$ROOT_FS >/dev/null && command -v mkfs.ext3 >/dev/null && command -v sfdisk >/dev/null || fail "no mkfs.$ROOT_FS, mkfs.ext3 or sfdisk"
+! lsmod | grep -q '^dm_crypt' || fail "LUKS isn't handled"
+M=$(awk '$1 ~ /^\/dev\// && $2 != "/" && $2 != "/boot" {print $2; exit}' /proc/mounts)
+[ -z "$M" ] || fail "$M is mounted from a disk: carrying more than / and /boot isn't built yet, and both roots would share it"
+awk '$1 !~ /^#/ && $3 ~ /^ext[234]$/ {print $2}' /etc/fstab | while read m; do awk -v m="$m" '$2 == m {f = 1} END {exit !f}' /proc/mounts || { echo "$m"; break; }; done | grep -q . && fail "an ext filesystem in fstab isn't mounted: wend doesn't know what's on it"
+[ "$(rpm -q --last kernel | head -n1 | awk '{print $1}')" = "kernel-$(uname -r)" ] || fail "the newest kernel isn't the running one: reboot first"
+! pgrep -x yum >/dev/null && [ ! -e /var/run/yum.pid ] || fail "yum is running"
+! findfs LABEL=wend-root >/dev/null 2>&1 && ! findfs LABEL=wend-boot >/dev/null 2>&1 || fail "a filesystem labelled wend-root or wend-boot exists already"
+[ -b "$D" ] || fail "$D isn't a block device"
+X=${D#/dev/}
+[ -d "/sys/block/$X" ] && [ -z "$(ls -d /sys/block/$X/$X* 2>/dev/null)" ] || fail "$D isn't a whole disk without partitions"
+[ -z "$(dd if="$D" bs=1M count=1 2>/dev/null | tr -d '\000' | head -c 1)" ] || fail "$D isn't empty (its first MiB isn't all zeros)"
+! awk -v d="$D" 'index($1, d) == 1' /proc/mounts | grep -q . || fail "$D is mounted"
+! { command -v pvs >/dev/null && pvs "$D" >/dev/null 2>&1; } || fail "$D is an LVM PV already"
+[ "$(readlink -f "$D")" != "$(readlink -f "$BOOT_DISK")" ] || fail "$D is the boot disk"
+# GRUB's name for each disk: the boot disk must be (hd0) in the installer's device.map; the new disk is its entry there,
+# or else the next BIOS disk after the ones it lists
+M=/boot/grub/device.map
+[ -f $M ] && [ "$(readlink -f "$(awk '$1 == "(hd0)" {print $2}' $M)")" = "$(readlink -f "$BOOT_DISK")" ] || fail "$M doesn't name $BOOT_DISK as (hd0)"
+NEW_HD=$(awk -v d="$(readlink -f "$D")" '$1 ~ /^\(hd[0-9]+\)$/ {n++; if ($2 == d) {gsub(/[()]/, "", $1); print $1; f = 1; exit}} END {if (!f) print "hd" n}' $M)
+BOOT_MIB=$(( $(df -Pk /boot | awk 'NR == 2 {print $2}') / 1024 + {boot_mib} ))
+NEED=$(( $(df -Pk / | awk 'NR == 2 {print $3}') * 6 / 5 / 1024 + {route_mib} + BOOT_MIB ))
+HAVE=$(( $(blockdev --getsize64 "$D") / 1048576 ))
+[ "$HAVE" -ge "$NEED" ] || fail "$D has $HAVE MiB; the copy needs $NEED"
+mkdir -p /var/lib/wend
+printf 'BOOT_DISK=%s\nBOOT_DEV=%s\nBOOT_N=%s\nBOOT_UUID=%s\nSTUB_UUID=%s\nOLD_DEV=%s\nOLD_UUID=%s\nROOT_FS=%s\nNEW_DISK=%s\nNEW_HD=%s\nBOOT_MIB=%s\n' "$BOOT_DISK" "$BOOT_DEV" "$BOOT_N" "$(blkid -s UUID -o value "$BOOT_DEV")" "$(blkid -s UUID -o value "$BOOT_DEV")" "$OLD_DEV" "$(blkid -s UUID -o value "$OLD_DEV")" "$ROOT_FS" "$D" "$NEW_HD" "$BOOT_MIB" > /var/lib/wend/relocate.env
+echo "relocate: $OLD_DEV ($ROOT_FS) -> $D as $NEW_HD (/boot $BOOT_MIB MiB, the rest the root; $HAVE MiB, needs $NEED); boot disk $BOOT_DISK as hd0"
+''']
+# No GRUB reinstall: the boot disk's stage1 and the old /boot's stage2 stay. This writes the device map and the helper
+# every later write to the saved default goes through (the copy carries both), and checks that the grub shell finds
+# the old /boot with them, before anything else is written.
+refresh = ['''
+set -e
+. /var/lib/wend/relocate.env
+printf '(hd0) %s\n(%s) %s\n' "$BOOT_DISK" "$NEW_HD" "$NEW_DISK" > /var/lib/wend/grub.map
+cat > /var/lib/wend/relocate-grub <<'EOF'
+#!/bin/bash
+# wend relocate on GRUB legacy (adapters/el.toml [relocate_grub_legacy]). `which`: the root that's booted (new, old,
+# or what instead). `set N [--once]`: entry N of the stub becomes GRUB's saved default, or its next boot only. The grub
+# shell writes the stage2 of whatever is mounted at /boot, so on the new root (whose /boot is the new one) the old
+# /boot is mounted and bound over /boot for the write; without that it prints no error and changes nothing.
+. /var/lib/wend/relocate.env
+s=$(stat -c %d /)
+for f in /sys/block/*/*/dev; do IFS=: read ma mi < "$f"; [ $(( (mi & 255) | (ma << 8) | ((mi >> 8) << 20) )) = "$s" ] || continue; p=${f%/dev}; U=$(blkid -s UUID -o value "/dev/${p##*/}"); break; done
+if [ -n "$NEW_UUID" ] && [ "$U" = "$NEW_UUID" ]; then W=new; elif [ "$U" = "$OLD_UUID" ]; then W=old; else W="neither: ${U:-unknown}"; fi
+case "$1 $2 $3" in
+  "which  ") echo "$W"; exit 0;;
+  "set 0 "|"set 1 "|"set 0 --once"|"set 1 --once") ;;
+  *) echo "usage: relocate-grub which | set 0|1 [--once]"; exit 2;;
+esac
+if [ "$W" = new ]; then
+  O=/mnt/wend/oldboot
+  mkdir -p $O && mount "$(findfs UUID=$STUB_UUID)" $O || exit 1
+  mount --bind $O /boot || { umount $O; exit 1; }
+  trap 'umount /boot; umount $O' EXIT
+fi
+o=$(printf 'root (hd0,%s)\nsavedefault --default=%s %s\nquit\n' $((BOOT_N - 1)) "$2" "$3" | grub --batch --device-map=/var/lib/wend/grub.map 2>&1)
+echo "$o"
+! echo "$o" | grep -qi error && sync
+EOF
+chmod 755 /var/lib/wend/relocate-grub
+o=$(printf 'root (hd0,%s)\nquit\n' $((BOOT_N - 1)) | grub --batch --device-map=/var/lib/wend/grub.map 2>&1)
+echo "$o"
+! echo "$o" | grep -qi error || { echo "the grub shell can't read the old /boot as (hd0,$((BOOT_N - 1)))"; exit 1; }
+''']
+place = ['''
+set -e
+. /var/lib/wend/relocate.env
+printf ',%s,83\n,,83\n' "$BOOT_MIB" | sfdisk -uM "$NEW_DISK"
+case "$NEW_DISK" in *[0-9]) P=${NEW_DISK}p;; *) P=$NEW_DISK;; esac
+for i in 1 2 3 4 5 6 7 8 9 10; do [ -b ${P}1 ] && [ -b ${P}2 ] && break; sleep 1; done
+[ -b ${P}1 ] && [ -b ${P}2 ] || { echo "no ${P}1 and ${P}2 after partitioning"; exit 1; }
+mkfs.ext3 -q -L wend-boot ${P}1 && mkfs.$ROOT_FS -q -L wend-root ${P}2
+mkdir -p /mnt/wend/new && mount ${P}2 /mnt/wend/new && mkdir -p /mnt/wend/new/boot && mount ${P}1 /mnt/wend/new/boot
+printf 'NEW_DEV=%s\nNEW_UUID=%s\nNEW_BOOT_UUID=%s\n' ${P}2 "$(blkid -s UUID -o value ${P}2)" "$(blkid -s UUID -o value ${P}1)" >> /var/lib/wend/relocate.env
+''']
+# One pass, with every running service stopped except what keeps the machine reachable and safe; they stay stopped
+# until the trial boot. tar, not rsync: CentOS 5's rsync (2.6.8) has no -X, and tar --selinux keeps the labels.
+# --one-file-system leaves out /proc, /sys, /dev, /selinux, /boot and the new root itself; the old /boot goes into the
+# new /boot. tar's create side may say a file changed as it read it (a log): that's 1, anything worse stops the copy.
+copy = ['''
+set -e
+K='^(sshd|network|NetworkManager|iptables|ip6tables|auditd|messagebus|haldaemon|syslog|rsyslog|lvm2-monitor|udev-post|mcstrans|restorecond)$'
+L=$(runlevel | awk '{print $2}')
+chkconfig --list 2>/dev/null | awk -v l="$L:on" '{for (i = 2; i <= NF; i++) if ($i == l) print $1}' | grep -Ev "$K" | while read s; do service "$s" status >/dev/null 2>&1 && echo "$s"; done > /var/lib/wend/relocate-stopped || true
+for s in $(cat /var/lib/wend/relocate-stopped); do service "$s" stop || exit 1; done
+sync
+N=/mnt/wend/new
+tar -C / --one-file-system --selinux --numeric-owner -cpf - . | tar -C $N --selinux --numeric-owner -xpf -; s="${PIPESTATUS[0]} ${PIPESTATUS[1]}"
+[ "${s% *}" -le 1 ] && [ "${s#* }" = 0 ] || { echo "copying / failed (tar $s)"; exit 1; }
+tar -C /boot --one-file-system --selinux --numeric-owner -cpf - . | tar -C $N/boot --selinux --numeric-owner -xpf -; s="${PIPESTATUS[0]} ${PIPESTATUS[1]}"
+[ "${s% *}" -le 1 ] && [ "${s#* }" = 0 ] || { echo "copying /boot failed (tar $s)"; exit 1; }
+''']
+# In the copy only: fstab names the new root and /boot by label; the new grub.conf's entries find their files on the
+# new /boot, boot the new root and reboot by themselves ten seconds after a panic (so a dead kernel or init lands on
+# the old system once the one-shot is spent); the device map names the new disk; every kernel gets an initrd from the
+# release's own mkinitrd (CentOS 6's is dracut's), built in the copy so it finds the new root. A kernel that can't
+# get one stops the relocate: dropping it would leave a dead entry in grub.conf. Then the labels: kept by the copy and
+# checked, fixed offline with setfiles -r if they were lost, and the relocate stops if they still are.
+fixup = ['''
+set -e
+. /var/lib/wend/relocate.env
+N=/mnt/wend/new
+awk -v t="$ROOT_FS" '$1 !~ /^#/ && $2 == "/" {$1 = "LABEL=wend-root"; $3 = t} $1 !~ /^#/ && $2 == "/boot" {$1 = "LABEL=wend-boot"; $3 = "ext3"} {print}' $N/etc/fstab > $N/etc/fstab.wend && cat $N/etc/fstab.wend > $N/etc/fstab && rm -f $N/etc/fstab.wend
+awk '$1 !~ /^#/ && $2 == "/" {r += $1 == "LABEL=wend-root"; n++} $1 !~ /^#/ && $2 == "/boot" {b += $1 == "LABEL=wend-boot"; m++} END {exit !(r == 1 && n == 1 && b == 1 && m == 1)}' $N/etc/fstab || { echo "the copy's fstab doesn't name the new root and /boot alone"; exit 1; }
+G=$N/boot/grub/grub.conf
+sed -e "s/(hd[0-9]*,[0-9]*)/($NEW_HD,0)/g" -e 's/root=[^ ]*/root=LABEL=wend-root/g' $G | awk '$1 == "kernel" && $0 !~ / panic=/ {$0 = $0 " panic=10"} {print}' > $G.wend && cat $G.wend > $G && rm -f $G.wend
+awk -v h="($NEW_HD,0)" '$1 == "kernel" {k++; if ($0 !~ / root=LABEL=wend-root( |$)/ || $0 !~ / panic=/) b++} /\(hd[0-9]+,[0-9]+\)/ {x = $0; gsub(/\(hd[0-9]+,[0-9]+\)/, "", x); if (index($0, h) == 0 || x ~ /\(hd/) b++} END {exit !(k && !b)}' $G || { echo "the copy's grub.conf doesn't boot the new root from the new /boot"; exit 1; }
+cp /var/lib/wend/grub.map $N/boot/grub/device.map
+''', '''
+set -e
+N=/mnt/wend/new
+trap 'umount $N/sys $N/proc $N/dev 2>/dev/null' EXIT
+mount --bind /dev $N/dev && mount -t proc proc $N/proc && mount -t sysfs sysfs $N/sys || exit 1
+for v in $(ls $N/lib/modules); do
+  [ -f "$N/boot/vmlinuz-$v" ] || continue
+  I=initramfs-$v.img; [ -f "$N/boot/$I" ] || I=initrd-$v.img
+  chroot $N mkinitrd -f "/boot/$I" "$v" || { echo "kernel $v's initrd can't be rebuilt in the copy"; exit 1; }
+done
+''', '''
+set -e
+N=/mnt/wend/new
+! awk -v n="$N" 'index($2, n "/") == 1 && $2 != n "/boot"' /proc/mounts | grep -q . || { echo "still mounted inside the copy"; exit 1; }
+S=$(sed -n 's/^SELINUX=//p' $N/etc/selinux/config 2>/dev/null || true) T=$(sed -n 's/^SELINUXTYPE=//p' $N/etc/selinux/config 2>/dev/null || true)
+[ "$S" != disabled ] && [ -n "$T" ] || exit 0
+lost() { ls -Z $N/bin/bash $N/usr/sbin/sshd $N/etc/shadow | awk '!/:object_r:/ || /:(file_t|unlabeled_t)(:|[ \t]|$)/ {b = 1} END {exit !b}'; }
+if lost; then echo "the copy lost its SELinux labels: setfiles -r"; setfiles -r $N $N/etc/selinux/$T/contexts/files/file_contexts $N || true; fi
+! lost || { ls -Z $N/bin/bash $N/usr/sbin/sshd $N/etc/shadow; echo "the copy's SELinux labels are lost"; exit 1; }
+ls -Z $N/bin/bash $N/usr/sbin/sshd $N/etc/shadow
+''']
+# The old grub.conf becomes the stub (the old one stays beside it as grub.conf.wend-old): its lines before the first
+# title, less any default or fallback, then `default saved`, entry 0 the new /boot's grub.conf, entry 1 the old one.
+# Neither entry has savedefault (an entry's own does nothing once it hands off with configfile). The saved default is
+# set to 1 first, the trial armed last.
+flip = ['''
+set -e
+. /var/lib/wend/relocate.env
+G=/boot/grub
+cp -p $G/grub.conf $G/grub.conf.wend-old
+{ echo "# wend relocate (docs/rebuild-and-carry.md): 0 boots the relocated root, 1 the old one (its config as it was)"
+  awk '/^title/ {exit} /^[ \t]*#/ || /^[ \t]*(default|fallback|savedefault)([ \t=]|$)/ {next} {print}' $G/grub.conf.wend-old
+  echo 'default saved'
+  printf 'title wend: relocated root\n\tconfigfile (%s,0)/grub/grub.conf\n' "$NEW_HD"
+  printf 'title wend rollback: the old root\n\tconfigfile (hd0,%s)/grub/grub.conf.wend-old\n' $((BOOT_N - 1)); } > $G/grub.conf.wend
+cat $G/grub.conf.wend
+mv $G/grub.conf.wend $G/grub.conf
+/var/lib/wend/relocate-grub set 1 && /var/lib/wend/relocate-grub set 0 --once && touch /var/lib/wend/relocate-flipped && sync
+''']
+release = ['''
+set -e
+for m in /mnt/wend/new/boot /mnt/wend/new; do ! awk -v m=$m '$2 == m {f = 1} END {exit !f}' /proc/mounts || umount $m || exit 1; done
+! grep -q ' /mnt/wend/' /proc/mounts || { echo "still mounted under /mnt/wend"; exit 1; }
+''']
+cleanup = ['''
+for m in /mnt/wend/new/sys /mnt/wend/new/proc /mnt/wend/new/dev /mnt/wend/new/boot /mnt/wend/new; do ! awk -v m=$m '$2 == m {f = 1} END {exit !f}' /proc/mounts || umount $m; done
+if [ ! -e /var/lib/wend/relocate-flipped ] && [ -s /var/lib/wend/relocate-stopped ]; then for s in $(cat /var/lib/wend/relocate-stopped); do service "$s" start; done; fi
+''']
+# Every write to the saved default goes through the helper, from either root. commit_trial and rollback (sticky) only
+# from the new root, forward only from the old; arm and rollback_next from either. Every kernel on these routes mounts
+# the old ext /boot, so a rollback from the last release is the same write as any other.
+booted = '''/var/lib/wend/relocate-grub which'''
+arm = '''/var/lib/wend/relocate-grub set 0 --once'''
+commit_trial = '''[ "$(/var/lib/wend/relocate-grub which)" = new ] || { echo "not booted from the relocated root"; exit 1; }; /var/lib/wend/relocate-grub set 0'''
+rollback_next = '''/var/lib/wend/relocate-grub set 1 --once'''
+rollback = '''[ "$(/var/lib/wend/relocate-grub which)" = new ] || { echo "not booted from the relocated root"; exit 1; }; /var/lib/wend/relocate-grub set 1'''
+forward = '''[ "$(/var/lib/wend/relocate-grub which)" = old ] || { echo "not booted from the old root"; exit 1; }; /var/lib/wend/relocate-grub set 0'''
+
+
 [predicates]
 # "installed" is rpm -q: EL has no removed-but-configured state. Multiple versions (kernels) still count as installed.
 installed = "rpm -q {pkg}"
