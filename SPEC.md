@@ -2350,7 +2350,9 @@ needed.
   the generated checks, rollback per hop. A rehearsal never takes `--live`: `upgrade` installs only bytes a passing run
   pinned. Two additions. The copy is cleaned first as a boot cleans the machine (EL's `rc.sysinit`): files under a
   `/var/run` and `/var/lock` that are directories on disk go (a daemon's pid file there says it is running, and its
-  init script won't start it), and so does rpm's `__db.*` environment. And the walk runs as on a CI box
+  init script won't start it), and so does rpm's `__db.*` environment; so do the package manager's downloaded
+  packages (`/var/cache/apt/archives/*.deb`, `*.rpm` under `/var/cache/yum` and `/var/cache/dnf`), so every package
+  the walk installs comes through the proxy into the plan's cache. And the walk runs as on a CI box
   (`WEND_CHROOT_BOX=1`, "Kernels and the bootloader"): `hop.kernel_before` drops the kernel packages' records and
   keeps their files, as the machine's own walk will, and no kernel is installed in the copy (the steps that read the
   running kernel or install one act only on a machine booted from the root, `[ / -ef /proc/1/root ]`). After each hop the rehearsal downloads, without installing, what

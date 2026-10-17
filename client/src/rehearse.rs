@@ -74,27 +74,14 @@ pub fn machine_id(root: &Path, fingerprint: &str) -> String {
 /// SPEC "The rehearsal": what a boot clears on the machine (EL's rc.sysinit) goes from the copy before the walk: every
 /// non-directory under var/run and var/lock where those are directories on disk (EL7 and later link them to the
 /// /run tmpfs, which the copy doesn't carry), never through a symlink, and rpm's var/lib/rpm/__db.* environment.
-/// A daemon's pid file left there says it is running, and its init script won't start it. How many went.
+/// A daemon's pid file left there says it is running, and its init script won't start it. The package manager's
+/// downloaded packages go too, so every package the walk installs comes through the proxy and into the plan's
+/// cache: one the machine happened to have cached would be missing from the plan. How many went.
 pub fn boot_clean(root: &Path) -> Result<usize, String> {
-    let mut n = 0;
-    for top in ["var/run", "var/lock"] {
-        let mut todo = vec![root.join(top)];
-        while let Some(d) = todo.pop() {
-            if !std::fs::symlink_metadata(&d).is_ok_and(|m| m.is_dir()) {
-                continue;
-            }
-            for e in std::fs::read_dir(&d)
-                .map_err(|e| format!("{}: {e}", d.display()))?
-                .flatten()
-            {
-                if e.file_type().is_ok_and(|t| t.is_dir()) {
-                    todo.push(e.path());
-                } else {
-                    std::fs::remove_file(e.path()).map_err(|x| format!("{}: {x}", e.path().display()))?;
-                    n += 1;
-                }
-            }
-        }
+    let mut n = remove_under(&root.join("var/run"), &|_| true)? + remove_under(&root.join("var/lock"), &|_| true)?;
+    n += remove_under(&root.join("var/cache/apt/archives"), &|f| f.ends_with(".deb"))?;
+    for top in ["var/cache/yum", "var/cache/dnf"] {
+        n += remove_under(&root.join(top), &|f| f.ends_with(".rpm"))?;
     }
     let rpm = root.join("var/lib/rpm");
     if std::fs::symlink_metadata(&rpm).is_ok_and(|m| m.is_dir()) {
@@ -103,6 +90,30 @@ pub fn boot_clean(root: &Path) -> Result<usize, String> {
             .flatten()
         {
             if e.file_name().to_string_lossy().starts_with("__db.") && e.file_type().is_ok_and(|t| t.is_file()) {
+                std::fs::remove_file(e.path()).map_err(|x| format!("{}: {x}", e.path().display()))?;
+                n += 1;
+            }
+        }
+    }
+    Ok(n)
+}
+
+/// Every non-directory under `top` whose name `pick` takes, never following a symlink; none if `top` is not a
+/// directory on disk. How many went.
+fn remove_under(top: &Path, pick: &dyn Fn(&str) -> bool) -> Result<usize, String> {
+    let mut n = 0;
+    let mut todo = vec![top.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        if !std::fs::symlink_metadata(&d).is_ok_and(|m| m.is_dir()) {
+            continue;
+        }
+        for e in std::fs::read_dir(&d)
+            .map_err(|e| format!("{}: {e}", d.display()))?
+            .flatten()
+        {
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
+                todo.push(e.path());
+            } else if pick(&e.file_name().to_string_lossy()) {
                 std::fs::remove_file(e.path()).map_err(|x| format!("{}: {x}", e.path().display()))?;
                 n += 1;
             }
@@ -244,7 +255,7 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
         }
     };
     let n = boot_clean(Path::new(root))?;
-    eprintln!("cleaned the copy as a boot would: {n} runtime files from var/run, var/lock and rpm's __db.*");
+    eprintln!("cleaned the copy as a boot would: {n} runtime files and cached packages");
     crate::sandbox::REHEARSAL.store(true, std::sync::atomic::Ordering::Relaxed);
     let checks_bytes = std::fs::read(checks_path).map_err(|e| format!("{checks_path}: {e}"))?;
     let w = cmd_walk(atlas, route, o)?;
@@ -347,6 +358,8 @@ mod tests {
             "var/lib/rpm",
             "run/keep",
             "outside",
+            "var/cache/apt/archives/partial",
+            "var/cache/yum/x86_64/7/base/packages",
         ] {
             std::fs::create_dir_all(d.join(p)).unwrap();
         }
@@ -358,11 +371,18 @@ mod tests {
             "var/lib/rpm/Packages",
             "run/keep/x.pid",
             "outside/f",
+            "var/cache/apt/archives/lock",
+            "var/cache/apt/archives/a_1_amd64.deb",
+            "var/cache/yum/x86_64/7/base/packages/b-1.x86_64.rpm",
+            "var/cache/yum/x86_64/7/base/repomd.xml",
         ] {
             std::fs::write(d.join(p), "x").unwrap();
         }
         std::os::unix::fs::symlink(d.join("outside"), d.join("var/run/link")).unwrap();
-        assert_eq!(boot_clean(&d), Ok(5));
+        assert_eq!(boot_clean(&d), Ok(7));
+        assert!(
+            d.join("var/cache/apt/archives/lock").exists() && d.join("var/cache/yum/x86_64/7/base/repomd.xml").exists()
+        );
         assert!(d.join("var/run/mysqld").is_dir() && d.join("var/lock/subsys").is_dir());
         assert!(d.join("var/lib/rpm/Packages").exists() && d.join("run/keep/x.pid").exists());
         assert!(d.join("outside/f").exists() && !d.join("var/run/link").exists());
