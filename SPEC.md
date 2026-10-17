@@ -2348,8 +2348,12 @@ needed.
   way (a mounted image or snapshot). The machine keeps running and nothing on it is written.
 - **The walk** is `walk --run` on the copy, unchanged: the pinned run the route was proved by, the verifying proxy,
   the generated checks, rollback per hop. A rehearsal never takes `--live`: `upgrade` installs only bytes a passing run
-  pinned. One addition: the kernel steps act only on a machine booted from the root (`[ / -ef /proc/1/root ]`), so in
-  the copy they do nothing and fetch nothing. After each hop the rehearsal downloads, without installing, what
+  pinned. Two additions. The copy is cleaned first as a boot cleans the machine (EL's `rc.sysinit`): files under a
+  `/var/run` and `/var/lock` that are directories on disk go (a daemon's pid file there says it is running, and its
+  init script won't start it), and so does rpm's `__db.*` environment. And the walk runs as on a CI box
+  (`WEND_CHROOT_BOX=1`, "Kernels and the bootloader"): `hop.kernel_before` drops the kernel packages' records and
+  keeps their files, as the machine's own walk will, and no kernel is installed in the copy (the steps that read the
+  running kernel or install one act only on a machine booted from the root, `[ / -ef /proc/1/root ]`). After each hop the rehearsal downloads, without installing, what
   `hop.kernel_after` would install (the release's `kernel` and what it pulls in, through the same proxy), so the
   machine's offline walk finds it in the cache. `net.ifcfg-to-keyfile` reads a profile's missing `HWADDR` from the
   running machine's `/sys/class/net`, which on the copy is the scratch host's NIC (a static profile refuses there, a

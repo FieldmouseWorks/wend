@@ -71,6 +71,46 @@ pub fn machine_id(root: &Path, fingerprint: &str) -> String {
     fingerprint.trim_start_matches("sha256:").chars().take(16).collect()
 }
 
+/// SPEC "The rehearsal": what a boot clears on the machine (EL's rc.sysinit) goes from the copy before the walk: every
+/// non-directory under var/run and var/lock where those are directories on disk (EL7 and later link them to the
+/// /run tmpfs, which the copy doesn't carry), never through a symlink, and rpm's var/lib/rpm/__db.* environment.
+/// A daemon's pid file left there says it is running, and its init script won't start it. How many went.
+pub fn boot_clean(root: &Path) -> Result<usize, String> {
+    let mut n = 0;
+    for top in ["var/run", "var/lock"] {
+        let mut todo = vec![root.join(top)];
+        while let Some(d) = todo.pop() {
+            if !std::fs::symlink_metadata(&d).is_ok_and(|m| m.is_dir()) {
+                continue;
+            }
+            for e in std::fs::read_dir(&d)
+                .map_err(|e| format!("{}: {e}", d.display()))?
+                .flatten()
+            {
+                if e.file_type().is_ok_and(|t| t.is_dir()) {
+                    todo.push(e.path());
+                } else {
+                    std::fs::remove_file(e.path()).map_err(|x| format!("{}: {x}", e.path().display()))?;
+                    n += 1;
+                }
+            }
+        }
+    }
+    let rpm = root.join("var/lib/rpm");
+    if std::fs::symlink_metadata(&rpm).is_ok_and(|m| m.is_dir()) {
+        for e in std::fs::read_dir(&rpm)
+            .map_err(|e| format!("{}: {e}", rpm.display()))?
+            .flatten()
+        {
+            if e.file_name().to_string_lossy().starts_with("__db.") && e.file_type().is_ok_and(|t| t.is_file()) {
+                std::fs::remove_file(e.path()).map_err(|x| format!("{}: {x}", e.path().display()))?;
+                n += 1;
+            }
+        }
+    }
+    Ok(n)
+}
+
 struct Machine<'a> {
     from: &'a str,
     ssh: &'a str,
@@ -203,6 +243,9 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
             )
         }
     };
+    let n = boot_clean(Path::new(root))?;
+    eprintln!("cleaned the copy as a boot would: {n} runtime files from var/run, var/lock and rpm's __db.*");
+    crate::sandbox::REHEARSAL.store(true, std::sync::atomic::Ordering::Relaxed);
     let checks_bytes = std::fs::read(checks_path).map_err(|e| format!("{checks_path}: {e}"))?;
     let w = cmd_walk(atlas, route, o)?;
     if w.run["result"] != "pass" {
@@ -292,6 +335,48 @@ mod tests {
         assert!(acl_xattr("    64-bit files, 64-bit inums, 64-bit timestamps, 64-bit long ints,\n    socketpairs, hardlinks, symlinks, IPv6, batchfiles, inplace,\n    append, ACLs, xattrs, iconv, symtimes, prealloc"));
         assert!(!acl_xattr("    64-bit files, socketpairs, hard links, symlinks, batchfiles,\n    inplace, IPv6, 64-bit system inums, 64-bit internal inums"));
         assert!(!acl_xattr("append, no ACLs, xattrs"));
+    }
+
+    #[test]
+    fn boot_clean_clears_runtime_files_but_not_dirs_or_symlinked_trees() {
+        let d = std::env::temp_dir().join(format!("wend-clean-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        for p in [
+            "var/run/mysqld",
+            "var/lock/subsys",
+            "var/lib/rpm",
+            "run/keep",
+            "outside",
+        ] {
+            std::fs::create_dir_all(d.join(p)).unwrap();
+        }
+        for p in [
+            "var/run/httpd.pid",
+            "var/run/mysqld/mysqld.pid",
+            "var/lock/subsys/httpd",
+            "var/lib/rpm/__db.001",
+            "var/lib/rpm/Packages",
+            "run/keep/x.pid",
+            "outside/f",
+        ] {
+            std::fs::write(d.join(p), "x").unwrap();
+        }
+        std::os::unix::fs::symlink(d.join("outside"), d.join("var/run/link")).unwrap();
+        assert_eq!(boot_clean(&d), Ok(5));
+        assert!(d.join("var/run/mysqld").is_dir() && d.join("var/lock/subsys").is_dir());
+        assert!(d.join("var/lib/rpm/Packages").exists() && d.join("run/keep/x.pid").exists());
+        assert!(d.join("outside/f").exists() && !d.join("var/run/link").exists());
+        std::fs::remove_dir_all(&d).unwrap();
+        // EL7: var/run is a symlink to ../run, which is left alone
+        let e = std::env::temp_dir().join(format!("wend-clean7-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&e);
+        std::fs::create_dir_all(e.join("run")).unwrap();
+        std::fs::create_dir_all(e.join("var")).unwrap();
+        std::fs::write(e.join("run/a.pid"), "x").unwrap();
+        std::os::unix::fs::symlink("../run", e.join("var/run")).unwrap();
+        assert_eq!(boot_clean(&e), Ok(0));
+        assert!(e.join("run/a.pid").exists());
+        std::fs::remove_dir_all(&e).unwrap();
     }
 
     #[test]

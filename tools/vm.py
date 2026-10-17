@@ -1662,7 +1662,7 @@ def rehearse(route_path, box_id, client):
     argv = [client, "--atlas", ROOT, "rehearse", route_path, "--from", "root@127.0.0.1", "--ssh", ssh,
             "--root", os.path.join(out_dir, "copy"), "--run", ci_path, "--checks", f"boxes/{box_id}/box.toml",
             "--plan", os.path.join(out_dir, "plan"), "--out", os.path.join(out_dir, "walk.json"),
-            "--work", os.path.join(out_dir, "work")]
+            "--steps", os.path.join(out_dir, "steps.json"), "--work", os.path.join(out_dir, "work")]
     log("rehearsing: " + " ".join(shlex.quote(x) for x in argv))
     t0 = time.time()
     with open(os.path.join(out_dir, "rehearse.log"), "w") as f:
