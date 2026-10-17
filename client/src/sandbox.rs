@@ -15,7 +15,9 @@ use std::time::{Duration, Instant};
 /// A rehearsal's walk (SPEC "The rehearsal"): the copy is walked as a CI box is, `WEND_CHROOT_BOX=1`, so EL's
 /// `hop.kernel_before` drops the kernel records the machine's own walk will drop; and each command runs in a PID
 /// namespace of its own with its own /proc, so a step's `pkill -x mysqld` or `pgrep` sees only its own processes,
-/// never the scratch host's daemons or another rehearsal's, and nothing it starts outlives it.
+/// never the scratch host's daemons or another rehearsal's, and nothing it starts outlives it. So every pid file in
+/// the copy is stale when a command starts, and the next namespace's small pids make one name a live process (httpd
+/// -k start then says it is already running): they go before each command (rehearse::stale_pids).
 pub static REHEARSAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 const ENV: &[(&str, &str)] = &[
@@ -339,6 +341,9 @@ impl Root {
     fn run_mounted(&self, cmd: &str, timeout: u64, isolated: bool) -> (i32, String) {
         let rehearsal = REHEARSAL.load(std::sync::atomic::Ordering::Relaxed);
         let argv = if rehearsal {
+            if let Err(e) = crate::rehearse::stale_pids(&self.dir) {
+                return (-1, e);
+            }
             rehearsal_argv(&self.dir.to_string_lossy(), cmd, isolated)
         } else {
             chroot_argv(&self.dir.to_string_lossy(), cmd, isolated)

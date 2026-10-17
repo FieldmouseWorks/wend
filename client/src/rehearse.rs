@@ -98,6 +98,13 @@ pub fn boot_clean(root: &Path) -> Result<usize, String> {
     Ok(n)
 }
 
+/// Every pid file under run and var/run where those are directories on disk (EL7 and later: run, which var/run links
+/// to). A rehearsal's command leaves no process behind (crate::sandbox::REHEARSAL), so each is stale. How many went.
+pub fn stale_pids(root: &Path) -> Result<usize, String> {
+    let pid = |f: &str| f.ends_with(".pid");
+    Ok(remove_under(&root.join("run"), &pid)? + remove_under(&root.join("var/run"), &pid)?)
+}
+
 /// Every non-directory under `top` whose name `pick` takes, never following a symlink; none if `top` is not a
 /// directory on disk. How many went.
 fn remove_under(top: &Path, pick: &dyn Fn(&str) -> bool) -> Result<usize, String> {
@@ -398,6 +405,12 @@ mod tests {
         std::os::unix::fs::symlink("../run", e.join("var/run")).unwrap();
         assert_eq!(boot_clean(&e), Ok(0));
         assert!(e.join("run/a.pid").exists());
+        // but before each rehearsal command its pid files go, once, through the real directory
+        std::fs::create_dir_all(e.join("run/httpd")).unwrap();
+        std::fs::write(e.join("run/httpd/httpd.pid"), "7").unwrap();
+        std::fs::write(e.join("run/utmp"), "x").unwrap();
+        assert_eq!(stale_pids(&e), Ok(2));
+        assert!(e.join("run/utmp").exists() && !e.join("run/a.pid").exists());
         std::fs::remove_dir_all(&e).unwrap();
     }
 
