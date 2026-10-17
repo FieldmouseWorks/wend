@@ -380,6 +380,27 @@ for name, on, cmd, start, want_rc, want in (
                              f"{header(f'{t}/oldboot/grub/stage2')} {mounted!r}"))
         bad += not ok
 
+# refresh checks the layout with the grub shell before any write: Red Hat's savedefault lands where the helper writes,
+# a GRUB whose shell has no --once (upstream's) is refused, and either way the header is back as it was
+probe = L["refresh"][0].split("\nEOF\n", 1)[1].split('echo "STAGE2=', 1)[1].split("\n", 1)[1]
+REDHAT = ('read r; read c d o; n=${d#--default=}; set -- $(od -An -tu1 -j 524 -N1 "$F")\n'
+          'if [ "$o" = --once ]; then printf "\\\\$(printf %03o $1)\\\\00$n\\\\001"; else printf "\\\\00$n\\\\00\\\\00"; fi'
+          ' | dd of="$F" bs=1 seek=524 count=3 conv=notrunc 2>/dev/null')
+UPSTREAM = ('read r; read c d o; n=${d#--default=}; [ -z "$o" ] || { echo "Error 12: Invalid device requested"; exit 0; }\n'
+            'printf "\\\\00$n" | dd of="$F" bs=1 seek=524 count=1 conv=notrunc 2>/dev/null')
+for name, shell, want_rc in (("Red Hat's stage2 passes the layout check", REDHAT, 0),
+                             ("a stage2 whose grub shell has no --once is refused", UPSTREAM, 1)):
+    with tempfile.TemporaryDirectory() as t:
+        stage2(f"{t}/grub/stage2", 0)
+        F = f"{t}/grub/stage2"
+        shims(t, {"grub": f'F={F}\n{shell}', "sync": "exit 0"})
+        h = probe.replace("/boot/grub/stage2", F).replace("/proc/sys/vm/drop_caches", f"{t}/drop")
+        rc, out = run("set -e\nBOOT_N=1\n" + h, t)
+        ok = rc == want_rc and header(F) == [0, 0, 0]
+        print(("passed  " if ok else "WRONG   ") + f"GRUB legacy refresh: {name}, the header put back" +
+              ("" if ok else f"\n        rc={rc} {out[-300:]!r} {header(F)}"))
+        bad += not ok
+
 # the room a relocated root needs for the CentOS 7 route: both hops' disk and /boot room, and EL8's transit kernel
 import vm  # noqa: E402
 route = tomllib.load(open(os.path.join(ROOT, "routes", "el", "centos7-to-alma10.toml"), "rb"))

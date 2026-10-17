@@ -2245,7 +2245,10 @@ the old kernel can still read it. Where the new `/boot` goes depends on what the
   `stage2`'s header, which the grub shell's `savedefault --default=N [--once]` writes: three bytes from offset 524
   (the saved entry, the one-shot entry, the one-shot flag; found by `cmp` on remi). The same bytes written in place
   with `dd`, on the same inode and blocks, drive GRUB exactly as the shell's do, sticky and one-shot, across reboots
-  and a reset (remi, CentOS 5), so the writes need no grub shell, which the route loses at CentOS 7. So the stub says `default saved`, the saved default stays 1 (the old system), and the trial is
+  and a reset (remi, CentOS 5), so the writes need no grub shell, which the route loses at CentOS 7. That layout is Red
+  Hat's patched GRUB, not upstream's, so before any write `refresh` has the release's own grub shell (still there at
+  CentOS 5 and 6) write a sticky 1 and a one-shot 0, refuses unless they read 1 0 0 and 1 0 1 at 524, and puts the
+  header back with `dd`. So the stub says `default saved`, the saved default stays 1 (the old system), and the trial is
   `savedefault --default=0 --once`, grub's own one-shot: a reset, a panic or a power cut during the trial brings back
   the old system. `arm` writes that from either root (so GRUB legacy needs no `arm_new`), `rollback_next`
   writes `--default=1 --once`, `commit_trial` `--default=0`, and the sticky `rollback` `--default=1`. From the new

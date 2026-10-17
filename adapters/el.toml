@@ -836,6 +836,7 @@ partof() { s=$(stat -c %d "$1") || return 1; for f in /sys/block/*/*/dev; do IFS
 [ ! -d /sys/firmware/efi ] || fail "UEFI isn't built yet (BIOS only)"
 [ -f /boot/grub/grub.conf ] && [ ! -e /boot/grub2 ] || fail "not GRUB legacy (no /boot/grub/grub.conf, or a /boot/grub2 beside it)"
 [ -f /boot/grub/stage2 ] && [ "$(od -An -tx1 -j 518 -N2 /boot/grub/stage2 | tr -d ' ')" = 0302 ] || fail "no GRUB legacy stage2 (compat 3.2) in /boot/grub"
+command -v grub >/dev/null || fail "no grub shell: wend checks stage2 keeps the saved default where it writes it with that shell first"
 [ ! -e /boot/grub/grub.conf.wend-old ] || fail "a relocate stub is already in /boot/grub"
 [ "$(stat -c %d /boot)" != "$(stat -c %d /)" ] || fail "/boot isn't a filesystem of its own"
 B=$(partof /boot) || fail "/boot isn't a plain partition"
@@ -919,7 +920,21 @@ echo "stage2: saved $1, one-shot $2, flag $3"
 EOF
 chmod 755 /var/lib/wend/relocate-grub
 echo "STAGE2=\"$(stat -c '%i %s' /boot/grub/stage2)\"" >> /var/lib/wend/relocate.env
-od -An -tu1 -j 524 -N3 /boot/grub/stage2
+# The compat bytes only say GRUB legacy; the helper's writes need Red Hat's stage2, which keeps a one-shot entry and
+# flag beside the saved default. While this release still has its grub shell, have it write a sticky 1 and then a
+# one-shot of 0, check the bytes land where the helper writes them, and put the header back as it was with dd.
+command -v grub >/dev/null || { echo "no grub shell: can't check stage2 keeps the saved default where the helper writes it"; exit 1; }
+F=/boot/grub/stage2
+hdr() { od -An -tu1 -j 524 -N3 $F | tr -s ' ' | sed 's/^ //; s/ $//'; }
+gs() { o=$(printf 'root (hd0,%s)\nsavedefault --default=%s %s\nquit\n' $((BOOT_N - 1)) "$1" "$2" | grub --batch --device-map=/var/lib/wend/grub.map 2>&1) && ! echo "$o" | grep -qi error || { echo "the grub shell's savedefault --default=$1 $2 failed: $o" >&2; return 1; }; sync && echo 3 > /proc/sys/vm/drop_caches && hdr; }
+H=$(hdr)
+A=$(gs 1) && O1=$(gs 0 --once) || A=failed
+set -- $H
+printf "\\$(printf %03o $1)\\$(printf %03o $2)\\$(printf %03o $3)" | dd of=$F bs=1 seek=524 count=3 conv=notrunc 2>/dev/null
+sync && echo 3 > /proc/sys/vm/drop_caches
+[ "$(hdr)" = "$H" ] || { echo "$F's header reads $(hdr) after putting back $H"; exit 1; }
+[ "$A" = "1 0 0" ] && [ "$O1" = "1 0 1" ] || { echo "$F isn't Red Hat's GRUB: the grub shell's sticky 1 and one-shot 0 read ${A:-nothing} and ${O1:-nothing} at 524, not 1 0 0 and 1 0 1"; exit 1; }
+echo "stage2 header: $H (Red Hat's layout: checked with the grub shell)"
 ''']
 place = ['''
 set -e
