@@ -37,7 +37,7 @@ ON_NIC = "2: eth0    inet 10.0.2.20/24 brd 10.0.2.255 scope global noprefixroute
 
 
 def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=(), link_dirs=None, nics=None,
-        addrs=None):
+        addrs=None, hostname=None):
     """Run the converter on a fresh root; return (exit message or None, {keyfile: nmcli args}, files left, printed).
     nics: {name: sysfs attributes} of the running NICs (a "device" link unless physical=False); addrs: {name: what
     `ip -o -4 addr show dev <name>` prints}."""
@@ -45,7 +45,7 @@ def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=()
     m = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
     loader.exec_module(m)
     with tempfile.TemporaryDirectory() as t:
-        for k in ("D", "K", "L", "SAVED", "NETWORK", "RESOLV", "SYS"):
+        for k in ("D", "K", "L", "SAVED", "NETWORK", "RESOLV", "SYS", "HOSTNAME"):
             setattr(m, k, t + getattr(m, k))
         m.LINK_DIRS = tuple(t + d for d in m.LINK_DIRS)
         os.makedirs(m.D)
@@ -65,6 +65,9 @@ def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=()
                 out.write(net)
         with open(m.RESOLV, "w") as out:
             out.write(resolv)
+        if hostname is not None:
+            with open(m.HOSTNAME, "w") as out:
+                out.write(hostname)
         os.makedirs(f"{t}/bin")
         with open(f"{t}/bin/nmcli", "w") as out:
             out.write(NMCLI)
@@ -366,6 +369,23 @@ for name, text, why in (
         ("an IPV6_ADDR_GEN_MODE in the wrong case", EL8 + "IPV6_ADDR_GEN_MODE=EUI64\n", "isn't stable-privacy or eui64")):
     msg, kf, left, out = run({"ifcfg-eth0": text})
     case(f"EL8: {name} is refused before anything changes", refused(msg, why) and not kf and len(left) == 3)
+# what EL6's installer writes for a static install: quoted values, NM_CONTROLLED, its MTU and the machine's name
+EL6 = ('DEVICE="eth0"\nBOOTPROTO="static"\nHOSTNAME="oldbox.example.org"\nHWADDR="52:54:00:12:34:56"\n'
+       'IPADDR="10.0.2.20"\nIPV6INIT="no"\nMTU="1500"\nNETMASK="255.255.255.0"\nNM_CONTROLLED="yes"\nONBOOT="yes"\n'
+       'TYPE="Ethernet"\n')
+msg, kf, left, out = run({"ifcfg-eth0": EL6})
+case("EL6's installer profile converts: MTU to ethernet.mtu, its HOSTNAME (the machine's) dropped",
+     msg is None and arg(kf, "eth0.nmconnection", "ethernet.mtu") == "1500"
+     and "oldbox.example.org" not in kf["eth0.nmconnection"][1])
+msg, kf, left, out = run({"ifcfg-eth0": EL6}, net=NET.replace("HOSTNAME=oldbox.example.org\n", ""),
+                         hostname="oldbox.example.org\n")
+case("a profile's HOSTNAME that /etc/hostname names is dropped", msg is None and list(kf) == ["eth0.nmconnection"])
+for name, text, why in (("a HOSTNAME that isn't the machine's", EL6.replace('"oldbox.', '"other.'),
+                         "HOSTNAME=other.example.org isn't the machine's own name"),
+                        ("an MTU that isn't a number", EL6.replace('MTU="1500"', 'MTU="jumbo"'), "MTU=jumbo isn't 68"),
+                        ("an MTU below IPv4's minimum", EL6.replace('MTU="1500"', 'MTU="60"'), "MTU=60 isn't 68")):
+    msg, kf, left, out = run({"ifcfg-eth0": text}, hostname="oldbox.example.org\n")
+    case(f"EL6: {name} is refused before anything changes", refused(msg, why) and not kf)
 msg, kf, left, out = run({})
 case("no profiles: nothing to convert", msg is None and not kf and out.startswith("no ifcfg profiles"))
 sys.exit(0 if all(cases) else 1)

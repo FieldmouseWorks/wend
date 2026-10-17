@@ -31,12 +31,15 @@ SYS = "/sys/class/net"
 SAVED = "/var/lib/wend/saved"
 NETWORK = "/etc/sysconfig/network"
 RESOLV = "/etc/resolv.conf"
+HOSTNAME = "/etc/hostname"
 KEYS = {"DEVICE", "HWADDR", "BOOTPROTO", "IPADDR", "NETMASK", "PREFIX", "BROADCAST", "NETWORK", "GATEWAY", "DNS1",
         "DNS2", "DOMAIN", "PEERDNS", "ONBOOT", "IPV6INIT", "IPV6_AUTOCONF", "TYPE", "NAME", "UUID", "NM_CONTROLLED",
         "DHCPCLASS", "USERCTL",
         # what EL8's installer adds, writing the profile through NetworkManager's ifcfg-rh plugin
         "DEFROUTE", "IPV4_FAILURE_FATAL", "IPV6_DEFROUTE", "IPV6_FAILURE_FATAL", "IPV6_ADDR_GEN_MODE",
-        "PROXY_METHOD", "BROWSER_ONLY"}
+        "PROXY_METHOD", "BROWSER_ONLY",
+        # what EL6's installer adds: the interface's MTU, and the machine's own name (see plan)
+        "MTU", "HOSTNAME"}
 # /etc/sysconfig/network: what the plugin reads there and this op converts (GATEWAY, GATEWAYDEV, IPV6INIT), and what
 # NetworkManager doesn't read at all; anything else it reads there (RES_OPTIONS, IPV6_DEFAULTGW...) fails the step
 NET_KEYS = {"GATEWAY", "GATEWAYDEV", "IPV6INIT", "NETWORKING", "NETWORKING_IPV6", "HOSTNAME", "NOZEROCONF", "NISDOMAIN"}
@@ -131,6 +134,15 @@ def plan(path, net, resolv):
         if not re.fullmatch(r"[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}", v["UUID"]):
             fail(f"{path}: UUID={v['UUID']} isn't a UUID")
         args += ["connection.uuid", v["UUID"].lower()]
+    if "MTU" in v:  # the plugin's ethernet.mtu
+        if not re.fullmatch(r"[1-9][0-9]{1,4}", v["MTU"]) or not 68 <= int(v["MTU"]) <= 65535:
+            fail(f"{path}: MTU={v['MTU']} isn't 68 to 65535")
+        args += ["ethernet.mtu", v["MTU"]]
+    # EL9's NetworkManager reads no HOSTNAME from a profile (initscripts sent it as a DHCP client's name at most), so
+    # it goes when it is the machine's own name (/etc/hostname, or /etc/sysconfig/network's HOSTNAME), as EL6's
+    # installer writes it; any other name might mean something to someone, and fails the step
+    if "HOSTNAME" in v and v["HOSTNAME"] not in (own_name(), net.get("HOSTNAME")):
+        fail(f"{path}: HOSTNAME={v['HOSTNAME']} isn't the machine's own name")
     proto = v.get("BOOTPROTO", "none").lower()
     if proto in ("dhcp", "bootp"):  # the plugin reads bootp as dhcp
         for key in ("IPADDR", "PREFIX", "NETMASK", "GATEWAY"):
@@ -209,6 +221,14 @@ def plan(path, net, resolv):
         args += ["ipv6.addr-gen-mode", gen or "default-or-eui64"]
     args += ["connection.autoconnect", "yes" if boolean(path, v, "ONBOOT", "yes") else "no"]
     return c, dev, hw, args
+
+
+def own_name():
+    """/etc/hostname's name, or None"""
+    if not os.path.isfile(HOSTNAME):
+        return None
+    lines = [x.strip() for x in open(HOSTNAME) if x.strip() and not x.lstrip().startswith("#")]
+    return lines[0] if lines else None
 
 
 def running_mac(path, dev):

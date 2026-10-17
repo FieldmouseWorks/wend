@@ -906,7 +906,10 @@ The files are read as `KEY=VALUE` lines and never executed; a value that isn't o
   overrides it either way), `IPV4_FAILURE_FATAL=yes` as `ipv4.may-fail no`, and, with IPv6 on, `IPV6_DEFROUTE=no` as
   `ipv6.never-default`, `IPV6_FAILURE_FATAL=yes` as `ipv6.may-fail no` and `IPV6_ADDR_GEN_MODE` (`stable-privacy`
   or `eui64`, in that case; absent, `default-or-eui64`, as the plugin reads it) as `ipv6.addr-gen-mode`; all of them are booleans (or that mode) even with IPv6 off. `PROXY_METHOD`
-  must be `none` and `BROWSER_ONLY` `no`, the defaults: a proxy fails.
+  must be `none` and `BROWSER_ONLY` `no`, the defaults: a proxy fails;
+- what EL6's installer adds: `MTU` (68 to 65535) as `ethernet.mtu`, and `HOSTNAME`, which the plugin doesn't read:
+  dropped when it is the machine's own name (`/etc/hostname`, or `/etc/sysconfig/network`'s `HOSTNAME`), as the
+  installer writes it, and any other name fails.
 
 In `/etc/sysconfig/network`, `GATEWAY`, `GATEWAYDEV` and `IPV6INIT` are read as above, and `NETWORKING`,
 `NETWORKING_IPV6`, `HOSTNAME`, `NOZEROCONF` and `NISDOMAIN` are left as they are: none of them is part of a profile.
