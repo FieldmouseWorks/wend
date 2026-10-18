@@ -726,9 +726,13 @@ fn refusals(atlas_dir: &Path, plan_path: &str, o: &UpgradeOpts) -> Result<Value,
 /// The worker is running: follow its log. Else start it, detached, and follow that.
 fn follow_or_spawn() -> Result<u8, String> {
     let alive = |pid: i32| pid > 0 && unsafe { libc::kill(pid, 0) } == 0;
+    // the pid file names the boot it was written in: relocate copies it into the new root, where that pid is nobody
     let running = std::fs::read_to_string(PID)
         .ok()
-        .and_then(|p| p.trim().parse::<i32>().ok())
+        .and_then(|p| match p.split_whitespace().collect::<Vec<_>>()[..] {
+            [pid, boot] if boot == boot_id() => pid.parse::<i32>().ok(),
+            _ => None,
+        })
         .filter(|p| alive(*p));
     let start_at = std::fs::metadata(LOG).map(|m| m.len()).unwrap_or(0);
     let mut child = None;
@@ -776,10 +780,12 @@ fn follow_or_spawn() -> Result<u8, String> {
         if !buf.is_empty() {
             let _ = std::io::stderr().write_all(&buf);
         }
-        let done = match child.as_mut() {
-            Some(c) => c.try_wait().map(|s| s.is_some()).unwrap_or(true),
-            None => !alive(pid),
-        };
+        // the worker writes its exit code before a reboot, so the owner's session hears 10 before ssh goes down
+        let done = std::fs::metadata(RC).is_ok()
+            || match child.as_mut() {
+                Some(c) => c.try_wait().map(|s| s.is_some()).unwrap_or(true),
+                None => !alive(pid),
+            };
         if done {
             buf.clear();
             let _ = f.read_to_end(&mut buf);
@@ -800,7 +806,6 @@ fn follow_or_spawn() -> Result<u8, String> {
 
 /// The detached worker: one step of the state machine after another until it reboots, lands or rolls back.
 fn worker() -> Result<u8, String> {
-    let _ = std::fs::write(PID, std::process::id().to_string());
     let lock = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -811,6 +816,7 @@ fn worker() -> Result<u8, String> {
     if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Err("another wend upgrade worker holds the lock".into());
     }
+    let _ = std::fs::write(PID, format!("{} {}", std::process::id(), boot_id()));
     unsafe { libc::umask(0o022) };
     let code = match Worker::new() {
         Ok(mut w) => w.run().unwrap_or_else(|e| {
@@ -979,6 +985,7 @@ impl Worker {
                 s["phase"] = json!("relocated");
                 s["boot_id"] = json!(boot_id());
                 s["relocate"] = json!(stages);
+                s["reboots"] = json!([{"for": "the trial boot onto the new root", "at": now()}]);
                 s["expect"] = json!({"release": crate::share::system(Path::new("/")).release.map(|r| r.1)});
                 save(&format!("/run/wend/new{STATE}"), &s)?;
                 let motd = "/run/wend/new/etc/motd";
@@ -1370,18 +1377,11 @@ impl Worker {
             "rebooting: {what}. Run `wend upgrade` again once the machine is back"
         ));
         sh("sync", 120);
-        let _ = Command::new("/bin/sh")
-            .arg("-c")
-            .arg(format!("{ENV}sleep 2; reboot"))
-            .stdin(Stdio::null())
-            .spawn();
-        for _ in 0..120 {
-            std::thread::sleep(Duration::from_secs(1));
-        }
-        log("the old boot is still running two minutes after `reboot`: stopping everything and resetting (sysrq)");
+        // detached, so this process can end first and the owner hears 10: the reboot, and when it does nothing for
+        // two minutes, the forced reset
         let mut c = Command::new("/bin/sh");
         c.arg("-c")
-            .arg(format!("{ENV}{FORCED_RESET}"))
+            .arg(format!("{ENV}sleep 5; sync; reboot; sleep 120; {FORCED_RESET}"))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -1392,7 +1392,7 @@ impl Worker {
                 Ok(())
             });
         }
-        let _ = c.spawn();
+        c.spawn().map_err(|e| format!("starting the reboot: {e}"))?;
         Ok(AGAIN)
     }
 

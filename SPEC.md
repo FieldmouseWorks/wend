@@ -2190,8 +2190,10 @@ mechanism of either. Each step below names what it comes from, and the short lis
 
 The first target is Enterprise Linux on BIOS: `centos5-to-alma10` and `centos7-to-alma10`, the routes the VM tier has
 proved, and CentOS 6 machines joining the first one at its `centos6` rung. EL on UEFI, Debian and Ubuntu come after,
-each once its own proof below has run. Nothing here is built. It moves into the sections it changes, piece by piece,
-in the PRs that build it.
+each once its own proof below has run. `wend rehearse` and the plan (step 4 of the order of work) are built, and
+`wend upgrade`, `wend rollback` and `wend commit` (step 5) are built for a new root on a spare disk the owner names;
+step 5 says what of them is still to come. The rest is design. It moves into the sections it changes, piece by
+piece, in the PRs that build it.
 
 ### Four verbs
 
@@ -2655,7 +2657,16 @@ downloads. Nothing else.
    the walk with CI's run of the same route (`vm.py rehearse`). In three parts: the copy, the walk and the plan
    first; then the generated checks; then the kernel downloads, the facts and the failed rehearsal's report.
 5. `wend upgrade`, `wend rollback`, `wend commit` and `vm.py upgrade`, on `el/centos7-lamp`, then `el/centos5-web`,
-   with the proof above.
+   with the proof above. Built (`client/src/upgrade.rs`): the refusals, the detached worker, relocate onto a disk
+   named with `--new-root-disk` (the adapter's `[relocate]` or `[relocate_grub_legacy]` steps), each hop on the new
+   root offline through the verifying proxy with its fixes held to the rehearsal's, `arm_new` before every reboot of
+   the new root, the judgment after each boot, the rollback on the first red (the trial coming back twice included),
+   the rehearsal's prune (the plan's `prune`, each removal it kept), the landing release's repo files (the adapter's
+   `hop.land_repos`), the run, the state file and the exit codes. `vm.py upgrade` plays the owner, with
+   `--break-after HOP`, `--reset-trial`, `--kill-ssh` and `--rollback-by-hand`. Not yet: the free-extents
+   placement, carrying other mounted filesystems (relocate's preflight still refuses them, so the proof's extra data
+   disk waits on it), hardware preflight judged with the relocation assumed (it is judged on the machine as it is),
+   `stub_home` for an XFS v4 `/boot`, and `wend upgrade --resume`.
 6. Fleets: plan reuse, the exit codes and the loop in `docs/`, with the proof in "Fleets".
 7. `el/centos6-lamp` and its proof.
 8. README and docs/try-it.md say what's real.
