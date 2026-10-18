@@ -197,12 +197,12 @@ Each one a small PR.
    `ssh-keygen -Y verify -f archive/allowed_signers -I wend-archive -n wend-archive -s latest.json.sig < latest.json`.
    `r2push.py` marks an index `no-cache` and a blob or alias immutable, so an edge cache can't serve a stale index.
 9. **Gate artifacts** (built). `tools/gate_fetched.py DIR` downloads unexpired `fetched-N` artifacts not yet seen (a
-   read-only Actions token; GitHub wants one even on a public repo) and unpacks each under `DIR/<id>/`;
-   `archive.py ingest STORE --fetched DIR` then takes what passing runs on main pin. With `--runs` it takes only the
-   artifacts behind main's runs: a run file lands byte for byte as a gate job wrote it, so its sha256 finds its
-   attestation, the attestation names the workflow run, and the `run-N` artifact there holding that same file names
-   the job's `fetched-N`. Most artifacts are superseded pushes (on 2026-10-18, 559 unexpired, 187 GB; the ones
-   behind runs main lacked: 15, 5.5 GB).
+   token with read-only Actions and Attestations; GitHub wants one even on a public repo) and unpacks each under
+   `DIR/<id>/`; `archive.py ingest STORE --fetched DIR` then takes what passing runs on main pin. With `--runs` it
+   takes only the artifacts behind main's runs: a run file lands byte for byte as a gate job wrote it, so its sha256
+   finds its attestation, the attestation names the workflow run, and the `run-N` artifact there holding that same
+   file names the job's `fetched-N`. Most artifacts are superseded pushes (on 2026-10-18, 559 unexpired, 187 GB; the
+   ones behind runs main lacked: 15, 5.5 GB).
 
 ## Keeping it current
 
