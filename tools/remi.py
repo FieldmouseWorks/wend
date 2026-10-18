@@ -21,7 +21,8 @@ Jobs (ROUTE is routes/<family>/<name>.toml, BOX is <family>/<name>, both as they
   relocate BOX           tools/vm.py relocate BOX (give it --vm-flags "--extra-disk GB")
   rehearse ROUTE BOX     the client built with cargo build --release --locked, then tools/vm.py rehearse, as root
 
---vm-flags takes vm.py's flags before the command: --uefi --no-hwaddr --lvm --relocate --root-fs FS --extra-disk GB.
+--vm-flags takes vm.py's flags before the command: --uefi --no-hwaddr --lvm --relocate --root-fs FS --extra-disk GB
+--selinux MODE (a replay only).
 VM jobs run as dev under `sg kvm` with WEND_WORK=<lab>/vmwork, except a rehearse and any job on a box with a [shelter]
 plan, which run as root (sudo -n) with WEND_WORK=<lab>/vmwork-root, as they always have on remi.
 
@@ -86,7 +87,8 @@ JOBS = {  # name: (slot class, argument patterns, hours before it is stopped)
 SLOTS = {"rehearse": 1, "vm": 1, "tests": 2}  # a rehearse also takes the vm slot: VM jobs share the one shim
 VM_FLAGS = {"--uefi": None, "--no-hwaddr": None, "--lvm": None, "--relocate": None,
             # what tools/vm.py's main takes: ROOT_FS's keys, and 1 to 500 GB
-            "--root-fs": re.compile(r"ext3|ext4|xfs|xfs-v4"), "--extra-disk": re.compile(r"[1-9][0-9]?|[1-4][0-9]{2}|500")}
+            "--root-fs": re.compile(r"ext3|ext4|xfs|xfs-v4"), "--extra-disk": re.compile(r"[1-9][0-9]?|[1-4][0-9]{2}|500"),
+            "--selinux": re.compile(r"enforcing|none")}
 DONE = ("done", "refused", "error", "cancelled")
 
 
@@ -277,6 +279,8 @@ def enqueue(args):
         raise Refused("relocating needs a disk to relocate onto: --vm-flags \"--extra-disk GB\"")
     if "--relocate" in flags and job != "replay":
         raise Refused("--relocate goes with a replay only")
+    if "--selinux" in flags and (job != "replay" or "--relocate" in flags):
+        raise Refused("--selinux goes with a replay only, without --relocate")
     runner_check()
     where = trusted(sha, pr)
     with QueueLock():

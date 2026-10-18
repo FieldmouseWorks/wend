@@ -1912,7 +1912,9 @@ After every hop:
 
 A hop ends the replay when its commands fail, when the guest doesn't come back, when its network differs from the
 start, when the newest installed kernel isn't the one running (or the query names none), when the guest no longer
-runs on the firmware the replay boots, or when a check that passed before it fails after the reboot. Its disk and serial console are kept.
+runs on the firmware the replay boots, when SELinux no longer runs in the mode the box started in (enforcing,
+permissive or disabled, read from selinuxfs after every reboot), or when a check that passed before it fails after the
+reboot. Its disk and serial console are kept.
 
 The VM box differs from the chroot box in ways a replay can show: it has what the installer adds (`@core`, a kernel, a
 bootloader, a `/boot` of `releases.<id>.install.boot_part_mib` MiB: 7.9's installer default of 1 GiB on CentOS 7, and
@@ -1999,6 +2001,15 @@ The rules:
   `--no-hwaddr` boots the installer without `ifname=` (for a release whose `install.ifname` is on), so its ifcfg has
   no `HWADDR`, as a plain kickstart or interactive EL7 install writes it (wend#74); the build fails if the installed
   `ifcfg-eth0` has one anyway. It is an install choice too: the chroot box writes its own profile.
+- SELinux: a VM box installs permissive. `replay --selinux MODE` (EL) starts from the box as an owner who set SELinux
+  otherwise has it, made once per mode from a running copy of the installed box rather than a second install, as an
+  admin turns it: `enforcing` installs the release's targeted policy if it's missing, sets `SELINUX=enforcing` and
+  relabels the whole filesystem (`/.autorelabel`), as a stock install runs; `none` removes the policy packages and
+  `/etc/selinux/config`, so no policy loads (CentOS 4 to 6 only: a CentOS 4 box without `selinux-policy-targeted` has
+  no config at all, wend#158; EL7's systemd freezes rather than boot such a box). The disk is kept beside the box's
+  and isn't part of its cache key; it's made only if the box comes up in that mode and still passes every check it
+  passed as installed, since an owner who set SELinux so had a box that works so. A run records its `selinux` and the
+  mode it started in (`selinux_start`), and resumes only a run with the same.
 - `replay ROUTE BOX --from RUN HOP` starts from an earlier run's disk after the hop before HOP, to iterate on a late
   hop. It only resumes from a hop that passed on the same box, logs in with the ssh key of the box build that disk
   came from, and is recorded as `partial-pass` at best, never `pass`.

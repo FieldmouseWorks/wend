@@ -35,6 +35,10 @@ not runs/ (runs/ holds what CI proved).
                                            and NVRAM, and after every boot the guest must still be running on UEFI
   --no-hwaddr                              (before the command, EL7 kickstart) the installer isn't told the NIC
                                            by MAC, so ifcfg-eth0 has no HWADDR, as a stock install (wend#74)
+  --selinux enforcing|none                 (before replay, EL) the box with SELinux as its owner set it, made from a
+                                           copy of the installed box: enforcing (the targeted policy and a relabel),
+                                           or none (no policy package, no /etc/selinux/config: CentOS 4 to 6). Every
+                                           replay holds a box to the SELinux mode it started in, after every hop
   --root-fs FS, --lvm, --extra-disk GB     (before the command, EL7 kickstart on) the box installed another way:
                                            FS overrides [vm].root_fs; --lvm puts / and swap on LVM in a VG `centos`
                                            filling the disk, beside /boot, as a default EL7 install does (on CentOS
@@ -112,6 +116,28 @@ FW_NOW = "{ [ -d /sys/firmware/efi ] && echo uefi || echo bios; } 2>/dev/null"
 # no_hwaddr (--no-hwaddr): the installer isn't told the NIC by MAC (no ifname=), so its ifcfg-eth0 has no HWADDR, as
 # a plain kickstart or interactive EL7 install writes it (wend#74); an install choice too: the chroot box writes its own.
 LAYOUT = {"root_fs": None, "lvm": False, "extra_disks": [], "no_hwaddr": False}
+# --selinux MODE (main): the box as its owner set SELinux, made from the installed (permissive) box rather than a second
+# install, as an admin would turn it: "enforcing" (the targeted policy, SELINUX=enforcing and a full relabel, as a stock
+# install runs) or "none" (no policy package and no /etc/selinux/config, so no policy loads: CentOS 4 without
+# selinux-policy-targeted, wend#158). None: the box as installed. Its own disk beside the box's, never its cache key.
+SELINUX = None
+# what SELinux is doing now, read from selinuxfs (EL4 to 6 mount it at /selinux, EL7 on at /sys/fs/selinux), so a box
+# without getenforce reads too; then the config's SELINUX= ("none" without the file, "unset" without the line). After every boot of a replay the
+# mode has to be the one the box started in (SPEC "VM tier")
+SELINUX_NOW = ("( m=Disabled; for d in /sys/fs/selinux /selinux; do if [ -e $d/enforce ]; then "
+               "[ \"$(cat $d/enforce)\" = 1 ] && m=Enforcing || m=Permissive; break; fi; done; echo $m; "
+               "if [ -f /etc/selinux/config ]; then v=$(sed -n 's/^SELINUX=//p' /etc/selinux/config | tail -1); "
+               "echo ${v:-unset}; else echo none; fi )")
+# how each --selinux mode is made on a running copy of the box (then a reboot: the relabel, or the boot without a policy)
+SELINUX_MAKE = {
+    "enforcing": "rpm -q selinux-policy-targeted >/dev/null || yum -y install selinux-policy-targeted || exit 1; "
+                 "if [ -f /etc/selinux/config ]; then sed -i -e 's/^SELINUX=.*/SELINUX=enforcing/' "
+                 "-e 's/^SELINUXTYPE=.*/SELINUXTYPE=targeted/' /etc/selinux/config; else "
+                 "printf 'SELINUX=enforcing\\nSELINUXTYPE=targeted\\n' > /etc/selinux/config; fi; "
+                 "grep -qx SELINUX=enforcing /etc/selinux/config && touch /.autorelabel",
+    "none": "for p in selinux-policy-targeted selinux-policy-strict selinux-policy-mls; do "
+            "! rpm -q $p >/dev/null || rpm -e $p || exit 1; done; rm -f /etc/selinux/config"}
+SELINUX_IS = {"enforcing": "Enforcing enforcing", "none": "Disabled none"}
 # replay --relocate (main): relocate the box onto the first extra disk before the route's first hop, and roll back to
 # the old root and forward again after its last (SPEC "Relocate", "Walking a route on a relocated root")
 RELOCATE = False
@@ -917,6 +943,61 @@ def install(box_id, box_doc, d):
     sandbox.host(f"chmod a-w {base}")
 
 
+def selinux_start(d, box_doc, a):
+    """The disk a run starts from: the box's base.qcow2, or with --selinux (SELINUX) a disk beside it made from a copy
+    of the box once per mode and per this function's commands (SELINUX_MAKE), rebooted into that mode and holding
+    every check the box passed as installed. Built under the box's lock, like build()."""
+    base = os.path.join(d, "base.qcow2")
+    if not SELINUX:
+        return base
+    if a["backend"] != "rpm":
+        raise SystemExit("--selinux is for EL boxes")
+    if SELINUX == "none" and a["releases"][box_doc["release"]]["major"] >= 7:
+        # EL7's systemd freezes at boot with SELINUX=enforcing and no policy; there is no such box to start from
+        raise SystemExit("--selinux none is for a box on CentOS 4 to 6 (wend#158)")
+    h = hashlib.sha256((SELINUX_MAKE[SELINUX] + SELINUX_NOW).encode()).hexdigest()[:12]
+    disk = os.path.join(d, f"selinux-{SELINUX}-{h}.qcow2")
+    if os.path.exists(disk):
+        return disk
+    with Locked(os.path.join(d, "selinux.lock"), f"making the box's --selinux {SELINUX} disk"):
+        if os.path.exists(disk):
+            return disk
+        work = disk[:-len(".qcow2")] + ".work.qcow2"
+        for f in [work, *extras(work)]:
+            if os.path.exists(f):
+                os.remove(f)
+        overlay(base, work)
+        g = Guest(work, os.path.join(d, "key"), box_doc.get("vm", {}).get("ssh_port", 22),
+                  hardware(a, box_doc["release"]))
+        g.start()
+        try:
+            if not g.wait_ssh():
+                raise RuntimeError(f"the box didn't come up to be made --selinux {SELINUX}; console: {g.console}")
+            log(f"making the box SELinux {SELINUX}")
+            rc, out = g.ssh(SELINUX_MAKE[SELINUX], timeout=1800)
+            if rc:
+                raise RuntimeError(f"--selinux {SELINUX}: setting it up failed:\n{out[-2000:]}")
+            if not g.reboot()[0]:  # a relabel first, then the boot in that mode
+                raise RuntimeError(f"--selinux {SELINUX}: the box didn't come back; console: {g.console}")
+            now = " ".join(g.ssh(SELINUX_NOW)[1].split())
+            if now != SELINUX_IS[SELINUX]:
+                raise RuntimeError(f"--selinux {SELINUX}: the box came up with SELinux {now!r}, not {SELINUX_IS[SELINUX]!r}")
+            failed = {n: o for n, (ok, o) in checks(g, box_doc, a).items() if not ok}
+            if failed:  # an owner who set SELinux so had a box that works so; this one doesn't, so it isn't that box
+                raise RuntimeError(f"--selinux {SELINUX}: the box fails its own checks: {sorted(failed)}\n" +
+                                   "\n".join(f"{n}: {o[-600:]}" for n, o in failed.items()))
+        finally:
+            g.stop()
+        for x, b in zip(extras(work), extras(disk)):
+            os.rename(x, b)
+            sandbox.host(f"chmod a-w {b}")
+        if FIRMWARE == "uefi":
+            os.rename(nvram(work), nvram(disk))
+        os.rename(work, disk)
+        sandbox.host(f"chmod a-w {disk}")
+    return disk
+
+
 def pocket_sources(release, pockets):
     """Shell that adds the [vm].pockets a box asks for to the sources.list set_release just wrote: each `deb` line of
     the release, again for {release}-{pocket}, from the same mirror with the same components. check.py holds release
@@ -1088,7 +1169,9 @@ def replay(route_path, box_id, resume=None):
     pinned = [fixes[r["id"]] for r in route["fixes"]]
     w = type("W", (), {})()  # the harness's own hop_cmds (tools/walk.py), on a walk with no chroot box
     w.adapter = a
-    key, prev = os.path.join(d, "key"), os.path.join(d, "base.qcow2")
+    if SELINUX and box_doc.get("shelter"):  # the shelter's enforcing window sets the box back to permissive
+        raise SystemExit("--selinux on a box with a [shelter] plan isn't built yet")
+    key, prev = os.path.join(d, "key"), selinux_start(d, box_doc, a)
     start, todo = joins(a, route, box_doc["release"])
     if not todo:
         raise SystemExit(f"{box_id} starts at {start}: {route_path} neither starts there nor passes through it")
@@ -1107,6 +1190,8 @@ def replay(route_path, box_id, resume=None):
             raise SystemExit(f"{resume[0]} ran on {src.get('firmware', 'bios')}, not {FIRMWARE}")
         if src.get("layout", {}) != {k: v for k, v in LAYOUT.items() if v}:
             raise SystemExit(f"{resume[0]} ran with layout {src.get('layout', {})}, not this one")
+        if src.get("selinux") != SELINUX:
+            raise SystemExit(f"{resume[0]} ran with --selinux {src.get('selinux')}, not {SELINUX}")
         prev = os.path.abspath(os.path.join(resume[0], f"{route['hops'][i - 1]}.qcow2"))
         todo = route["hops"][i:]
         if not os.path.exists(prev):
@@ -1130,7 +1215,8 @@ def replay(route_path, box_id, resume=None):
     elif resume and "relocate" in src:
         raise SystemExit(f"{resume[0]} walked a relocated root: resume it with --relocate")
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    tag = "-".join(filter(None, [FIRMWARE, layout_tag(), "relocate" if RELOCATE else ""]))
+    tag = "-".join(filter(None, [FIRMWARE, layout_tag(), f"selinux-{SELINUX}" if SELINUX else "",
+                                 "relocate" if RELOCATE else ""]))
     out_dir = os.path.join(ROOT, ".wend", "vm", f"{stamp}-{box_id.replace('/', '_')}-{tag}-{os.getpid()}")
     w.head = head()
     at = w.head or {}
@@ -1160,6 +1246,16 @@ def replay(route_path, box_id, resume=None):
             rw.close()
 
 
+def selinux_read(g):
+    """SELinux on the running guest (SELINUX_NOW): its mode and its config's SELINUX= ("none": no config). A read
+    that fails has mode None, which is never a mode kept."""
+    rc, out = g.ssh(SELINUX_NOW, timeout=60)
+    words = out.split()
+    if rc or len(words) != 2 or words[0] not in ("Enforcing", "Permissive", "Disabled"):
+        return {"mode": None, "config": None, "error": f"rc={rc} {out[-300:]}"}
+    return {"mode": words[0], "config": words[1]}
+
+
 def kernel_is(running, newest):
     """Whether `uname -r` (running) names the release's newest kernel (the adapter's kernel_newest): EL7 and later put
     the arch on both, EL5's uname -r has none while the rpm query does, so a known arch suffix is dropped from both
@@ -1174,7 +1270,7 @@ def kernel_is(running, newest):
 def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_dir, stamp, key, prev, port, hw,
             plan, drop, sheltered, rw, sh_steps, reloc=None, start=None):
     """replay's hops, once the shelters (if any) are built; with reloc (replay --relocate), on the relocated root."""
-    hops, start_net, efi_start = [], None, None
+    hops, start_net, efi_start, start_selinux = [], None, None, None
     if reloc and not resume:
         moved = relocate_first(reloc, prev, key, port, hw, out_dir)
         todo, prev = (todo, moved) if moved else ([], prev)
@@ -1193,6 +1289,10 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
                 efi_start = g.ssh(EFI_CHAIN)[1][-3000:]
             if f"default via {GUEST_HOST}" not in start_net or ADDR not in start_net:  # never compare two empty reads
                 raise RuntimeError(f"the box's network can't be read at the start (no `ip`?): {start_net!r}")
+        if start_selinux is None:
+            start_selinux = selinux_read(g)
+            if start_selinux["mode"] is None:
+                raise RuntimeError(f"the box's SELinux can't be read at the start: {start_selinux['error']}")
         before = checks(g, box_doc, a)
         if hop == drop and not sh_steps:  # the build or the proof refused: the box stays on keeps_runtimes_on
             hops.append({"to": hop, "ok": False, "stage": "shelter refused: " +
@@ -1235,6 +1335,9 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
                 h["mid_reboot"], h["mid_reboot_forced"] = back, forced
                 if g.reboot_notes:
                     h["mid_reboot_notes"] = g.reboot_notes
+                if back:  # the post steps run in the mode the box started in, too
+                    h["mid_selinux"] = selinux_read(g)
+                    back = h["mid_selinux"]["mode"] is not None and h["mid_selinux"]["mode"] == start_selinux["mode"]
                 ok = back
                 if back:
                     ok, rest = run_hop(g, second, after)
@@ -1266,7 +1369,11 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
             h["firmware"] = g.ssh(FW_NOW)[1].strip()
             if FIRMWARE == "uefi":
                 h["efi_chain"] = g.ssh(EFI_CHAIN)[1][-3000:]
-            h["ok"] = ok and h["net_kept"] and not lost and h["kernel_current"] and h["firmware"] == FIRMWARE
+            # SELinux runs as it did when the walk started: enforcing stays enforcing, a box with no policy stays without
+            h["selinux"] = selinux_read(g)
+            h["selinux_kept"] = h["selinux"]["mode"] is not None and h["selinux"]["mode"] == start_selinux["mode"]
+            h["ok"] = ok and h["net_kept"] and not lost and h["kernel_current"] and h["firmware"] == FIRMWARE and \
+                h["selinux_kept"]
             if reloc:  # every hop's reboot has to land on the relocated root again, through the stub
                 h["root"] = g.ssh(reloc.r["booted"])[1].strip()
                 h["ok"] = h["ok"] and h["root"] == "new"
@@ -1281,7 +1388,7 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
             h["console_tail"] = open(g.console, errors="replace").read()[-4000:]
         log(f"hop to {hop}: {'OK' if h['ok'] else 'FAILED'} (commands {'ok' if ok else 'failed'}, "
             f"rebooted {back}{' (forced)' if forced else ''}, network kept {h.get('net_kept')}, lost {h.get('lost')}, "
-            f"firmware {h.get('firmware')})")
+            f"firmware {h.get('firmware')}, selinux {h.get('selinux', {}).get('mode')})")
         hops.append(h)
         g.stop()  # a failed hop's disk and console stay next to the run for a look (boot it with the same qemu line)
         if not h["ok"]:
@@ -1299,7 +1406,8 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
     run = {"schema": "wend.vmrun/0", "route": check.content_id(route), "box": box_id, "from": start or route["from"],
            "to": route["to"], "started": stamp, "head": w.head, "firmware": FIRMWARE,
            **({"efi_start": efi_start} if FIRMWARE == "uefi" else {}),
-           "layout": {k: v for k, v in LAYOUT.items() if v},
+           "layout": {k: v for k, v in LAYOUT.items() if v}, **({"selinux": SELINUX} if SELINUX else {}),
+           "selinux_start": start_selinux,
            **({"relocate": {**reloc.fills, "table": reloc.table, "stages": reloc.stages}} if reloc else {}), "hops": hops,
            "result": "pass" if complete and all(h["ok"] for h in hops) and not resume else
            "partial-pass" if complete and all(h["ok"] for h in hops) else "fail",
@@ -1705,7 +1813,7 @@ def rehearse(route_path, box_id, client):
 
 
 def main(args):
-    global FIRMWARE, RELOCATE
+    global FIRMWARE, RELOCATE, SELINUX
     while args[:1] and args[0].startswith("--"):
         if args[0] == "--relocate":
             RELOCATE, args = True, args[1:]
@@ -1716,6 +1824,8 @@ def main(args):
                     raise SystemExit(f"--uefi needs OVMF ({f}; Debian and Ubuntu: the ovmf package)")
         elif args[0] == "--no-hwaddr":
             LAYOUT["no_hwaddr"], args = True, args[1:]
+        elif args[0] == "--selinux" and len(args) > 1 and args[1] in SELINUX_MAKE:
+            SELINUX, args = args[1], args[2:]
         elif args[0] == "--lvm":
             LAYOUT["lvm"], args = True, args[1:]
         elif args[0] == "--root-fs" and len(args) > 1 and args[1] in ROOT_FS:
@@ -1724,6 +1834,9 @@ def main(args):
             LAYOUT["extra_disks"], args = LAYOUT["extra_disks"] + [int(args[1])], args[2:]
         else:
             return __doc__
+    if SELINUX and (args[:1] != ["replay"] or RELOCATE):
+        # relocate's boots aren't held to the mode yet, and a build is the box as installed
+        raise SystemExit("--selinux is for replay, without --relocate, so far")
     if args[:1] == ["shim-stop"] and len(args) == 2 and args[1].isdigit():
         return shim_stop(int(args[1]))
     if args[:1] in (["build"], ["replay"], ["relocate"], ["rehearse"]):

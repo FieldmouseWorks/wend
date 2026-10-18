@@ -177,12 +177,15 @@ try:
         return vm.build_source(p)
 
     for what, old in [("the hop walk", "def walk_vm("), ("the shelter's confinement proof", "def shelter_confine("),
-                      ("relocate", "def relocate("), ("prune", "def prune("), ("main", "def main(")]:
+                      ("relocate", "def relocate("), ("prune", "def prune("), ("main", "def main("),
+                      ("the --selinux disk", "def selinux_start(")]:
         say(key_after(f"\n{old}", f"\nUNUSED_BY_BUILD = 1\n\n\n{old}") == key,
             f"a change beside {what} keeps the installed boxes")
-    say(key_after("    hops, start_net, efi_start = [], None, None\n",
-                  "    hops, start_net, efi_start = [], None, None  # changed\n") == key,
+    say(key_after("    hops, start_net, efi_start, start_selinux = [], None, None, None\n",
+                  "    hops, start_net, efi_start, start_selinux = [], None, None, None  # changed\n") == key,
         "a change inside the hop walk keeps the installed boxes")
+    say(key_after('    "none": "for p in', '    "none": "true; for p in') == key,
+        "a change to how --selinux makes its disk keeps the installed boxes")
     for what, old, new in [("the kickstart", 'def kickstart(box_doc, adapter, key_pub):\n',
                             'def kickstart(box_doc, adapter, key_pub):\n    pass\n'),
                            ("the install", "def install(box_id, box_doc, d):\n",
