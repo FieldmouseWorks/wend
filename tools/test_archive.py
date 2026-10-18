@@ -356,8 +356,9 @@ sys.path.insert(0, HERE)
 import archive  # noqa: E402
 
 
-def rpm(tags, sig_store=b"\0" * 5):
-    """A made-up binary .rpm: lead, a signature header (whose odd size needs the 8-byte padding), the main header."""
+def rpm(tags, sig_store=b"\0" * 5, kind=0):
+    """A made-up .rpm (kind 0 binary, 1 source): lead, a signature header (whose odd size needs the 8-byte padding),
+    the main header."""
     def header(entries, store):
         return (b"\x8e\xad\xe8\x01\0\0\0\0" + struct.pack(">II", len(entries), len(store)) +
                 b"".join(struct.pack(">IIII", *e) for e in entries) + store)
@@ -366,7 +367,8 @@ def rpm(tags, sig_store=b"\0" * 5):
     for tag, v in tags:
         entries.append((tag, 6, len(store), 1))
         store += v + b"\0"
-    return b"\xed\xab\xee\xdb" + b"\0" * 92 + sig + b"\0" * (-len(sig) % 8) + header(entries, store) + b"payload"
+    lead = b"\xed\xab\xee\xdb\3\0" + struct.pack(">H", kind) + b"\0" * 88
+    return lead + sig + b"\0" * (-len(sig) % 8) + header(entries, store) + b"payload"
 
 
 check(archive.rpm_sourcerpm(rpm([(1000, b"p7zip"), (1044, b"p7zip-9.20.1-2.el5.src.rpm")])) ==
@@ -374,6 +376,56 @@ check(archive.rpm_sourcerpm(rpm([(1000, b"p7zip"), (1044, b"p7zip-9.20.1-2.el5.s
 check(archive.rpm_sourcerpm(rpm([(1044, b"../../etc/passwd")])) is None and
       archive.rpm_sourcerpm(rpm([(1000, b"x")])) is None and archive.rpm_sourcerpm(b"\xed\xab\xee\xdb short") is None,
       "a header with no source, a source name that isn't one, or a truncated rpm names nothing")
+# a source its repos lost: Red Hat's SRPMS for a CentOS 7 rebuild, Fedora's koji for what Fedora built, each taken
+# only when it is a source rpm named as the binary's header names it; and an earlier ingest's gap is tried again
+tags = lambda n, v, r, host, src=None: ([(1000, n), (1001, v), (1002, r), (1007, host)] +
+                                       ([(1044, src)] if src else []))
+cos, fed = b"x86-01.bsys.centos.org", b"buildvm-x86-01.iad2.fedoraproject.org"
+bins = {"g": rpm(tags(b"g", b"1", b"3.el7_9", cos, b"g-1-3.el7_9.src.rpm")),
+        "f": rpm(tags(b"f", b"7", b"11", fed, b"f-7-11.src.rpm")),
+        "h": rpm(tags(b"h", b"1", b"1.el7", cos, b"h-1-1.el7.src.rpm")),
+        "d": rpm(tags(b"d", b"1", b"1.el7", cos, b"d-1-1.el7.src.rpm")),
+        "s": rpm(tags(b"s", b"2", b"1.el7", cos, b"s-2-1.el7.src.rpm"))}
+srcs = {"g": rpm(tags(b"g", b"1", b"3.el7_9", cos), kind=1), "f": rpm(tags(b"f", b"7", b"11", fed), kind=1),
+        "d": rpm(tags(b"evil", b"1", b"1.el7", cos), kind=1), "s": rpm(tags(b"s", b"2", b"1.el7", cos), kind=1)}
+rh = "ftp.redhat.com/redhat/linux/enterprise/7Server/en/os/SRPMS"
+put(f"{rh}/g-1-3.el7_9.src.rpm", srcs["g"])
+put(f"{rh}/d-1-1.el7.src.rpm", srcs["d"])  # names another package
+put("kojipkgs.fedoraproject.org/packages/f/7/11/src/f-7-11.src.rpm", srcs["f"])
+put("kojipkgs.fedoraproject.org/packages/h/1/1.el7/src/h-1-1.el7.src.rpm", srcs["f"])  # CentOS built h: not koji's
+u7 = "vault.centos.org/7.9.2009/updates"
+prim7 = gzip.compress(("<metadata>" + "".join(pkg(f"{n}.rpm", b, archive.rpm_sourcerpm(b)) for n, b in bins.items()) +
+                       "</metadata>").encode())
+put(f"{u7}/x86_64/repodata/repomd.xml", md(prim7))
+put(f"{u7}/x86_64/repodata/{sha(prim7)}-primary.xml.gz", prim7)
+os.makedirs(f"{w}/runs7")
+os.makedirs(f"{w}/fetched7/r")
+for n, b in bins.items():
+    put(f"{u7}/x86_64/Packages/{n}.rpm", b)
+open(f"{w}/fetched7/r/fetched.txt", "w").write("".join(f"https://{u7}/x86_64/Packages/{n}.rpm sha256:{sha(b)} 1\n"
+                                                        for n, b in bins.items()))
+json.dump({"result": "pass", "box": "c", "started": "7", "hops": [{"sources": {
+    f"https://{u7}/x86_64/repodata/repomd.xml": f"sha256:{sha(md(prim7))}"}}]}, open(f"{w}/runs7/r.json", "w"))
+p = subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", "ingest", f"{w}/store7", "--offline", "--tree",
+                    f"{w}/tree", "--runs", f"{w}/runs7", "--fetched", f"{w}/fetched7"], capture_output=True, text=True)
+idx = json.load(open(f"{w}/store7/index/latest.json"))["files"]
+src7 = lambda n: idx[f"https://{u7}/x86_64/Packages/{n}.rpm"][f"sha256:{sha(bins[n])}"]["source"]
+check(src7("g") == {"url": f"https://{rh}/g-1-3.el7_9.src.rpm", "digest": f"sha256:{sha(srcs['g'])}"} and
+      idx[f"https://{rh}/g-1-3.el7_9.src.rpm"][f"sha256:{sha(srcs['g'])}"].get("live"),
+      "a CentOS 7 update whose source the vault never got is taken from Red Hat's SRPMS, marked live")
+check(src7("f")["url"] == "https://kojipkgs.fedoraproject.org/packages/f/7/11/src/f-7-11.src.rpm",
+      "a package Fedora built whose source no repo keeps any more is taken from koji")
+check("missing" in src7("h") and "missing" in src7("d") and "missing" in src7("s") and
+      f"https://{rh}/d-1-1.el7.src.rpm" not in idx,
+      "koji isn't asked for what CentOS built, and a source rpm naming another package is refused")
+put(f"{rh}/s-2-1.el7.src.rpm", srcs["s"])
+os.makedirs(f"{w}/runs7b")
+p = subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", "ingest", f"{w}/store7", "--offline", "--tree",
+                    f"{w}/tree", "--runs", f"{w}/runs7b"], capture_output=True, text=True)
+idx = json.load(open(f"{w}/store7/index/latest.json"))["files"]
+check(src7("s").get("url") == f"https://{rh}/s-2-1.el7.src.rpm" and "missing" in src7("h") and
+      f"no source https://{u7}/x86_64/Packages/h.rpm" in p.stdout,
+      "an earlier ingest's gap is tried again though this ingest never walked to it, and one still missing is listed")
 import shutil as sh  # noqa: E402
 if sh.which("ssh-keygen"):  # the index signature (docs/archive.md, step 8)
     a = lambda *x: subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", *x], capture_output=True, text=True)
