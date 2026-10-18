@@ -391,18 +391,19 @@ impl<'a> Walk<'a> {
                 self.hops.last_mut().unwrap()["sources"] = Value::Object(s);
                 if crate::sandbox::REHEARSAL.load(std::sync::atomic::Ordering::Relaxed) {
                     let cached = self.fetch_kernel()?;
-                    self.hops.last_mut().unwrap()["kernel_cached"] = cached;
+                    let h = self.hops.last_mut().unwrap();
+                    // a hop whose kernel can't be fetched is the gap, as tools/report.py finds it
+                    if cached == json!(false) {
+                        h["ok"] = json!(false);
+                    }
+                    h["kernel_cached"] = cached;
                 }
             }
-            if !ok || self.hops.last().unwrap()["kernel_cached"] == json!(false) {
+            if self.hops.last().unwrap()["ok"] != json!(true) {
                 break;
             }
         }
-        let complete = self.hops.len() == hops.len()
-            && self
-                .hops
-                .iter()
-                .all(|h| h["ok"] == json!(true) && h["kernel_cached"] != json!(false));
+        let complete = self.hops.len() == hops.len() && self.hops.iter().all(|h| h["ok"] == json!(true));
         let prune = get(self.route, "finish").and_then(|f| get(f, "prune_obsolete")) == Some(&json!(true));
         let extra = if prune && complete { Some(self.prune()?) } else { None };
         let fin = self.check_health();

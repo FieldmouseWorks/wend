@@ -2361,7 +2361,7 @@ needed.
   running kernel or install one act only on a machine booted from the root, `[ / -ef /proc/1/root ]`). After each hop the rehearsal downloads, without installing, what
   `hop.kernel_after` would install (the release's `kernel` and what it pulls in, through the same proxy: the
   adapter's `hop.kernel_fetch`), so the machine's offline walk finds it in the cache. A hop whose kernel couldn't be
-  downloaded fails the rehearsal there (the download is the run's failed stage) and writes no plan. `net.ifcfg-to-keyfile` reads a profile's missing `HWADDR` from the
+  downloaded fails the rehearsal there (that hop is the run's failed hop and the download its failed stage) and writes no plan. `net.ifcfg-to-keyfile` reads a profile's missing `HWADDR` from the
   running machine's `/sys/class/net`, which on the copy is the scratch host's NIC (a static profile refuses there, a
   DHCP one pins that NIC). That is harmless only because nothing the copy wrote reaches the machine: `upgrade` runs
   the op again on the machine itself. An engine that ever deploys a copy's output must supply the machine's own NIC
