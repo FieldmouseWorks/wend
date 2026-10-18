@@ -7,7 +7,8 @@
 A pin of a live repo rots within hours (EPEL replaced two of #163's overnight), and the gate's artifacts keep its
 bytes only 90 days, so every run that lands on main has to reach the public archive the day it lands. One cycle:
 
-  1. tools/gate_fetched.py DIR: download the gate's new fetched-N artifacts.
+  1. tools/gate_fetched.py DIR --runs --have --lost: download the gate's fetched-N artifacts behind the passing runs
+     on main no ingest has walked yet (lost.txt aside), and no others.
   2. If main's runs/ is what the last good cycle ingested, no artifact is new, and that cycle is under HOURS old
      (default 24), stop: nothing to do.
   3. tools/archive.py ingest STORE --fetched DIR (plus any --tree and --blobs), the origin on.
@@ -15,8 +16,8 @@ bytes only 90 days, so every run that lands on main has to reach the public arch
   5. CMD, which signs and pushes (on remi, `sudo -n /data/wend-lab/scripts/r2push-run.sh`). It runs even when the
      ingest missed something: what was stored is good, and the index names only stored blobs.
   6. After a cycle that found everything, delete artifacts unpacked over DAYS ago (default 30): their pinned bytes
-     are stored, and a PR whose gate run is older than that rarely lands. If one does, the public check reports its
-     pins; delete its artifact id from DIR/.done and the next cycle downloads it again (GitHub keeps it 90 days).
+     are stored, and only runs already on main had theirs downloaded. To ingest one again, delete its artifact id
+     from DIR/.done and the next cycle downloads it again if its run still needs it (GitHub keeps it 90 days).
 
 Exits 1 when any step fails or the ingest missed something archive/lost.txt doesn't excuse, so the timer's unit goes
 red; the public check (.github/workflows/archive-check.yml) opens an issue when a pin stays unarchived. Exits 0 when
@@ -80,8 +81,9 @@ def main(argv):
     py = [sys.executable, "-P", "-u"]
 
     before = done_count(fetched)
-    gate = [*py, f"{HERE}/gate_fetched.py", fetched] + (["--token-file", opts["--token-file"][-1]]
-                                                        if opts["--token-file"] else [])
+    gate = [*py, f"{HERE}/gate_fetched.py", fetched, "--runs", f"{repo}/runs", "--have", f"{store}/index/latest.json",
+            "--lost", f"{repo}/archive/lost.txt"]
+    gate += ["--token-file", opts["--token-file"][-1]] if opts["--token-file"] else []
     if run(gate):
         print("archive_cycle: downloading the gate's artifacts failed")
         return 1

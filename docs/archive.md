@@ -196,10 +196,13 @@ Each one a small PR.
    `curl -sO https://archive.fieldmouseworks.com/index/latest.json{,.sig}` then
    `ssh-keygen -Y verify -f archive/allowed_signers -I wend-archive -n wend-archive -s latest.json.sig < latest.json`.
    `r2push.py` marks an index `no-cache` and a blob or alias immutable, so an edge cache can't serve a stale index.
-9. **Gate artifacts** (built). `tools/gate_fetched.py DIR` downloads every unexpired `fetched-N` artifact not yet
-   seen (a read-only Actions token; GitHub wants one even on a public repo) and unpacks each under `DIR/<id>/`;
-   `archive.py ingest STORE --fetched DIR` then takes what passing runs on main pin. Artifacts from runs that never
-   landed are read and ignored.
+9. **Gate artifacts** (built). `tools/gate_fetched.py DIR` downloads unexpired `fetched-N` artifacts not yet seen (a
+   read-only Actions token; GitHub wants one even on a public repo) and unpacks each under `DIR/<id>/`;
+   `archive.py ingest STORE --fetched DIR` then takes what passing runs on main pin. With `--runs` it takes only the
+   artifacts behind main's runs: a run file lands byte for byte as a gate job wrote it, so its sha256 finds its
+   attestation, the attestation names the workflow run, and the `run-N` artifact there holding that same file names
+   the job's `fetched-N`. Most artifacts are superseded pushes (on 2026-10-18, 559 unexpired, 187 GB; the ones
+   behind runs main lacked: 15, 5.5 GB).
 
 ## Keeping it current
 
@@ -210,12 +213,13 @@ reachable. So the archive is kept current on a timer, and checked from outside.
 
 - **remi, hourly.** `archive/remi/wend-archive.timer` runs `tools/archive_cycle.py` from a worktree of main nothing
   else uses (`/data/dev/src/wend-archive-main`), updated to `origin/main` first, so ingest always reads the runs main
-  has now. A cycle downloads new gate artifacts (`gate_fetched.py`), stops there if main's `runs/` and the artifacts
-  are what the last good cycle saw (under a day ago), and otherwise ingests, verifies the store (signatures aside:
-  the push signs) and runs remi's push wrapper (`sudo -n /data/wend-lab/scripts/r2push-run.sh`: sign, then
-  `r2push.py`, from that same worktree). It pushes what it stored even when the ingest missed something, then exits
-  1, and keeps retrying each hour until a cycle finds everything. After a good cycle it deletes artifacts unpacked
-  over 30 days ago.
+  has now. A cycle downloads the gate artifacts behind the passing runs on main no ingest has walked yet
+  (`gate_fetched.py --runs --have --lost`: a pin isn't in the store's index naming that run, lost.txt aside), stops
+  there if main's `runs/` and the artifacts are what the last good cycle saw (under a day ago), and otherwise ingests,
+  verifies the store (signatures aside: the push signs) and runs remi's push wrapper (`sudo -n
+  /data/wend-lab/scripts/r2push-run.sh`: sign, then `r2push.py`, from that same worktree). It pushes what it stored
+  even when the ingest missed something, then exits 1, and keeps retrying each hour until a cycle finds everything.
+  After a good cycle it deletes artifacts unpacked over 30 days ago.
 - **What a live walk reads.** A replay asks only for what its package manager needed, but a live walk of the same
   run on a real machine can ask for more (filelists for a file dependency, updateinfo), and a live repo deletes them
   with their repomd.xml: #163's rehearsal was refused on EPEL 8's. So capture also fetches, as the run is saved,
