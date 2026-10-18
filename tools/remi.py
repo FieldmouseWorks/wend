@@ -310,12 +310,15 @@ def mirror_hash(sha):
     return hashlib.sha256(p.stdout).hexdigest() if p.returncode == 0 else None
 
 
-def shim_urls():
+def shim_urls(sha):
+    """The shims the job at sha would use, from its own adapters (never the runner's: a test's stand-in repo has no
+    [mirror], so the test never probes or stops the lab's real shim)."""
     out = set()
-    d = os.path.join(RUNNER, "adapters")
-    for f in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+    ls = subprocess.run(["git", "-C", BASE, "ls-tree", "--name-only", f"{sha}:adapters"], capture_output=True, text=True)
+    for f in ls.stdout.split() if ls.returncode == 0 else []:
         if f.endswith(".toml"):
-            m = tomllib.load(open(os.path.join(d, f), "rb")).get("mirror")
+            p = subprocess.run(["git", "-C", BASE, "show", f"{sha}:adapters/{f}"], capture_output=True, text=True)
+            m = tomllib.loads(p.stdout).get("mirror") if p.returncode == 0 else None
             if m:
                 out.add(m["shim"])
     return sorted(out)
@@ -399,7 +402,7 @@ def blocker(e, running, ranked):
             return f"the mirror shim: {', '.join(others)} use another tools/mirror.py"
         e["mirror"] = want
         if not any(JOBS[x["job"]][0] != "tests" for x in running):
-            for url in shim_urls():
+            for url in shim_urls(e["sha"]):
                 have = shim_have(url)
                 if have is not None and have != want:
                     why = shim_stop(url)

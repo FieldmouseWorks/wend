@@ -2,9 +2,11 @@
 and a stand-in cargo, with no sudo, sg or KVM. python3 tools/test_remi.py"""
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 sys.dont_write_bytecode = True
@@ -64,6 +66,23 @@ trace.write(f"end {cmd} {box}\n")
 sys.exit(0 if res == "pass" else 1)
 '''
 
+# a stand-in shim the stand-in repo's adapter names: it notes each probe and hangs up, so a probe finds nothing listening
+# and the worker never tries to stop it. The worker must probe this one, from the job's own adapters, and never the
+# lab's real shim from the runner's.
+shim, probes = socket.socket(), []
+shim.bind(("127.0.0.1", 0))
+shim.listen(8)
+
+
+def hang_up():
+    while True:
+        c, _ = shim.accept()
+        probes.append(c.recv(4096).split(b"\r\n", 1)[0].decode())
+        c.close()
+
+
+threading.Thread(target=hang_up, daemon=True).start()
+
 # the stand-in origin: main with two commits, a PR branch, and a commit only a fork has (a pull head, no branch)
 origin, seed = f"{w}/origin.git", f"{w}/seed"
 sh("git", "init", "-q", "--bare", origin)
@@ -74,6 +93,7 @@ open(f"{seed}/tools/vm.py", "w").write(VM)
 open(f"{seed}/tools/mirror.py", "w").write("# shim\n")
 open(f"{seed}/tools/check.py", "w").write("print('ok')\n")
 open(f"{seed}/tools/test_a.py", "w").write("print('fine')\n")
+open(f"{seed}/adapters/el.toml", "w").write(f'[mirror]\nshim = "http://127.0.0.1:{shim.getsockname()[1]}"\n')
 open(f"{seed}/routes/el/c7-to-a10.toml", "w").write('family = "el"\n')
 open(f"{seed}/boxes/el/c7/box.toml", "w").write('release = "7"\n')
 open(f"{seed}/boxes/el/junk/box.toml", "w").write('release = "7"\n[shelter.app]\nx = 1\n')
@@ -164,6 +184,8 @@ lines = out.splitlines()
 check(lines[0].startswith(j2) and lines[1].startswith(j1), "order puts the named jobs first, in that order")
 rc, out = remi("worker")
 check(rc == 0, "the worker runs the queue to empty and exits")
+check(probes and set(probes) == {"GET /.wend-shim HTTP/1.1"} and "shim-stop" not in out,
+      "it probes the shim the job's own adapters name, and stops nothing it doesn't own")
 trace = open(f"{w}/lab/trace").read().splitlines()
 at = [i for i, l in enumerate(trace) if l.startswith("start rehearse")]
 check(len(at) == 2 and trace.index("end rehearse el/c7") < at[1], "two rehearses never overlap")
