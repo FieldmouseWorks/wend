@@ -65,17 +65,18 @@ For each hop on a route, the harness (not the fix) does:
 
 1. set the release (adapter `hop.set_release`; harness-owned files are rewritten),
 2. refresh the indexes (`hop.refresh`), then the kernel handover's first half (`hop.kernel_before`, see "Kernels
-   and the bootloader"),
+   and the bootloader"), then `hop.before_transaction` (EL: an enforcing machine runs the hop permissive, wend#158),
 3. the `pre` steps of every fix whose `when` held, in route order,
 4. the upgrade transaction: the arriving release's own `upgrade` list if the adapter gives one, else `hop.upgrade`
    (Debian: `dist-upgrade`, then `autoremove --purge`; EL: from `yum upgrade` on EL6 to
-   `dnf distro-sync --allowerasing` on EL9 and 10), then the kernel handover's second half (`hop.kernel_after`). On a
-   real machine, a release whose adapter says `reboot = "before-post"` boots its new kernel here,
+   `dnf distro-sync --allowerasing` on EL9 and 10), then the kernel handover's second half (`hop.kernel_after`) and `hop.after_transaction` (EL: that machine's files relabelled
+   under the arriving policy, so it boots enforcing). On a real machine, a release whose adapter says `reboot = "before-post"` boots its new kernel here,
 5. the `post` steps of those fixes, in route order, then the harness appends their `adds` to
    `/var/lib/wend/added-families` (see "restores and adds"),
 6. remove the drop-ins of any `pm-option` used on this hop,
 7. `hop.verify` if the adapter has one (EL: the release file names the new major),
-8. `hop.after`, whatever happened above (cleanup: package caches, the rpm database),
+8. `hop.after`, whatever happened above (cleanup: package caches, the rpm database; EL: enforcing again if step 2 set
+   permissive),
 9. all health checks. Any command that fails in 1 to 7, or any check that passed before the hop and fails now,
    rolls the whole hop back.
 
@@ -974,7 +975,7 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`; each an http(s) URL, or host/path through the `[mirror]` shim), and optional `releases.<id>.upgrade` like rpm's. rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader"), `joins` (a start release off the ladder: the ladder release with the same major whose routes its boxes take; see Route). apt: a start release may have `releases.<id>.install` too, and any release `signed` (see "Signed packages") |
 | `[addons.<name>]` | rpm: `marker`, `vendor`, `repos` (see "Add-on repositories") |
 | `[mirror]` | `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts): every rpm repo, and an apt mirror given as host/path |
-| `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), `autoremove`, `obsolete`, `installed_list`, `kernel_newest` (the VM tier's newest-kernel query); apt also `apt_conf`, the harness's apt config, and `apt_unsigned`, the lines added on hops into unsigned releases |
+| `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), optional `before_transaction` and `after_transaction` (lists, see "How a hop runs"), `autoremove`, `obsolete`, `installed_list`, `kernel_newest` (the VM tier's newest-kernel query); apt also `apt_conf`, the harness's apt config, and `apt_unsigned`, the lines added on hops into unsigned releases |
 | `[predicates]` | `installed`, `file`, `file-contains`, `mysql-option` command templates |
 | `[pm_options.<name>]` | `path`, `content`. apt: only `overwrite-conflicting-files`; rpm: none |
 | `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear. Whatever a `pattern`, `list` or `table` says, every value a fix passes through one must also match `[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*`: no quote, whitespace, backslash, glob character, `%`, any of `` $`;&|<>(){}~ ``, or leading `-` |

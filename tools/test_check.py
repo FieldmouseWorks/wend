@@ -622,8 +622,13 @@ for fam, hop in (("el", "centos6"), ("debian", "squeeze")):
     up = [_walk.fill(c, w_.vars) for c in (rel["upgrade"] if isinstance(rel, dict) and "upgrade" in rel
                                             else h_["upgrade"])]
     if fam == "el":  # kernel_before before the pre steps: rpm.transit (a pre step) needs the kernel records gone
-        ok = bool(kb) and bool(ka) and first[2:2 + len(kb)] == kb and "vsftpd" in first[2 + len(kb)] and \
-            first[-len(ka):] == ka and first[-len(ka) - len(up):-len(ka)] == up
+        # (and before_transaction, then after_transaction, wrap them: wend#158)
+        bt = [_walk.fill(c, w_.vars) for c in h_.get("before_transaction", [])]
+        at = [_walk.fill(c, w_.vars) for c in h_.get("after_transaction", [])]
+        ok = bool(kb) and bool(ka) and bool(bt) and bool(at) and first[2:2 + len(kb)] == kb and \
+            first[2 + len(kb):2 + len(kb) + len(bt)] == bt and "vsftpd" in first[2 + len(kb) + len(bt)] and \
+            first[-len(at):] == at and first[-len(at) - len(ka):-len(at)] == ka and \
+            first[-len(at) - len(ka) - len(up):-len(at) - len(ka)] == up
     else:  # Debian's packages carry its kernels; the harness only keeps GRUB 2 installed, after the transaction
         ok = not kb and bool(ka) and first[-len(ka):] == ka and first[-len(ka) - len(up):-len(ka)] == up
     print(("passed  " if ok else "WRONG   ") + f"{fam} {hop}: kernel steps right after refresh and right after the upgrade")

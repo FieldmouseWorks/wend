@@ -92,8 +92,10 @@ class Walk:
                                  "don't install")
         declare = [f"mkdir -p /var/lib/wend && printf '{''.join(x + chr(92) + 'n' for x in adds)}' >> {ADDED}"] if adds else []
         kernel = lambda k: [fill(c, v) for c in h.get(k, [])]  # noqa: E731 (SPEC "Kernels and the bootloader")
-        return ([fill(h["set_release"], v), fill(h["refresh"], v)] + kernel("kernel_before") + sh_pre + comp("pre") +
-                [fill(c, v) for c in upgrade] + kernel("kernel_after"),
+        # before_transaction and after_transaction: the adapter's own around everything that runs a transaction
+        return ([fill(h["set_release"], v), fill(h["refresh"], v)] + kernel("kernel_before") +
+                kernel("before_transaction") + sh_pre + comp("pre") + [fill(c, v) for c in upgrade] +
+                kernel("kernel_after") + kernel("after_transaction"),
                 comp("post") + sh_post + declare + cleanup + verify)
 
     def execute(self, commands, why):
