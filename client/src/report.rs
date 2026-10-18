@@ -150,7 +150,7 @@ pub fn build(run: &Value, family: &str, output: Option<&str>, words: &[String]) 
     }
     if let Some(logs) = run["final"]["failed_logs"].as_object() {
         for (c, l) in logs {
-            md.extend(fence(&format!("{c} log"), l.as_str().unwrap_or("")));
+            md.extend(fence(&format!("{} log", scrub(c, words)), l.as_str().unwrap_or("")));
         }
     }
     let md = md.join("\n");
@@ -224,6 +224,7 @@ mod tests {
         // an owner's check named after the machine is scrubbed too
         r["final"]["failed"] = json!(["web01-backup"]);
         r["start_services"] = json!(["httpd", "web01-sync"]);
+        r["final"]["failed_logs"] = json!({"web01-backup": "no"});
         let (_, file, link) = build(&r, "el", None, &words);
         assert!(!file.contains("web01") && !link.contains("web01"), "{file}");
     }

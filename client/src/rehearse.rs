@@ -501,6 +501,8 @@ fn gap_report(
         .find(|s| s["ok"] == json!(false))
         .and_then(|s| s["outputs"].as_array())
         .and_then(|o| o.last())
+        // a step that lost checks with every command passing has no failing command: its checks' logs say it
+        .filter(|o| o["rc"].as_i64().is_some_and(|rc| rc != 0))
         .and_then(|o| o["out"].as_str());
     let words = crate::share::local_words(root, nodename, &[]);
     let mut run = w.run.clone();
