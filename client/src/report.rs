@@ -35,8 +35,21 @@ pub fn gap_key(run: &Value, family: &str) -> (String, String, String) {
         .filter_map(|v| v.as_str().map(String::from))
         .collect();
     failed.sort();
-    // json.dumps's own layout, as tools/report.py hashes it
-    let j = |s: &str| serde_json::to_string(s).unwrap();
+    // json.dumps's own layout, as tools/report.py hashes it: non-ASCII as \\u escapes (UTF-16, as Python writes them)
+    let j = |s: &str| {
+        serde_json::to_string(s)
+            .unwrap()
+            .chars()
+            .map(|c| match c as u32 {
+                0..=0x7f => c.to_string(),
+                _ => c
+                    .encode_utf16(&mut [0; 2])
+                    .iter()
+                    .map(|u| format!("\\u{u:04x}"))
+                    .collect(),
+            })
+            .collect::<String>()
+    };
     let raw = format!(
         "[{}, {}, {}, {}, [{}]]",
         j(family),
@@ -203,6 +216,15 @@ mod tests {
             .map(|b| format!("{b:02x}"))
             .collect();
         assert_eq!(key, want);
+        // json.dumps escapes what isn't ASCII: python3 -c 'import json; print(json.dumps(["café", "🙂"]))'
+        let mut r = run();
+        r["final"]["failed"] = json!(["café", "🙂"]);
+        let raw = r#"["el", "alma8", "alma9", "command failed: dnf -y install foo-N", ["caf\u00e9", "\ud83d\ude42"]]"#;
+        let want: String = Sha256::digest(raw.as_bytes())[..6]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(gap_key(&r, "el").0, want);
     }
 
     #[test]
