@@ -87,6 +87,22 @@ check(p.returncode == 1 and "refused member" in p.stdout and not os.path.exists(
       not [f for f in os.listdir(f"{w}/out") if f.startswith("4")] and "4" not in open(f"{w}/out/.done").read().split(),
       "a zip member that climbs out of its directory is refused, and nothing of it is kept")
 check(TOKEN not in p.stdout + p.stderr, "the token is never printed")
+# --on-main: only artifacts whose gate run tested a commit main has; the rest wait, unrecorded
+repo = f"{w}/repo"
+g = lambda *a: subprocess.run(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", *a], check=True,
+                              capture_output=True, text=True).stdout.strip()
+os.makedirs(repo)
+g("init", "-q")
+g("commit", "-q", "--allow-empty", "-m", "merged head")
+merged = g("rev-parse", "HEAD")
+listing[:] = [{"id": 5, "name": "fetched-0", "expired": False, "workflow_run": {"head_sha": merged}},
+              {"id": 6, "name": "fetched-0", "expired": False, "workflow_run": {"head_sha": "9" * 40}}]
+zips[5] = zips[6] = zipped({"fetched.txt": "z"})
+p = subprocess.run([sys.executable, "-B", f"{HERE}/gate_fetched.py", f"{w}/out2", "--token-file", tok, "--api", api,
+                    "--on-main", repo], capture_output=True, text=True)
+check(p.returncode == 0 and os.path.isdir(f"{w}/out2/5") and not os.path.exists(f"{w}/out2/6") and
+      "1 from commits not on main left for later" in p.stdout and open(f"{w}/out2/.done").read().split() == ["5"],
+      "--on-main takes only artifacts of commits main has, and leaves the rest unrecorded for a later run")
 srv.shutdown()
 subprocess.run(["rm", "-rf", w])
 sys.exit(0 if all(results) else 1)

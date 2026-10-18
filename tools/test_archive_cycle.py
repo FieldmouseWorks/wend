@@ -80,6 +80,8 @@ check(p.returncode == 0 and steps == ["gate_fetched", "archive-ingest", "archive
 check(f"--tree {w}/tree" in open(f"{w}/log").read().split("\n")[1] and
       f"--lost {w}/repo/archive/lost.txt" in open(f"{w}/log").read(),
       "the ingest gets the extra sources and the checkout's lost.txt")
+check(f"--on-main {w}/repo" in open(f"{w}/log").read().split("\n")[0],
+      "the download takes only artifacts of commits the checkout's main has")
 p, steps = cycle()
 check(p.returncode == 0 and steps == ["gate_fetched"] and "nothing new" in p.stdout,
       "nothing new on main and no new artifact: the cycle stops after the download")

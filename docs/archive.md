@@ -210,7 +210,8 @@ reachable. So the archive is kept current on a timer, and checked from outside.
 
 - **remi, hourly.** `archive/remi/wend-archive.timer` runs `tools/archive_cycle.py` from a worktree of main nothing
   else uses (`/data/dev/src/wend-archive-main`), updated to `origin/main` first, so ingest always reads the runs main
-  has now. A cycle downloads new gate artifacts (`gate_fetched.py`), stops there if main's `runs/` and the artifacts
+  has now. A cycle downloads new gate artifacts of commits main has (`gate_fetched.py --on-main`: a run lands only from a
+  merged PR head, so superseded pushes and open PRs wait until they merge), stops there if main's `runs/` and the artifacts
   are what the last good cycle saw (under a day ago), and otherwise ingests, verifies the store (signatures aside:
   the push signs) and runs remi's push wrapper (`sudo -n /data/wend-lab/scripts/r2push-run.sh`: sign, then
   `r2push.py`, from that same worktree). It pushes what it stored even when the ingest missed something, then exits

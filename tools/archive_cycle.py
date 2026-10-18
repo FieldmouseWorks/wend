@@ -7,7 +7,7 @@
 A pin of a live repo rots within hours (EPEL replaced two of #163's overnight), and the gate's artifacts keep its
 bytes only 90 days, so every run that lands on main has to reach the public archive the day it lands. One cycle:
 
-  1. tools/gate_fetched.py DIR: download the gate's new fetched-N artifacts.
+  1. tools/gate_fetched.py DIR --on-main: download the gate's new fetched-N artifacts from commits main has.
   2. If main's runs/ is what the last good cycle ingested, no artifact is new, and that cycle is under HOURS old
      (default 24), stop: nothing to do.
   3. tools/archive.py ingest STORE --fetched DIR (plus any --tree and --blobs), the origin on.
@@ -80,8 +80,8 @@ def main(argv):
     py = [sys.executable, "-P", "-u"]
 
     before = done_count(fetched)
-    gate = [*py, f"{HERE}/gate_fetched.py", fetched] + (["--token-file", opts["--token-file"][-1]]
-                                                        if opts["--token-file"] else [])
+    gate = [*py, f"{HERE}/gate_fetched.py", fetched, "--on-main", repo]
+    gate += ["--token-file", opts["--token-file"][-1]] if opts["--token-file"] else []
     if run(gate):
         print("archive_cycle: downloading the gate's artifacts failed")
         return 1

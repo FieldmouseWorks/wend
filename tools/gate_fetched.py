@@ -1,13 +1,18 @@
 """Download the gate's fetched-N artifacts for the archive (docs/archive.md, "CI captures, remi archives"). Runs on
 remi. Standard library only.
 
-  python3 tools/gate_fetched.py DIR [--token-file FILE]
+  python3 tools/gate_fetched.py DIR [--token-file FILE] [--on-main REPO]
 
 Each gate replay uploads what it downloaded as an artifact named fetched-N: its download list and the metadata's bytes,
 which live repos replace within days. GitHub keeps them 90 days. This lists the repo's unexpired fetched-* artifacts
 and unpacks each one not yet seen into DIR/<artifact id>/, recording it in DIR/.done. Then:
 
   python3 tools/archive.py ingest STORE --fetched DIR
+
+With --on-main REPO, an artifact is downloaded only when the commit its gate run tested is in REPO's history (an
+ancestor of its HEAD, a checkout of main): a run lands on main only from a PR head that merged, so the rest (pushes that
+were superseded, PRs still open) are left for now, unrecorded, and downloaded on a later run once they've merged. A
+head that was force-pushed away never lands; if one somehow did, tools/archive_check.py reports its pins.
 
 Nothing here is trusted: ingest stores a file only when it hashes right against a passing run's pins on main, so an
 artifact from a run that never landed is read and ignored. Downloading an artifact needs a token even on a public repo:
@@ -17,6 +22,7 @@ $GH_TOKEN, then `gh auth token`. The token is never printed.
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -106,6 +112,14 @@ def extract(data, tmp):
                 out.write(src.read())
 
 
+def on_main(repo, sha):
+    """Is sha in repo's history? An unknown commit (a PR head that never merged) isn't."""
+    if not re.fullmatch(r"[0-9a-f]{40}", sha or ""):
+        return False
+    return subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", sha, "HEAD"],
+                          capture_output=True).returncode == 0
+
+
 def main(argv):
     if not argv or argv[0].startswith("-"):
         print(__doc__)
@@ -113,7 +127,7 @@ def main(argv):
     out, rest, opts = argv[0], argv[1:], {}
     while rest:
         a = rest.pop(0)
-        if a in ("--token-file", "--api") and rest:  # --api: a stand-in GitHub, for tests
+        if a in ("--token-file", "--api", "--on-main") and rest:  # --api: a stand-in GitHub, for tests
             opts[a] = rest.pop(0)
         else:
             print(f"gate_fetched: {a!r} isn't an option, or has no value\n{__doc__}")
@@ -124,11 +138,14 @@ def main(argv):
         done = set(open(f"{out}/.done").read().split())
     except FileNotFoundError:
         done = set()
-    n = size = 0
+    n = size = later = 0
     try:
         with open(f"{out}/.done", "a") as log:
             for a in artifacts(opts.get("--api", API), tok):
                 if str(a["id"]) in done:
+                    continue
+                if "--on-main" in opts and not on_main(opts["--on-main"], a.get("workflow_run", {}).get("head_sha")):
+                    later += 1
                     continue
                 data = get(a["archive_download_url"], tok)
                 unpack(data, f"{out}/{a['id']}")
@@ -138,7 +155,8 @@ def main(argv):
     except (RuntimeError, zipfile.BadZipFile, OSError) as e:
         print(f"gate_fetched: {e}")
         return 1
-    print(f"unpacked {n} new fetched artifacts ({size / 1e6:.1f} MB) into {out}")
+    print(f"unpacked {n} new fetched artifacts ({size / 1e6:.1f} MB) into {out}" +
+          (f"; {later} from commits not on main left for later" if later else ""))
     return 0
 
 
