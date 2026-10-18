@@ -151,7 +151,8 @@ Adapter ops are named `<tool>.<verb>`. The adapter declares which ones its famil
   (release packages by hand: epochs and vendor switches), `rpm.drop-arch` (multilib leftovers), `rpm.drop-unneeded`, `rpm.adopt-rpmnew`,
   `rpm.set-aside-unowned`, `fs.layout` (`usrmove`, `run`), `kv.set` / `kv.unset` (key=value lines),
   `mysql.set-password`, `mysql.clean-shutdown`, `mysql.upgrade-data`, `ssh.generate-host-keys`,
-  `httpd.drop-missing-modules`, `php.mysqli-report-off`, `service.record`, `service.enable`, `net.ifcfg-to-keyfile`.
+  `httpd.drop-missing-modules`, `php.mysqli-report-off`, `service.record`, `service.enable`, `net.ifcfg-to-keyfile`,
+  `selinux.keep-disabled`.
 
 `rpm.bootstrap`, `rpm.transit` and `fs.layout` are surgery: dozens of shell lines each, replayed as root on a
 stranger's box. They are exactly why ops are typed. The surgery is written once, reviewed as a spec change, and every
@@ -863,6 +864,18 @@ now. `like` names what the unit replaces (`mysqld` for `mariadb`) or follows (`h
 the site needs). Never disables anything, and a unit whose `like` services were all off is left as it is. Fails if
 `systemctl enable` fails (the unit doesn't exist) or the unit isn't `enabled` afterwards. Works offline, as in a
 chroot. Reference: `systemctl enable {unit}`, then `systemctl is-enabled {unit}` must print `enabled`.
+
+**`selinux.keep-disabled`** (no arguments). For a box that runs with no SELinux policy loaded. EL4 writes
+`/etc/selinux/config` only from `selinux-policy-targeted`'s `%post`, so a CentOS 4 box without that package has no config
+and runs with SELinux off; at the CentOS 5 hop, EL5's `selinux-policy` `%post` sees no config and writes
+`SELINUX=enforcing` with no targeted policy beside it. EL5's and EL6's init boot such a box anyway; EL7's systemd reads
+`enforcing`, can't load a policy and freezes at the first boot (wend#158). This op makes the config say what the box
+runs: `SELINUX=disabled`, replacing every `SELINUX=` line (not `SELINUXTYPE=`), or a new config with `SELINUX=disabled`
+and `SELINUXTYPE=targeted` where there is none; the old file is kept under `/var/lib/wend/saved`. Refuses, changing
+nothing, where a policy is loaded: selinuxfs has an `enforce` file and the running shell's context
+(`/proc/self/attr/current`) is a `user:role:type` one, not the kernel's initial SID. Carrying a running SELinux is
+another job. A fix gates it on the targeted policy not being installed and runs it before the transaction of the
+hop into EL7.
 
 **`net.ifcfg-to-keyfile`** (no arguments). EL10's NetworkManager can't read the initscripts profiles
 (`/etc/sysconfig/network-scripts/ifcfg-*`) that EL9's still does. Without this op, a box with a static address comes
@@ -1913,7 +1926,8 @@ After every hop:
 A hop ends the replay when its commands fail, when the guest doesn't come back, when its network differs from the
 start, when the newest installed kernel isn't the one running (or the query names none), when the guest no longer
 runs on the firmware the replay boots, when SELinux no longer runs in the mode the box started in (enforcing,
-permissive or disabled, read from selinuxfs after every reboot), or when a check that passed before it fails after the
+permissive or disabled, read from selinuxfs after every reboot; no policy loaded counts as disabled, though EL4 to 6
+mount selinuxfs anyway), or when a check that passed before it fails after the
 reboot. Its disk and serial console are kept.
 
 The VM box differs from the chroot box in ways a replay can show: it has what the installer adds (`@core`, a kernel, a

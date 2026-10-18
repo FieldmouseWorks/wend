@@ -1174,6 +1174,10 @@ args = {}
 summary = "turn /etc/sysconfig/network-scripts/ifcfg-* into NetworkManager keyfiles (nmcli --offline, mode 0600) and pin each interface's name to its HWADDR (else the MAC of the physical NIC running the profile now, which must hold a static profile's address), before EL10, whose NetworkManager can't read ifcfg; fails, changing nothing, on any setting it doesn't convert"
 args = {}
 
+[ops."selinux.keep-disabled"]
+summary = "on a box running with no SELinux policy loaded, write SELINUX=disabled into /etc/selinux/config (making it if missing), so the next release's init doesn't freeze trying to load a policy the box never had; refuses where a policy is loaded"
+args = {}
+
 [ops."service.enable"]
 summary = "enable a systemd unit at boot if a service it replaces or follows (like) is in the SysV record or is an enabled unit now; never disables"
 args = { unit = { pattern = "[A-Za-z0-9][A-Za-z0-9_.-]*" }, like = { list = "[A-Za-z0-9][A-Za-z0-9_.-]*" } }
