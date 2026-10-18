@@ -216,6 +216,12 @@ reachable. So the archive is kept current on a timer, and checked from outside.
   `r2push.py`, from that same worktree). It pushes what it stored even when the ingest missed something, then exits
   1, and keeps retrying each hour until a cycle finds everything. After a good cycle it deletes artifacts unpacked
   over 30 days ago.
+- **What a live walk reads.** A replay asks only for what its package manager needed, but a live walk of the same
+  run on a real machine can ask for more (filelists for a file dependency, updateinfo), and a live repo deletes them
+  with their repomd.xml: #163's rehearsal was refused on EPEL 8's. So capture also fetches, as the run is saved,
+  every index a live repo's captured repomd.xml lists but changelogs and deltas, and ingest stores every such index
+  under a pinned repomd. One no source has is a walk gap, reported but not a failure: runs captured before this
+  have none.
 - **Known losses.** `archive/lost.txt` lists the pins whose bytes are gone everywhere (the pre-capture pins above,
   and anything since that no artifact or copy on remi held). `ingest` reports them as lost instead of failing, so a
   red cycle means something that can still be saved.

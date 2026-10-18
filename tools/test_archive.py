@@ -75,9 +75,18 @@ p = ingest("--fetched", f"{w}/fetched")
 idx = json.load(open(f"{w}/store/index/latest.json"))["files"]
 check(p.returncode == 0 and "0 referenced files not found" in p.stdout, "with the download list, the whole chain is found")
 check(sorted(idx) == sorted([f"{u}/repodata/repomd.xml", f"{u}/repodata/{sha(primary)}-primary.xml.gz",
+                             f"{u}/repodata/{sha(filelists)}-filelists.xml.gz",
                              f"{u}/Packages/a-1.rpm", f"{u}/Packages/c-1.rpm"]),
-      "stored: the pin, its package index and the packages the walk used; not filelists, unused packages, or a "
-      "package its index names only by md5 (the client ignores those too)")
+      "stored: the pin, its package index, its filelists (a live walk can ask for them) and the packages the walk "
+      "used; not unused packages, or a package its index names only by md5 (the client ignores those too)")
+os.rename(f"{w}/tree/{repo}/repodata/{sha(filelists)}-filelists.xml.gz", f"{w}/fl")
+shutil.rmtree(f"{w}/store")
+p = ingest("--fetched", f"{w}/fetched")
+check(p.returncode == 0 and f"walk gap {u}/repodata/{sha(filelists)}-filelists.xml.gz" in p.stdout,
+      "filelists no source has are a walk gap, not a failure")
+os.rename(f"{w}/fl", f"{w}/tree/{repo}/repodata/{sha(filelists)}-filelists.xml.gz")
+p = ingest("--fetched", f"{w}/fetched")
+idx = json.load(open(f"{w}/store/index/latest.json"))["files"]
 check(list(idx[f"{u}/repodata/repomd.xml"]) == [f"sha256:{sha(repomd)}"] and
       idx[f"{u}/Packages/a-1.rpm"][f"sha256:{sha(used_rpm)}"]["runs"] == ["el/x@1"],
       "the index maps each url to its digest and the passing runs that reference it")

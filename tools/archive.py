@@ -19,8 +19,10 @@ when it hashes right against that chain, wherever its bytes came from:
   (--runs DIR reads the run files from DIR instead of this checkout's runs/: for tests)
 
 What goes in: every top file a passing run pins; under it, each index some download list names, and always each
-package index (primary, Packages: the files that vouch for packages), in one form unless a walk used others; each
-package a download list names; and each stored package's source (a .src.rpm from its repo's source repo, or a .dsc
+package index (primary, Packages: the files that vouch for packages), in one form unless a walk used others; under a
+repomd.xml, also every other index it lists but changelogs (`other`) and deltas, since a live walk of the run can ask
+for filelists or updateinfo its replay never needed (one no source has is listed as a walk gap, not a failure: runs
+recorded before capture took them have none); each package a download list names; and each stored package's source (a .src.rpm from its repo's source repo, or a .dsc
 and its files from the Sources index its Release lists), checked against that metadata. A package whose source
 can't be found is listed as a gap, not a failure. Never the rest of a repo. Indexes compressed with zstd (EPEL 10)
 need Python 3.14 or the zstd command. Blobs are kept as upstream served them, under blob/sha256/<2 hex>/<64 hex>. index/latest.json
@@ -67,6 +69,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGES = (".rpm", ".deb", ".udeb")
 UNREADABLE = (".zck", ".lzma", ".lz4")  # compressions nothing here reads: reported, never skipped
 MAX_PLAIN = 1 << 30  # a .gz decompressed before it can be checked stops here
+NOT_WALKED = re.compile(r"(^|-)(other|prestodelta|deltainfo)[._]")  # a repomd's changelogs and deltas, by file name
 PACKAGE_INDEX = re.compile(r"(^|/)(primary\.xml(\.[a-z0-9]+)?|[0-9a-f]{40,64}-primary\.xml(\.[a-z0-9]+)?|"
                            r"binary-amd64/Packages(\.[a-z0-9]+)?)$")
 
@@ -292,6 +295,13 @@ def sources_entries(text):
     return out
 
 
+def walk_only(url, parent, used):
+    """An index a repomd.xml lists that no replay read and isn't a package index: kept for a live walk (filelists,
+    updateinfo, modules), never read for children, and a gap rather than a failure when no source has it."""
+    return bool(parent) and parent[0].endswith("/repodata/repomd.xml") and url not in used and \
+        not url.endswith(PACKAGES) and not PACKAGE_INDEX.search(url) and not NOT_WALKED.search(url.rsplit("/", 1)[1])
+
+
 def stem(u):
     return re.sub(r"\.(gz|xz|bz2|lzma|zst)$", "", u)
 
@@ -339,6 +349,7 @@ class Store:
         self.built_from = {}  # (package url, digest) -> source_names() value, for every package stored
         self.deb_sources = {}  # "<.../dists/X>/<comp>" -> [(Sources url, digest, the Release that lists it)]
         self.no_source = {}  # (package url, digest) -> why no source was stored
+        self.walk_gaps = {}  # url -> why: an index a repomd lists that only a live walk reads, found nowhere
         self.deb_indexes = {}  # "<.../dists/X>" -> {(url, digest)} of the package indexes pinned under it
         self.live_releases = {}  # "<.../dists/X>" -> [(url, "sha256:<hex>")]: a live Release read for its Sources
 
@@ -446,7 +457,7 @@ class Store:
             self.kept[(url, d)] = f"sha256:{h}"
             if parent:
                 self.found_under.add((parent, stem(url)))
-            if url.endswith(PACKAGES):
+            if url.endswith(PACKAGES) or walk_only(url, parent, self.used):
                 continue
             try:
                 listed = children(url, data)
@@ -471,8 +482,9 @@ class Store:
                     self.built_from[(child, cd)] = names[child]
                 if child.endswith(PACKAGES):
                     wanted = child in self.used
-                else:  # an index: the package indexes always, the rest when a walk used them
-                    wanted = bool(PACKAGE_INDEX.search(child)) or child in self.used
+                else:  # an index: the package indexes always, a repomd's others for a live walk, the rest when used
+                    wanted = bool(PACKAGE_INDEX.search(child)) or child in self.used or \
+                        walk_only(child, (url, d), self.used)
                 if wanted and depth < 3:
                     self.edges.setdefault((url, d), []).append((child, cd))
                     todo.append((child, cd, depth + 1, (url, d)))
@@ -675,6 +687,8 @@ class Store:
         for u, d, depth, parent, why in self.missing:
             if depth == 0 and (u, d) in self.lost:
                 self.known_lost.append((u, d))
+            elif depth > 0 and walk_only(u, parent, self.used):
+                self.walk_gaps.setdefault(u, why)
             elif depth == 0 or u.endswith(PACKAGES) or (parent, stem(u)) not in self.found_under or u in self.found:
                 out.setdefault(u, why)
         return dict(sorted(out.items()))
@@ -896,6 +910,11 @@ def main(argv):
         print(f"  missing {u} ({why})")
     for u, why in s.unreadable:
         print(f"  unreadable {u} ({why})")
+    if s.walk_gaps:
+        print(f"{len(s.walk_gaps)} indexes only a live walk reads weren't found (gaps for `wend walk --run` on a real "
+              "machine, not failures):")
+        for u, why in s.walk_gaps.items():
+            print(f"  walk gap {u} ({why})")
     if s.known_lost:
         print(f"{len(s.known_lost)} pins are known lost (archive/lost.txt), not failures:")
         for u, (_, h) in sorted(s.known_lost):
