@@ -9,8 +9,8 @@ bytes only 90 days, so every run that lands on main has to reach the public arch
 
   1. tools/gate_fetched.py DIR --runs --have --lost: download the gate's fetched-N artifacts behind the passing runs
      on main no ingest has walked yet (lost.txt aside), and no others.
-  2. If main's runs/ is what the last good cycle ingested, no artifact is new, and that cycle is under HOURS old
-     (default 24), stop: nothing to do.
+  2. If main's runs/ and tools/ are what the last good cycle saw, no artifact is new, and that cycle is under HOURS
+     old (default 24), stop: nothing to do. A merged change to the archive's own code (a new source kind) is new.
   3. tools/archive.py ingest STORE --fetched DIR (plus any --tree and --blobs), the origin on.
   4. tools/archive.py verify STORE, signatures aside (the push signs): a bad store is never pushed.
   5. CMD, which signs and pushes (on remi, `sudo -n /data/wend-lab/scripts/r2push-run.sh`). It runs even when the
@@ -92,11 +92,13 @@ def main(argv):
         print(f"archive_cycle: {repo} isn't a checkout with runs/: {r.stderr.strip()}")
         return 1
     head, runs = r.stdout.split()
+    tools_tree = subprocess.run(["git", "-C", repo, "ls-tree", "HEAD", "tools"], capture_output=True, text=True).stdout
     try:
         last = json.load(open(f"{store}/.cycle"))
     except (FileNotFoundError, ValueError):
         last = {}
-    if (last.get("runs") == runs and done_count(fetched) == before == last.get("artifacts")
+    if ((last.get("runs"), last.get("tools")) == (runs, tools_tree)
+            and done_count(fetched) == before == last.get("artifacts")
             and time.time() - last.get("ok", 0) < float(opts["--every"][-1]) * 3600):
         print(f"archive_cycle: nothing new since {time.strftime('%Y-%m-%d %H:%M', time.gmtime(last['ok']))} UTC "
               f"(main {last.get('head', '?')[:7]})")
@@ -130,7 +132,8 @@ def main(argv):
         return 1
     tmp = f"{store}/.cycle.tmp{os.getpid()}"
     with open(tmp, "w") as f:
-        json.dump({"head": head, "runs": runs, "artifacts": done_count(fetched), "ok": time.time()}, f)
+        json.dump({"head": head, "runs": runs, "tools": tools_tree, "artifacts": done_count(fetched),
+                   "ok": time.time()}, f)
     os.replace(tmp, f"{store}/.cycle")
     prune(fetched, float(opts["--keep-days"][-1]))
     print(f"archive_cycle: main {head[:7]} archived and pushed")
