@@ -776,8 +776,9 @@ class Rpm:
                 "if tr -d '\\0' < /proc/self/attr/current 2>/dev/null | grep -q :; then "
                 "echo \"a SELinux policy is loaded ($d/enforce, context $(tr -d '\\0' < /proc/self/attr/current)): "
                 "selinux.keep-disabled is for a box running without one\"; exit 1; fi; done; "
-                f"if [ -f {c} ]; then mkdir -p {SAVED}/etc/selinux; [ -e {SAVED}{c} ] || cp -a {c} {SAVED}{c}; "
-                f"sed -i '/^[[:space:]]*SELINUX[[:space:]]*=/d' {c} && echo SELINUX=disabled >> {c}; "
+                f"if [ -f {c} ]; then mkdir -p {SAVED}/etc/selinux; [ -e {SAVED}{c} ] || cp -a {c} {SAVED}{c} || exit 1; "
+                f"sed -i '/^[[:space:]]*SELINUX[[:space:]]*=/d' {c} && {{ [ -z \"$(tail -c 1 {c})\" ] || echo >> {c}; }} && "
+                f"echo SELINUX=disabled >> {c}; "
                 f"else mkdir -p /etc/selinux && printf 'SELINUX=disabled\\nSELINUXTYPE=targeted\\n' > {c}; fi; "
                 f"grep -qx SELINUX=disabled {c} && echo \"SELinux stays disabled: $(tr '\\n' ' ' < {c})\"")
 
