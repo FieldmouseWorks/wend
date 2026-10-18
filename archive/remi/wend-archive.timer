@@ -1,0 +1,12 @@
+# Hourly: a live repo replaces a pinned file within hours, and the gate's artifacts are the only copy until this runs.
+# A cycle with nothing new stops after checking for artifacts. A cycle still running when the next is due delays it.
+[Unit]
+Description=wend archive cycle, hourly
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

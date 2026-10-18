@@ -1,0 +1,58 @@
+# Is every pin on main in the public archive? (docs/archive.md, "Keeping it current"). remi archives each run the
+# hour it lands; this checks from outside that it did, so a cycle that stopped running doesn't go unnoticed again.
+# A pin still missing 6 hours after its run landed opens an issue labelled archive-gap (edited in place while it
+# stays open, so it notifies once) and fails the job. The issue closes itself once the archive has caught up.
+name: archive-check
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: archive-check
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }      # when each run landed comes from main's history
+      - id: check
+        run: |
+          set +e
+          python3 -B tools/archive_check.py > report.txt 2>&1
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+          cat report.txt
+      - env:
+          GH_TOKEN: "${{ github.token }}"
+          REPO: "${{ github.repository }}"
+          RC: "${{ steps.check.outputs.rc }}"
+          RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: |
+          open=$(gh issue list -R "$REPO" -l archive-gap -s open --json number -q '.[0].number // empty')
+          if [ "$RC" = 0 ]; then
+            [ -z "$open" ] || gh issue close "$open" -R "$REPO" -c "The archive holds every pin on main again ($RUN_URL)."
+            exit 0
+          fi
+          { echo "The public archive is missing pins that runs on main rely on, so \`wend walk --run\` refuses those runs."
+            echo "remi's hourly cycle (\`tools/archive_cycle.py\`, docs/archive.md \"Keeping it current\") should have"
+            echo "stored them. Check its timer on remi. A pin whose bytes are gone everywhere goes in \`archive/lost.txt\`."
+            echo
+            echo "Latest check: $RUN_URL"
+            echo
+            echo '```'
+            head -c 60000 report.txt
+            echo '```'; } > body.md
+          if [ -n "$open" ]; then
+            gh issue edit "$open" -R "$REPO" --body-file body.md
+          else
+            gh label create archive-gap -R "$REPO" -c b60205 -d "A pin on main the public archive doesn't hold" 2>/dev/null || true
+            gh issue create -R "$REPO" -l archive-gap -t "archive: pins on main are missing from the public archive" --body-file body.md
+          fi
+          exit 1

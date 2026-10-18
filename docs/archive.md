@@ -196,10 +196,50 @@ Each one a small PR.
    `curl -sO https://archive.fieldmouseworks.com/index/latest.json{,.sig}` then
    `ssh-keygen -Y verify -f archive/allowed_signers -I wend-archive -n wend-archive -s latest.json.sig < latest.json`.
    `r2push.py` marks an index `no-cache` and a blob or alias immutable, so an edge cache can't serve a stale index.
-9. **Gate artifacts** (built). `tools/gate_fetched.py DIR` downloads every unexpired `fetched-N` artifact not yet
-   seen (a read-only Actions token; GitHub wants one even on a public repo) and unpacks each under `DIR/<id>/`;
-   `archive.py ingest STORE --fetched DIR` then takes what passing runs on main pin. Artifacts from runs that never
-   landed are read and ignored.
+9. **Gate artifacts** (built). `tools/gate_fetched.py DIR` downloads unexpired `fetched-N` artifacts not yet seen (a
+   read-only Actions token; GitHub wants one even on a public repo) and unpacks each under `DIR/<id>/`;
+   `archive.py ingest STORE --fetched DIR` then takes what passing runs on main pin. With `--runs` it takes only the
+   artifacts behind main's runs: a run file lands byte for byte as a gate job wrote it, so its sha256 finds its
+   attestation, the attestation names the workflow run, and the `run-N` artifact there holding that same file names
+   the job's `fetched-N`. Most artifacts are superseded pushes (on 2026-10-18, 559 unexpired, 187 GB; the ones
+   behind runs main lacked: 15, 5.5 GB).
+
+## Keeping it current
+
+A pin of a live repo is safe only once it's in the archive, and it rots within hours: on 2026-10-17 EPEL replaced two
+`repomd.xml` files a run pinned that morning, and the public archive, last pushed the day before, didn't have them,
+so #163's rehearsal refused to start. The gate's `fetched-N` artifacts held the bytes, but only an ingest makes them
+reachable. So the archive is kept current on a timer, and checked from outside.
+
+- **remi, hourly.** `archive/remi/wend-archive.timer` runs `tools/archive_cycle.py` from a worktree of main nothing
+  else uses (`/data/dev/src/wend-archive-main`), updated to `origin/main` first, so ingest always reads the runs main
+  has now. A cycle downloads the gate artifacts behind the passing runs on main no ingest has walked yet
+  (`gate_fetched.py --runs --have --lost`: a pin isn't in the store's index naming that run, lost.txt aside), stops
+  there if main's `runs/` and the artifacts are what the last good cycle saw (under a day ago), and otherwise ingests,
+  verifies the store (signatures aside: the push signs) and runs remi's push wrapper (`sudo -n
+  /data/wend-lab/scripts/r2push-run.sh`: sign, then `r2push.py`, from that same worktree). It pushes what it stored
+  even when the ingest missed something, then exits 1, and keeps retrying each hour until a cycle finds everything.
+  After a good cycle it deletes artifacts unpacked over 30 days ago.
+- **What a live walk reads.** A replay asks only for what its package manager needed, but a live walk of the same
+  run on a real machine can ask for more (filelists for a file dependency, updateinfo), and a live repo deletes them
+  with their repomd.xml: #163's rehearsal was refused on EPEL 8's. So capture also fetches, as the run is saved,
+  every index a live repo's captured repomd.xml lists but changelogs and deltas, and ingest stores every such index
+  under a pinned repomd. One no source has is a walk gap, reported but not a failure: runs captured before this
+  have none.
+- **No binary without its source.** `r2push.py` holds back a package whose source the store doesn't have (its
+  index entry says `"source": {"missing": ...}`), and any alias naming it. The index still names it, so what's held
+  is on the record; it goes up with the first push after an ingest finds its source. Source lookup tries more than
+  one place: AlmaLinux files a source package under one repo of its minor release (an AppStream rpm's `.src.rpm` is
+  often in BaseOS's `Source`), and a CentOS 7 vault lists a source only under the minor release that built it
+  (`tools/archive.py` `source_repos`).
+- **Known losses.** `archive/lost.txt` lists the pins whose bytes are gone everywhere (the pre-capture pins above,
+  and anything since that no artifact or copy on remi held). `ingest` reports them as lost instead of failing, so a
+  red cycle means something that can still be saved.
+- **CI, hourly.** `.github/workflows/archive-check.yml` runs `tools/archive_check.py`: it reads the public
+  `index/latest.json`, checks its signature, and lists every pin of a passing run on main the index lacks and
+  `lost.txt` doesn't excuse. A pin still missing 6 hours after its run landed on main opens an `archive-gap` issue
+  (edited in place while open) and fails the job; the issue closes itself once the archive catches up. This is what
+  notices a remi that stopped running the cycle.
 
 ## Refused
 

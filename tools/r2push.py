@@ -10,6 +10,10 @@ key pushed (a blob or alias never changes under its key; a stamped index or sign
 one rewritten in place goes up again). It holds the store's lock (STORE/.lock, the one ingest takes), so an ingest
 can't add blobs under an index mid-push.
 
+A package whose source the store doesn't hold (its index entry says "source": {"missing": ...}) is held back, and so is
+an alias naming it: the archive is public, and a GPL binary goes out only with its source. Its index entry still names
+it, so the index says what's held; it goes up with the first push after an ingest stores its source.
+
 The endpoint is the account's S3 API endpoint (https://<account>.r2.cloudflarestorage.com). FILE holds two lines,
 access_key_id=... and secret_access_key=... (an R2 API token with Object Read & Write on this bucket). It should be
 readable by its owner only; this refuses one that isn't. Neither value is ever printed or logged, and errors name the
@@ -20,6 +24,7 @@ import fcntl
 import glob
 import hashlib
 import hmac
+import json
 import os
 import stat
 import sys
@@ -117,14 +122,34 @@ def key(entry):
     return entry.partition("@")[0]
 
 
+PACKAGES = (".rpm", ".deb", ".udeb")
+
+
+def held(store):
+    """sha256 hexes of the blobs to hold back: every index entry for that digest is a package with no source."""
+    try:
+        files = json.load(open(f"{store}/index/latest.json")).get("files", {})
+    except FileNotFoundError:
+        return set()
+    sourceless, sourced = set(), set()
+    for url, digests in files.items():
+        for d, e in digests.items():
+            if url.endswith(PACKAGES) and not url.endswith(".src.rpm") and "missing" in e.get("source", {}):
+                sourceless.add(d[7:])
+            else:
+                sourced.add(d[7:])
+    return sourceless - sourced
+
+
 def pending(store, pushed):
-    """(.pushed entry, path, content type) still to push: blobs and aliases first, then the stamped indexes, then latest.json."""
-    out = []
+    """(.pushed entry, path, content type) still to push: blobs and aliases first, then the stamped indexes, then
+    latest.json. Sourceless packages (held()) and their aliases aren't among them."""
+    out, hold = [], held(store)
     for p in sorted(glob.glob(f"{store}/blob/sha256/*/*")):
-        if ".tmp" not in os.path.basename(p):  # archive.py writes <blob>.tmp<pid>, then renames it
+        if ".tmp" not in os.path.basename(p) and os.path.basename(p) not in hold:  # archive.py writes <blob>.tmp<pid>
             out.append((os.path.relpath(p, store), p, "application/octet-stream"))
     for p in sorted(glob.glob(f"{store}/alias/*/*")):
-        if ".tmp" not in os.path.basename(p):
+        if ".tmp" not in os.path.basename(p) and open(p).read().strip()[7:] not in hold:
             out.append((os.path.relpath(p, store), p, "text/plain"))
     out = [x for x in out if x[0] not in pushed]
     # a stamped index is only seconds-unique (two ingests in one second rewrite it), so it's skipped by key and content
@@ -146,6 +171,9 @@ def push(store, bucket):
     except FileNotFoundError:
         pushed = set()
     todo = pending(store, pushed)
+    hold = held(store)
+    if hold:
+        print(f"holding back {len(hold)} packages whose source the store doesn't have yet")
     done = size = 0
     with open(f"{store}/.pushed", "a") as log:
         for entry, path, ctype in todo:

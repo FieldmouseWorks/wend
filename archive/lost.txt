@@ -1,0 +1,4 @@
+# Pins whose bytes are gone everywhere: upstream replaced them before anything kept them, and no gate artifact or copy
+# on remi holds them. `tools/archive.py ingest` lists them as lost instead of failing, and the public check
+# (tools/archive_check.py) doesn't report them, so both go red only for what can still be saved. One per line:
+# URL sha256:HEX  # why. Remove a line once the archive holds it (the check says so).

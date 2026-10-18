@@ -93,6 +93,9 @@ jobs:
       - name: downloading the gate's fetched-N artifacts for the archive, by behaviour against a stand-in GitHub API (runs the PR's own tools, so not in the gate)
         working-directory: .
         run: python3 -B tools/test_gate_fetched.py
+      - name: keeping the archive current (remi's hourly cycle and the public check), by behaviour with stand-in tools and a made-up signed index (runs the PR's own tools, so not in the gate)
+        working-directory: .
+        run: python3 -B tools/test_archive_cycle.py
       - name: primary metadata however it's compressed (gz, EPEL 9's xz, EPEL 10's zst), by behaviour (runs the PR's own tools, so not in the gate)
         working-directory: .
         run: WEND_ALL_DECODERS=1 python3 -B tools/test_primary.py
