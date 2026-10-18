@@ -160,7 +160,7 @@ check(rc == 0, "the worker runs the queue to empty and exits")
 trace = open(f"{w}/lab/trace").read().splitlines()
 at = [i for i, l in enumerate(trace) if l.startswith("start rehearse")]
 check(len(at) == 2 and trace.index("end rehearse el/c7") < at[1], "two rehearses never overlap")
-check(starts[0].split()[3] == f"{w}/lab/vmwork-root", "a rehearse runs with root's WEND_WORK")
+check(trace[at[0]].split()[3] == f"{w}/lab/vmwork-root", "a rehearse runs with root's WEND_WORK")
 reps = [l for l in trace if l.startswith("start replay")]
 check(len(reps) == 1 and reps[0].split()[3] == f"{w}/lab/vmwork" and "--uefi --extra-disk 20 replay" in reps[0],
       "a replay runs as dev with dev's WEND_WORK and its vm flags before the command")
