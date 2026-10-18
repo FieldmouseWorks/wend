@@ -57,7 +57,7 @@ pub fn probe(g: &Doc) -> String {
     format!(
         "if [ -d /run/systemd/system ]; then en() {{ systemctl is-enabled \"$1\" 2>/dev/null | grep -qx enabled; }}; \
          up() {{ systemctl is-active \"$1\" >/dev/null 2>&1; }}; \
-         else en() {{ chkconfig --list \"$1\" 2>/dev/null | grep -q '3:on'; }}; \
+         else R=$(sed -n 's/^id:\\([0-6]\\):initdefault:.*/\\1/p' /etc/inittab 2>/dev/null); [ -n \"$R\" ] || R=3; en() {{ chkconfig --list \"$1\" 2>/dev/null | grep -q \"$R:on\"; }}; \
          up() {{ service \"$1\" status >/dev/null 2>&1; }}; fi; \
          ON=''; for s in {names}; do en $s && up $s && {{ printf 'svc\\t%s\\n' $s; ON=\"$ON $s \"; }}; done; \
          (netstat -ltnp 2>/dev/null || ss -ltnp 2>/dev/null) | while IFS= read -r l; do printf 'net\\t%s\\n' \"$l\"; done; \
@@ -204,7 +204,7 @@ const RUNNING: &str = "up() { if [ -d /run/systemd/system ]; then systemctl is-a
 
 const ENABLED: &str = "en() { if [ -x /usr/bin/systemctl ] || [ -x /bin/systemctl ]; then \
                        systemctl is-enabled \"$1\" 2>/dev/null | grep -qx enabled; \
-                       else chkconfig --list \"$1\" 2>/dev/null | grep -q '3:on'; fi; }";
+                       else R=$(sed -n 's/^id:\\([0-6]\\):initdefault:.*/\\1/p' /etc/inittab 2>/dev/null); [ -n \"$R\" ] || R=3; chkconfig --list \"$1\" 2>/dev/null | grep -q \"$R:on\"; fi; }";
 
 /// mysqld from the root, started as the box files start it, with `extra` options; `$P` is its pid file.
 fn start_db(extra: &str) -> String {
@@ -356,7 +356,7 @@ pub fn render(g: &Doc, s: &Seen) -> Value {
             ));
             let want: Vec<String> = if tables.is_empty() {
                 vec![format!(
-                    "{{ $C -S $S -N -e 'show databases' | grep -qxF {} || {{ echo {}; f=1; }}; }}",
+                    "{{ $C -S $S -N -e 'show databases' | grep -qxF -- {} || {{ echo {}; f=1; }}; }}",
                     sq(d),
                     sq(&format!("database {d} is gone"))
                 )]
@@ -365,7 +365,7 @@ pub fn render(g: &Doc, s: &Seen) -> Value {
                     .iter()
                     .map(|t| {
                         format!(
-                            "{{ echo \"$T\" | grep -qxF {} || {{ echo {}; f=1; }}; }}",
+                            "{{ echo \"$T\" | grep -qxF -- {} || {{ echo {}; f=1; }}; }}",
                             sq(t),
                             sq(&format!("table {d}.{t} is gone"))
                         )
@@ -377,7 +377,7 @@ pub fn render(g: &Doc, s: &Seen) -> Value {
             }
             if tables.is_empty() {
                 lv.push_str(&format!(
-                    "; {{ $C -N -e 'show databases' | grep -qxF {} || {{ echo {}; f=1; }}; }}",
+                    "; {{ $C -N -e 'show databases' | grep -qxF -- {} || {{ echo {}; f=1; }}; }}",
                     sq(d),
                     sq(&format!("database {d} is gone"))
                 ));
