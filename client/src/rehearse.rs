@@ -291,7 +291,18 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
             m.copy(dir)?;
             running
         }
-        (None, Some(k)) => k.clone(),
+        (None, Some(k)) => {
+            let (_, rdoc) = atlas.route(route)?;
+            let a = crate::adapter_of(atlas, rdoc)?;
+            if get(a, "hop").and_then(|h| get(h, "generated")).is_some() {
+                return Err(
+                    "this route's checks are generated from what the running machine runs: give --from \
+                     root@machine (it makes the copy too), not --root alone"
+                        .into(),
+                );
+            }
+            k.clone()
+        }
         (None, None) => {
             return Err(
                 "rehearsing a copy made another way (--root without --from) needs --kernel VERSION, the \

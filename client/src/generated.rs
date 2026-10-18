@@ -80,7 +80,7 @@ pub fn probe(g: &Doc) -> String {
 
 /// The second probe: the status each vhost's `/` answers with on localhost.
 pub fn status_probe(vhosts: &[String]) -> String {
-    vhosts
+    let each = vhosts
         .iter()
         .map(|h| {
             format!(
@@ -90,7 +90,9 @@ pub fn status_probe(vhosts: &[String]) -> String {
             )
         })
         .collect::<Vec<_>>()
-        .join("; ")
+        .join("; ");
+    // without curl every site would read as no answer and drop out of the checks
+    format!("command -v curl >/dev/null || {{ echo 'no curl on the machine: the site checks need it' >&2; exit 1; }}; {each}")
 }
 
 /// The listening socket lines' (program, port): netstat's `PID/prog` or ss's `users:(("prog",...`.

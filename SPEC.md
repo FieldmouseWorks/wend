@@ -2345,7 +2345,8 @@ needed.
   `--one-file-system`: each pass copies one filesystem and crosses no mount point, so `/proc`, `/sys`, `/dev` and
   `/run` come over as the empty directories they are underneath, and `/` is copied first, then `/boot` and each other
   mounted disk filesystem into its place in the copy, once each. `--root DIR` takes a copy made another
-  way (a mounted image or snapshot). The machine keeps running and nothing on it is written.
+  way (a mounted image or snapshot), on a route whose adapter generates no checks: the generated checks are read
+  from the running machine, so with them the rehearsal needs `--from`. The machine keeps running and nothing on it is written.
 - **The walk** is `walk --run` on the copy, unchanged: the pinned run the route was proved by, the verifying proxy,
   the generated checks, rollback per hop. A rehearsal never takes `--live`: `upgrade` installs only bytes a passing run
   pinned. Two additions. The copy is cleaned first as a boot cleans the machine (EL's `rc.sysinit`): files under a
