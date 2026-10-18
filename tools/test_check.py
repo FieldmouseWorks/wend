@@ -736,6 +736,41 @@ for name, fails, reboots, resets, silent, want_back, want_forced, want_notes in 
     bad += not ok
 
 
+class _HopGuest:  # a hop's guest: ssh answers until `stops` s into the hop, then (if `back`) again from `back` on
+    console = "/x/hop.console.log"
+
+    def __init__(self, clock, stops, back=None, done_at=None):
+        self.clock, self.stops, self.back, self.done_at, self.t0 = clock, stops, back, done_at, clock.now
+
+    def ssh(self, cmd, timeout=600, stdin=None):
+        at = self.clock.now - self.t0
+        if at >= self.stops and (self.back is None or at < self.back):
+            self.clock.now += timeout
+            return 255, "TIMEOUT"
+        if cmd.startswith("cat /root/wend-hop/DONE"):
+            return (0, "0\n") if self.done_at is not None and at >= self.done_at else (1, "")
+        return 0, ""
+
+    def running(self):
+        return True
+
+
+for name, stops, back, done_at, want in (
+        ("a hop whose sshd is gone a minute while it's replaced finishes", 120, 200, 600, True),
+        ("a hop whose guest stops answering ssh fails in half an hour, not four hours", 120, None, None, False)):
+    _vm.time = _Clock()
+    try:
+        g_ = _HopGuest(_vm.time, stops, back, done_at)
+        t_ = _vm.time.now
+        ok_, out_ = _vm.run_hop(g_, ["true"], [])
+        took = _vm.time.now - t_
+    finally:
+        _vm.time = _real_time
+    good = ok_ is want and (want or ("stopped answering ssh" in out_ and g_.console in out_ and took < 2 * 3600))
+    print(("passed  " if good else "WRONG   ") + f"vm run_hop: {name}  ({ok_}, {round(took)}s)")
+    bad += not good
+
+
 # the VM tier's network comparison drops the shelter's own bridge, as podman reports it, and nothing else
 
 

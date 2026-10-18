@@ -1035,6 +1035,10 @@ ls main-*.rc | while read r; do cat $r; done | grep -qv '^0$' && echo 1 > DONE |
 """
 
 
+# how long a hop's guest may go without answering ssh before the hop fails: the transaction restarts sshd, briefly
+SILENT_HOP = 1800
+
+
 def run_hop(g, cmds, after):
     """The hop's commands inside the guest, detached: the transaction replaces sshd and glibc under the session.
     Stops at the first failing command, then runs `after` whatever happened (SPEC "How a hop runs")."""
@@ -1050,12 +1054,17 @@ def run_hop(g, cmds, after):
     rc, o = g.ssh("cd /root/wend-hop && (setsid nohup sh runner.sh >runner.log 2>&1 </dev/null &)", timeout=30)
     if rc:
         raise RuntimeError(f"starting the hop in the guest failed: {o}")
-    t = time.time()
+    t = answered = time.time()
     while time.time() - t < 4 * 3600 and g.running():
         time.sleep(20)
         rc, o = g.ssh("cat /root/wend-hop/DONE 2>/dev/null", timeout=60)
         if rc == 0 and o.strip() in ("0", "1"):
             break
+        if rc not in (124, 255):  # ssh's own failures; anything else is the guest answering, DONE or not
+            answered = time.time()
+        elif time.time() - answered > SILENT_HOP:  # sshd is replaced in seconds, not this long (wend#158)
+            return False, (f"the guest stopped answering ssh {round(time.time() - answered)}s ago, mid-hop; "
+                           f"console: {g.console}")
     else:
         return False, "the hop didn't finish in 4 hours, or the guest stopped"
     rc, o = g.ssh("cd /root/wend-hop; for f in main-*.sh after-*.sh; do [ -f $f.rc ] || continue; "
