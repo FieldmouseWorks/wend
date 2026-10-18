@@ -583,9 +583,9 @@ class Rpm:
             f"dnf -y {o} --setopt=best=False --setopt=deltarpm=false --nogpgcheck --downloadonly --destdir={b}/pkgs distro-sync "
             f"> {b}/dl.log 2>&1 || tail -n 20 {b}/dl.log",
             f"cd {b}/pkgs; for n in rpm rpm-libs glibc dnf python3-dnf; do ls | grep -qE \"^$n-[0-9]\" || "
-            "{ echo \"not downloaded: $n\"; exit 1; }; done",
+            f"{{ echo \"not downloaded: $n\"; tail -n 30 {b}/dl.log; exit 1; }}; done",
             f"ls | {NAMES} > {b}/got; M=$(for n in $P; do grep -qxF \"$n\" {b}/got || echo $n; done); "
-            "[ -z \"$M\" ] || { echo \"not downloaded:\" $M; exit 1; }",
+            f"[ -z \"$M\" ] || {{ echo \"not downloaded:\" $M; tail -n 30 {b}/dl.log; exit 1; }}",
             "rpm -e dnf; rm -f /var/lib/rpm/__db.*; rpm --rebuilddb",
             f"ls | grep -qE '^{boot['release_package']}-' || {{ {primary_list(base, f'{b}/list')}; "
             f"f=$(grep -E '^{boot['release_package']}-{t['major']}[^/]*x86_64\\.rpm$' {b}/list | sort -V | tail -n1); "

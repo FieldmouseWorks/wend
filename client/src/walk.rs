@@ -214,6 +214,26 @@ impl<'a> Walk<'a> {
         Ok(ok)
     }
 
+    /// SPEC "The rehearsal": the adapter's `hop.kernel_fetch`, after a hop, downloads what `kernel_after` will install
+    /// on the machine, through the proxy, so the plan's cache has it. Changes nothing a check reads, so it's no step of
+    /// its own: its output goes to the log. Whether it got the kernel (null when the adapter has no such step).
+    fn fetch_kernel(&mut self) -> Result<Value, String> {
+        let cmds = list_of(get(self.adapter, "hop").unwrap_or(&Value::Null), "kernel_fetch").unwrap_or_default();
+        if cmds.is_empty() {
+            return Ok(Value::Null);
+        }
+        let mut ok = true;
+        for c in &cmds {
+            let (rc, out) = self.root.run(&fill(c, &self.vars), 1800, false);
+            self.log(&format!("kernel download: rc {rc}\n{}", tail(&out, 1500)));
+            if rc != 0 {
+                ok = false;
+                break;
+            }
+        }
+        Ok(json!(ok))
+    }
+
     /// The pinned fixes whose `when` holds on the root as it is now, by content id (SPEC "The plan": part of the
     /// machine's fingerprint).
     pub fn holding(&self) -> Result<Vec<String>, String> {
@@ -361,6 +381,10 @@ impl<'a> Walk<'a> {
             if ok {
                 let s = self.sources(hop)?;
                 self.hops.last_mut().unwrap()["sources"] = Value::Object(s);
+                if crate::sandbox::REHEARSAL.load(std::sync::atomic::Ordering::Relaxed) {
+                    let cached = self.fetch_kernel()?;
+                    self.hops.last_mut().unwrap()["kernel_cached"] = cached;
+                }
             }
             if !ok {
                 break;

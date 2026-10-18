@@ -13,9 +13,9 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 
-const REPO_URL: &str = "https://github.com/FieldmouseWorks/wend";
+pub const REPO_URL: &str = "https://github.com/FieldmouseWorks/wend";
 /// GitHub drops very long prefilled URLs; past this the issue gets the summary and the file is attached
-const URL_BUDGET: usize = 7000;
+pub const URL_BUDGET: usize = 7000;
 
 /// The release a machine runs: its own words for it, and the atlas's (family, release id) when wend knows it.
 pub struct System {
@@ -180,7 +180,7 @@ pub fn scrub(text: &str, words: &[String]) -> String {
     s
 }
 
-fn pct(s: &str) -> String {
+pub fn pct(s: &str) -> String {
     let mut o = String::new();
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {

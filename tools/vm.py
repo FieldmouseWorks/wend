@@ -26,7 +26,8 @@ not runs/ (runs/ holds what CI proved).
                                            `wend rehearse` (the client binary WEND, run as root on this host) from a
                                            fresh copy of BOX, running: copies its root over ssh, walks ROUTE on the
                                            copy pinned by CI's newest passing run in runs/, writes the plan, and
-                                           passes only if each hop fired that run's fixes and the guest was only read
+                                           passes only if each hop fired that run's fixes, every hop's kernel is in
+                                           the plan's cache and the guest was only read (a fail logs its gap report)
   python3 tools/vm.py --extra-disk GB --relocate replay ROUTE BOX
                                            the same relocate (trial, commit) before ROUTE's first hop, every hop on the
                                            new root, then a rollback to the old root and forward again after the last
@@ -1622,7 +1623,8 @@ def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net, plan):
 def rehearse(route_path, box_id, client):
     """SPEC "Order of work" 4: `wend rehearse` from this host on a fresh copy of BOX, running. The client copies the
     guest's root over ssh, walks ROUTE on the copy, verified against CI's newest passing run of ROUTE on BOX
-    (runs/), and writes a plan; it passes only if each hop fired the fixes that run did and the guest was only read."""
+    (runs/), and writes a plan; it passes only if each hop fired the fixes that run did, each hop's kernel was
+    downloaded into the plan's cache and the guest was only read."""
     if os.geteuid() != 0:
         raise SystemExit("rehearse runs the client's walk, which needs root (sudo -E)")
     d, box_doc = build(box_id)
@@ -1676,6 +1678,10 @@ def rehearse(route_path, box_id, client):
     run["machine_untouched"] = rc == 0 and rc2 == 0 and before == after
     plan_path = os.path.join(out_dir, "plan", "plan.json")
     if p.returncode != 0 or not os.path.exists(plan_path):
+        # a failed rehearsal writes its gap report beside the run
+        for f in sorted(glob.glob(os.path.join(out_dir, "wend-gap-*.md"))):
+            run["gap_report"] = os.path.relpath(f, ROOT)
+            log(f"gap report: {run['gap_report']}")
         return finish("fail")
     plan = json.load(open(plan_path))
     want = {h["to"]: sorted(h["fired"]) for h in ci_run["hops"]}
@@ -1691,7 +1697,11 @@ def rehearse(route_path, box_id, client):
     # and the plan holds the guest to what it ran (the client writes a plan only if they all held)
     gen = bool(a.get("hop", {}).get("generated")) <= bool(plan["generated_checks"])
     log(f"generated checks: {', '.join(plan['generated_checks']) or 'none'}")
-    return finish("pass" if run["machine_untouched"] and run["fired_match"] and gen else "fail")
+    # and every hop's kernel is in the plan's cache, for the machine's offline walk
+    run["plan"]["kernel_cached"] = {h["to"]: h["kernel_cached"] for h in plan["hops"]}
+    kernels = not a.get("hop", {}).get("kernel_fetch") or all(run["plan"]["kernel_cached"].values())
+    log(f"kernels cached: {run['plan']['kernel_cached']}")
+    return finish("pass" if run["machine_untouched"] and run["fired_match"] and gen and kernels else "fail")
 
 
 def main(args):

@@ -19,6 +19,8 @@ pub struct RehearseOpts {
     pub kernel: Option<String>,
     /// where the plan goes (default `wend-plan-<machine id>` in the current directory)
     pub plan: Option<String>,
+    /// `wend facts` read on the machine (`--facts`): kept in the plan for the report, never judged from there
+    pub facts: Option<String>,
 }
 
 /// The filesystems rsync copies one by one: disk filesystems (`-x` crosses none of them), `/` first, then each in
@@ -261,7 +263,18 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
     if unsafe { libc::geteuid() } != 0 {
         return Err("rehearsing needs root (the copy keeps the machine's owners; the walk chroots)".into());
     }
+    // the machine's facts, for the report: a file that isn't `wend facts` output refuses before anything is copied
+    let facts = match &r.facts {
+        Some(f) => {
+            let v: Value = serde_json::from_str(&std::fs::read_to_string(f).map_err(|e| format!("{f}: {e}"))?)
+                .map_err(|e| format!("{f}: {e}"))?;
+            crate::hardware::check_facts(&v).map_err(|e| format!("{f}: {e}"))?;
+            v
+        }
+        None => Value::Null,
+    };
     let mut gen = None;
+    let mut nodename = String::new();
     let kernel = match (&r.from, &r.kernel) {
         (Some(from), k) => {
             let m = Machine { from, ssh: &r.ssh };
@@ -287,6 +300,7 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
                     k.as_ref().unwrap()
                 ));
             }
+            nodename = m.run("uname -n")?.trim().to_string();
             gen = generate(atlas, route, &m)?;
             m.copy(dir)?;
             running
@@ -362,19 +376,42 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
     }
     let o = &o;
     let w = cmd_walk(atlas, route, o)?;
+    let (_, rdoc) = atlas.route(route)?;
+    let fail = |why: &str| -> Result<bool, String> {
+        gap_report(
+            &w,
+            str_of(rdoc, "family")?,
+            Path::new(root),
+            &nodename,
+            o.out.as_deref(),
+        )?;
+        eprintln!("the rehearsal failed: {why}; no plan written");
+        Ok(false)
+    };
     if w.run["result"] != "pass" {
-        eprintln!("the rehearsal failed: no plan written. The run says where it stopped; `wend share` makes a report.");
-        return Ok(false);
+        return fail("the run says where it stopped");
     }
     // a generated check that doesn't pass on the copy at the end holds the machine to nothing (its offline form
     // can't judge this machine, or the route lost what it checks): no plan
     let passed = strings_of(&w.run["final"]["passed"]);
     let lost: Vec<&String> = generated_names.iter().filter(|n| !passed.contains(n)).collect();
     if !lost.is_empty() {
-        eprintln!("the rehearsal failed: generated checks {lost:?} don't pass on the upgraded copy; no plan written");
-        return Ok(false);
+        return fail(&format!("generated checks {lost:?} don't pass on the upgraded copy"));
     }
-    let (_, rdoc) = atlas.route(route)?;
+    // the machine's offline walk installs each hop's kernel from the plan's cache: one the rehearsal couldn't
+    // download leaves that walk without it (null: the adapter downloads none)
+    let missing: Vec<&str> = w.run["hops"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|h| h["kernel_cached"] == json!(false))
+        .filter_map(|h| h["to"].as_str())
+        .collect();
+    if !missing.is_empty() {
+        return fail(&format!(
+            "the kernel for {missing:?} couldn't be downloaded (the walk's log says why)"
+        ));
+    }
     let fp = json!({
         "installed": w.installed, "installed_sha256": format!("sha256:{}", sha256_hex(w.installed.join("\n").as_bytes())),
         "kernel": kernel, "release": w.release, "holding": w.holding,
@@ -406,7 +443,7 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
         .as_array()
         .into_iter()
         .flatten()
-        .map(|h| json!({"to": h["to"], "fired": h["fired"], "seconds": h["seconds"], "kernel_cached": false}))
+        .map(|h| json!({"to": h["to"], "fired": h["fired"], "seconds": h["seconds"], "kernel_cached": h["kernel_cached"] == json!(true)}))
         .collect();
     let plan = json!({
         "schema": "wend.plan/0", "route": content_id(rdoc), "pinned_by": w.run["pinned_by"],
@@ -414,7 +451,7 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
         "from": w.run["from"], "to": get(rdoc, "to"), "hops": hops,
         "fingerprint": fp, "fingerprint_sha256": fingerprint,
         "checks_sha256": format!("sha256:{}", sha256_hex(&checks_bytes)), "generated_checks": generated_names,
-        "cache_files": listed.len(),
+        "cache_files": listed.len(), "facts": facts,
     });
     let write = |name: &str, text: &[u8]| -> Result<(), String> {
         std::fs::write(dir.join(name), text).map_err(|e| format!("{}: {e}", dir.join(name).display()))
@@ -441,9 +478,57 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
     Ok(true)
 }
 
+/// SPEC "The rehearsal": a fail writes the scrubbed gap report beside the run (`--out`'s directory, else here) and
+/// prints its issue link. The words scrubbed are the copy's: its hostname, the machine's, and its login accounts.
+fn gap_report(w: &crate::Walked, family: &str, root: &Path, nodename: &str, out: Option<&str>) -> Result<(), String> {
+    let output = w
+        .steps
+        .iter()
+        .rev()
+        .find(|s| s["ok"] == json!(false))
+        .and_then(|s| s["outputs"].as_array())
+        .and_then(|o| o.last())
+        .and_then(|o| o["out"].as_str());
+    let words = crate::share::local_words(root, nodename, &[]);
+    let (key, text, link) = crate::report::build(&w.run, family, output, &words);
+    let dir = out
+        .and_then(|p| Path::new(p).parent())
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let file = dir.join(format!("wend-gap-{key}.md"));
+    std::fs::write(&file, &text).map_err(|e| format!("{}: {e}", file.display()))?;
+    eprintln!(
+        "gap report: {} (hostnames, IPs, users and anything like a secret replaced; read it before posting). \
+         Nothing was sent. To report the gap, open:\n{link}",
+        file.display()
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// EL's kernel download fills on every release a route arrives at and parses in sh.
+    #[test]
+    fn el_kernel_download_fills_and_parses() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let a = crate::atlas::parse_toml(&std::fs::read_to_string(root.join("adapters/el.toml")).unwrap()).unwrap();
+        let cmds = crate::atlas::list_of(get(&a, "hop").unwrap(), "kernel_fetch").unwrap();
+        assert!(!cmds.is_empty());
+        let unfilled = regex::Regex::new(r"\{[a-z_]+\}").unwrap();
+        for rel in ["centos5", "centos6", "centos7", "alma8", "alma9", "alma10"] {
+            let v = crate::backend::hop_vars(&a, rel).unwrap();
+            for c in &cmds {
+                let c = crate::backend::fill(c, &v);
+                assert!(!unfilled.is_match(&c), "{rel}: {c}");
+                assert!(
+                    Command::new("sh").args(["-n", "-c", &c]).status().unwrap().success(),
+                    "{c}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn copies_root_first_then_each_disk_filesystem_once() {
