@@ -191,8 +191,8 @@ check([c["name"] for c in v1["commands"]] == ["cargo-build", "rehearse"] and v1[
       "a rehearse builds the client first, each command with its own log, rc and hash")
 check(all(c["log"].startswith(f"{w}/lab/logs/main/{old}/{j1}/") for c in v1["commands"]),
       "logs go under the lab's logs/<PR or main>/<sha>/<id>, not into the worktree")
-check(os.path.isdir(f"{w}/src/wend-main-{old[:7]}-root") and v1["worktree"].endswith("-root") and os.path.isdir(f"{w}/src/wend-7-{pr[:7]}"),
-      "each job gets its own worktree, wend-<PR or main>-<sha7>, root's apart (-root)")
+check(os.path.isdir(f"{w}/src/wend-main-{old[:12]}-root") and v1["worktree"].endswith("-root") and os.path.isdir(f"{w}/src/wend-7-{pr[:12]}"),
+      "each job gets its own worktree, wend-<PR or main>-<sha12>, root's apart (-root)")
 check(v3["remi_verdict"] == {"pr": "7", "sha": pr, "state": "success",
                               "summary": f"replay el/c7-to-a10 el/c7 --uefi --extra-disk 20: passed (job {j3})"},
       "a PR job's verdict carries the remi-verdict inputs")
@@ -200,16 +200,16 @@ check(v4["result"] == "fail" and v4["reasons"] == ["tools/test_b.py exited 3"] a
       [c["name"] for c in v4["commands"]] == ["test_a", "test_b", "check"], "tests runs each test and check.py")
 
 # failures, refusals and a dirty worktree
-os.makedirs(f"{w}/src/wend-main-{main[:7]}/.wend", exist_ok=True)
-open(f"{w}/src/wend-main-{main[:7]}/tools/check.py", "a").write("# local edit\n")
+os.makedirs(f"{w}/src/wend-main-{main[:12]}/.wend", exist_ok=True)
+open(f"{w}/src/wend-main-{main[:12]}/tools/check.py", "a").write("# local edit\n")
 rc, out = remi("enqueue", "replay", "routes/el/c7-to-a10.toml", "el/c7", "--sha", main, "--by", "t", env=NOW)
 j5 = entry(out)
 remi("worker")
 v5 = verdict(j5)
 check(v5["result"] == "refused" and "local changes" in v5["reasons"][0] and
-      open(f"{w}/src/wend-main-{main[:7]}/tools/check.py").read().endswith("# local edit\n"),
+      open(f"{w}/src/wend-main-{main[:12]}/tools/check.py").read().endswith("# local edit\n"),
       "a dirty worktree is refused and left as it is")
-sh("git", "-C", f"{w}/src/wend-main-{main[:7]}", "checkout", "tools/check.py")
+sh("git", "-C", f"{w}/src/wend-main-{main[:12]}", "checkout", "tools/check.py")
 rc, out = remi("enqueue", "replay", "routes/el/c7-to-a10.toml", "el/junk", "--sha", main, "--by", "t", env=NOW)
 j6 = entry(out)
 remi("worker", env=dict(ENV, FAKE_RESULT="fail"))
@@ -272,14 +272,24 @@ check(verdict(j1)["pad"] == "x" * 120000 and remi("show", j1)[1].startswith("par
 # a cancel that lands before the runner is ready leaves a flag the runner honours; a split character joins back
 rc, out = remi("enqueue", "build", "el/c7", "--sha", main, "--by", "t", env=NOW)
 j11 = entry(out)
-with open(f"{w}/lab/queue/{j11}.json") as f:
-    e11 = json.load(f)
-e11.update(state="running", pid=os.getpid())
+import fcntl  # noqa: E402  (as the worker does: hold the queue lock while starting the runner and recording it)
+lk = open(f"{w}/lab/queue/.lock", "a")
+fcntl.flock(lk, fcntl.LOCK_EX)
+kid = subprocess.Popen([sys.executable, "-P", os.path.join(HERE, "remi.py"), "run", j11], env=ENV,
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+e11 = json.load(open(f"{w}/lab/queue/{j11}.json"))
+e11.update(state="running", pid=kid.pid, cancel=True)  # what cancel leaves for a runner not yet ready
 json.dump(e11, open(f"{w}/lab/queue/{j11}.json", "w"))
-rc, out = remi("cancel", j11)
-check(rc == 0 and "starting" in out, "cancel before the runner is ready leaves a flag")
-rc, out = remi("run", j11)
-check(verdict(j11)["result"] == "cancelled" and not verdict(j11)["commands"], "the runner honours the flag at once")
+lk.close()
+kid.wait(timeout=60)
+check(verdict(j11)["result"] == "cancelled" and not verdict(j11)["commands"],
+      "a runner that finds the cancel flag at its handshake runs nothing and ends cancelled")
+rc, out = remi("enqueue", "build", "el/c7", "--sha", main, "--by", "t", env=NOW)
+j12 = entry(out)
+rc, out = remi("run", j12)
+check(rc == 0 and json.load(open(f"{w}/lab/queue/{j12}.json"))["state"] == "queued" and "leaving it" in out,
+      "a runner whose entry isn't recorded as its own runs nothing")
+remi("cancel", j12)
 logdir = verdict(j11)["log_dir"]
 open(f"{logdir}/utf8.log", "wb").write(b"a" * 47999 + "é".encode() + b"z" * 10)
 raw = b""

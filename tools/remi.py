@@ -28,7 +28,7 @@ plan, which run as root (sudo -n) with WEND_WORK=<lab>/vmwork-root, as they alwa
 What it enforces, so nobody has to remember it:
 - SHA is the tip of a branch on origin (pushed by someone with write access) or on origin/main, checked at enqueue and
   again when the job starts; with --pr N it must also be PR N's head then. A fork's commit never runs here.
-- Each job runs in its own worktree, <src>/wend-<PR or main>-<sha7> (…-root for root's jobs), created from <src>/wend
+- Each job runs in its own worktree, <src>/wend-<PR or main>-<sha12> (…-root for root's jobs), created from <src>/wend
   at SHA; a worktree that exists must be at SHA with `git status --porcelain` empty, or the job is refused. Worktrees
   are left in place.
 - Slots: one rehearse at a time; at most 3 VM jobs (rehearse included) and 2 test jobs at once. A queued job starts
@@ -526,7 +526,7 @@ def job_user(e):
 def worktree(e, user):
     """The job's own worktree at its sha: created if missing, refused unless at sha and clean if not. Root's jobs get
     their own (…-root): the .wend/ a root vm.py makes would leave a dev job nowhere to write its run directory."""
-    wt = os.path.join(SRC, f"wend-{e['pr'] or 'main'}-{e['sha'][:7]}" + ("-root" if user == "root" else ""))
+    wt = os.path.join(SRC, f"wend-{e['pr'] or 'main'}-{e['sha'][:12]}" + ("-root" if user == "root" else ""))
     with GitLock():  # two jobs at one sha may start together: only one adds it
         if not os.path.exists(wt):
             git("worktree", "add", "--detach", wt, e["sha"])
@@ -641,6 +641,10 @@ def run(jid):
     try:
         with QueueLock():  # the handshake with cancel: it signals only a runner that is ready, else it leaves a flag
             e = load(jid)
+            if e["state"] != "running" or e.get("pid") != os.getpid():
+                # the worker died before it recorded this runner: the entry isn't ours, and a later worker starts it
+                print(f"{jid} isn't recorded as run by pid {os.getpid()}; leaving it to the queue", flush=True)
+                return 0
             e["ready"] = True
             save(e)
         if e.get("cancel"):

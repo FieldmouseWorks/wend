@@ -53,7 +53,7 @@ The runner refuses the job, both when it's queued and again when it starts, unle
 - `--sha` is a full commit that is a branch tip on origin or on origin/main (a fork's commit never runs here; push it
   to a branch first), and with `--pr`, that PR's head at that moment. A thread that pushes after queueing gets a
   refusal, not a run on a head nobody froze.
-- The job's worktree, `/data/dev/src/wend-<PR or main>-<sha7>` (with `-root` on the end for root's jobs, so a root
+- The job's worktree, `/data/dev/src/wend-<PR or main>-<sha12>` (with `-root` on the end for root's jobs, so a root
   `.wend/` never blocks a dev job), is at that commit with `git status --porcelain` empty. It's created when missing
   and never cleaned, moved or deleted. A dirty one is refused and left as it is.
 - The route and box exist at that commit, and the arguments match the job's patterns.
