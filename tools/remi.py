@@ -416,9 +416,7 @@ def worker():
             all_ = entries()
             for x in all_:  # a job whose runner died without a verdict
                 if x["state"] == "running" and not alive(x):
-                    x.update(state="error", ended=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                             reason="its runner process died without writing a verdict")
-                    save(x)
+                    end_unrun(x, "error", "its runner process died without writing a verdict")
             running = [x for x in all_ if x["state"] == "running"]
             ranked = sorted((x for x in all_ if x["state"] == "queued"), key=lambda x: x["rank"])
             if not ranked and not running:
@@ -508,8 +506,8 @@ def stop_current():
 def worktree(e):
     """The job's own worktree at its sha: created if missing, refused unless at sha and clean if not."""
     wt = os.path.join(SRC, f"wend-{e['pr'] or 'main'}-{e['sha'][:7]}")
-    if not os.path.exists(wt):
-        with GitLock():
+    with GitLock():  # two jobs at one sha may start together: only one adds it
+        if not os.path.exists(wt):
             git("worktree", "add", "--detach", wt, e["sha"])
     head = git("rev-parse", "HEAD", cwd=wt)
     dirty = git("status", "--porcelain", cwd=wt)
@@ -581,6 +579,27 @@ def verdict_path(e):
     return os.path.join(LOGS, str(e["pr"] or "main"), e["sha"], e["id"], "verdict.json")
 
 
+def write_verdict(e, v):
+    os.makedirs(os.path.dirname(verdict_path(e)), exist_ok=True)
+    with open(verdict_path(e) + ".tmp", "w") as f:
+        json.dump(v, f, indent=1)
+    os.replace(verdict_path(e) + ".tmp", verdict_path(e))
+
+
+def end_unrun(e, result, reason):
+    """A job that ends without its runner writing a verdict (cancelled while queued, or its runner died) still gets
+    one, so whoever asked hears how it ended. Called under the queue lock; changes e and saves it."""
+    now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    v = {"schema": "wend.remijob/0", **{k: e[k] for k in ("id", "job", "args", "vm_flags", "sha", "pr", "by",
+                                                         "reply_to", "enqueued")},
+         "started": e.get("started"), "ended": now, "host": os.uname().nodename,
+         "log_dir": os.path.dirname(verdict_path(e)), "commands": [], "runs": [], "reasons": [reason],
+         "result": result, "remi_verdict": None}
+    write_verdict(e, v)
+    e.update(state=result, result=result, ended=now, reason=reason, verdict=verdict_path(e))
+    save(e)
+
+
 def interrupted(*_):
     signal.signal(signal.SIGTERM, signal.SIG_IGN)  # once: a second cancel mustn't cut the cleanup short
     raise KeyboardInterrupt  # `cancel` sends SIGTERM: stop the command, then write a cancelled verdict
@@ -625,9 +644,7 @@ def run(jid):
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     v["ended"], v["seconds"] = time.strftime("%Y-%m-%dT%H:%M:%S%z"), round(time.time() - t0)
     v["remi_verdict"] = remi_verdict(v)
-    with open(verdict_path(e) + ".tmp", "w") as f:
-        json.dump(v, f, indent=1)
-    os.replace(verdict_path(e) + ".tmp", verdict_path(e))
+    write_verdict(e, v)
     state = {"pass": "done", "fail": "done"}.get(v["result"], v["result"])
     update(jid, state=state, result=v["result"], ended=v["ended"], verdict=verdict_path(e))
     print(f"{time.strftime('%H:%M:%S')} {jid}: {v['result'].upper()} ({verdict_path(e)})", flush=True)
@@ -758,8 +775,7 @@ def cancel(jid):
     with QueueLock():
         e = load(jid)
         if e["state"] == "queued":
-            e.update(state="cancelled", ended=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
-            save(e)
+            end_unrun(e, "cancelled", "cancelled before it started")
             print(f"{jid}: cancelled before it started")
             return 0
         if e["state"] == "running" and not e.get("ready"):

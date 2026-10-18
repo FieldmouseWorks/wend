@@ -231,6 +231,7 @@ rc, out = remi("enqueue", "build", "el/c7", "--sha", main, "--by", "t", env=NOW)
 j9 = entry(out)
 rc, out = remi("cancel", j9)
 check(rc == 0 and json.load(open(f"{w}/lab/queue/{j9}.json"))["state"] == "cancelled", "cancel drops a queued job")
+check(verdict(j9)["result"] == "cancelled", "a job cancelled while queued still has a verdict to deliver")
 rc, out = remi("enqueue", "build", "el/c7", "--sha", main, "--by", "t", env=NOW)
 j10 = entry(out)
 subprocess.Popen([sys.executable, "-P", os.path.join(HERE, "remi.py"), "worker"], env=dict(ENV, FAKE_SLEEP="30"),
