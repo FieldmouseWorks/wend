@@ -99,6 +99,9 @@ jobs:
       - name: VM replays side by side (per-guest ports, the install lock, the box cache key), by behaviour with a stand-in QEMU (runs the PR's own vm.py, so not in the gate)
         working-directory: .
         run: python3 -B tools/test_vm_parallel.py
+      - name: remi's job runner (the queue, the slots, the origin check, the verdict), by behaviour with a stand-in origin and vm.py (runs the PR's own tools, so not in the gate)
+        working-directory: .
+        run: python3 -B tools/test_remi.py
       - name: the atlas passes the client's own check
         working-directory: .
         run: client/target/x86_64-unknown-linux-musl/release/wend check
