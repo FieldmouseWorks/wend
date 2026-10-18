@@ -136,6 +136,13 @@ SELINUX_MAKE = {
                  "if [ -f /etc/selinux/config ]; then sed -i -e 's/^SELINUX=.*/SELINUX=enforcing/' "
                  "-e 's/^SELINUXTYPE=.*/SELINUXTYPE=targeted/' /etc/selinux/config; else "
                  "printf 'SELINUX=enforcing\\nSELINUXTYPE=targeted\\n' > /etc/selinux/config; fi; "
+                 # sshd on a port the policy doesn't give it (every EL box's 2222) can't bind once enforcing: an owner
+                 # who moved it labelled the port. EL4 has no semanage, and its targeted policy leaves sshd unconfined
+                 "for p in $(awk 'tolower($1) == \"port\" && $2 != 22 {print $2}' /etc/ssh/sshd_config); do "
+                 "command -v semanage >/dev/null || yum -y install policycoreutils-python || "
+                 "yum -y install policycoreutils-python-utils || true; if command -v semanage >/dev/null; then "
+                 "semanage port -a -t ssh_port_t -p tcp $p || semanage port -m -t ssh_port_t -p tcp $p || exit 1; "
+                 "else echo \"no semanage: sshd's port $p stays unlabelled\"; fi; done; "
                  "grep -qx SELINUX=enforcing /etc/selinux/config && touch /.autorelabel",
     "none": "for p in selinux-policy-targeted selinux-policy-strict selinux-policy-mls; do "
             "! rpm -q $p >/dev/null || rpm -e $p || exit 1; done; rm -f /etc/selinux/config"}

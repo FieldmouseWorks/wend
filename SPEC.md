@@ -2018,7 +2018,8 @@ The rules:
 - SELinux: a VM box installs permissive. `replay --selinux MODE` (EL) starts from the box as an owner who set SELinux
   otherwise has it, made once per mode from a running copy of the installed box rather than a second install, as an
   admin turns it: `enforcing` installs the release's targeted policy if it's missing, sets `SELINUX=enforcing` and
-  relabels the whole filesystem (`/.autorelabel`), as a stock install runs; `none` removes the policy packages and
+  relabels the whole filesystem (`/.autorelabel`), as a stock install runs, and labels sshd's port `ssh_port_t` when the
+  box moved it (`semanage port`, EL5 on); `none` removes the policy packages and
   `/etc/selinux/config`, so no policy loads (CentOS 4 to 6 only: a CentOS 4 box without `selinux-policy-targeted` has
   no config at all, wend#158; EL7's systemd freezes rather than boot such a box). The disk is kept beside the box's
   and isn't part of its cache key; it's made only if the box comes up in that mode and still passes every check it
