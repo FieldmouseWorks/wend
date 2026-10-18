@@ -196,6 +196,10 @@ pub fn read_status(s: &mut Seen, out: &str) {
     s.vhosts.retain(|(_, c)| c.len() == 3 && c != "000");
 }
 
+/// `up NAME`: the service runs now, asked as the probe asks it (`service NAME status` before systemd).
+const RUNNING: &str = "up() { if [ -d /run/systemd/system ]; then systemctl is-active \"$1\" >/dev/null 2>&1; \
+                       else service \"$1\" status >/dev/null 2>&1; fi; }";
+
 const ENABLED: &str = "en() { if [ -x /usr/bin/systemctl ] || [ -x /bin/systemctl ]; then \
                        systemctl is-enabled \"$1\" 2>/dev/null | grep -qx enabled; \
                        else chkconfig --list \"$1\" 2>/dev/null | grep -q '3:on'; fi; }";
@@ -255,16 +259,15 @@ pub fn render(g: &Doc, s: &Seen) -> Value {
             .map(|(n, names)| {
                 format!(
                     "{{ {}; }} || {{ echo {}; f=1; }}",
-                    names
-                        .iter()
-                        .map(|x| format!("systemctl is-active {x} >/dev/null 2>&1"))
-                        .collect::<Vec<_>>()
-                        .join(" || "),
+                    names.iter().map(|x| format!("up {x}")).collect::<Vec<_>>().join(" || "),
                     sq(&format!("{n} is not running"))
                 )
             })
             .collect();
-        live.insert("gen-services".into(), json!(format!("f=0; {}; exit $f", up.join("; "))));
+        live.insert(
+            "gen-services".into(),
+            json!(format!("{RUNNING}; f=0; {}; exit $f", up.join("; "))),
+        );
     }
     if !s.ports.is_empty() {
         let body: Vec<String> = s
@@ -299,8 +302,10 @@ pub fn render(g: &Doc, s: &Seen) -> Value {
         };
         let mut body = format!(
             "{start_db}mkdir -p /run/php-fpm /var/run/httpd 2>/dev/null; test -x /usr/sbin/php-fpm && /usr/sbin/php-fpm -D; \
-             /usr/sbin/httpd -t 2>&1 || {{ echo 'httpd -t fails'; exit 1; }}; /usr/sbin/httpd -k start; i=0; \
-             while [ $i -lt 30 ] && ! curl -s -o /dev/null -m 5 http://127.0.0.1/; do sleep 1; i=$((i+1)); done; f=0"
+             /usr/sbin/httpd -t 2>&1 || {{ echo 'httpd -t fails'; exit 1; }}; \
+             /usr/sbin/httpd -k start || {{ echo 'httpd does not start'; tail -n 15 /var/log/httpd/error_log; exit 1; }}; i=0; \
+             while [ $i -lt 30 ] && ! curl -s -o /dev/null -m 5 http://127.0.0.1/; do sleep 1; i=$((i+1)); done; \
+             sleep 1; pidof httpd >/dev/null 2>&1 || {{ echo 'httpd does not stay up'; tail -n 15 /var/log/httpd/error_log; exit 1; }}; f=0"
         );
         let mut lv = String::from("f=0");
         // httpd listened on port 80 on the machine: it must answer there (any HTTP status)
@@ -496,7 +501,11 @@ mod tests {
         assert!(g["live"]["gen-services"]
             .as_str()
             .unwrap()
-            .contains("systemctl is-active mysqld"));
+            .contains("{ up mysqld || up mariadb; }"));
+        assert!(g["live"]["gen-services"]
+            .as_str()
+            .unwrap()
+            .contains("service \"$1\" status"));
         // every generated check parses in sh
         for (_, c) in roles.iter().chain(g["live"].as_object().unwrap()) {
             let st = std::process::Command::new("sh")
