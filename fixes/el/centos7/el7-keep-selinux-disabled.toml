@@ -1,0 +1,17 @@
+# A box that runs with no SELinux policy keeps running without one (wend#158).
+schema = "wend.fix/0"
+family = "el"
+hop = "centos7"
+when = { not = { installed = "selinux-policy-targeted" } }
+restores = []
+adds = []
+
+[[pre]]
+op = "selinux.keep-disabled"
+
+[meta]
+name = "el7-keep-selinux-disabled"
+author = "claude (wend#158)"
+source = "wend#158"
+note = "A CentOS 4 box without selinux-policy-targeted has no /etc/selinux/config, and EL5's selinux-policy then writes SELINUX=enforcing with no targeted policy beside it. EL5 and EL6 boot it with no policy loaded; EL7's systemd reads enforcing, can't load a policy and freezes at the first boot. Before the EL7 transaction, the config is made to say what the box runs: disabled. The op refuses where a policy is loaded (a strict or mls box), so the route stops there instead of freezing."
+fires_on = ["el/centos4-dns", "el/centos5-dns", "el/centos5-web", "el/centos6-lamp"]
