@@ -1,0 +1,22 @@
+# remi's archive cycle (docs/archive.md, "Keeping it current"): tools/archive_cycle.py from a checkout of main kept
+# for it alone, updated to origin/main first. Installed by hand on remi, with wend-archive.timer:
+#   sudo install -m 644 archive/remi/wend-archive.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now wend-archive.timer
+# The checkout is a worktree nothing else uses: the cycle checks it out over itself every hour.
+[Unit]
+Description=wend archive: store what main's runs pin, and push it
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=dev
+Group=dev
+UMask=0002
+Nice=19
+IOSchedulingClass=idle
+WorkingDirectory=/data/dev/src/wend-archive-main
+ExecStartPre=/usr/bin/git fetch -q origin main
+ExecStartPre=/usr/bin/git checkout -q --detach --force FETCH_HEAD
+ExecStart=/usr/bin/python3 -P -u tools/archive_cycle.py /data/wend-archive --fetched /data/wend-lab/gate-fetched --token-file /data/dev/home/.config/wend/gh-actions.txt --push "sudo -n /data/wend-lab/scripts/r2push-run.sh"
+TimeoutStartSec=6h

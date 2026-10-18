@@ -86,6 +86,15 @@ json.dump({**run("pass", sha(b"<repomd>vanished</repomd>")), "started": "2"}, op
 p = ingest("--fetched", f"{w}/fetched")
 check(f"missing {u}/repodata/repomd.xml" in p.stdout,
       "a newer pin no source has is missing, though an older digest at its url is stored")
+open(f"{w}/lost.txt", "w").write(f"# gone\n{u}/repodata/repomd.xml sha256:{sha(b'<repomd>vanished</repomd>')}  # replaced\n")
+p = ingest("--fetched", f"{w}/fetched", "--lost", f"{w}/lost.txt")
+check(p.returncode == 0 and "0 referenced files not found" in p.stdout and
+      f"lost {u}/repodata/repomd.xml sha256:{sha(b'<repomd>vanished</repomd>')}" in p.stdout,
+      "a pin lost.txt lists as lost is reported, and doesn't fail the ingest")
+open(f"{w}/lost.txt", "w").write(f"{u}/repodata/repomd.xml sha256:{sha(b'another')}\n")
+p = ingest("--fetched", f"{w}/fetched", "--lost", f"{w}/lost.txt")
+check(p.returncode == 1 and f"missing {u}/repodata/repomd.xml" in p.stdout,
+      "lost.txt excuses only the digest it names, not every pin at its url")
 os.remove(f"{w}/runs/later.json")
 # a second passing run pins another repomd listing the same primary: the package gets both runs
 repomd2 = repomd.replace(b"</repomd>", b"<!-- 2 --></repomd>")

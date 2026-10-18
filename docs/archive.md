@@ -201,6 +201,30 @@ Each one a small PR.
    `archive.py ingest STORE --fetched DIR` then takes what passing runs on main pin. Artifacts from runs that never
    landed are read and ignored.
 
+## Keeping it current
+
+A pin of a live repo is safe only once it's in the archive, and it rots within hours: on 2026-10-17 EPEL replaced two
+`repomd.xml` files a run pinned that morning, and the public archive, last pushed the day before, didn't have them,
+so #163's rehearsal refused to start. The gate's `fetched-N` artifacts held the bytes, but only an ingest makes them
+reachable. So the archive is kept current on a timer, and checked from outside.
+
+- **remi, hourly.** `archive/remi/wend-archive.timer` runs `tools/archive_cycle.py` from a worktree of main nothing
+  else uses (`/data/dev/src/wend-archive-main`), updated to `origin/main` first, so ingest always reads the runs main
+  has now. A cycle downloads new gate artifacts (`gate_fetched.py`), stops there if main's `runs/` and the artifacts
+  are what the last good cycle saw (under a day ago), and otherwise ingests, verifies the store (signatures aside:
+  the push signs) and runs remi's push wrapper (`sudo -n /data/wend-lab/scripts/r2push-run.sh`: sign, then
+  `r2push.py`, from that same worktree). It pushes what it stored even when the ingest missed something, then exits
+  1, and keeps retrying each hour until a cycle finds everything. After a good cycle it deletes artifacts unpacked
+  over 30 days ago.
+- **Known losses.** `archive/lost.txt` lists the pins whose bytes are gone everywhere (the pre-capture pins above,
+  and anything since that no artifact or copy on remi held). `ingest` reports them as lost instead of failing, so a
+  red cycle means something that can still be saved.
+- **CI, hourly.** `.github/workflows/archive-check.yml` runs `tools/archive_check.py`: it reads the public
+  `index/latest.json`, checks its signature, and lists every pin of a passing run on main the index lacks and
+  `lost.txt` doesn't excuse. A pin still missing 6 hours after its run landed on main opens an `archive-gap` issue
+  (edited in place while open) and fails the job; the issue closes itself once the archive catches up. This is what
+  notices a remi that stopped running the cycle.
+
 ## Refused
 
 - Mirroring whole distros or whole repos, "just in case". That's how this turns into the thing it's meant to save us

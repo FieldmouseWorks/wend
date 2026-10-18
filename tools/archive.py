@@ -1,6 +1,7 @@
 """The wend archive's store (docs/archive.md). Runs on remi, the only writer. Standard library only.
 
   python3 tools/archive.py ingest STORE [--fetched DIR]... [--blobs DIR]... [--tree DIR]... [--offline] [--runs DIR]
+                                       [--lost FILE]
   python3 tools/archive.py verify STORE [--signers FILE]
   python3 tools/archive.py sign STORE --key KEY
   python3 tools/archive.py add-tables STORE DIR
@@ -30,7 +31,10 @@ is gone) is stored as the uncompressed bytes its pin names, taken from the .gz u
 evicted. verify rehashes every blob and alias and checks the index against them.
 
 ingest exits 1 when a referenced file wasn't found or couldn't be read, so a cron job notices. One ingest at a time:
-a second one exits 2 rather than wait.
+a second one exits 2 rather than wait. The exception is a pin archive/lost.txt (or --lost FILE) lists: a pinned top
+file upstream replaced before anything kept it, whose bytes are known to be gone everywhere. It is listed as lost and
+doesn't fail the ingest, so a cron job goes red only for what can still be saved. Anything under a pin, and any pin
+the list doesn't name, still fails.
 
 add-tables stores wend's own library tables (tools/sonames.py): each one an adapter in this checkout pins
 (`runtimes.<release>.libs`), read from DIR/<family>/<release>.txt.xz, only at its pinned sha256, indexed under
@@ -305,8 +309,9 @@ def bounded_unpack(f, name):
 
 
 class Store:
-    def __init__(self, path, fetched=(), blobs=(), trees=(), offline=False):
-        self.path, self.offline = path, offline
+    def __init__(self, path, fetched=(), blobs=(), trees=(), offline=False, lost=()):
+        self.path, self.offline, self.lost = path, offline, set(lost)
+        self.known_lost = []  # (url, digest) pins self.lost names that no source had
         self.blob_dirs = list(blobs) + [b for d in fetched for b in glob.glob(f"{d}/**/blobs", recursive=True)]
         self.trees = list(trees)
         self.used = set()  # (url) every download list names
@@ -667,8 +672,10 @@ class Store:
         in several compressed forms counts as found when this ingest found another form of it under the same parent
         (a repo serves one or two). An older digest at the same url never counts: a newer run's pin is its own file."""
         out = {}
-        for u, _, depth, parent, why in self.missing:
-            if depth == 0 or u.endswith(PACKAGES) or (parent, stem(u)) not in self.found_under or u in self.found:
+        for u, d, depth, parent, why in self.missing:
+            if depth == 0 and (u, d) in self.lost:
+                self.known_lost.append((u, d))
+            elif depth == 0 or u.endswith(PACKAGES) or (parent, stem(u)) not in self.found_under or u in self.found:
                 out.setdefault(u, why)
         return dict(sorted(out.items()))
 
@@ -681,6 +688,24 @@ class Store:
             with open(tmp, "w") as f:
                 f.write(body)
             os.replace(tmp, f"{self.path}/index/{name}")
+
+
+def read_lost(path):
+    """archive/lost.txt: one `URL sha256:HEX` per line, `#` starts a comment. {(url, ("sha256", hex))}."""
+    out = set()
+    try:
+        lines = open(path).read().splitlines()
+    except FileNotFoundError:
+        return out
+    for n, line in enumerate(lines, 1):
+        f = line.split("#", 1)[0].split()
+        if not f:
+            continue
+        d = digest(*f[1].partition(":")[::2]) if len(f) == 2 else None
+        if not d or d[0] != "sha256":
+            sys.exit(f"{path}:{n}: not `URL sha256:HEX`")
+        out.add((f[0], d))
+    return out
 
 
 def pins_on_main(runs_dir):
@@ -844,7 +869,7 @@ def main(argv):
         if not lock:
             return 2
         return sign(argv[1], arg, default)
-    opts = {"--fetched": [], "--blobs": [], "--tree": [], "--runs": [f"{ROOT}/runs"]}
+    opts = {"--fetched": [], "--blobs": [], "--tree": [], "--runs": [f"{ROOT}/runs"], "--lost": [f"{ROOT}/archive/lost.txt"]}
     rest, offline = argv[2:], False
     while rest:
         a = rest.pop(0)
@@ -858,7 +883,7 @@ def main(argv):
     lock = lock_store(argv[1], "ingest")
     if not lock:
         return 2
-    s = Store(argv[1], opts["--fetched"], opts["--blobs"], opts["--tree"], offline)
+    s = Store(argv[1], opts["--fetched"], opts["--blobs"], opts["--tree"], offline, read_lost(opts["--lost"][-1]))
     try:
         s.ingest(pins_on_main(opts["--runs"][-1]))
         s.sources()
@@ -871,6 +896,10 @@ def main(argv):
         print(f"  missing {u} ({why})")
     for u, why in s.unreadable:
         print(f"  unreadable {u} ({why})")
+    if s.known_lost:
+        print(f"{len(s.known_lost)} pins are known lost (archive/lost.txt), not failures:")
+        for u, (_, h) in sorted(s.known_lost):
+            print(f"  lost {u} sha256:{h}")
     if s.no_source:
         print(f"{len(s.no_source)} stored packages have no source stored yet (gaps to fill before going public):")
         for (u, _), why in sorted(s.no_source.items()):
