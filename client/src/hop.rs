@@ -15,6 +15,9 @@ pub struct HopPlan {
     pub commands: Vec<String>,
     /// step 8: run whatever happened above
     pub after: Vec<String>,
+    /// where the post steps start (tools/walk.py's hop_parts): a release marked `reboot = "before-post"` boots its
+    /// new kernel there on a real machine
+    pub post_at: usize,
 }
 
 fn phase(f: &Doc, ph: &str) -> Vec<Value> {
@@ -68,6 +71,7 @@ pub fn hop_plan(adapter: &Doc, hop: &str, fixes: &[&Doc]) -> Result<HopPlan, Str
     commands.extend(comp("pre")?);
     commands.extend(upgrade.iter().map(|c| fill(c, &v)));
     commands.extend(kernel("kernel_after")?);
+    let post_at = commands.len();
     commands.extend(comp("post")?);
     // SPEC "restores and adds": the families the fired fixes may introduce, for the services check
     let mut adds = BTreeSet::new();
@@ -98,7 +102,11 @@ pub fn hop_plan(adapter: &Doc, hop: &str, fixes: &[&Doc]) -> Result<HopPlan, Str
         Some(_) => list_of(h, "after")?.iter().map(|c| fill(c, &v)).collect(),
         None => vec![],
     };
-    Ok(HopPlan { commands, after })
+    Ok(HopPlan {
+        commands,
+        after,
+        post_at,
+    })
 }
 
 /// The fixes a route pins, in route order, resolved by id.

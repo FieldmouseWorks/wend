@@ -35,7 +35,7 @@ pub fn gap_key(run: &Value, family: &str) -> (String, String, String) {
         .filter_map(|v| v.as_str().map(String::from))
         .collect();
     failed.sort();
-    // json.dumps's own layout, as tools/report.py hashes it: non-ASCII as \\u escapes (UTF-16, as Python writes them)
+    // json.dumps's own layout, as tools/report.py hashes it: non-ASCII as \u escapes (UTF-16, as Python writes them)
     let j = |s: &str| {
         serde_json::to_string(s)
             .unwrap()
@@ -179,11 +179,15 @@ pub fn build(run: &Value, family: &str, output: Option<&str>, words: &[String]) 
         )
     };
     let mut link = url(&md);
-    if link.len() > URL_BUDGET {
-        let short: String = md.chars().take(1500).collect();
+    // the budget is the encoded URL's: a non-ASCII character takes up to 12 bytes there, so the summary shrinks
+    // until the link fits
+    let mut keep = 1500;
+    while link.len() > URL_BUDGET && keep > 0 {
+        let short: String = md.chars().take(keep).collect();
         link = url(&format!(
             "{short}\n\n(full report attached: drag wend-gap-{key}.md into this issue)"
         ));
+        keep = keep * 3 / 4;
     }
     let file = format!(
         "{md}\n\n```json\n{}\n```\n",

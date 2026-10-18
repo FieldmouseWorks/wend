@@ -53,9 +53,15 @@ def scrub(text, words):
     return text
 
 
+def failed_hop(run):
+    """The hop that broke: the first not ok, else (every hop ok, the final checks failed) the last; None with no hops."""
+    hops = run["hops"]
+    return next((h for h in hops if not h["ok"]), hops[-1] if hops else None)
+
+
 def gap_key(run):
-    bad = next(h for h in run["hops"] if not h["ok"])
-    i = run["hops"].index(bad)
+    bad = failed_hop(run) or {"to": run.get("to", "?")}
+    i = run["hops"].index(bad) if bad in run["hops"] else 0
     before = run["hops"][i - 1]["to"] if i else run.get("from", "start")
     stage = re.sub(r"[0-9][0-9.:+~-]*", "N", run.get("failed_stage", ""))
     raw = json.dumps([run["box"].split("/")[0], before, bad["to"], stage, sorted(run["final"]["failed"])])
@@ -63,7 +69,7 @@ def gap_key(run):
 
 
 def build(run, extra_words=()):
-    if run["result"] == "pass" or all(h["ok"] for h in run["hops"]):
+    if run["result"] == "pass":
         raise SystemExit("this run passed; there is no gap to report")
     words = local_words(extra_words)
     key, before, hop = gap_key(run)
@@ -72,7 +78,7 @@ def build(run, extra_words=()):
     body = {
         "gap_key": key, "family": fam, "from_release": before, "hop": hop,
         "route": run["route"], "route_target": run.get("to", "?"),
-        "fixes_fired_on_this_hop": next(h for h in run["hops"] if not h["ok"])["fired_names"],
+        "fixes_fired_on_this_hop": (failed_hop(run) or {}).get("fired_names", []),
         "failed_stage": scrub(run.get("failed_stage", ""), words),
         "failed_checks": run["final"]["failed"],
         "start_fingerprint": run.get("start_fingerprint"),

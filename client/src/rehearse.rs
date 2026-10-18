@@ -334,6 +334,11 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
     // the checks the walk and the plan hold the machine to: the given file, plus the generated checks
     let mut checks_bytes = std::fs::read(checks_path).map_err(|e| format!("{checks_path}: {e}"))?;
     let mut o = o.clone();
+    // the run names its box by family, as a CI run does (`./wend report` reads the family from it)
+    if o.box_id.is_none() {
+        let (_, rdoc) = atlas.route(route)?;
+        o.box_id = Some(format!("{}/rehearsal", str_of(rdoc, "family")?));
+    }
     let mut generated_names: Vec<String> = vec![];
     let mut ran: Vec<String> = vec![];
     match gen {
@@ -455,7 +460,7 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
         "from": w.run["from"], "to": get(rdoc, "to"), "hops": hops,
         "fingerprint": fp, "fingerprint_sha256": fingerprint,
         "checks_sha256": format!("sha256:{}", sha256_hex(&checks_bytes)), "generated_checks": generated_names,
-        "cache_files": listed.len(), "facts": facts,
+        "cache_files": listed.len(), "facts": facts, "prune": w.pruned,
     });
     let write = |name: &str, text: &[u8]| -> Result<(), String> {
         std::fs::write(dir.join(name), text).map_err(|e| format!("{}: {e}", dir.join(name).display()))
