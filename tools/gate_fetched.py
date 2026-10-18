@@ -18,9 +18,9 @@ there whose run.json is that file names N: fetched-N is its capture. Each lookup
 --dry-run says what it would download, and downloads none.
 
 Nothing here is trusted: ingest stores a file only when it hashes right against a passing run's pins on main, so an
-artifact from a run that never landed is read and ignored. Downloading an artifact needs a token even on a public repo:
-FILE holds one (a fine-grained token with read-only Actions on this repo), readable by its owner only; without FILE,
-$GH_TOKEN, then `gh auth token`. The token is never printed.
+artifact from a run that never landed is read and ignored. Downloading an artifact needs a token even on a public
+repo: FILE holds one (a fine-grained token with read-only Actions and Attestations on this repo; --runs reads
+attestations), readable by its owner only; without FILE, $GH_TOKEN, then `gh auth token`. The token is never printed.
 """
 import base64
 import functools
