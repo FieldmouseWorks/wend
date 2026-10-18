@@ -222,6 +222,12 @@ reachable. So the archive is kept current on a timer, and checked from outside.
   every index a live repo's captured repomd.xml lists but changelogs and deltas, and ingest stores every such index
   under a pinned repomd. One no source has is a walk gap, reported but not a failure: runs captured before this
   have none.
+- **No binary without its source.** `r2push.py` holds back a package whose source the store doesn't have (its
+  index entry says `"source": {"missing": ...}`), and any alias naming it. The index still names it, so what's held
+  is on the record; it goes up with the first push after an ingest finds its source. Source lookup tries more than
+  one place: AlmaLinux files a source package under one repo of its minor release (an AppStream rpm's `.src.rpm` is
+  often in BaseOS's `Source`), and a CentOS 7 vault lists a source only under the minor release that built it
+  (`tools/archive.py` `source_repos`).
 - **Known losses.** `archive/lost.txt` lists the pins whose bytes are gone everywhere (the pre-capture pins above,
   and anything since that no artifact or copy on remi held). `ingest` reports them as lost instead of failing, so a
   red cycle means something that can still be saved.

@@ -210,6 +210,31 @@ SOURCE_REPOS = (
 )
 
 
+C7_MINORS = ("7.9.2009", "7.8.2003", "7.7.1908", "7.6.1810", "7.5.1804", "7.4.1708", "7.3.1611", "7.2.1511",
+             "7.1.1503", "7.0.1406")
+ALMA_REPOS = ("BaseOS", "AppStream", "CRB", "PowerTools", "extras")
+
+
+def source_repos(base):
+    """Every source repo to look in for base's packages, in order: SOURCE_REPOS' own, then where a source also turns
+    up. AlmaLinux files a source package under one repo of its minor release though its binaries ship in several
+    (an AppStream rpm's .src.rpm is often in BaseOS's Source). A CentOS 7 vault lists a package's source under the
+    minor release that built it, not under every later one that still ships it (libmodulemd 1.6.3, built for 7.6,
+    sits in 7.9.2009's extras but only 7.6.1810's extras Source has its source)."""
+    first = source_repo(base)
+    if not first:
+        return []
+    out = [first]
+    m = re.match(r"^https://vault\.centos\.org/7\.[^/]+/([^/]+)/x86_64/$", base)
+    if m:
+        out += [f"https://vault.centos.org/{v}/{m[1]}/Source/" for v in C7_MINORS]
+    m = re.match(r"^https://(?:repo\.almalinux\.org/almalinux|vault\.almalinux\.org)/(\d+(?:\.\d+)?)/[^/]+/x86_64/os/$",
+                 base)
+    if m:
+        out += [f"https://vault.almalinux.org/{m[1]}/{r}/Source/" for r in ALMA_REPOS]
+    return list(dict.fromkeys(out))
+
+
 def source_repo(base):
     for pattern, to in SOURCE_REPOS:
         if re.match(pattern, base):
@@ -349,6 +374,7 @@ class Store:
         self.built_from = {}  # (package url, digest) -> source_names() value, for every package stored
         self.deb_sources = {}  # "<.../dists/X>/<comp>" -> [(Sources url, digest, the Release that lists it)]
         self.no_source = {}  # (package url, digest) -> why no source was stored
+        self.rpm_found = {}  # source repo base -> ({"<name>.src.rpm": [(url, digest)]}, its metadata)
         self.walk_gaps = {}  # url -> why: an index a repomd lists that only a live walk reads, found nowhere
         self.deb_indexes = {}  # "<.../dists/X>" -> {(url, digest)} of the package indexes pinned under it
         self.live_releases = {}  # "<.../dists/X>" -> [(url, "sha256:<hex>")]: a live Release read for its Sources
@@ -534,9 +560,9 @@ class Store:
             if what is None:
                 self.no_source[key] = "no package index names its source (pinned directly, or no sourcerpm)"
             elif what[0] == "rpm":
-                base = source_repo(what[2])
-                if base:
-                    groups.setdefault(base, {})[key] = what
+                bases = source_repos(what[2])
+                if bases:
+                    groups.setdefault(("rpm", *bases), {})[key] = what
                 else:
                     self.no_source[key] = f"no source repo known for {what[2]}"
             elif self.has_sources(what[4].rsplit("/", 1)[0]):
@@ -546,9 +572,8 @@ class Store:
         stored = {}  # (url, digest) -> "sha256:<hex>", or None when it couldn't be had: each source file once
         for group, packages in sorted(groups.items(), key=lambda g: str(g[0])):
             meta = []  # (url, "sha256:<hex>") of the metadata this group's sources came through
-            if isinstance(group, str):
-                found, why = self.rpm_sources(group, meta)
-                lookup = lambda what: found.get(what[1])
+            if group[0] == "rpm":
+                lookup, why = self.rpm_lookup(group[1:], meta)
             else:
                 lookup, why = self.deb_lookup(group[1], group[2], packages.values(), meta), ""
                 meta += self.live_releases.get(group[2], [])
@@ -603,6 +628,23 @@ class Store:
                     if m:
                         self.deb_sources.setdefault(f"{m[1]}/{m[2]}", []).append((child, cd, (url, ("sha256", h))))
         return any(c.rsplit("/", 1)[0] == suite for c in self.deb_sources)
+
+    def rpm_lookup(self, bases, meta):
+        """A function from a package's what to its .src.rpm, looked up in each of bases in turn (source_repos), each
+        repo's metadata read once and only when an earlier one lacked a package; meta gets the metadata of every repo
+        a source was found through."""
+        def lookup(what):
+            for base in bases:
+                if base not in self.rpm_found:
+                    m = []
+                    self.rpm_found[base] = (self.rpm_sources(base, m)[0], m)
+                found, m = self.rpm_found[base]
+                if what[1] in found:
+                    meta.extend(x for x in m if x not in meta)
+                    return found[what[1]]
+            return None
+        return lookup, (f"its source isn't listed (with a sha1 or sha256) in the metadata of {bases[0]}" +
+                        (f" or {len(bases) - 1} other source repos" if len(bases) > 1 else ""))
 
     def rpm_sources(self, base, meta):
         """({"<name>.src.rpm": [(url, digest)]}, why it's empty) from a source repo's live metadata. Its repomd.xml
