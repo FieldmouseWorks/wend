@@ -2419,7 +2419,9 @@ This answers open question 8 for a client. A boot is green on a running machine 
 
   What they cover comes from the adapter's `[hop.generated]`: the services held (each with every name it goes by on
   the routes, `mysqld` or `mariadb`), which of them serve sites (`web`) and hold databases (`db`), and how to tell a
-  package-owned file. A service counts when it is enabled at boot and running. The ports have a live form only: on
+  package-owned file. A service counts when it is enabled at boot and running. On the copy no daemon runs, so
+  a service's offline form is that it is enabled and that its config test passes where the adapter names one
+  (`tests`: `sshd -t`, `postfix check`, `php-fpm -t`); whether it runs is the live form's, at the trial boot. The ports have a live form only: on
   the copy no daemon runs, and the services the copy can start answer the site and database checks instead. The
   sites are the port-80 virtual hosts `httpd -S` lists that answer on localhost, with the status each gave, and
   httpd must answer on port 80 at all if it listened there; nginx gets its config test. A given role can't be named

@@ -643,6 +643,7 @@ web = ["httpd"]
 db = ["mysqld", "mariadb"]
 owned = "rpm -qf"
 modified = "rpm -Vf"
+tests = { sshd = "/usr/sbin/sshd -t", postfix = "postfix check", php-fpm = "/usr/sbin/php-fpm -t" }
 
 
 # Relocate (SPEC "Relocate", docs/rebuild-and-carry.md): copy the running root onto a fresh XFS v5 filesystem on a disk

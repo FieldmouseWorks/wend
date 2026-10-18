@@ -225,15 +225,24 @@ pub fn render(g: &Doc, s: &Seen) -> Value {
     let mut live = Map::new();
     let mut isolate = vec![];
     if !s.services.is_empty() {
+        let tests = get(g, "tests").and_then(Value::as_object);
         let body: Vec<String> = s
             .services
             .iter()
             .map(|(n, names)| {
-                format!(
+                let mut c = format!(
                     "{{ {}; }} || {{ echo {}; f=1; }}",
                     names.iter().map(|x| format!("en {x}")).collect::<Vec<_>>().join(" || "),
                     sq(&format!("{n} does not start at boot (as {})", names.join(" or ")))
-                )
+                );
+                // no daemon runs on the copy: the service's own config test stands for its start
+                if let Some(t) = tests.and_then(|t| t.get(n)).and_then(Value::as_str) {
+                    c.push_str(&format!(
+                        "; {{ {t}; }} >/tmp/wend-gen-test.log 2>&1 || {{ echo {}; tail -n 5 /tmp/wend-gen-test.log; f=1; }}",
+                        sq(&format!("{n}'s config test fails ({t}):"))
+                    ));
+                }
+                c
             })
             .collect();
         roles.insert(
@@ -358,7 +367,15 @@ pub fn render(g: &Doc, s: &Seen) -> Value {
             };
             for w in &want {
                 body.push_str(&format!("; {w}"));
-                if !tables.is_empty() {
+            }
+            if tables.is_empty() {
+                lv.push_str(&format!(
+                    "; {{ $C -N -e 'show databases' | grep -qxF {} || {{ echo {}; f=1; }}; }}",
+                    sq(d),
+                    sq(&format!("database {d} is gone"))
+                ));
+            } else {
+                for w in &want {
                     lv.push_str(&format!("; {w}"));
                 }
             }
@@ -397,7 +414,8 @@ mod tests {
     fn adapter() -> Doc {
         json!({"services": {"httpd": ["httpd"], "mysqld": ["mysqld", "mariadb"], "mariadb": ["mariadb", "mysqld"],
                             "postfix": ["postfix"], "sshd": ["sshd"]},
-               "web": ["httpd"], "db": ["mysqld", "mariadb"], "owned": "rpm -qf", "modified": "rpm -Vf"})
+               "web": ["httpd"], "db": ["mysqld", "mariadb"], "owned": "rpm -qf", "modified": "rpm -Vf",
+               "tests": {"sshd": "/usr/sbin/sshd -t", "postfix": "postfix check"}})
     }
 
     #[test]
@@ -449,7 +467,7 @@ mod tests {
     fn renders_offline_and_live_forms() {
         let mut s = read(
             &adapter(),
-            "svc\thttpd\nsvc\tmysqld\nvhost\t port 80 namevhost a.local (x)\ndb\tapp\ntable\tapp\tt\n\
+            "svc\thttpd\nsvc\tmysqld\nsvc\tsshd\nvhost\t port 80 namevhost a.local (x)\ndb\tapp\ntable\tapp\tt\ndb\tempty\n\
              cron\t/var/spool/cron/alice\t0 3 * * * echo 'hi'\n",
         );
         read_status(&mut s, "a.local\t200\n");
@@ -464,6 +482,11 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("en mysqld || en mariadb"));
+        assert!(roles["gen-services"]
+            .as_str()
+            .unwrap()
+            .contains("{ /usr/sbin/sshd -t; } >/tmp/wend-gen-test.log"));
+        assert!(g["live"]["gen-db"].as_str().unwrap().contains("database empty is gone"));
         assert!(roles["gen-web"].as_str().unwrap().contains("[ \"$c\" = 200 ]"));
         assert!(roles["gen-db"].as_str().unwrap().contains("--skip-grant-tables"));
         assert!(roles["gen-cron"]
