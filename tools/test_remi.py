@@ -115,9 +115,9 @@ def entry(out):
 def verdict(jid):
     rc, out = remi("show", jid)
     parts = int(out.split()[1].split("/")[1])
-    text = out.split("\n", 1)[1].rstrip("\n")
+    text = out.split("\n", 1)[1]
     for i in range(2, parts + 1):
-        text += remi("show", jid, "--part", str(i))[1].split("\n", 1)[1].rstrip("\n")
+        text += remi("show", jid, "--part", str(i))[1].split("\n", 1)[1]
     return json.loads(text)
 
 
@@ -135,6 +135,11 @@ for args, what in (
         (["build", "el/c7", "--sha", main, "--by", "t", "--vm-flags", "--extra-disk 501"], "an extra disk vm.py won't take"),
         (["build", "el/c7", "--sha", main, "--by", "t", "--vm-flags", "--root-fs btrfs"], "a root fs vm.py won't take"),
         (["tests", "--sha", main, "--by", "t", "--vm-flags", "--uefi"], "vm flags on a tests job"),
+        (["relocate", "el/c7", "--sha", main, "--by", "t"], "a relocate with no extra disk"),
+        (["replay", "routes/el/c7-to-a10.toml", "el/c7", "--sha", main, "--by", "t", "--vm-flags", "--relocate"],
+         "a replay --relocate with no extra disk"),
+        (["build", "el/c7", "--sha", main, "--by", "t", "--vm-flags", "--relocate --extra-disk 20"],
+         "--relocate on a job that isn't a replay"),
         (["shell", "--sha", main, "--by", "t"], "a job that doesn't exist")):
     rc, out = remi("enqueue", *args, env=NOW)
     check(rc != 0 and "refused" in out, f"enqueue refuses {what}")
@@ -186,8 +191,8 @@ check([c["name"] for c in v1["commands"]] == ["cargo-build", "rehearse"] and v1[
       "a rehearse builds the client first, each command with its own log, rc and hash")
 check(all(c["log"].startswith(f"{w}/lab/logs/main/{old}/{j1}/") for c in v1["commands"]),
       "logs go under the lab's logs/<PR or main>/<sha>/<id>, not into the worktree")
-check(os.path.isdir(f"{w}/src/wend-main-{old[:7]}") and os.path.isdir(f"{w}/src/wend-7-{pr[:7]}"),
-      "each job gets its own worktree, wend-<PR or main>-<sha7>")
+check(os.path.isdir(f"{w}/src/wend-main-{old[:7]}-root") and v1["worktree"].endswith("-root") and os.path.isdir(f"{w}/src/wend-7-{pr[:7]}"),
+      "each job gets its own worktree, wend-<PR or main>-<sha7>, root's apart (-root)")
 check(v3["remi_verdict"] == {"pr": "7", "sha": pr, "state": "success",
                               "summary": f"replay el/c7-to-a10 el/c7 --uefi --extra-disk 20: passed (job {j3})"},
       "a PR job's verdict carries the remi-verdict inputs")
@@ -281,7 +286,7 @@ raw = b""
 for i in (1, 2):
     p = subprocess.run([sys.executable, "-P", os.path.join(HERE, "remi.py"), "file", j11, "utf8.log", "--part", str(i)],
                        capture_output=True, env=ENV)
-    raw += p.stdout.split(b"\n", 1)[1][:-1]
+    raw += p.stdout.split(b"\n", 1)[1]
 check(raw == b"a" * 47999 + "é".encode() + b"z" * 10, "file parts join back byte for byte across a split character")
 
 print(f"{sum(results)}/{len(results)} passed")

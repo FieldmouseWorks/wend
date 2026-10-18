@@ -40,7 +40,7 @@ once that job has ended).
 The remi session runs exactly that line as `python3 -P /data/dev/src/wend-runner/tools/remi.py enqueue …` and sends
 back what it printed: the job id, or the reason for a refusal. Then it runs `remi.py wait <id>` in the background.
 When that returns, it sends `remi.py show <id>` to the `--reply-to` session, every part in order (a big verdict comes
-in parts of 48000 bytes that join back into one JSON), and runs `remi.py delivered <id>`. When it restarts after
+in parts of 48000 bytes: drop each part's header line and join the rest, byte for byte, into one JSON), and runs `remi.py delivered <id>`. When it restarts after
 being parked, `remi.py queue` lists any verdicts it still owes, and to whom.
 
 The thread reads the verdict, never a summary of it. For anything more, it asks for
@@ -53,8 +53,9 @@ The runner refuses the job, both when it's queued and again when it starts, unle
 - `--sha` is a full commit that is a branch tip on origin or on origin/main (a fork's commit never runs here; push it
   to a branch first), and with `--pr`, that PR's head at that moment. A thread that pushes after queueing gets a
   refusal, not a run on a head nobody froze.
-- The job's worktree, `/data/dev/src/wend-<PR or main>-<sha7>`, is at that commit with `git status --porcelain` empty.
-  It's created when missing and never cleaned, moved or deleted. A dirty one is refused and left as it is.
+- The job's worktree, `/data/dev/src/wend-<PR or main>-<sha7>` (with `-root` on the end for root's jobs, so a root
+  `.wend/` never blocks a dev job), is at that commit with `git status --porcelain` empty. It's created when missing
+  and never cleaned, moved or deleted. A dirty one is refused and left as it is.
 - The route and box exist at that commit, and the arguments match the job's patterns.
 
 ## How ordering holds when several threads ask

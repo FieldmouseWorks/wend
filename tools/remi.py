@@ -7,7 +7,7 @@ slot at a time, ending in a full JSON verdict. Nobody types a VM command by hand
   python3 -P tools/remi.py order ID...         put these queued jobs first, in this order (the lab order)
   python3 -P tools/remi.py cancel ID           drop a queued job, or stop a running one (its verdict says cancelled)
   python3 -P tools/remi.py wait ID             block until the job ends; prints its result and verdict path
-  python3 -P tools/remi.py show ID [--part N]  the verdict JSON, in parts of at most 48000 bytes ("part i/n" first)
+  python3 -P tools/remi.py show ID [--part N]  the verdict JSON, in parts of 48000 bytes after a "part i/n" line
   python3 -P tools/remi.py file ID PATH [--part N]
                                                a file from the job's log directory or one of its run directories
   python3 -P tools/remi.py delivered ID        mark the verdict as sent to whoever asked; `queue` lists undelivered
@@ -28,8 +28,9 @@ plan, which run as root (sudo -n) with WEND_WORK=<lab>/vmwork-root, as they alwa
 What it enforces, so nobody has to remember it:
 - SHA is the tip of a branch on origin (pushed by someone with write access) or on origin/main, checked at enqueue and
   again when the job starts; with --pr N it must also be PR N's head then. A fork's commit never runs here.
-- Each job runs in its own worktree, <src>/wend-<PR or main>-<sha7>, created from <src>/wend at SHA; a worktree that
-  exists must be at SHA with `git status --porcelain` empty, or the job is refused. Worktrees are left in place.
+- Each job runs in its own worktree, <src>/wend-<PR or main>-<sha7> (…-root for root's jobs), created from <src>/wend
+  at SHA; a worktree that exists must be at SHA with `git status --porcelain` empty, or the job is refused. Worktrees
+  are left in place.
 - Slots: one rehearse at a time; at most 3 VM jobs (rehearse included) and 2 test jobs at once. A queued job starts
   when its slot is free, everything ranked before it in its class has started, and its --after job has ended.
 - The mirror shim (tools/mirror.py on 8085) is shared only by jobs whose tools/mirror.py is byte for byte the same. A
@@ -272,6 +273,10 @@ def enqueue(args):
     flags = vm_flags(opts.get("vm-flags"))
     if flags and JOBS[job][0] == "tests":
         raise Refused("--vm-flags is for VM jobs")
+    if (job == "relocate" or "--relocate" in flags) and "--extra-disk" not in flags:
+        raise Refused("relocating needs a disk to relocate onto: --vm-flags \"--extra-disk GB\"")
+    if "--relocate" in flags and job != "replay":
+        raise Refused("--relocate goes with a replay only")
     runner_check()
     where = trusted(sha, pr)
     with QueueLock():
@@ -503,9 +508,23 @@ def stop_current():
                 pass
 
 
-def worktree(e):
-    """The job's own worktree at its sha: created if missing, refused unless at sha and clean if not."""
-    wt = os.path.join(SRC, f"wend-{e['pr'] or 'main'}-{e['sha'][:7]}")
+def job_user(e):
+    """root for a rehearse or a box with a [shelter] plan (as remi has always run them), dev otherwise; read at the sha
+    from the base clone, before any worktree exists."""
+    if e["job"] == "tests":
+        return "dev"
+    for a in e["args"]:
+        path = a if a.startswith("routes/") else f"boxes/{a}/box.toml"
+        if subprocess.run(["git", "-C", BASE, "cat-file", "-e", f"{e['sha']}:{path}"], capture_output=True).returncode:
+            raise Refused(f"{a} doesn't exist at {e['sha']}")
+    box = tomllib.loads(git("show", f"{e['sha']}:boxes/{e['args'][-1]}/box.toml"))
+    return "root" if e["job"] == "rehearse" or "shelter" in box else "dev"
+
+
+def worktree(e, user):
+    """The job's own worktree at its sha: created if missing, refused unless at sha and clean if not. Root's jobs get
+    their own (…-root): the .wend/ a root vm.py makes would leave a dev job nowhere to write its run directory."""
+    wt = os.path.join(SRC, f"wend-{e['pr'] or 'main'}-{e['sha'][:7]}" + ("-root" if user == "root" else ""))
     with GitLock():  # two jobs at one sha may start together: only one adds it
         if not os.path.exists(wt):
             git("worktree", "add", "--detach", wt, e["sha"])
@@ -626,7 +645,8 @@ def run(jid):
             raise KeyboardInterrupt  # cancelled between the worker starting it and the handshake
         v["runner"] = runner_check()
         v["origin"] = trusted(e["sha"], e["pr"])
-        wt, v["preflight"] = worktree(e)
+        v["user"] = job_user(e)
+        wt, v["preflight"] = worktree(e, v["user"])
         v["worktree"] = wt
         if e["job"] == "tests":
             tests(v, wt, deadline)
@@ -670,13 +690,7 @@ def tests(v, wt, deadline):
 
 
 def vm_job(e, v, wt, deadline):
-    box = e["args"][-1]
-    for a in e["args"]:
-        if not os.path.exists(os.path.join(wt, a if a.startswith("routes/") else f"boxes/{a}/box.toml")):
-            raise Refused(f"{a} doesn't exist at {e['sha']}")
-    sheltered = "shelter" in tomllib.load(open(os.path.join(wt, "boxes", box, "box.toml"), "rb"))
-    user = "root" if e["job"] == "rehearse" or sheltered else "dev"
-    v["user"] = user
+    user = v["user"]
     tail = list(e["args"])
     if e["job"] == "rehearse":
         c = command(v, "cargo-build", as_user("dev", [CARGO, "build", "--release", "--locked"], os.path.join(wt, "client")),
@@ -702,15 +716,21 @@ def vm_job(e, v, wt, deadline):
 
 # ---- reading results ----------------------------------------------------------------------------------------------
 
-def parts(data, part):
-    """data (bytes) in parts of PART bytes, written as bytes: a multibyte character split at a boundary joins back."""
-    n = max(1, -(-len(data) // PART))
+def parts(path, part):
+    """Part `part` of the file at path: one header line, then exactly that part's bytes and nothing after them, so
+    the parts (each without its header line) join back byte for byte. Only that range is read: a run directory
+    holds disk images."""
+    size = os.path.getsize(path)
+    n = max(1, -(-size // PART))
     i = int(part or 1)
     if not 1 <= i <= n:
         raise Refused(f"there are {n} part(s)")
-    print(f"part {i}/{n} ({len(data)} bytes in all; concatenate the parts in order)")
+    with open(path, "rb") as f:
+        f.seek((i - 1) * PART)
+        data = f.read(PART)
+    print(f"part {i}/{n} ({size} bytes in all; drop this line and concatenate the parts in order)")
     sys.stdout.flush()
-    sys.stdout.buffer.write(data[(i - 1) * PART:i * PART] + b"\n")
+    sys.stdout.buffer.write(data)
     return 0
 
 
@@ -722,7 +742,7 @@ def show(args):
     e = load(args[0])
     if not e.get("verdict"):
         raise Refused(f"{e['id']} is {e['state']}: no verdict yet")
-    return parts(open(e["verdict"], "rb").read(), opt(args, "--part"))
+    return parts(e["verdict"], opt(args, "--part"))
 
 
 def file_(args):
@@ -734,7 +754,7 @@ def file_(args):
     for root in roots:
         p = os.path.realpath(os.path.join(root, args[1]))
         if p.startswith(os.path.realpath(root) + os.sep) and os.path.isfile(p):
-            return parts(open(p, "rb").read(), opt(args, "--part"))
+            return parts(p, opt(args, "--part"))
     raise Refused(f"{args[1]} isn't a file under the job's log directory or its run directories")
 
 
