@@ -263,5 +263,25 @@ json.dump(v, open(big, "w"))
 check(verdict(j1)["pad"] == "x" * 120000 and remi("show", j1)[1].startswith("part 1/3"),
       "show splits a big verdict into parts that join back exactly")
 
+# a cancel that lands before the runner is ready leaves a flag the runner honours; a split character joins back
+rc, out = remi("enqueue", "build", "el/c7", "--sha", main, "--by", "t", env=NOW)
+j11 = entry(out)
+with open(f"{w}/lab/queue/{j11}.json") as f:
+    e11 = json.load(f)
+e11.update(state="running", pid=os.getpid())
+json.dump(e11, open(f"{w}/lab/queue/{j11}.json", "w"))
+rc, out = remi("cancel", j11)
+check(rc == 0 and "starting" in out, "cancel before the runner is ready leaves a flag")
+rc, out = remi("run", j11)
+check(verdict(j11)["result"] == "cancelled" and not verdict(j11)["commands"], "the runner honours the flag at once")
+logdir = verdict(j11)["log_dir"]
+open(f"{logdir}/utf8.log", "wb").write(b"a" * 47999 + "é".encode() + b"z" * 10)
+raw = b""
+for i in (1, 2):
+    p = subprocess.run([sys.executable, "-P", os.path.join(HERE, "remi.py"), "file", j11, "utf8.log", "--part", str(i)],
+                       capture_output=True, env=ENV)
+    raw += p.stdout.split(b"\n", 1)[1][:-1]
+check(raw == b"a" * 47999 + "é".encode() + b"z" * 10, "file parts join back byte for byte across a split character")
+
 print(f"{sum(results)}/{len(results)} passed")
 sys.exit(0 if all(results) else 1)

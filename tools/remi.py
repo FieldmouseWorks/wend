@@ -588,6 +588,7 @@ def interrupted(*_):
 
 def run(jid):
     os.umask(0o002)
+    signal.signal(signal.SIGTERM, interrupted)
     e = load(jid)
     v = {"schema": "wend.remijob/0", **{k: e[k] for k in ("id", "job", "args", "vm_flags", "sha", "pr", "by",
                                                          "reply_to", "enqueued")},
@@ -598,7 +599,12 @@ def run(jid):
     t0 = time.time()
     deadline = t0 + JOBS[e["job"]][2] * 3600
     try:
-        signal.signal(signal.SIGTERM, interrupted)
+        with QueueLock():  # the handshake with cancel: it signals only a runner that is ready, else it leaves a flag
+            e = load(jid)
+            e["ready"] = True
+            save(e)
+        if e.get("cancel"):
+            raise KeyboardInterrupt  # cancelled between the worker starting it and the handshake
         v["runner"] = runner_check()
         v["origin"] = trusted(e["sha"], e["pr"])
         wt, v["preflight"] = worktree(e)
@@ -679,14 +685,15 @@ def vm_job(e, v, wt, deadline):
 
 # ---- reading results ----------------------------------------------------------------------------------------------
 
-def parts(text, part):
-    data = text.encode()
+def parts(data, part):
+    """data (bytes) in parts of PART bytes, written as bytes: a multibyte character split at a boundary joins back."""
     n = max(1, -(-len(data) // PART))
     i = int(part or 1)
     if not 1 <= i <= n:
         raise Refused(f"there are {n} part(s)")
     print(f"part {i}/{n} ({len(data)} bytes in all; concatenate the parts in order)")
-    sys.stdout.write(data[(i - 1) * PART:i * PART].decode(errors="replace") + "\n")
+    sys.stdout.flush()
+    sys.stdout.buffer.write(data[(i - 1) * PART:i * PART] + b"\n")
     return 0
 
 
@@ -698,7 +705,7 @@ def show(args):
     e = load(args[0])
     if not e.get("verdict"):
         raise Refused(f"{e['id']} is {e['state']}: no verdict yet")
-    return parts(open(e["verdict"]).read(), opt(args, "--part"))
+    return parts(open(e["verdict"], "rb").read(), opt(args, "--part"))
 
 
 def file_(args):
@@ -710,7 +717,7 @@ def file_(args):
     for root in roots:
         p = os.path.realpath(os.path.join(root, args[1]))
         if p.startswith(os.path.realpath(root) + os.sep) and os.path.isfile(p):
-            return parts(open(p, errors="replace").read(), opt(args, "--part"))
+            return parts(open(p, "rb").read(), opt(args, "--part"))
     raise Refused(f"{args[1]} isn't a file under the job's log directory or its run directories")
 
 
@@ -754,6 +761,11 @@ def cancel(jid):
             e.update(state="cancelled", ended=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
             save(e)
             print(f"{jid}: cancelled before it started")
+            return 0
+        if e["state"] == "running" and not e.get("ready"):
+            e["cancel"] = True  # its runner sees this when it starts, under this same lock
+            save(e)
+            print(f"{jid}: stopping (its runner is starting)")
             return 0
     fd = runner_fd(e) if e["state"] == "running" else None
     if fd is not None:
