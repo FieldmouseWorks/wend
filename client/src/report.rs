@@ -71,6 +71,12 @@ pub fn build(run: &Value, family: &str, output: Option<&str>, words: &[String]) 
         .flatten()
         .filter_map(|v| v.as_str().map(|c| scrub(c, words)))
         .collect();
+    let services: Vec<String> = run["start_services"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str().map(|c| scrub(c, words)))
+        .collect();
     let stage = scrub(run["failed_stage"].as_str().unwrap_or(""), words);
     let stage = if stage.is_empty() {
         "the final checks".to_string()
@@ -81,7 +87,7 @@ pub fn build(run: &Value, family: &str, output: Option<&str>, words: &[String]) 
         "gap_key": key, "family": family, "from_release": before, "hop": hop,
         "route": run["route"], "route_target": run["to"], "fixes_fired_on_this_hop": fired,
         "failed_stage": stage, "failed_checks": failed, "start_fingerprint": run["start_fingerprint"],
-        "services": run["start_services"], "client": run["runner"]["kind"],
+        "services": services, "client": run["runner"]["kind"],
     });
     let route = run["route"].as_str().unwrap_or("?");
     let mut md = vec![
@@ -115,12 +121,6 @@ pub fn build(run: &Value, family: &str, output: Option<&str>, words: &[String]) 
         ),
         String::new(),
     ];
-    let services: Vec<&str> = run["start_services"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect();
     if !services.is_empty() {
         md.push(format!("Services on the box at the start: {}", services.join(", ")));
         md.push(String::new());
@@ -223,6 +223,7 @@ mod tests {
         assert!(build(&r, "el", None, &[]).1.contains("failed at: `the final checks`"));
         // an owner's check named after the machine is scrubbed too
         r["final"]["failed"] = json!(["web01-backup"]);
+        r["start_services"] = json!(["httpd", "web01-sync"]);
         let (_, file, link) = build(&r, "el", None, &words);
         assert!(!file.contains("web01") && !link.contains("web01"), "{file}");
     }

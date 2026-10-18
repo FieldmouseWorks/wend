@@ -216,8 +216,8 @@ fn strings_of(v: &Value) -> Vec<String> {
 }
 
 /// SPEC "Checks the machine is held to": read what the machine runs (the adapter's `[hop.generated]`) and render the
-/// generated checks; none when the adapter names no services.
-fn generate(atlas: &Atlas, route: &str, m: &Machine) -> Result<Option<Value>, String> {
+/// generated checks and the services they were read from; none when the adapter names no services.
+fn generate(atlas: &Atlas, route: &str, m: &Machine) -> Result<Option<(Value, Vec<String>)>, String> {
     let (_, rdoc) = atlas.route(route)?;
     let a = crate::adapter_of(atlas, rdoc)?;
     let Some(g) = get(a, "hop").and_then(|h| get(h, "generated")) else {
@@ -241,7 +241,8 @@ fn generate(atlas: &Atlas, route: &str, m: &Machine) -> Result<Option<Value>, St
         seen.dbs.len(),
         seen.cron.len()
     );
-    Ok(Some(generated::render(g, &seen)))
+    let names = seen.services.iter().map(|(n, _)| n.clone()).collect();
+    Ok(Some((generated::render(g, &seen), names)))
 }
 
 pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) -> Result<bool, String> {
@@ -334,8 +335,10 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
     let mut checks_bytes = std::fs::read(checks_path).map_err(|e| format!("{checks_path}: {e}"))?;
     let mut o = o.clone();
     let mut generated_names: Vec<String> = vec![];
+    let mut ran: Vec<String> = vec![];
     match gen {
-        Some(g) => {
+        Some((g, names)) => {
+            ran = names;
             let given = crate::atlas::parse_toml(&String::from_utf8_lossy(&checks_bytes))?;
             if get(&given, "generated").is_some() {
                 return Err(format!(
@@ -383,6 +386,7 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
             str_of(rdoc, "family")?,
             Path::new(root),
             &nodename,
+            &ran,
             o.out.as_deref(),
         )?;
         eprintln!("the rehearsal failed: {why}; no plan written");
@@ -480,7 +484,16 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
 
 /// SPEC "The rehearsal": a fail writes the scrubbed gap report beside the run (`--out`'s directory, else here) and
 /// prints its issue link. The words scrubbed are the copy's: its hostname, the machine's, and its login accounts.
-fn gap_report(w: &crate::Walked, family: &str, root: &Path, nodename: &str, out: Option<&str>) -> Result<(), String> {
+/// `ran` is what the machine ran when it was copied (the generated checks' services), which stands in for the run's
+/// `/etc/init.d` listing: on a systemd machine that lists only leftovers.
+fn gap_report(
+    w: &crate::Walked,
+    family: &str,
+    root: &Path,
+    nodename: &str,
+    ran: &[String],
+    out: Option<&str>,
+) -> Result<(), String> {
     let output = w
         .steps
         .iter()
@@ -490,7 +503,11 @@ fn gap_report(w: &crate::Walked, family: &str, root: &Path, nodename: &str, out:
         .and_then(|o| o.last())
         .and_then(|o| o["out"].as_str());
     let words = crate::share::local_words(root, nodename, &[]);
-    let (key, text, link) = crate::report::build(&w.run, family, output, &words);
+    let mut run = w.run.clone();
+    if !ran.is_empty() {
+        run["start_services"] = json!(ran);
+    }
+    let (key, text, link) = crate::report::build(&run, family, output, &words);
     let dir = out
         .and_then(|p| Path::new(p).parent())
         .filter(|d| !d.as_os_str().is_empty())
