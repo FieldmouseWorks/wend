@@ -1334,6 +1334,9 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
                 h["mid_reboot"], h["mid_reboot_forced"] = back, forced
                 if g.reboot_notes:
                     h["mid_reboot_notes"] = g.reboot_notes
+                if back:  # the post steps run in the mode the box started in, too
+                    h["mid_selinux"] = selinux_read(g)
+                    back = h["mid_selinux"]["mode"] is not None and h["mid_selinux"]["mode"] == start_selinux["mode"]
                 ok = back
                 if back:
                     ok, rest = run_hop(g, second, after)
@@ -1821,6 +1824,9 @@ def main(args):
             LAYOUT["extra_disks"], args = LAYOUT["extra_disks"] + [int(args[1])], args[2:]
         else:
             return __doc__
+    if SELINUX and (args[:1] != ["replay"] or RELOCATE):
+        # relocate's boots aren't held to the mode yet, and a build is the box as installed
+        raise SystemExit("--selinux is for replay, without --relocate, so far")
     if args[:1] == ["shim-stop"] and len(args) == 2 and args[1].isdigit():
         return shim_stop(int(args[1]))
     if args[:1] in (["build"], ["replay"], ["relocate"], ["rehearse"]):
@@ -1832,8 +1838,6 @@ def main(args):
         return replay(args[1], args[2])
     if args[:1] == ["replay"] and len(args) == 6 and args[3] == "--from":
         return replay(args[1], args[2], (args[4], args[5]))
-    if SELINUX and args[:1] != ["replay"]:
-        raise SystemExit("--selinux is for replay so far")
     if args[:1] == ["rehearse"] and len(args) == 5 and args[3] == "--client" and not RELOCATE:
         return rehearse(args[1], args[2], os.path.abspath(args[4]))
     if args[:1] == ["relocate"] and len(args) == 2 and not RELOCATE:

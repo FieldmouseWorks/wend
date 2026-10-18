@@ -279,8 +279,8 @@ def enqueue(args):
         raise Refused("relocating needs a disk to relocate onto: --vm-flags \"--extra-disk GB\"")
     if "--relocate" in flags and job != "replay":
         raise Refused("--relocate goes with a replay only")
-    if "--selinux" in flags and job != "replay":
-        raise Refused("--selinux goes with a replay only")
+    if "--selinux" in flags and (job != "replay" or "--relocate" in flags):
+        raise Refused("--selinux goes with a replay only, without --relocate")
     runner_check()
     where = trusted(sha, pr)
     with QueueLock():

@@ -158,6 +158,8 @@ for args, what in (
         (["build", "el/c7", "--sha", main, "--by", "t", "--vm-flags", "--selinux permissive"], "a selinux mode vm.py won't take"),
         (["build", "el/c7", "--sha", main, "--by", "t", "--vm-flags", "--selinux enforcing"],
          "--selinux on a job that isn't a replay"),
+        (["replay", "routes/el/c7-to-a10.toml", "el/c7", "--sha", main, "--by", "t", "--vm-flags",
+          "--selinux enforcing --relocate --extra-disk 20"], "--selinux on a relocated replay"),
         (["relocate", "el/c7", "--sha", main, "--by", "t"], "a relocate with no extra disk"),
         (["replay", "routes/el/c7-to-a10.toml", "el/c7", "--sha", main, "--by", "t", "--vm-flags", "--relocate"],
          "a replay --relocate with no extra disk"),
