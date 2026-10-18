@@ -75,9 +75,18 @@ p = ingest("--fetched", f"{w}/fetched")
 idx = json.load(open(f"{w}/store/index/latest.json"))["files"]
 check(p.returncode == 0 and "0 referenced files not found" in p.stdout, "with the download list, the whole chain is found")
 check(sorted(idx) == sorted([f"{u}/repodata/repomd.xml", f"{u}/repodata/{sha(primary)}-primary.xml.gz",
+                             f"{u}/repodata/{sha(filelists)}-filelists.xml.gz",
                              f"{u}/Packages/a-1.rpm", f"{u}/Packages/c-1.rpm"]),
-      "stored: the pin, its package index and the packages the walk used; not filelists, unused packages, or a "
-      "package its index names only by md5 (the client ignores those too)")
+      "stored: the pin, its package index, its filelists (a live walk can ask for them) and the packages the walk "
+      "used; not unused packages, or a package its index names only by md5 (the client ignores those too)")
+os.rename(f"{w}/tree/{repo}/repodata/{sha(filelists)}-filelists.xml.gz", f"{w}/fl")
+shutil.rmtree(f"{w}/store")
+p = ingest("--fetched", f"{w}/fetched")
+check(p.returncode == 0 and f"walk gap {u}/repodata/{sha(filelists)}-filelists.xml.gz" in p.stdout,
+      "filelists no source has are a walk gap, not a failure")
+os.rename(f"{w}/fl", f"{w}/tree/{repo}/repodata/{sha(filelists)}-filelists.xml.gz")
+p = ingest("--fetched", f"{w}/fetched")
+idx = json.load(open(f"{w}/store/index/latest.json"))["files"]
 check(list(idx[f"{u}/repodata/repomd.xml"]) == [f"sha256:{sha(repomd)}"] and
       idx[f"{u}/Packages/a-1.rpm"][f"sha256:{sha(used_rpm)}"]["runs"] == ["el/x@1"],
       "the index maps each url to its digest and the passing runs that reference it")
@@ -86,6 +95,15 @@ json.dump({**run("pass", sha(b"<repomd>vanished</repomd>")), "started": "2"}, op
 p = ingest("--fetched", f"{w}/fetched")
 check(f"missing {u}/repodata/repomd.xml" in p.stdout,
       "a newer pin no source has is missing, though an older digest at its url is stored")
+open(f"{w}/lost.txt", "w").write(f"# gone\n{u}/repodata/repomd.xml sha256:{sha(b'<repomd>vanished</repomd>')}  # replaced\n")
+p = ingest("--fetched", f"{w}/fetched", "--lost", f"{w}/lost.txt")
+check(p.returncode == 0 and "0 referenced files not found" in p.stdout and
+      f"lost {u}/repodata/repomd.xml sha256:{sha(b'<repomd>vanished</repomd>')}" in p.stdout,
+      "a pin lost.txt lists as lost is reported, and doesn't fail the ingest")
+open(f"{w}/lost.txt", "w").write(f"{u}/repodata/repomd.xml sha256:{sha(b'another')}\n")
+p = ingest("--fetched", f"{w}/fetched", "--lost", f"{w}/lost.txt")
+check(p.returncode == 1 and f"missing {u}/repodata/repomd.xml" in p.stdout,
+      "lost.txt excuses only the digest it names, not every pin at its url")
 os.remove(f"{w}/runs/later.json")
 # a second passing run pins another repomd listing the same primary: the package gets both runs
 repomd2 = repomd.replace(b"</repomd>", b"<!-- 2 --></repomd>")
@@ -152,10 +170,11 @@ check(p.returncode == 1 and "unreadable https://new.example.org/10/repodata/prim
 # Sources index its pinned Release lists; checked against that metadata, with a gap reported where there's none
 el = "vault.centos.org/7.9.2009/os"
 bin_rpm, src_rpm, lone_rpm = b"\xed\xab\xee\xdb bin", b"\xed\xab\xee\xdb src", b"\xed\xab\xee\xdb lone"
+old_rpm, old_src = b"\xed\xab\xee\xdb old", b"\xed\xab\xee\xdb old src"  # its source is only under an older minor
 pkg = lambda n, b, src: (f'<package type="rpm"><checksum type="sha256" pkgid="YES">{sha(b)}</checksum>'
                          f'<location href="Packages/{n}"/><format><rpm:sourcerpm>{src}</rpm:sourcerpm></format></package>')
 prim = gzip.compress(f"<metadata>{pkg('t-1.rpm', bin_rpm, 't-1.src.rpm')}{pkg('l-1.rpm', lone_rpm, 'l-1.src.rpm')}"
-                     f"</metadata>".encode())
+                     f"{pkg('o-1.rpm', old_rpm, 'o-1.src.rpm')}</metadata>".encode())
 md = lambda p: (f'<repomd><data type="primary"><checksum type="sha256">{sha(p)}</checksum>'
                 f'<location href="repodata/{sha(p)}-primary.xml.gz"/></data></repomd>').encode()
 put(f"{el}/x86_64/repodata/repomd.xml", md(prim))
@@ -166,6 +185,12 @@ sprim = gzip.compress(f"<metadata>{pkg('t-1.src.rpm', src_rpm, 'x')}</metadata>"
 put(f"{el}/Source/repodata/repomd.xml", md(sprim))
 put(f"{el}/Source/repodata/{sha(sprim)}-primary.xml.gz", sprim)
 put(f"{el}/Source/Packages/t-1.src.rpm", src_rpm)
+put(f"{el}/x86_64/Packages/o-1.rpm", old_rpm)
+el76 = "vault.centos.org/7.6.1810/os"
+oprim = gzip.compress(f"<metadata>{pkg('o-1.src.rpm', old_src, 'x')}</metadata>".encode())
+put(f"{el76}/Source/repodata/repomd.xml", md(oprim))
+put(f"{el76}/Source/repodata/{sha(oprim)}-primary.xml.gz", oprim)
+put(f"{el76}/Source/Packages/o-1.src.rpm", old_src)
 deb_bin, dsc, tar = b"!<arch> deb", b"Format: 3.0 (quilt)\n", b"tarball"
 zbin, zdsc = b"!<arch> z", b"Format: z\n"
 packages = (f"Package: x\nSource: xsrc (1.0-1)\nVersion: 1.0-1+b1\nFilename: pool/main/x/xsrc/x_1.0-1+b1_amd64.deb\n"
@@ -191,6 +216,7 @@ os.makedirs(f"{w}/fetched3/r.fetched")
 open(f"{w}/fetched3/r.fetched/fetched.txt", "w").write(
     f"https://{el}/x86_64/Packages/t-1.rpm sha256:{sha(bin_rpm)} 1\n"
     f"https://{el}/x86_64/Packages/l-1.rpm sha256:{sha(lone_rpm)} 1\n"
+    f"https://{el}/x86_64/Packages/o-1.rpm sha256:{sha(old_rpm)} 1\n"
     f"https://{deb}/pool/main/x/xsrc/x_1.0-1+b1_amd64.deb sha256:{sha(deb_bin)} 1\n"
     f"https://{deb}/pool/main/z/z/z_2-1+b3_amd64.deb sha256:{sha(zbin)} 1\n")
 json.dump({"result": "pass", "box": "s", "started": "5", "hops": [{"sources": {
@@ -204,6 +230,9 @@ check(entry(f"https://{el}/x86_64/Packages/t-1.rpm", bin_rpm)["source"] ==
       {"url": f"https://{el}/Source/Packages/t-1.src.rpm", "digest": f"sha256:{sha(src_rpm)}"} and
       entry(f"https://{el}/Source/Packages/t-1.src.rpm", src_rpm)["runs"] == ["s@5"],
       "an rpm's .src.rpm is stored from its source repo, and named on the rpm's index entry")
+check(entry(f"https://{el}/x86_64/Packages/o-1.rpm", old_rpm)["source"] ==
+      {"url": f"https://{el76}/Source/Packages/o-1.src.rpm", "digest": f"sha256:{sha(old_src)}"},
+      "a CentOS 7 rpm whose source only the minor release that built it lists finds it there")
 check(entry(f"https://{deb}/pool/main/x/xsrc/x_1.0-1+b1_amd64.deb", deb_bin)["source"]["url"] ==
       f"https://{deb}/pool/main/x/xsrc/xsrc_1.0-1.dsc" and
       entry(f"https://{deb}/pool/main/x/xsrc/xsrc_1.0.orig.tar.xz", tar)["runs"] == ["s@5"],

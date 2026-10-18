@@ -84,6 +84,36 @@ try:
     check(sorted(os.listdir(f"{out}/blobs")) == sorted([sha[md], sha[epel]]) and
           open(f"{out}/blobs/{sha[md]}", "rb").read() == files[md],
           "collect copies the metadata's and live EPEL packages' bytes, and leaves other packages to the archive")
+    # a live repo's repomd: collect also takes every index it lists (but changelogs and deltas) from the origin
+    live = "https://repo.almalinux.org/almalinux/9/BaseOS/x86_64/os/"
+    fl, ui, oth, gone = b"<filelists/>", b"<updates/>", b"<otherdata/>", b"<gone/>"
+    lmd = "".join(f'<data type="{t}"><checksum type="sha256">{hashlib.sha256(b).hexdigest()}</checksum>'
+                  f'<location href="repodata/{n}"/></data>'
+                  for t, n, b in (("filelists", "x-filelists.xml.gz", fl), ("updateinfo", "y-updateinfo.xml.gz", ui),
+                                  ("other", "z-other.xml.gz", oth), ("modules", "m-modules.yaml.xz", gone),
+                                  ("primary", "p-primary.xml.gz", b"<metadata/>"))).encode()
+    lh = hashlib.sha256(lmd).hexdigest()
+    os.makedirs(f"{work}/live/blobs")
+    open(f"{work}/live/blobs/{lh}", "wb").write(lmd)
+    served = {live + "repodata/x-filelists.xml.gz": fl, live + "repodata/y-updateinfo.xml.gz": b"<replaced/>",
+              live + "repodata/z-other.xml.gz": oth}
+    asked = []
+    fetched.origin = lambda u: asked.append(u) or served[u]
+    seen = {(live + "repodata/repomd.xml", f"sha256:{lh}", str(len(lmd))),
+            (live + "repodata/p-primary.xml.gz", "sha256:" + "0" * 64, "11")}
+    miss = []
+    got = fetched.indexes(seen, f"{work}/live", miss)
+    check(got == {(live + "repodata/x-filelists.xml.gz", f"sha256:{hashlib.sha256(fl).hexdigest()}", str(len(fl)))}
+          and open(f"{work}/live/blobs/{hashlib.sha256(fl).hexdigest()}", "rb").read() == fl,
+          "a live repo's filelists the walk never asked for are fetched, checked and kept")
+    check(sorted(miss) == [live + "repodata/m-modules.yaml.xz", live + "repodata/y-updateinfo.xml.gz"],
+          "an index the origin no longer has, or serves different bytes for, is reported missing")
+    check(live + "repodata/z-other.xml.gz" not in asked and live + "repodata/p-primary.xml.gz" not in asked,
+          "changelogs aren't fetched, nor an index the walk already listed")
+    vault = {("https://vault.centos.org/7.9.2009/os/x86_64/repodata/repomd.xml", f"sha256:{lh}", "1")}
+    asked.clear()
+    check(fetched.indexes(vault, f"{work}/live", []) == set() and not asked, "a vault's repomd is left alone: it keeps "
+          "its indexes")
     os.makedirs(f"{work}/nothing")
     check(fetched.collect(fetched.mark(), f"{work}/nothing") == 0 and not os.path.exists(f"{work}/nothing"),
           "a walk that fetched nothing writes nothing, and leaves no stale list")

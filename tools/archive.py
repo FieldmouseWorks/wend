@@ -1,6 +1,7 @@
 """The wend archive's store (docs/archive.md). Runs on remi, the only writer. Standard library only.
 
   python3 tools/archive.py ingest STORE [--fetched DIR]... [--blobs DIR]... [--tree DIR]... [--offline] [--runs DIR]
+                                       [--lost FILE]
   python3 tools/archive.py verify STORE [--signers FILE]
   python3 tools/archive.py sign STORE --key KEY
   python3 tools/archive.py add-tables STORE DIR
@@ -18,8 +19,10 @@ when it hashes right against that chain, wherever its bytes came from:
   (--runs DIR reads the run files from DIR instead of this checkout's runs/: for tests)
 
 What goes in: every top file a passing run pins; under it, each index some download list names, and always each
-package index (primary, Packages: the files that vouch for packages), in one form unless a walk used others; each
-package a download list names; and each stored package's source (a .src.rpm from its repo's source repo, or a .dsc
+package index (primary, Packages: the files that vouch for packages), in one form unless a walk used others; under a
+repomd.xml, also every other index it lists but changelogs (`other`) and deltas, since a live walk of the run can ask
+for filelists or updateinfo its replay never needed (one no source has is listed as a walk gap, not a failure: runs
+recorded before capture took them have none); each package a download list names; and each stored package's source (a .src.rpm from its repo's source repo, or a .dsc
 and its files from the Sources index its Release lists), checked against that metadata. A package whose source
 can't be found is listed as a gap, not a failure. Never the rest of a repo. Indexes compressed with zstd (EPEL 10)
 need Python 3.14 or the zstd command. Blobs are kept as upstream served them, under blob/sha256/<2 hex>/<64 hex>. index/latest.json
@@ -30,7 +33,10 @@ is gone) is stored as the uncompressed bytes its pin names, taken from the .gz u
 evicted. verify rehashes every blob and alias and checks the index against them.
 
 ingest exits 1 when a referenced file wasn't found or couldn't be read, so a cron job notices. One ingest at a time:
-a second one exits 2 rather than wait.
+a second one exits 2 rather than wait. The exception is a pin archive/lost.txt (or --lost FILE) lists: a pinned top
+file upstream replaced before anything kept it, whose bytes are known to be gone everywhere. It is listed as lost and
+doesn't fail the ingest, so a cron job goes red only for what can still be saved. Anything under a pin, and any pin
+the list doesn't name, still fails.
 
 add-tables stores wend's own library tables (tools/sonames.py): each one an adapter in this checkout pins
 (`runtimes.<release>.libs`), read from DIR/<family>/<release>.txt.xz, only at its pinned sha256, indexed under
@@ -63,6 +69,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGES = (".rpm", ".deb", ".udeb")
 UNREADABLE = (".zck", ".lzma", ".lz4")  # compressions nothing here reads: reported, never skipped
 MAX_PLAIN = 1 << 30  # a .gz decompressed before it can be checked stops here
+NOT_WALKED = re.compile(r"(^|-)(other|prestodelta|deltainfo)[._]")  # a repomd's changelogs and deltas, by file name
 PACKAGE_INDEX = re.compile(r"(^|/)(primary\.xml(\.[a-z0-9]+)?|[0-9a-f]{40,64}-primary\.xml(\.[a-z0-9]+)?|"
                            r"binary-amd64/Packages(\.[a-z0-9]+)?)$")
 
@@ -203,6 +210,31 @@ SOURCE_REPOS = (
 )
 
 
+C7_MINORS = ("7.9.2009", "7.8.2003", "7.7.1908", "7.6.1810", "7.5.1804", "7.4.1708", "7.3.1611", "7.2.1511",
+             "7.1.1503", "7.0.1406")
+ALMA_REPOS = ("BaseOS", "AppStream", "CRB", "PowerTools", "extras")
+
+
+def source_repos(base):
+    """Every source repo to look in for base's packages, in order: SOURCE_REPOS' own, then where a source also turns
+    up. AlmaLinux files a source package under one repo of its minor release though its binaries ship in several
+    (an AppStream rpm's .src.rpm is often in BaseOS's Source). A CentOS 7 vault lists a package's source under the
+    minor release that built it, not under every later one that still ships it (libmodulemd 1.6.3, built for 7.6,
+    sits in 7.9.2009's extras but only 7.6.1810's extras Source has its source)."""
+    first = source_repo(base)
+    if not first:
+        return []
+    out = [first]
+    m = re.match(r"^https://vault\.centos\.org/7\.[^/]+/([^/]+)/x86_64/$", base)
+    if m:
+        out += [f"https://vault.centos.org/{v}/{m[1]}/Source/" for v in C7_MINORS]
+    m = re.match(r"^https://(?:repo\.almalinux\.org/almalinux|vault\.almalinux\.org)/(\d+(?:\.\d+)?)/[^/]+/x86_64/os/$",
+                 base)
+    if m:
+        out += [f"https://vault.almalinux.org/{m[1]}/{r}/Source/" for r in ALMA_REPOS]
+    return list(dict.fromkeys(out))
+
+
 def source_repo(base):
     for pattern, to in SOURCE_REPOS:
         if re.match(pattern, base):
@@ -288,6 +320,13 @@ def sources_entries(text):
     return out
 
 
+def walk_only(url, parent, used):
+    """An index a repomd.xml lists that no replay read and isn't a package index: kept for a live walk (filelists,
+    updateinfo, modules), never read for children, and a gap rather than a failure when no source has it."""
+    return bool(parent) and parent[0].endswith("/repodata/repomd.xml") and url not in used and \
+        not url.endswith(PACKAGES) and not PACKAGE_INDEX.search(url) and not NOT_WALKED.search(url.rsplit("/", 1)[1])
+
+
 def stem(u):
     return re.sub(r"\.(gz|xz|bz2|lzma|zst)$", "", u)
 
@@ -305,8 +344,9 @@ def bounded_unpack(f, name):
 
 
 class Store:
-    def __init__(self, path, fetched=(), blobs=(), trees=(), offline=False):
-        self.path, self.offline = path, offline
+    def __init__(self, path, fetched=(), blobs=(), trees=(), offline=False, lost=()):
+        self.path, self.offline, self.lost = path, offline, set(lost)
+        self.known_lost = []  # (url, digest) pins self.lost names that no source had
         self.blob_dirs = list(blobs) + [b for d in fetched for b in glob.glob(f"{d}/**/blobs", recursive=True)]
         self.trees = list(trees)
         self.used = set()  # (url) every download list names
@@ -334,6 +374,8 @@ class Store:
         self.built_from = {}  # (package url, digest) -> source_names() value, for every package stored
         self.deb_sources = {}  # "<.../dists/X>/<comp>" -> [(Sources url, digest, the Release that lists it)]
         self.no_source = {}  # (package url, digest) -> why no source was stored
+        self.rpm_found = {}  # source repo base -> ({"<name>.src.rpm": [(url, digest)]}, its metadata)
+        self.walk_gaps = {}  # url -> why: an index a repomd lists that only a live walk reads, found nowhere
         self.deb_indexes = {}  # "<.../dists/X>" -> {(url, digest)} of the package indexes pinned under it
         self.live_releases = {}  # "<.../dists/X>" -> [(url, "sha256:<hex>")]: a live Release read for its Sources
 
@@ -441,7 +483,7 @@ class Store:
             self.kept[(url, d)] = f"sha256:{h}"
             if parent:
                 self.found_under.add((parent, stem(url)))
-            if url.endswith(PACKAGES):
+            if url.endswith(PACKAGES) or walk_only(url, parent, self.used):
                 continue
             try:
                 listed = children(url, data)
@@ -466,8 +508,9 @@ class Store:
                     self.built_from[(child, cd)] = names[child]
                 if child.endswith(PACKAGES):
                     wanted = child in self.used
-                else:  # an index: the package indexes always, the rest when a walk used them
-                    wanted = bool(PACKAGE_INDEX.search(child)) or child in self.used
+                else:  # an index: the package indexes always, a repomd's others for a live walk, the rest when used
+                    wanted = bool(PACKAGE_INDEX.search(child)) or child in self.used or \
+                        walk_only(child, (url, d), self.used)
                 if wanted and depth < 3:
                     self.edges.setdefault((url, d), []).append((child, cd))
                     todo.append((child, cd, depth + 1, (url, d)))
@@ -517,9 +560,9 @@ class Store:
             if what is None:
                 self.no_source[key] = "no package index names its source (pinned directly, or no sourcerpm)"
             elif what[0] == "rpm":
-                base = source_repo(what[2])
-                if base:
-                    groups.setdefault(base, {})[key] = what
+                bases = source_repos(what[2])
+                if bases:
+                    groups.setdefault(("rpm", *bases), {})[key] = what
                 else:
                     self.no_source[key] = f"no source repo known for {what[2]}"
             elif self.has_sources(what[4].rsplit("/", 1)[0]):
@@ -529,9 +572,8 @@ class Store:
         stored = {}  # (url, digest) -> "sha256:<hex>", or None when it couldn't be had: each source file once
         for group, packages in sorted(groups.items(), key=lambda g: str(g[0])):
             meta = []  # (url, "sha256:<hex>") of the metadata this group's sources came through
-            if isinstance(group, str):
-                found, why = self.rpm_sources(group, meta)
-                lookup = lambda what: found.get(what[1])
+            if group[0] == "rpm":
+                lookup, why = self.rpm_lookup(group[1:], meta)
             else:
                 lookup, why = self.deb_lookup(group[1], group[2], packages.values(), meta), ""
                 meta += self.live_releases.get(group[2], [])
@@ -586,6 +628,23 @@ class Store:
                     if m:
                         self.deb_sources.setdefault(f"{m[1]}/{m[2]}", []).append((child, cd, (url, ("sha256", h))))
         return any(c.rsplit("/", 1)[0] == suite for c in self.deb_sources)
+
+    def rpm_lookup(self, bases, meta):
+        """A function from a package's what to its .src.rpm, looked up in each of bases in turn (source_repos), each
+        repo's metadata read once and only when an earlier one lacked a package; meta gets the metadata of every repo
+        a source was found through."""
+        def lookup(what):
+            for base in bases:
+                if base not in self.rpm_found:
+                    m = []
+                    self.rpm_found[base] = (self.rpm_sources(base, m)[0], m)
+                found, m = self.rpm_found[base]
+                if what[1] in found:
+                    meta.extend(x for x in m if x not in meta)
+                    return found[what[1]]
+            return None
+        return lookup, (f"its source isn't listed (with a sha1 or sha256) in the metadata of {bases[0]}" +
+                        (f" or {len(bases) - 1} other source repos" if len(bases) > 1 else ""))
 
     def rpm_sources(self, base, meta):
         """({"<name>.src.rpm": [(url, digest)]}, why it's empty) from a source repo's live metadata. Its repomd.xml
@@ -667,8 +726,12 @@ class Store:
         in several compressed forms counts as found when this ingest found another form of it under the same parent
         (a repo serves one or two). An older digest at the same url never counts: a newer run's pin is its own file."""
         out = {}
-        for u, _, depth, parent, why in self.missing:
-            if depth == 0 or u.endswith(PACKAGES) or (parent, stem(u)) not in self.found_under or u in self.found:
+        for u, d, depth, parent, why in self.missing:
+            if depth == 0 and (u, d) in self.lost:
+                self.known_lost.append((u, d))
+            elif depth > 0 and walk_only(u, parent, self.used):
+                self.walk_gaps.setdefault(u, why)
+            elif depth == 0 or u.endswith(PACKAGES) or (parent, stem(u)) not in self.found_under or u in self.found:
                 out.setdefault(u, why)
         return dict(sorted(out.items()))
 
@@ -681,6 +744,24 @@ class Store:
             with open(tmp, "w") as f:
                 f.write(body)
             os.replace(tmp, f"{self.path}/index/{name}")
+
+
+def read_lost(path):
+    """archive/lost.txt: one `URL sha256:HEX` per line, `#` starts a comment. {(url, ("sha256", hex))}."""
+    out = set()
+    try:
+        lines = open(path).read().splitlines()
+    except FileNotFoundError:
+        return out
+    for n, line in enumerate(lines, 1):
+        f = line.split("#", 1)[0].split()
+        if not f:
+            continue
+        d = digest(*f[1].partition(":")[::2]) if len(f) == 2 else None
+        if not d or d[0] != "sha256":
+            sys.exit(f"{path}:{n}: not `URL sha256:HEX`")
+        out.add((f[0], d))
+    return out
 
 
 def pins_on_main(runs_dir):
@@ -844,7 +925,7 @@ def main(argv):
         if not lock:
             return 2
         return sign(argv[1], arg, default)
-    opts = {"--fetched": [], "--blobs": [], "--tree": [], "--runs": [f"{ROOT}/runs"]}
+    opts = {"--fetched": [], "--blobs": [], "--tree": [], "--runs": [f"{ROOT}/runs"], "--lost": [f"{ROOT}/archive/lost.txt"]}
     rest, offline = argv[2:], False
     while rest:
         a = rest.pop(0)
@@ -858,7 +939,7 @@ def main(argv):
     lock = lock_store(argv[1], "ingest")
     if not lock:
         return 2
-    s = Store(argv[1], opts["--fetched"], opts["--blobs"], opts["--tree"], offline)
+    s = Store(argv[1], opts["--fetched"], opts["--blobs"], opts["--tree"], offline, read_lost(opts["--lost"][-1]))
     try:
         s.ingest(pins_on_main(opts["--runs"][-1]))
         s.sources()
@@ -871,6 +952,15 @@ def main(argv):
         print(f"  missing {u} ({why})")
     for u, why in s.unreadable:
         print(f"  unreadable {u} ({why})")
+    if s.walk_gaps:
+        print(f"{len(s.walk_gaps)} indexes only a live walk reads weren't found (gaps for `wend walk --run` on a real "
+              "machine, not failures):")
+        for u, why in s.walk_gaps.items():
+            print(f"  walk gap {u} ({why})")
+    if s.known_lost:
+        print(f"{len(s.known_lost)} pins are known lost (archive/lost.txt), not failures:")
+        for u, (_, h) in sorted(s.known_lost):
+            print(f"  lost {u} sha256:{h}")
     if s.no_source:
         print(f"{len(s.no_source)} stored packages have no source stored yet (gaps to fill before going public):")
         for (u, _), why in sorted(s.no_source.items()):

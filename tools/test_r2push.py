@@ -5,6 +5,7 @@ import datetime
 import fcntl
 import hashlib
 import http.server
+import json
 import os
 import socket
 import subprocess
@@ -104,6 +105,28 @@ got.clear()
 r2push.push(store, bucket)
 check([k for k, _ in got] == ["index/20261015-000000.json.sig", "index/latest.json.sig", "index/latest.json"],
       "each index's signature goes up just before it (tools/archive.py sign)")
+# a package with no source stored is held back, and its alias with it, until an ingest stores its source
+src_missing = {"files": {"https://e.org/p-1.rpm": {"sha256:" + "aa" * 32: {"size": 1, "source": {"missing": "x"}}},
+                         "https://e.org/q-1.rpm": {"sha256:" + "bb" * 32: {"size": 1, "source": {"missing": "x"}}},
+                         "https://e.org/repodata/x.xml": {"sha256:" + "bb" * 32: {"size": 1}}}}
+for h in ("aa", "bb"):
+    os.makedirs(f"{store}/blob/sha256/{h}")
+    open(f"{store}/blob/sha256/{h}/" + h * 32, "wb").write(b"pkg")
+open(f"{store}/alias/sha1/" + "11" * 20, "w").write("sha256:" + "aa" * 32)
+open(f"{store}/index/latest.json", "w").write(json.dumps(src_missing))
+got.clear()
+r2push.push(store, bucket)
+keys = [k for k, _ in got]
+check("blob/sha256/aa/" + "aa" * 32 not in keys and "alias/sha1/" + "11" * 20 not in keys and
+      "blob/sha256/bb/" + "bb" * 32 in keys,
+      "a sourceless package and its alias are held back; a blob another entry needs without a source goes up")
+src_missing["files"]["https://e.org/p-1.rpm"]["sha256:" + "aa" * 32]["source"] = {"url": "u", "digest": "d"}
+open(f"{store}/index/latest.json", "w").write(json.dumps(src_missing))
+got.clear()
+r2push.push(store, bucket)
+keys = [k for k, _ in got]
+check("blob/sha256/aa/" + "aa" * 32 in keys and "alias/sha1/" + "11" * 20 in keys,
+      "once its source is stored, a held package and its alias go up")
 os.makedirs(f"{store}/blob/sha256/12")
 open(f"{store}/blob/sha256/12/" + "12" * 32, "wb").write(b"new")
 fail.add("blob/sha256/12/" + "12" * 32)
