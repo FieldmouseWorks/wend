@@ -69,7 +69,7 @@ pub fn build(run: &Value, family: &str, output: Option<&str>, words: &[String]) 
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|v| v.as_str().map(String::from))
+        .filter_map(|v| v.as_str().map(|c| scrub(c, words)))
         .collect();
     let stage = scrub(run["failed_stage"].as_str().unwrap_or(""), words);
     let stage = if stage.is_empty() {
@@ -221,5 +221,9 @@ mod tests {
         r["failed_stage"] = json!("");
         assert_eq!(gap_key(&r, "el").2, "alma9");
         assert!(build(&r, "el", None, &[]).1.contains("failed at: `the final checks`"));
+        // an owner's check named after the machine is scrubbed too
+        r["final"]["failed"] = json!(["web01-backup"]);
+        let (_, file, link) = build(&r, "el", None, &words);
+        assert!(!file.contains("web01") && !link.contains("web01"), "{file}");
     }
 }

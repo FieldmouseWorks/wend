@@ -222,15 +222,23 @@ impl<'a> Walk<'a> {
         if cmds.is_empty() {
             return Ok(Value::Null);
         }
-        let mut ok = true;
+        let t0 = Instant::now();
+        let (mut ok, mut outs, mut stage) = (true, vec![], "ok".to_string());
         for c in &cmds {
-            let (rc, out) = self.root.run(&fill(c, &self.vars), 1800, false);
+            let c = fill(c, &self.vars);
+            let (rc, out) = self.root.run(&c, 1800, false);
             self.log(&format!("kernel download: rc {rc}\n{}", tail(&out, 1500)));
+            outs.push(json!({"cmd": c, "rc": rc, "out": tail(&out, 4000)}));
             if rc != 0 {
-                ok = false;
+                (ok, stage) = (false, format!("kernel download failed: {c}"));
                 break;
             }
         }
+        // a step like any other, so a failed download is the run's failed stage and its output is the gap report's
+        self.steps.push(
+            json!({"why": "kernel download", "ok": ok, "stage": stage, "outputs": outs,
+                               "seconds": round1(t0.elapsed().as_secs_f64())}),
+        );
         Ok(json!(ok))
     }
 
@@ -386,11 +394,15 @@ impl<'a> Walk<'a> {
                     self.hops.last_mut().unwrap()["kernel_cached"] = cached;
                 }
             }
-            if !ok {
+            if !ok || self.hops.last().unwrap()["kernel_cached"] == json!(false) {
                 break;
             }
         }
-        let complete = self.hops.len() == hops.len() && self.hops.iter().all(|h| h["ok"] == json!(true));
+        let complete = self.hops.len() == hops.len()
+            && self
+                .hops
+                .iter()
+                .all(|h| h["ok"] == json!(true) && h["kernel_cached"] != json!(false));
         let prune = get(self.route, "finish").and_then(|f| get(f, "prune_obsolete")) == Some(&json!(true));
         let extra = if prune && complete { Some(self.prune()?) } else { None };
         let fin = self.check_health();
