@@ -84,7 +84,8 @@ JOBS = {  # name: (slot class, argument patterns, hours before it is stopped)
 }
 SLOTS = {"rehearse": 1, "vm": 3, "tests": 2}  # a rehearse also takes a vm slot
 VM_FLAGS = {"--uefi": None, "--no-hwaddr": None, "--lvm": None, "--relocate": None,
-            "--root-fs": re.compile(r"[a-z0-9-]+"), "--extra-disk": re.compile(r"[1-9][0-9]{0,2}")}
+            # what tools/vm.py's main takes: ROOT_FS's keys, and 1 to 500 GB
+            "--root-fs": re.compile(r"ext3|ext4|xfs|xfs-v4"), "--extra-disk": re.compile(r"[1-9][0-9]?|[1-4][0-9]{2}|500")}
 DONE = ("done", "refused", "error", "cancelled")
 
 
@@ -211,14 +212,30 @@ def entries():
     return out
 
 
-def alive(pid):
+def runner_fd(e):
+    """A pidfd for job e's runner process (`remi.py run ID`), or None once it has ended. The pidfd names that process,
+    not its number, and its command line is read while the pidfd says it lives, so a reused pid is never taken for it."""
     try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
+        fd = os.pidfd_open(e.get("pid") or 0)
+    except (ProcessLookupError, ValueError, OSError):
+        return None
+    try:
+        cmd = open(f"/proc/{e['pid']}/cmdline", "rb").read().split(b"\0")
+        signal.pidfd_send_signal(fd, 0)
+        if b"run" in cmd and e["id"].encode() in cmd:
+            return fd
+    except (OSError, ProcessLookupError):
+        pass
+    os.close(fd)
+    return None
+
+
+def alive(e):
+    fd = runner_fd(e)
+    if fd is None:
         return False
-    except PermissionError:
-        return True
+    os.close(fd)
+    return True
 
 
 def update(jid, **kw):
@@ -398,7 +415,7 @@ def worker():
         with QueueLock():
             all_ = entries()
             for x in all_:  # a job whose runner died without a verdict
-                if x["state"] == "running" and not alive(x.get("pid", 0)):
+                if x["state"] == "running" and not alive(x):
                     x.update(state="error", ended=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                              reason="its runner process died without writing a verdict")
                     save(x)
@@ -735,10 +752,16 @@ def cancel(jid):
             save(e)
             print(f"{jid}: cancelled before it started")
             return 0
-    if e["state"] == "running" and alive(e["pid"]):
-        os.kill(e["pid"], signal.SIGTERM)  # its runner stops the command and writes a cancelled verdict
-        print(f"{jid}: stopping (runner pid {e['pid']})")
-        return 0
+    fd = runner_fd(e) if e["state"] == "running" else None
+    if fd is not None:
+        try:
+            signal.pidfd_send_signal(fd, signal.SIGTERM)  # its runner stops the command, writes a cancelled verdict
+            print(f"{jid}: stopping (runner pid {e['pid']})")
+            return 0
+        except ProcessLookupError:
+            raise Refused(f"{jid} ended just now; see its verdict")
+        finally:
+            os.close(fd)
     raise Refused(f"{jid} is {e['state']}")
 
 

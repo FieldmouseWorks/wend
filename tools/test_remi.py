@@ -132,6 +132,8 @@ for args, what in (
         (["build", "el/c7", "--sha", main, "--pr", "7", "--by", "t"], "a sha that isn't PR 7's head"),
         (["build", "el/c7", "--sha", main, "--by", "t", "--vm-flags", "--uefi; reboot"], "an unknown vm flag"),
         (["build", "el/c7", "--sha", main, "--by", "t", "--vm-flags", "--extra-disk 9999"], "a bad flag value"),
+        (["build", "el/c7", "--sha", main, "--by", "t", "--vm-flags", "--extra-disk 501"], "an extra disk vm.py won't take"),
+        (["build", "el/c7", "--sha", main, "--by", "t", "--vm-flags", "--root-fs btrfs"], "a root fs vm.py won't take"),
         (["tests", "--sha", main, "--by", "t", "--vm-flags", "--uefi"], "vm flags on a tests job"),
         (["shell", "--sha", main, "--by", "t"], "a job that doesn't exist")):
     rc, out = remi("enqueue", *args, env=NOW)
