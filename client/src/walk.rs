@@ -14,7 +14,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 /// Health checks: the adapter's shell checks the check file names (`adapter_checks`, default pkgdb), plus its own
-/// `[roles]` (a CI box file, or the owner's own checks). Roles win on a name clash.
+/// `[roles]` (a CI box file, or the owner's own checks), then a rehearsal's `[generated.roles]`. Roles win on a
+/// name clash.
 pub struct Checks {
     pub checks: Map<String, Value>,
     pub isolate: Vec<String>,
@@ -37,10 +38,19 @@ impl Checks {
         for (k, v) in get(doc, "roles").and_then(Value::as_object).into_iter().flatten() {
             checks.insert(k.clone(), v.clone());
         }
-        let isolate = match get(doc, "isolate") {
+        let mut isolate = match get(doc, "isolate") {
             Some(_) => list_of(doc, "isolate")?,
             None => vec![],
         };
+        // a rehearsal's generated checks (SPEC "Checks the machine is held to"), the offline forms
+        if let Some(g) = get(doc, "generated") {
+            for (k, v) in get(g, "roles").and_then(Value::as_object).into_iter().flatten() {
+                checks.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+            if get(g, "isolate").is_some() {
+                isolate.extend(list_of(g, "isolate")?);
+            }
+        }
         let arch = get(doc, "arch").and_then(Value::as_str).map(String::from);
         let release = get(doc, "release").and_then(Value::as_str).map(String::from);
         Ok(Checks {
