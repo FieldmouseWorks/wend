@@ -1657,7 +1657,10 @@ def rehearse(route_path, box_id, client):
     if not g.wait_ssh():
         run["console_tail"] = open(g.console, errors="replace").read()[-4000:]
         return finish("fail")
-    rc, before = g.ssh("cat /proc/sys/kernel/random/boot_id; rpm -qa 2>/dev/null | sort | sha256sum")
+    # read only: the boot and the package set (the adapter's installed_versions, the fingerprint's), before and after
+    iv = load(f"adapters/{route['family']}.toml")["hop"]["installed_versions"]
+    seen = f"cat /proc/sys/kernel/random/boot_id; ( {iv} ) | sha256sum"
+    rc, before = g.ssh(seen)
     ssh = " ".join(shlex.quote(x) for x in g.ssh_argv("")[:-2])
     argv = [client, "--atlas", ROOT, "rehearse", route_path, "--from", "root@127.0.0.1", "--ssh", ssh,
             "--root", os.path.join(out_dir, "copy"), "--run", ci_path, "--checks", f"boxes/{box_id}/box.toml",
@@ -1668,7 +1671,7 @@ def rehearse(route_path, box_id, client):
     with open(os.path.join(out_dir, "rehearse.log"), "w") as f:
         p = subprocess.run(argv, stdout=f, stderr=subprocess.STDOUT, cwd=ROOT)
     run["client_rc"], run["seconds"] = p.returncode, round(time.time() - t0)
-    rc2, after = g.ssh("cat /proc/sys/kernel/random/boot_id; rpm -qa 2>/dev/null | sort | sha256sum")
+    rc2, after = g.ssh(seen)
     # the machine is only read: the same boot, the same packages
     run["machine_untouched"] = rc == 0 and rc2 == 0 and before == after
     plan_path = os.path.join(out_dir, "plan", "plan.json")
@@ -1679,12 +1682,16 @@ def rehearse(route_path, box_id, client):
     got = {h["to"]: sorted(h["fired"]) for h in plan["hops"]}
     run["fired"] = {h: {"ci": want.get(h), "rehearsal": got.get(h)} for h in sorted(set(want) | set(got))}
     run["fired_match"] = want == got
-    run["plan"] = {k: plan[k] for k in ("machine", "fingerprint_sha256", "checks_sha256", "cache_files")}
+    run["plan"] = {k: plan[k] for k in ("machine", "fingerprint_sha256", "checks_sha256", "cache_files",
+                                         "generated_checks")}
     run["plan"]["kernel"] = plan["fingerprint"]["kernel"]
     log(f"fired {'the same fixes as' if want == got else 'other fixes than'} {os.path.relpath(ci_path, ROOT)}; "
         f"{plan['cache_files']} files cached; machine untouched: {run['machine_untouched']}")
     # the rehearsal reproduces CI's walk only if every hop fired the fixes CI proved on this box
-    return finish("pass" if run["machine_untouched"] and run["fired_match"] else "fail")
+    # and the plan holds the guest to what it ran (the client writes a plan only if they all held)
+    gen = bool(a.get("hop", {}).get("generated")) <= bool(plan["generated_checks"])
+    log(f"generated checks: {', '.join(plan['generated_checks']) or 'none'}")
+    return finish("pass" if run["machine_untouched"] and run["fired_match"] and gen else "fail")
 
 
 def main(args):
