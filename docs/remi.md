@@ -65,7 +65,8 @@ it. There is only ever one worker (it holds a lock), and it exits when the queue
 
 - Jobs start in queue order, first come first served. **The coordinator sets the lab order** with
   `remi.py order <id> <id> …`, which puts those queued jobs first, in that order. Threads don't reorder.
-- Slots: **one rehearse at a time**, at most three VM jobs at once (a rehearse counts as one), and two `tests` jobs.
+- Slots: **one VM job at a time** (build, replay, relocate or rehearse: they all share the one shim on 8085), and two
+  `tests` jobs beside it.
   Within a class, nothing jumps a job ranked before it. A job in another class may start while one waits.
 - The mirror shim: jobs share it only when their `tools/mirror.py` is byte for byte the same. Otherwise the later
   job waits until the VM jobs using the other one end. A leftover shim from another checkout that nothing uses is

@@ -271,6 +271,17 @@ for _ in range(100):
 remi("cancel", j10)
 rc, out = remi("wait", j10)
 check("CANCELLED" in out and verdict(j10)["reasons"] == ["cancelled"], "cancel stops a running job, verdict cancelled")
+
+# every VM job shares the one shim on remi, so two VM jobs on the same mirror.py still run one at a time
+seen = len(open(f"{w}/lab/trace").read().splitlines())
+for job in (["build", "el/c7"], ["replay", "routes/el/c7-to-a10.toml", "el/c7"]):
+    remi("enqueue", *job, "--sha", main, "--by", "t", env=NOW)
+remi("worker")
+depth, most = 0, 0
+for line in open(f"{w}/lab/trace").read().splitlines()[seen:]:
+    depth += 1 if line.startswith("start ") else -1 if line.startswith("end ") else 0
+    most = max(most, depth)
+check(most == 1, "VM jobs run one at a time, even on the same shim")
 rc, out = remi("queue")
 check(f"{j1}  done (pass)" in out and "UNDELIVERED to cse_a" in out, "queue lists undelivered verdicts and to whom")
 remi("delivered", j1)

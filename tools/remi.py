@@ -83,7 +83,7 @@ JOBS = {  # name: (slot class, argument patterns, hours before it is stopped)
     "relocate": ("vm", [BOX], 3),
     "rehearse": ("rehearse", [ROUTE, BOX], 4),
 }
-SLOTS = {"rehearse": 1, "vm": 3, "tests": 2}  # a rehearse also takes a vm slot
+SLOTS = {"rehearse": 1, "vm": 1, "tests": 2}  # a rehearse also takes the vm slot: VM jobs share the one shim
 VM_FLAGS = {"--uefi": None, "--no-hwaddr": None, "--lvm": None, "--relocate": None,
             # what tools/vm.py's main takes: ROOT_FS's keys, and 1 to 500 GB
             "--root-fs": re.compile(r"ext3|ext4|xfs|xfs-v4"), "--extra-disk": re.compile(r"[1-9][0-9]?|[1-4][0-9]{2}|500")}
