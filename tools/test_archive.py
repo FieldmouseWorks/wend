@@ -426,6 +426,53 @@ idx = json.load(open(f"{w}/store7/index/latest.json"))["files"]
 check(src7("s").get("url") == f"https://{rh}/s-2-1.el7.src.rpm" and "missing" in src7("h") and
       f"no source https://{u7}/x86_64/Packages/h.rpm" in p.stdout,
       "an earlier ingest's gap is tried again though this ingest never walked to it, and one still missing is listed")
+# CentOS 7's last updates, whose sources survive only in dist-git: the import tag's files at its commit, and each
+# tarball its .<name>.metadata lists from the lookaside, checked against that sha1; all of it or nothing
+dg = f"{w}/distgit"
+tarball = b"k-1.tar.gz bytes"
+for n, tarsha in (("k", hashlib.sha1(tarball).hexdigest()), ("m", "0" * 40)):
+    g = lambda *a: subprocess.run(["git", "-C", f"{dg}/{n}", "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                                  check=True, capture_output=True)
+    os.makedirs(f"{dg}/{n}/SPECS")
+    os.makedirs(f"{dg}/{n}/SOURCES")
+    open(f"{dg}/{n}/SPECS/{n}.spec", "w").write(f"Name: {n}\nVersion: 1\nRelease: 2.el7_9\n")
+    open(f"{dg}/{n}/SOURCES/fix.patch", "w").write("--- a\n+++ b\n")
+    open(f"{dg}/{n}/.{n}.metadata", "w").write(f"{tarsha} SOURCES/{n}-1.tar.gz\n")
+    g("init", "-q")
+    g("add", "-A")
+    g("commit", "-q", "-m", "import")
+    g("tag", f"imports/c7/{n}-1-2.el7_9")
+    g("commit", "-q", "--allow-empty", "-m", "a later import")  # the tag, not the branch tip, is what counts
+put(f"git.centos.org/sources/k/c7/{hashlib.sha1(tarball).hexdigest()}", tarball)
+dbins = {n: rpm(tags(n.encode(), b"1", b"2.el7_9", cos, f"{n}-1-2.el7_9.src.rpm".encode())) for n in ("k", "m")}
+u8 = "vault.centos.org/7.9.2009/updates"
+os.makedirs(f"{w}/runs8")
+os.makedirs(f"{w}/fetched8/r")
+prim8 = gzip.compress(("<metadata>" + "".join(pkg(f"{n}.rpm", b, archive.rpm_sourcerpm(b)) for n, b in dbins.items()) +
+                       "</metadata>").encode())
+shutil.rmtree(f"{w}/tree/{u8}/x86_64")
+put(f"{u8}/x86_64/repodata/repomd.xml", md(prim8))
+put(f"{u8}/x86_64/repodata/{sha(prim8)}-primary.xml.gz", prim8)
+for n, b in dbins.items():
+    put(f"{u8}/x86_64/Packages/{n}.rpm", b)
+open(f"{w}/fetched8/r/fetched.txt", "w").write("".join(f"https://{u8}/x86_64/Packages/{n}.rpm sha256:{sha(b)} 1\n"
+                                                        for n, b in dbins.items()))
+json.dump({"result": "pass", "box": "k", "started": "8", "hops": [{"sources": {
+    f"https://{u8}/x86_64/repodata/repomd.xml": f"sha256:{sha(md(prim8))}"}}]}, open(f"{w}/runs8/r.json", "w"))
+p = subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", "ingest", f"{w}/store8", "--offline", "--tree",
+                    f"{w}/tree", "--runs", f"{w}/runs8", "--fetched", f"{w}/fetched8"], capture_output=True, text=True,
+                   env={**os.environ, "WEND_DISTGIT": f"file://{dg}/{{name}}"})
+idx = json.load(open(f"{w}/store8/index/latest.json"))["files"]
+web = "https://gitlab.com/CentOS/archives/git.centos.org/rpms/k/-/raw/"
+src8 = lambda n: idx[f"https://{u8}/x86_64/Packages/{n}.rpm"][f"sha256:{sha(dbins[n])}"]["source"]
+kept8 = {u: e for u, d in idx.items() for e in d.values() if u.startswith(web) or "/sources/k/" in u}
+check(src8("k").get("url", "").startswith(web) and src8("k")["url"].endswith("/SPECS/k.spec") and
+      sorted(u.rsplit("/", 1)[1] for u in kept8) == sorted([".k.metadata", "fix.patch", "k.spec",
+                                                            hashlib.sha1(tarball).hexdigest()]) and
+      all(e.get("live") and e["runs"] == ["k@8"] for e in kept8.values()),
+      "a CentOS 7 update with no .src.rpm anywhere stores its dist-git import: the tag's files and its tarball, live")
+check("missing" in src8("m") and not [u for u in idx if "/rpms/m/" in u],
+      "a dist-git import whose tarball the lookaside lost is no source, and none of it is kept")
 import shutil as sh  # noqa: E402
 if sh.which("ssh-keygen"):  # the index signature (docs/archive.md, step 8)
     a = lambda *x: subprocess.run([sys.executable, "-B", f"{HERE}/archive.py", *x], capture_output=True, text=True)

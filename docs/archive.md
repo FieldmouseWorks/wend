@@ -236,7 +236,10 @@ reachable. So the archive is kept current on a timer, and checked from outside.
   no metadata vouches for those, so a file counts only as a source rpm with the name, version and release the
   binary's header names, and its index entry says `live`. Every ingest tries the gaps again, so a source repo that
   timed out once doesn't leave a package sourceless for good. CentOS 7's last glibc, kernel and libX11 updates have
-  their sources only as dist-git (git.centos.org `imports/c7/<nvr>`), which nothing here reads yet: they stay held.
+  their sources only as dist-git: then the import's tag (`imports/c7/<nvr>`, mirrored at
+  gitlab.com/CentOS/archives/git.centos.org) is cloned, every file at the commit it names is stored (spec first, as
+  the package's source), and so is each tarball its `.<name>.metadata` lists from the lookaside
+  (`git.centos.org/sources/<name>/c7/<sha1>`), checked against that sha1. All of it or none; every entry says `live`.
 - **Known losses.** `archive/lost.txt` lists the pins whose bytes are gone everywhere (the pre-capture pins above,
   and anything since that no artifact or copy on remi held). `ingest` reports them as lost instead of failing, so a
   red cycle means something that can still be saved.
