@@ -63,6 +63,7 @@ import re
 import struct
 import subprocess
 import sys
+import tempfile
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -292,6 +293,13 @@ def fallback_urls(srpm, base, tags):
     if nvr and tags.get(1007, "").endswith(".fedoraproject.org"):
         out.append(f"https://kojipkgs.fedoraproject.org/packages/{nvr[1]}/{nvr[2]}/{nvr[3]}/src/{srpm}")
     return out
+
+
+# CentOS 7's dist-git, which kept every import's spec and patches (its lookaside the tarballs, by sha1) after the vault
+# stopped getting the last updates' .src.rpm. WEND_DISTGIT is a stand-in clone url, for tests.
+DISTGIT_WEB = "https://gitlab.com/CentOS/archives/git.centos.org/rpms/{name}"
+DISTGIT = os.environ.get("WEND_DISTGIT", DISTGIT_WEB + ".git")
+LOOKASIDE = "https://git.centos.org/sources/{name}/{branch}/{sha1}"
 
 
 def source_names(url, data):
@@ -665,7 +673,55 @@ class Store:
                     self.index["files"][u][f"sha256:{h}"]["live"] = True
                     self.fallback_found[srpm] = [(u, ("sha256", h))]
                     break
+            if self.fallback_found[srpm] is None and re.match(r"^https://vault\.centos\.org/7\.", what[2]):
+                self.fallback_found[srpm] = self.distgit(srpm, "c7")
         return self.fallback_found[srpm]
+
+    def distgit(self, srpm, branch):
+        """[(url, digest)] of srpm's source as dist-git kept it, spec first, or None: every file of the import's tag
+        (imports/<branch>/<nvr>) at the commit it names, then each tarball its .<name>.metadata lists from the
+        lookaside, checked against that sha1. git checks the files against the commit; the commit is the one the tag
+        names when it's read, which nothing signs, so every entry says "live" and the archive's signature is what
+        vouches for it. All of it or nothing: a source missing a tarball isn't one."""
+        nvr = re.fullmatch(r"(.+)-([^-]+)-([^-]+)\.src\.rpm", srpm)
+        url = DISTGIT.format(name=nvr[1]) if nvr else ""
+        if not nvr or (self.offline and not url.startswith("file:")):
+            return None
+        name, web = nvr[1], DISTGIT_WEB.format(name=nvr[1])
+        with tempfile.TemporaryDirectory() as t:
+            git = lambda *a, **k: subprocess.run(["git", "-C", f"{t}/g", *a], capture_output=True, **k)
+            try:
+                r = subprocess.run(["git", "clone", "-q", "--bare", "--depth", "1", "--branch",
+                                    f"imports/{branch}/{srpm[:-8]}", url, f"{t}/g"], capture_output=True, timeout=1800,
+                                   env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+                commit = git("rev-parse", "HEAD^{commit}", text=True).stdout.strip() if r.returncode == 0 else ""
+                tree = git("ls-tree", "-r", "-z", commit).stdout if commit else b""
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+            files = {}
+            for entry in tree.split(b"\0"):
+                head, _, path = entry.decode("utf-8", "replace").partition("\t")
+                if head.split()[1:2] == ["blob"]:
+                    files[path] = git("cat-file", "blob", head.split()[2]).stdout
+            spec = f"SPECS/{name}.spec"
+            if spec not in files:
+                return None
+            got = [(f"{web}/-/raw/{commit}/{path}", files[path]) for path in [spec] + sorted(set(files) - {spec})]
+            for line in files.get(f".{name}.metadata", b"").decode("utf-8", "replace").splitlines():
+                f = line.split()
+                if len(f) != 2 or not re.fullmatch(r"[0-9a-f]{40}", f[0]):
+                    continue
+                u = LOOKASIDE.format(name=name, branch=branch, sha1=f[0])
+                data = self.live(u)
+                if data is None or hexof("sha1", data) != f[0]:
+                    return None
+                got.append((u, data))
+        out = []
+        for u, data in got:
+            h = self.keep(u, data)
+            self.index["files"][u][f"sha256:{h}"]["live"] = True
+            out.append((u, ("sha256", h)))
+        return out
 
     def has_sources(self, suite):
         """Whether a Release lists Sources for suite. A suite whose run pinned only a package index (wheezy) gets its
