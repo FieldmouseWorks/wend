@@ -110,7 +110,7 @@ fn listener(l: &str) -> Option<(String, u16)> {
     Some((prog, port))
 }
 
-/// Read the first probe. `vhost` lines name the port-80 name-based hosts (`httpd -S`: `port 80 namevhost NAME (`).
+/// Read the first probe. `vhost` lines name the port-80 virtual hosts (`httpd -S`).
 pub fn read(g: &Doc, out: &str) -> Seen {
     let known = services(g);
     let mut s = Seen::default();
@@ -139,13 +139,17 @@ pub fn read(g: &Doc, out: &str) -> Seen {
             (Some("net"), Some(line), None) => nets.extend(listener(line)),
             (Some("vhost"), Some(line), None) => {
                 let w: Vec<&str> = line.split_whitespace().collect();
-                if let Some(i) = w.iter().position(|x| *x == "namevhost") {
-                    if i >= 2 && w[i - 2] == "port" && w[i - 1] == "80" {
-                        if let Some(h) = w.get(i + 1) {
-                            if !s.vhosts.iter().any(|(x, _)| x == h) {
-                                s.vhosts.push((h.to_string(), String::new()));
-                            }
-                        }
+                // `port 80 namevhost NAME (file:line)` where several hosts share an address; `*:80 NAME (file:line)`
+                // where one host has it alone (httpd 2.4's -S)
+                let h = match w.iter().position(|x| *x == "namevhost") {
+                    Some(i) if i >= 2 && w[i - 2] == "port" && w[i - 1] == "80" => w.get(i + 1),
+                    Some(_) => None,
+                    None if w.len() >= 3 && w[0].ends_with(":80") && w[2].starts_with('(') => w.get(1),
+                    None => None,
+                };
+                if let Some(h) = h {
+                    if !s.vhosts.iter().any(|(x, _)| x == h) {
+                        s.vhosts.push((h.to_string(), String::new()));
                     }
                 }
             }
@@ -290,6 +294,13 @@ pub fn render(g: &Doc, s: &Seen) -> Value {
              while [ $i -lt 30 ] && ! curl -s -o /dev/null -m 5 http://127.0.0.1/; do sleep 1; i=$((i+1)); done; f=0"
         );
         let mut lv = String::from("f=0");
+        // httpd listened on port 80 on the machine: it must answer there (any HTTP status)
+        if s.ports.contains(&("httpd".to_string(), 80)) {
+            let answers =
+                "curl -s -o /dev/null -m 20 http://127.0.0.1/ || { echo 'httpd does not answer on port 80'; f=1; }";
+            body.push_str(&format!("; {answers}"));
+            lv.push_str(&format!("; {answers}"));
+        }
         for (h, code) in &s.vhosts {
             let get = format!(
                 "c=$(curl -s -o /dev/null -m 20 -w '%{{http_code}}' -H {} http://127.0.0.1/); [ \"$c\" = {code} ] || {{ echo {} \"$c\"; f=1; }}",
@@ -401,6 +412,8 @@ mod tests {
                    vhost\t*:80                   is a NameVirtualHost\n\
                    vhost\t         port 80 namevhost mysite.local (/etc/httpd/conf.d/mysite.conf:2)\n\
                    vhost\t         port 443 namevhost secure.local (/etc/httpd/conf.d/ssl.conf:74)\n\
+                   vhost\t*:80                   lamp.local (/etc/httpd/conf.d/lamp.conf:1)\n\
+                   vhost\t*:443                  localhost (/etc/httpd/conf.d/ssl.conf:56)\n\
                    db\tapp\ntable\tapp\tt\ndb\tempty\n\
                    cron\t/var/spool/cron/alice\t0 3 * * * /home/alice/nightly-backup\n";
         let s = read(&adapter(), out);
@@ -416,11 +429,17 @@ mod tests {
             s.ports,
             vec![("httpd".into(), 80), ("mysqld".into(), 3306), ("postfix".into(), 25)]
         );
-        assert_eq!(s.vhosts, vec![("mysite.local".into(), String::new())]);
+        assert_eq!(
+            s.vhosts,
+            vec![
+                ("mysite.local".into(), String::new()),
+                ("lamp.local".into(), String::new())
+            ]
+        );
         assert_eq!(s.dbs, vec![("app".into(), vec!["t".into()]), ("empty".into(), vec![])]);
         assert_eq!(s.cron.len(), 1);
         let mut s = s;
-        read_status(&mut s, "mysite.local\t200\n");
+        read_status(&mut s, "mysite.local\t200\nlamp.local\t000\n");
         assert_eq!(s.vhosts, vec![("mysite.local".into(), "200".into())]);
         read_status(&mut s, "mysite.local\t000\n");
         assert!(s.vhosts.is_empty());
@@ -474,5 +493,37 @@ mod tests {
             .status()
             .unwrap()
             .success());
+    }
+
+    /// The site checks fail when a page comes back with another status, or not at all (fake httpd and curl).
+    #[test]
+    fn site_checks_fail_when_a_page_changes() {
+        let mut s = read(
+            &adapter(),
+            "svc\thttpd\nnet\ttcp 0 0 :::80 :::* LISTEN 1/httpd\nvhost\t*:80 lamp.local (x)\n",
+        );
+        read_status(&mut s, "lamp.local\t200\n");
+        let live = render(&adapter(), &s)["live"]["gen-web"].as_str().unwrap().to_string();
+        let bin = std::env::temp_dir().join(format!("wend-gen-web-{}", std::process::id()));
+        std::fs::create_dir_all(&bin).unwrap();
+        let run = |curl: &str| -> bool {
+            for (n, body) in [("httpd", "exit 0"), ("curl", curl)] {
+                let f = bin.join(n);
+                std::fs::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
+                std::fs::set_permissions(&f, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+            }
+            let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+            std::process::Command::new("sh")
+                .args(["-c", &live])
+                .env("PATH", path)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        };
+        assert!(run("printf 200"));
+        assert!(!run("printf 500"));
+        assert!(!run("printf 000; exit 7"));
+        std::fs::remove_dir_all(&bin).unwrap();
     }
 }

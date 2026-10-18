@@ -317,6 +317,20 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
                     "{checks_path} has a [generated] table: that is the rehearsal's to write"
                 ));
             }
+            // a given role named like a generated one would stand in for it (roles win on a name clash)
+            let clash: Vec<&String> = get(&given, "roles")
+                .and_then(Value::as_object)
+                .into_iter()
+                .flatten()
+                .map(|(k, _)| k)
+                .filter(|k| k.starts_with("gen-"))
+                .collect();
+            if !clash.is_empty() {
+                return Err(format!(
+                    "{checks_path} has roles named like generated checks ({clash:?}): rename them (gen- is the \
+                     rehearsal's)"
+                ));
+            }
             generated_names = get(&g, "roles")
                 .and_then(Value::as_object)
                 .map(|r| r.keys().cloned().collect())

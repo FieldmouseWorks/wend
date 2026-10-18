@@ -2421,8 +2421,9 @@ This answers open question 8 for a client. A boot is green on a running machine 
   the routes, `mysqld` or `mariadb`), which of them serve sites (`web`) and hold databases (`db`), and how to tell a
   package-owned file. A service counts when it is enabled at boot and running. The ports have a live form only: on
   the copy no daemon runs, and the services the copy can start answer the site and database checks instead. The
-  sites are the port-80 name-based virtual hosts `httpd -S` lists that answer on localhost, with the status each
-  gave; nginx gets its config test. The databases are the data directory's, without its own (`mysql`,
+  sites are the port-80 virtual hosts `httpd -S` lists that answer on localhost, with the status each gave, and
+  httpd must answer on port 80 at all if it listened there; nginx gets its config test. A given role can't be named
+  `gen-*`. The databases are the data directory's, without its own (`mysql`,
   `performance_schema`, `sys`), and the offline form starts the server with `--skip-grant-tables --skip-networking`
   on a socket of its own, so it needs no password. The cron entries are the owner's: every user crontab, the
   `/etc/cron.d` files no package owns, and `/etc/crontab` when its package says it was changed (less its stock
