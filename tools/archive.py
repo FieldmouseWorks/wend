@@ -242,27 +242,56 @@ def source_repo(base):
     return None
 
 
-def rpm_sourcerpm(data):
-    """The SOURCERPM tag (1044) of a binary .rpm's header, or None: for a package a run pins directly, which no
-    primary names. Lead (96 bytes), signature header (padded to 8), then the main header."""
+def rpm_header(data):
+    """(lead type: 0 binary, 1 source, or None; {tag: value} of the main header's string tags) of an .rpm. Lead (96
+    bytes), signature header (padded to 8), then the main header."""
     def header(at):
         if data[at:at + 4] != b"\x8e\xad\xe8\x01":
             return None, None
         n, size = struct.unpack(">II", data[at + 8:at + 16])
         store = at + 16 + 16 * n
         return [struct.unpack(">IIII", data[at + 16 + 16 * i:at + 32 + 16 * i]) for i in range(n)], (store, size)
+    tags = {}
     try:
+        if data[:4] != b"\xed\xab\xee\xdb":
+            return None, tags
         sig, (store, size) = header(96)
         if sig is None:
-            return None
+            return None, tags
         main, (store, _) = header(96 + (16 + 16 * len(sig) + size + 7) // 8 * 8)
         for tag, typ, off, _ in main or []:
-            if tag == 1044 and typ == 6:
-                v = data[store + off:data.index(b"\0", store + off)].decode()
-                return v if re.fullmatch(r"[A-Za-z0-9._+~^-]+\.src\.rpm", v) else None
+            if typ == 6:
+                tags[tag] = data[store + off:data.index(b"\0", store + off)].decode()
+        return struct.unpack(">H", data[6:8])[0], tags
     except (struct.error, ValueError, TypeError, UnicodeDecodeError):
-        pass
-    return None
+        return None, {}
+
+
+def rpm_sourcerpm(data):
+    """The SOURCERPM tag (1044) of a binary .rpm's header, or None: for a package no primary names (a run pins it
+    directly, or an index entry from an earlier ingest still lacks its source)."""
+    v = rpm_header(data)[1].get(1044)
+    return v if v and re.fullmatch(r"[A-Za-z0-9._+~^-]+\.src\.rpm", v) else None
+
+
+def repo_base(url):
+    """The repo a package url sits in, as a primary's base: .../x86_64/os/ for .../x86_64/os/Packages/b/bash.rpm."""
+    i = url.find("/Packages/")
+    return url[:i + 1] if i >= 0 else url.rsplit("/", 1)[0] + "/"
+
+
+def fallback_urls(srpm, base, tags):
+    """Where else a source rpm survives once its own source repos lost it, for a binary whose header is tags: Red
+    Hat's public SRPMS for a CentOS 6 or 7 rebuild (the vault never got the last updates' sources), and Fedora's
+    build system for a package Fedora built (EPEL archives keep only a release's last epel-release)."""
+    out = []
+    m = re.match(r"^https://vault\.centos\.org/([67])\.", base)
+    if m:
+        out.append(f"https://ftp.redhat.com/redhat/linux/enterprise/{m[1]}Server/en/os/SRPMS/{srpm}")
+    nvr = re.fullmatch(r"(.+)-([^-]+)-([^-]+)\.src\.rpm", srpm)
+    if nvr and tags.get(1007, "").endswith(".fedoraproject.org"):
+        out.append(f"https://kojipkgs.fedoraproject.org/packages/{nvr[1]}/{nvr[2]}/{nvr[3]}/src/{srpm}")
+    return out
 
 
 def source_names(url, data):
@@ -375,6 +404,7 @@ class Store:
         self.deb_sources = {}  # "<.../dists/X>/<comp>" -> [(Sources url, digest, the Release that lists it)]
         self.no_source = {}  # (package url, digest) -> why no source was stored
         self.rpm_found = {}  # source repo base -> ({"<name>.src.rpm": [(url, digest)]}, its metadata)
+        self.fallback_found = {}  # "<name>.src.rpm" -> [(url, digest)] from fallback_urls, or None
         self.walk_gaps = {}  # url -> why: an index a repomd lists that only a live walk reads, found nowhere
         self.deb_indexes = {}  # "<.../dists/X>" -> {(url, digest)} of the package indexes pinned under it
         self.live_releases = {}  # "<.../dists/X>" -> [(url, "sha256:<hex>")]: a live Release read for its Sources
@@ -545,18 +575,28 @@ class Store:
         """Store the source of every package stored: the .src.rpm its primary names, from its source repo
         (SOURCE_REPOS), or the .dsc and files its Sources stanza lists, from the Sources indexes its pinned Releases
         list. Every source file is checked against that metadata, and gets the runs of the packages built from it.
-        A package whose source can't be found gets "source": {"missing": why} in the index and is listed; that's a
-        gap to fill before the archive goes public, not a failure."""
+        When those lost an rpm's source, fallback() tries where else it survives. A package whose source can't be
+        found gets "source": {"missing": why} in the index and is listed; that's a gap to fill before the archive goes
+        public, not a failure. Every ingest tries such gaps again, walked to this time or not: a source repo that
+        couldn't be read once (a vault timing out) shouldn't leave a package sourceless for good."""
         groups = {}  # source repo base, or ("deb", mirror, suite dir) -> {package key: what}
-        for key in sorted(self.kept):
+        targets = dict(self.kept)  # package key -> "sha256:<hex>" of its index entry
+        held = {(u, v) for (u, _), v in self.kept.items()}
+        for url, digests in self.index["files"].items():  # an earlier ingest's gaps, this one walked or not
+            if url.endswith(".rpm") and not url.endswith(".src.rpm"):
+                for d, e in digests.items():
+                    if "missing" in e.get("source", {}) and (url, d) not in held and os.path.isfile(self.blob(d[7:])):
+                        targets[(url, ("sha256", d[7:]))] = d
+        for key in sorted(targets):
             if not key[0].endswith(PACKAGES):
                 continue
             what = self.built_from.get(key)
             if what is None and key[0].endswith(".rpm") and not key[0].endswith(".src.rpm"):
-                # pinned directly (an old EPEL package no repo serves any more): its own header names its source
-                srpm = rpm_sourcerpm(open(self.blob(self.kept[key][7:]), "rb").read())
+                # pinned directly (an old EPEL package no repo serves any more), or an earlier ingest's gap: its own
+                # header names its source
+                srpm = rpm_sourcerpm(open(self.blob(targets[key][7:]), "rb").read())
                 if srpm:
-                    what = ("rpm", srpm, key[0].rsplit("/", 1)[0] + "/")
+                    what = ("rpm", srpm, repo_base(key[0]))
             if what is None:
                 self.no_source[key] = "no package index names its source (pinned directly, or no sourcerpm)"
             elif what[0] == "rpm":
@@ -579,7 +619,7 @@ class Store:
                 meta += self.live_releases.get(group[2], [])
             runs_of_group = set()
             for key, what in packages.items():
-                files = lookup(what)
+                files = lookup(what) or (self.fallback(what, targets[key]) if what[0] == "rpm" else None)
                 if not files:
                     self.no_source[key] = why or "its source isn't listed (with a sha1 or sha256) in the metadata now"
                     continue
@@ -594,18 +634,38 @@ class Store:
                 if any(stored[f] is None for f in files):
                     self.no_source.setdefault(key, "a source file couldn't be had")
                     continue
-                runs = self.index["files"][key[0]][self.kept[key]]["runs"]
+                runs = self.index["files"][key[0]][targets[key]]["runs"]
                 runs_of_group |= set(runs)
                 for u, d in files:
                     e = self.index["files"][u][stored[(u, d)]]
                     e["runs"] = sorted(set(e["runs"]) | set(runs))
                 main = next((f for f in files if f[0].endswith((".dsc", ".src.rpm"))), files[0])
-                self.index["files"][key[0]][self.kept[key]]["source"] = {"url": main[0], "digest": stored[main]}
+                self.index["files"][key[0]][targets[key]]["source"] = {"url": main[0], "digest": stored[main]}
             for u, hd in meta:
                 e = self.index["files"][u][hd]
                 e["runs"] = sorted(set(e["runs"]) | runs_of_group)
         for key, why in self.no_source.items():
-            self.index["files"][key[0]][self.kept[key]].setdefault("source", {"missing": why})
+            e = self.index["files"][key[0]][targets[key]]
+            if "missing" in e.get("source", {"missing": ""}):
+                e["source"] = {"missing": why}
+
+    def fallback(self, what, binary):
+        """[(url, digest)] of what's .src.rpm from fallback_urls, or None. No metadata vouches for these bytes, so
+        they count only when they are a source rpm whose name, version and release are what the binary's header
+        names; the index entry says "live", and the archive's signature is what vouches for it."""
+        srpm = what[1]
+        if srpm not in self.fallback_found:
+            self.fallback_found[srpm] = None
+            tags = rpm_header(open(self.blob(binary[7:]), "rb").read())[1]
+            for u in fallback_urls(srpm, what[2], tags):
+                data = self.live(u)
+                kind, t = rpm_header(data or b"")
+                if kind == 1 and f"{t.get(1000)}-{t.get(1001)}-{t.get(1002)}.src.rpm" == srpm:
+                    h = self.keep(u, data)
+                    self.index["files"][u][f"sha256:{h}"]["live"] = True
+                    self.fallback_found[srpm] = [(u, ("sha256", h))]
+                    break
+        return self.fallback_found[srpm]
 
     def has_sources(self, suite):
         """Whether a Release lists Sources for suite. A suite whose run pinned only a package index (wheezy) gets its

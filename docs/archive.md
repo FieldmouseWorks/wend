@@ -197,12 +197,12 @@ Each one a small PR.
    `ssh-keygen -Y verify -f archive/allowed_signers -I wend-archive -n wend-archive -s latest.json.sig < latest.json`.
    `r2push.py` marks an index `no-cache` and a blob or alias immutable, so an edge cache can't serve a stale index.
 9. **Gate artifacts** (built). `tools/gate_fetched.py DIR` downloads unexpired `fetched-N` artifacts not yet seen (a
-   read-only Actions token; GitHub wants one even on a public repo) and unpacks each under `DIR/<id>/`;
-   `archive.py ingest STORE --fetched DIR` then takes what passing runs on main pin. With `--runs` it takes only the
-   artifacts behind main's runs: a run file lands byte for byte as a gate job wrote it, so its sha256 finds its
-   attestation, the attestation names the workflow run, and the `run-N` artifact there holding that same file names
-   the job's `fetched-N`. Most artifacts are superseded pushes (on 2026-10-18, 559 unexpired, 187 GB; the ones
-   behind runs main lacked: 15, 5.5 GB).
+   token with read-only Actions and Attestations; GitHub wants one even on a public repo) and unpacks each under
+   `DIR/<id>/`; `archive.py ingest STORE --fetched DIR` then takes what passing runs on main pin. With `--runs` it
+   takes only the artifacts behind main's runs: a run file lands byte for byte as a gate job wrote it, so its sha256
+   finds its attestation, the attestation names the workflow run, and the `run-N` artifact there holding that same
+   file names the job's `fetched-N`. Most artifacts are superseded pushes (on 2026-10-18, 559 unexpired, 187 GB; the
+   ones behind runs main lacked: 15, 5.5 GB).
 
 ## Keeping it current
 
@@ -231,7 +231,12 @@ reachable. So the archive is kept current on a timer, and checked from outside.
   is on the record; it goes up with the first push after an ingest finds its source. Source lookup tries more than
   one place: AlmaLinux files a source package under one repo of its minor release (an AppStream rpm's `.src.rpm` is
   often in BaseOS's `Source`), and a CentOS 7 vault lists a source only under the minor release that built it
-  (`tools/archive.py` `source_repos`).
+  (`tools/archive.py` `source_repos`). When every source repo lost it, Red Hat's public SRPMS (for a CentOS 6 or 7
+  rebuild: the vault never got the last updates' sources) and Fedora's koji (for a package Fedora built) are tried;
+  no metadata vouches for those, so a file counts only as a source rpm with the name, version and release the
+  binary's header names, and its index entry says `live`. Every ingest tries the gaps again, so a source repo that
+  timed out once doesn't leave a package sourceless for good. CentOS 7's last glibc, kernel and libX11 updates have
+  their sources only as dist-git (git.centos.org `imports/c7/<nvr>`), which nothing here reads yet: they stay held.
 - **Known losses.** `archive/lost.txt` lists the pins whose bytes are gone everywhere (the pre-capture pins above,
   and anything since that no artifact or copy on remi held). `ingest` reports them as lost instead of failing, so a
   red cycle means something that can still be saved.
