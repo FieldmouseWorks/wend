@@ -582,6 +582,7 @@ def verdict_path(e):
 
 
 def interrupted(*_):
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)  # once: a second cancel mustn't cut the cleanup short
     raise KeyboardInterrupt  # `cancel` sends SIGTERM: stop the command, then write a cancelled verdict
 
 
@@ -594,10 +595,10 @@ def run(jid):
          "commands": [], "runs": [], "reasons": [], "result": None}
     v["log_dir"] = os.path.dirname(verdict_path(e))
     os.makedirs(v["log_dir"], exist_ok=True)
-    signal.signal(signal.SIGTERM, interrupted)
     t0 = time.time()
     deadline = t0 + JOBS[e["job"]][2] * 3600
     try:
+        signal.signal(signal.SIGTERM, interrupted)
         v["runner"] = runner_check()
         v["origin"] = trusted(e["sha"], e["pr"])
         wt, v["preflight"] = worktree(e)
@@ -614,6 +615,8 @@ def run(jid):
         v["result"], v["reasons"] = "cancelled", v["reasons"] + ["cancelled"]
     except Exception:
         v["result"], v["reasons"] = "error", v["reasons"] + [traceback.format_exc()[-3000:]]
+    # the work is over: a cancel from here on is too late, and must not cut the verdict or the queue entry short
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
     v["ended"], v["seconds"] = time.strftime("%Y-%m-%dT%H:%M:%S%z"), round(time.time() - t0)
     v["remi_verdict"] = remi_verdict(v)
     with open(verdict_path(e) + ".tmp", "w") as f:
