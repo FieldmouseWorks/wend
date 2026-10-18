@@ -282,7 +282,9 @@ def enqueue(args):
     with QueueLock():
         if opts.get("after"):
             load(opts["after"])
-        jid = f"{time.strftime('%Y%m%d-%H%M%S')}-{job}-{secrets.token_hex(2)}"
+        jid = None
+        while jid is None or os.path.exists(entry_path(jid)):  # under the lock: a collision draws again
+            jid = f"{time.strftime('%Y%m%d-%H%M%S')}-{job}-{secrets.token_hex(2)}"
         e = {"id": jid, "job": job, "args": pos, "vm_flags": flags, "sha": sha, "pr": int(pr) if pr else None,
              "by": opts["by"], "reply_to": opts.get("reply-to"), "after": opts.get("after"), "rank": time.time(),
              "state": "queued", "enqueued": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "origin": where,
