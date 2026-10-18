@@ -40,7 +40,7 @@ def remi(*args, env=None):
 VM = r'''import json, os, subprocess, sys, time
 a = sys.argv[1:]
 while a[0].startswith("--"):
-    a = a[2:] if a[0] in ("--root-fs", "--extra-disk") else a[1:]
+    a = a[2:] if a[0] in ("--root-fs", "--extra-disk", "--selinux") else a[1:]
 cmd, box = a[0], (a[2] if a[0] in ("replay", "rehearse") else a[1])
 trace = open(os.environ["WEND_LAB"] + "/trace", "a")
 trace.write(f"start {cmd} {box} {os.environ.get('WEND_WORK')} {' '.join(sys.argv[1:])}\n"); trace.flush()
@@ -155,6 +155,11 @@ for args, what in (
         (["build", "el/c7", "--sha", main, "--by", "t", "--vm-flags", "--extra-disk 501"], "an extra disk vm.py won't take"),
         (["build", "el/c7", "--sha", main, "--by", "t", "--vm-flags", "--root-fs btrfs"], "a root fs vm.py won't take"),
         (["tests", "--sha", main, "--by", "t", "--vm-flags", "--uefi"], "vm flags on a tests job"),
+        (["build", "el/c7", "--sha", main, "--by", "t", "--vm-flags", "--selinux permissive"], "a selinux mode vm.py won't take"),
+        (["build", "el/c7", "--sha", main, "--by", "t", "--vm-flags", "--selinux enforcing"],
+         "--selinux on a job that isn't a replay"),
+        (["replay", "routes/el/c7-to-a10.toml", "el/c7", "--sha", main, "--by", "t", "--vm-flags",
+          "--selinux enforcing --relocate --extra-disk 20"], "--selinux on a relocated replay"),
         (["relocate", "el/c7", "--sha", main, "--by", "t"], "a relocate with no extra disk"),
         (["replay", "routes/el/c7-to-a10.toml", "el/c7", "--sha", main, "--by", "t", "--vm-flags", "--relocate"],
          "a replay --relocate with no extra disk"),
@@ -174,7 +179,7 @@ j1 = entry(out)
 rc, out = remi("enqueue", "rehearse", "routes/el/c7-to-a10.toml", "el/c7", "--sha", main, "--by", "thread B", env=NOW)
 j2 = entry(out)
 rc, out = remi("enqueue", "replay", "routes/el/c7-to-a10.toml", "el/c7", "--sha", pr, "--pr", "7", "--by", "thread C",
-               "--vm-flags", "--uefi --extra-disk 20", env=NOW)
+               "--vm-flags", "--uefi --extra-disk 20 --selinux enforcing", env=NOW)
 check(rc == 0 and "tip of origin/claude/x" in out, "a PR head that is a branch tip on origin queues")
 j3 = entry(out)
 rc, out = remi("enqueue", "tests", "--sha", main, "--by", "thread D", "--after", j1, env=NOW)
@@ -191,7 +196,7 @@ at = [i for i, l in enumerate(trace) if l.startswith("start rehearse")]
 check(len(at) == 2 and trace.index("end rehearse el/c7") < at[1], "two rehearses never overlap")
 check(trace[at[0]].split()[3] == f"{w}/lab/vmwork-root", "a rehearse runs with root's WEND_WORK")
 reps = [l for l in trace if l.startswith("start replay")]
-check(len(reps) == 1 and reps[0].split()[3] == f"{w}/lab/vmwork" and "--uefi --extra-disk 20 replay" in reps[0],
+check(len(reps) == 1 and reps[0].split()[3] == f"{w}/lab/vmwork" and "--uefi --extra-disk 20 --selinux enforcing replay" in reps[0],
       "a replay runs as dev with dev's WEND_WORK and its vm flags before the command")
 check(trace.index(reps[0]) > trace.index("end rehearse el/c7"),
       "a job with another tools/mirror.py waits for the VM jobs using the first one")
@@ -216,7 +221,7 @@ check(all(c["log"].startswith(f"{w}/lab/logs/main/{old}/{j1}/") for c in v1["com
 check(os.path.isdir(f"{w}/src/wend-main-{old[:12]}-root") and v1["worktree"].endswith("-root") and os.path.isdir(f"{w}/src/wend-7-{pr[:12]}"),
       "each job gets its own worktree, wend-<PR or main>-<sha12>, root's apart (-root)")
 check(v3["remi_verdict"] == {"pr": "7", "sha": pr, "state": "success",
-                              "summary": f"replay el/c7-to-a10 el/c7 --uefi --extra-disk 20: passed (job {j3})"},
+                              "summary": f"replay el/c7-to-a10 el/c7 --uefi --extra-disk 20 --selinux enforcing: passed (job {j3})"},
       "a PR job's verdict carries the remi-verdict inputs")
 check(v4["result"] == "fail" and v4["reasons"] == ["tools/test_b.py exited 3"] and
       [c["name"] for c in v4["commands"]] == ["test_a", "test_b", "check"], "tests runs each test and check.py")
