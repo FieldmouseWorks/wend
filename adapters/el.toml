@@ -588,7 +588,7 @@ upgrade = ["{pm} -y distro-sync"]
 # before the box boots it, and `after` sets enforcing again. The config is never touched; a chroot (not PID 1's
 # root) is left alone.
 before_transaction = ["[ / -ef /proc/1/root ] || exit 0; for d in /sys/fs/selinux /selinux; do [ -e $d/enforce ] || continue; [ \"$(cat $d/enforce)\" = 1 ] || exit 0; mkdir -p /var/lib/wend && touch /var/lib/wend/selinux-was-enforcing && setenforce 0 && echo 'SELinux permissive for the transaction' && exit 0; exit 1; done"]
-after_transaction = ["[ -e /var/lib/wend/selinux-was-enforcing ] || exit 0; semodule -B || exit 1; echo \"policy rebuilt with the arriving release's tools: $(ls /etc/selinux/targeted/policy/ | tr '\\n' ' ')\"; fixfiles restore > /var/lib/wend/relabel.log 2>&1 || { tail -n 20 /var/lib/wend/relabel.log; echo 'the relabel failed: the box would boot enforcing on stale labels'; exit 1; }; echo \"relabelled under the new policy: $(tail -n 3 /var/lib/wend/relabel.log | tr '\\n' ' ')\""]
+after_transaction = ["[ -e /var/lib/wend/selinux-was-enforcing ] || exit 0; semodule -B || exit 1; echo \"policy rebuilt with the arriving release's tools: $(ls /etc/selinux/targeted/policy/ | tr '\\n' ' ')\"; fixfiles restore > /var/lib/wend/relabel.log 2>&1 || { tail -n 20 /var/lib/wend/relabel.log; echo 'the relabel failed: the box would boot enforcing on stale labels'; exit 1; }; touch /var/lib/wend/selinux-relabelled && echo \"relabelled under the new policy: $(tail -n 3 /var/lib/wend/relabel.log | tr '\\n' ' ')\""]
 verify = "grep -q 'release {major}[. ]' /etc/redhat-release"
 after = [
   "{clean_repos}",
@@ -606,8 +606,9 @@ after = [
   # wend#75: a hop to EL9 that fails between rpm.transit and its last sshd restart leaves the old listener exec'ing the
   # new sshd, so nobody can log in to see why. `after` runs whatever happened (releases.alma9 explains the restart).
   "[ / -ef /proc/1/root ] && [ -d /run/systemd/system ] && case $(systemctl is-active sshd 2>/dev/null) in inactive|failed|unknown) false;; esac || { echo \"sshd: not a running systemd service on this root, left alone\"; exit 0; }; /usr/sbin/sshd -t || { echo \"the installed sshd rejects its configuration: restarting it would lock ssh out\"; exit 1; }; timeout 120 systemctl restart sshd || { echo \"systemctl restart sshd failed or hung\"; exit 1; }; L=$(/usr/sbin/sshd -T 2>/dev/null | awk '$1 == \"listenaddress\" {print $2}'); A=$(echo \"$L\" | grep -v '^\\[' | head -n1); [ -n \"$A\" ] || A=$(echo \"$L\" | head -n1); H=${A%:*}; P=${A##*:}; H=${H#[}; H=${H%]}; case \"$H\" in 0.0.0.0|\"\") H=127.0.0.1;; ::) H=::1;; esac; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do timeout 5 bash -c \"exec 3<>/dev/tcp/$H/${P:-22} && head -c 4 <&3\" 2>/dev/null | grep -q '^SSH-' && { echo \"sshd restarted: a new connection to $H port ${P:-22} gets its greeting\"; exit 0; }; sleep 1; done; echo \"sshd restarted, but a new connection to $H port ${P:-22} gets no greeting\"; exit 1",
-  # before_transaction's permissive ends with the hop, whatever happened
-  "[ -e /var/lib/wend/selinux-was-enforcing ] || exit 0; rm -f /var/lib/wend/selinux-was-enforcing; setenforce 1 && echo 'SELinux enforcing again'",
+  # before_transaction's permissive ends with the hop, once the policy is rebuilt and the files relabelled; a hop that
+  # failed short of that stays permissive until it's rolled back, rather than enforce a half-built policy
+  "[ -e /var/lib/wend/selinux-was-enforcing ] || exit 0; if [ -e /var/lib/wend/selinux-relabelled ]; then setenforce 1 && echo 'SELinux enforcing again'; else echo 'SELinux left permissive: the hop failed before its policy was rebuilt and its files relabelled'; fi; r=$?; rm -f /var/lib/wend/selinux-was-enforcing /var/lib/wend/selinux-relabelled; exit $r",
 ]
 installed_list = "rpm -qa --qf '%{NAME}\\n' | sort -u"
 # SPEC "The plan": a rehearsed machine's fingerprint, every package with its epoch, version and architecture
