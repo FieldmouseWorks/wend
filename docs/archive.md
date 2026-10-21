@@ -215,8 +215,8 @@ reachable. So the archive is kept current on a timer, and checked from outside.
   else uses (`/data/dev/src/wend-archive-main`), updated to `origin/main` first, so ingest always reads the runs main
   has now. A cycle downloads the gate artifacts behind the passing runs on main no ingest has walked yet
   (`gate_fetched.py --runs --have --lost`: a pin isn't in the store's index naming that run, lost.txt aside), stops
-  there if main's `runs/` and the artifacts are what the last good cycle saw (under a day ago), and otherwise ingests,
-  verifies the store (signatures aside: the push signs) and runs remi's push wrapper (`sudo -n
+  there if main's `runs/`, its `tools/` and the artifacts are what the last good cycle saw (under a day ago), and
+  otherwise ingests, verifies the store (signatures aside: the push signs) and runs remi's push wrapper (`sudo -n
   /data/wend-lab/scripts/r2push-run.sh`: sign, then `r2push.py`, from that same worktree). It pushes what it stored
   even when the ingest missed something, then exits 1, and keeps retrying each hour until a cycle finds everything.
   After a good cycle it deletes artifacts unpacked over 30 days ago.
@@ -236,7 +236,10 @@ reachable. So the archive is kept current on a timer, and checked from outside.
   no metadata vouches for those, so a file counts only as a source rpm with the name, version and release the
   binary's header names, and its index entry says `live`. Every ingest tries the gaps again, so a source repo that
   timed out once doesn't leave a package sourceless for good. CentOS 7's last glibc, kernel and libX11 updates have
-  their sources only as dist-git (git.centos.org `imports/c7/<nvr>`), which nothing here reads yet: they stay held.
+  their sources only as dist-git: then the import's tag (`imports/c7/<nvr>`, mirrored at
+  gitlab.com/CentOS/archives/git.centos.org) is cloned, every file at the commit it names is stored (spec first, as
+  the package's source), and so is each tarball its `.<name>.metadata` lists from the lookaside
+  (`git.centos.org/sources/<name>/c7/<sha1>`), checked against that sha1. All of it or none; every entry says `live`.
 - **Known losses.** `archive/lost.txt` lists the pins whose bytes are gone everywhere (the pre-capture pins above,
   and anything since that no artifact or copy on remi held). `ingest` reports them as lost instead of failing, so a
   red cycle means something that can still be saved.
