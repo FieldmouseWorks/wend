@@ -219,7 +219,7 @@ reachable. So the archive is kept current on a timer, and checked from outside.
   otherwise ingests, verifies the store (signatures aside: the push signs) and runs remi's push wrapper (`sudo -n
   /data/wend-lab/scripts/r2push-run.sh`: sign, then `r2push.py`, from that same worktree). It pushes what it stored
   even when the ingest missed something, then exits 1, and keeps retrying each hour until a cycle finds everything.
-  After a good cycle it deletes artifacts unpacked over 30 days ago.
+  After a good cycle it deletes artifacts unpacked over 7 days ago (`--keep-days 7`): their pins are in the store.
 - **What a live walk reads.** A replay asks only for what its package manager needed, but a live walk of the same
   run on a real machine can ask for more (filelists for a file dependency, updateinfo), and a live repo deletes them
   with their repomd.xml: #163's rehearsal was refused on EPEL 8's. So capture also fetches, as the run is saved,

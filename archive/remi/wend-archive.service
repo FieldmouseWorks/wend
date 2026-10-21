@@ -18,5 +18,5 @@ IOSchedulingClass=idle
 WorkingDirectory=/data/dev/src/wend-archive-main
 ExecStartPre=/usr/bin/git fetch -q origin main
 ExecStartPre=/usr/bin/git checkout -q --detach --force FETCH_HEAD
-ExecStart=/usr/bin/python3 -P -u tools/archive_cycle.py /data/wend-archive --fetched /data/wend-lab/gate-fetched --token-file /data/dev/home/.config/wend/gh-actions.txt --push "sudo -n /data/wend-lab/scripts/r2push-run.sh"
+ExecStart=/usr/bin/python3 -P -u tools/archive_cycle.py /data/wend-archive --fetched /data/wend-lab/gate-fetched --token-file /data/dev/home/.config/wend/gh-actions.txt --push "sudo -n /data/wend-lab/scripts/r2push-run.sh" --keep-days 7
 TimeoutStartSec=6h
