@@ -221,7 +221,7 @@ for fam, a in adapters.items():
     print(("passed  " if not errs else "WRONG   ") + f"adapters/{fam}.toml" + (f" ({errs})" if errs else ""))
     bad += bool(errs)
 # the hop's command lists run one command per item: a string would run as one command per character
-for k in ("kernel_before", "kernel_after", "before_transaction", "after_transaction"):
+for k in ("kernel_before", "kernel_after", "before_transaction"):
     loose = copy.deepcopy(adapters["el"])
     loose["hop"][k] = "true"
     errs = check.check_adapter(loose, "adapters/el.toml")
@@ -630,13 +630,11 @@ for fam, hop in (("el", "centos6"), ("debian", "squeeze")):
     up = [_walk.fill(c, w_.vars) for c in (rel["upgrade"] if isinstance(rel, dict) and "upgrade" in rel
                                             else h_["upgrade"])]
     if fam == "el":  # kernel_before before the pre steps: rpm.transit (a pre step) needs the kernel records gone
-        # (and before_transaction, then after_transaction, wrap them: wend#158)
+        # (and before_transaction right after it: wend#158)
         bt = [_walk.fill(c, w_.vars) for c in h_.get("before_transaction", [])]
-        at = [_walk.fill(c, w_.vars) for c in h_.get("after_transaction", [])]
-        ok = bool(kb) and bool(ka) and bool(bt) and bool(at) and first[2:2 + len(kb)] == kb and \
+        ok = bool(kb) and bool(ka) and bool(bt) and first[2:2 + len(kb)] == kb and \
             first[2 + len(kb):2 + len(kb) + len(bt)] == bt and "vsftpd" in first[2 + len(kb) + len(bt)] and \
-            first[-len(at):] == at and first[-len(at) - len(ka):-len(at)] == ka and \
-            first[-len(at) - len(ka) - len(up):-len(at) - len(ka)] == up
+            first[-len(ka):] == ka and first[-len(ka) - len(up):-len(ka)] == up
     else:  # Debian's packages carry its kernels; the harness only keeps GRUB 2 installed, after the transaction
         ok = not kb and bool(ka) and first[-len(ka):] == ka and first[-len(ka) - len(up):-len(ka)] == up
     print(("passed  " if ok else "WRONG   ") + f"{fam} {hop}: kernel steps right after refresh and right after the upgrade")

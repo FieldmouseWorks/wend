@@ -1356,9 +1356,11 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
                 h["mid_reboot"], h["mid_reboot_forced"] = back, forced
                 if g.reboot_notes:
                     h["mid_reboot_notes"] = g.reboot_notes
-                if back:  # the post steps run in the mode the box started in, too
+                if back:  # the post steps run in the mode the box started in, too; an enforcing box runs the hop
+                    # permissive (hop.before_transaction, wend#158)
                     h["mid_selinux"] = selinux_read(g)
-                    back = h["mid_selinux"]["mode"] is not None and h["mid_selinux"]["mode"] == start_selinux["mode"]
+                    mode = start_selinux["mode"]
+                    back = h["mid_selinux"]["mode"] in ({mode, "Permissive"} if mode == "Enforcing" else {mode})
                 ok = back
                 if back:
                     ok, rest = run_hop(g, second, after)

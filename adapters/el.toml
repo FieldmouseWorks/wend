@@ -582,13 +582,11 @@ refresh = "rm -f /var/lib/rpm/__db.*; rpm --rebuilddb && {pm} clean all"
 upgrade = ["{pm} -y distro-sync"]
 # wend#158: on an enforcing box the arriving release's scriptlets (groupadd, semanage, load_policy) run under the
 # leaving release's policy, which denies them, and the new policy loads mid-transaction: a CentOS 5 box stops
-# answering in the CentOS 6 transaction. So the transaction runs permissive; then the policy is rebuilt with the
-# arriving release's own tools (the transaction builds EL6's modules with EL5's semodule, and EL6's dracut then loads
-# a policy without EL6's permissions: udev can't label /dev and the boot stops), the files are relabelled under it
-# before the box boots it, and `after` sets enforcing again. The config is never touched; a chroot (not PID 1's
-# root) is left alone.
-before_transaction = ["[ / -ef /proc/1/root ] || exit 0; for d in /sys/fs/selinux /selinux; do [ -e $d/enforce ] || continue; [ \"$(cat $d/enforce)\" = 1 ] || exit 0; mkdir -p /var/lib/wend && touch /var/lib/wend/selinux-was-enforcing && setenforce 0 && echo 'SELinux permissive for the transaction' && exit 0; exit 1; done"]
-after_transaction = ["[ -e /var/lib/wend/selinux-was-enforcing ] || exit 0; semodule -B || exit 1; echo \"policy rebuilt with the arriving release's tools: $(ls /etc/selinux/targeted/policy/ | tr '\\n' ' ')\"; fixfiles restore > /var/lib/wend/relabel.log 2>&1 || { tail -n 20 /var/lib/wend/relabel.log; echo 'the relabel failed: the box would boot enforcing on stale labels'; exit 1; }; touch /var/lib/wend/selinux-relabelled && echo \"relabelled under the new policy: $(tail -n 3 /var/lib/wend/relabel.log | tr '\\n' ' ')\""]
+# answering in the CentOS 6 transaction. So the hop runs permissive, in the config too: a release that boots its
+# kernel before the post steps (CentOS 6) boots a policy the transaction couldn't build under the old kernel, and
+# an enforcing boot of it stops (udev can't label /dev). `after` rebuilds and reloads the policy and relabels where
+# the running kernel can load it, and sets enforcing again. A chroot (not PID 1's root) is left alone.
+before_transaction = ["[ / -ef /proc/1/root ] || exit 0; for d in /sys/fs/selinux /selinux; do [ -e $d/enforce ] || continue; [ \"$(cat $d/enforce)\" = 1 ] || exit 0; mkdir -p /var/lib/wend && touch /var/lib/wend/selinux-was-enforcing && sed -i 's/^SELINUX=enforcing$/SELINUX=permissive/' /etc/selinux/config && setenforce 0 && echo 'SELinux permissive for the hop' && exit 0; exit 1; done"]
 verify = "grep -q 'release {major}[. ]' /etc/redhat-release"
 after = [
   "{clean_repos}",
@@ -606,9 +604,11 @@ after = [
   # wend#75: a hop to EL9 that fails between rpm.transit and its last sshd restart leaves the old listener exec'ing the
   # new sshd, so nobody can log in to see why. `after` runs whatever happened (releases.alma9 explains the restart).
   "[ / -ef /proc/1/root ] && [ -d /run/systemd/system ] && case $(systemctl is-active sshd 2>/dev/null) in inactive|failed|unknown) false;; esac || { echo \"sshd: not a running systemd service on this root, left alone\"; exit 0; }; /usr/sbin/sshd -t || { echo \"the installed sshd rejects its configuration: restarting it would lock ssh out\"; exit 1; }; timeout 120 systemctl restart sshd || { echo \"systemctl restart sshd failed or hung\"; exit 1; }; L=$(/usr/sbin/sshd -T 2>/dev/null | awk '$1 == \"listenaddress\" {print $2}'); A=$(echo \"$L\" | grep -v '^\\[' | head -n1); [ -n \"$A\" ] || A=$(echo \"$L\" | head -n1); H=${A%:*}; P=${A##*:}; H=${H#[}; H=${H%]}; case \"$H\" in 0.0.0.0|\"\") H=127.0.0.1;; ::) H=::1;; esac; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do timeout 5 bash -c \"exec 3<>/dev/tcp/$H/${P:-22} && head -c 4 <&3\" 2>/dev/null | grep -q '^SSH-' && { echo \"sshd restarted: a new connection to $H port ${P:-22} gets its greeting\"; exit 0; }; sleep 1; done; echo \"sshd restarted, but a new connection to $H port ${P:-22} gets no greeting\"; exit 1",
-  # before_transaction's permissive ends with the hop, once the policy is rebuilt and the files relabelled; a hop that
-  # failed short of that stays permissive until it's rolled back, rather than enforce a half-built policy
-  "[ -e /var/lib/wend/selinux-was-enforcing ] || exit 0; if [ -e /var/lib/wend/selinux-relabelled ]; then setenforce 1 && echo 'SELinux enforcing again'; else echo 'SELinux left permissive: the hop failed before its policy was rebuilt and its files relabelled'; fi; r=$?; rm -f /var/lib/wend/selinux-was-enforcing /var/lib/wend/selinux-relabelled; exit $r",
+  # before_transaction's permissive ends with the hop. Where this kernel can load the arriving policy (a release that
+  # booted its kernel before the post steps), it's rebuilt with the arriving release's tools and the files relabelled
+  # under it; elsewhere the transaction's own build loads at the next boot. A failed relabel leaves the box
+  # permissive, and the hop-end mode check fails it.
+  "[ -e /var/lib/wend/selinux-was-enforcing ] || exit 0; rm -f /var/lib/wend/selinux-was-enforcing; if semodule -B; then fixfiles restore > /var/lib/wend/relabel.log 2>&1 || { tail -n 20 /var/lib/wend/relabel.log; echo 'the relabel failed: SELinux left permissive'; exit 1; }; echo \"policy rebuilt and files relabelled: $(ls /etc/selinux/targeted/policy/ | tr '\\n' ' ')\"; else echo 'this kernel cannot load the arriving policy: the transaction built it for the next boot'; fi; sed -i 's/^SELINUX=permissive$/SELINUX=enforcing/' /etc/selinux/config && setenforce 1 && echo 'SELinux enforcing again'",
 ]
 installed_list = "rpm -qa --qf '%{NAME}\\n' | sort -u"
 # SPEC "The plan": a rehearsed machine's fingerprint, every package with its epoch, version and architecture
