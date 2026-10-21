@@ -12,7 +12,7 @@ Without --apply it only says what it would do. Two things grow, and nothing else
   run.json, logs, steps and plan stay.
 - An installed box, <lab>/vmwork*/vm/<box>-<firmware>[-<layout>]-<key>/. vm.py reuses one only while its key (the box
   file, the adapter, vm.py's build_source, the firmware and the layout: vm.build) is what a checkout would make, so
-  a box is deleted when no branch tip on origin, no PR head remi.py has fetched and no queued or running job's sha
+  a box is deleted when no branch tip on origin and no queued or running job's sha
   makes its key, nothing has written to it in N days, and no disk left in any run directory backs onto it.
 
 Never: a run directory or box any process has open (its cwd, an open file or a mapped one), a worktree a queued or
@@ -159,8 +159,10 @@ def busy_worktrees(src, js):
 
 
 def heads(base, js):
-    """Every commit a VM run could be at next: origin's branch tips, the PR heads remi.py fetched, queued jobs."""
-    r = git(base, "for-each-ref", "--format=%(objectname)", "refs/remotes/origin", "refs/wend-lab/pr")
+    """Every commit a VM run could be at next: origin's branch tips and queued or running jobs' shas. Not
+    refs/wend-lab/pr/*: remi.py never deletes those, so a merged PR's last head would keep its boxes forever, and
+    remi.py runs only a sha that is a branch tip on origin anyway."""
+    r = git(base, "for-each-ref", "--format=%(objectname)", "refs/remotes/origin")
     out = set(r.stdout.split()) | {e["sha"] for e in js if re.fullmatch(r"[0-9a-f]{40}", e.get("sha", ""))}
     if not out:
         raise Unsure(f"no branch tips or jobs in {base}")
