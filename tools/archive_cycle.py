@@ -5,7 +5,7 @@
                                  [--every HOURS] [--keep-days DAYS]
 
 A pin of a live repo rots within hours (EPEL replaced two of #163's overnight), and the gate's artifacts keep its
-bytes only 90 days, so every run that lands on main has to reach the public archive the day it lands. One cycle:
+bytes only 14 days, so every run that lands on main has to reach the public archive the day it lands. One cycle:
 
   1. tools/gate_fetched.py DIR --runs --have --lost: download the gate's fetched-N artifacts behind the passing runs
      on main no ingest has walked yet (lost.txt aside), and no others.
@@ -17,7 +17,7 @@ bytes only 90 days, so every run that lands on main has to reach the public arch
      ingest missed something: what was stored is good, and the index names only stored blobs.
   6. After a cycle that found everything, delete artifacts unpacked over DAYS ago (default 30): their pinned bytes
      are stored, and only runs already on main had theirs downloaded. To ingest one again, delete its artifact id
-     from DIR/.done and the next cycle downloads it again if its run still needs it (GitHub keeps it 90 days).
+     from DIR/.done and the next cycle downloads it again if its run still needs it (GitHub keeps it 14 days).
 
 Exits 1 when any step fails or the ingest missed something archive/lost.txt doesn't excuse, so the timer's unit goes
 red; the public check (.github/workflows/archive-check.yml) opens an issue when a pin stays unarchived. Exits 0 when
