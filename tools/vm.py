@@ -142,7 +142,10 @@ SELINUX_MAKE = {
                  "command -v semanage >/dev/null || yum -y install policycoreutils-python || "
                  "yum -y install policycoreutils-python-utils || true; if command -v semanage >/dev/null; then "
                  "semanage port -a -t ssh_port_t -p tcp $p || semanage port -m -t ssh_port_t -p tcp $p || exit 1; "
-                 "else echo \"no semanage: sshd's port $p stays unlabelled\"; fi; done; "
+                 "semanage port -l | grep -q \"^ssh_port_t .*[ ,]$p\\(,\\|$\\)\" || "
+                 "{ semanage port -l | grep ^ssh_port_t; exit 1; }; "
+                 "elif grep -q 'release 4' /etc/redhat-release; then echo \"no semanage: sshd's port $p stays unlabelled\"; "
+                 "else echo \"sshd listens on $p and semanage can't be had to label it\"; exit 1; fi; done; "
                  "grep -qx SELINUX=enforcing /etc/selinux/config && touch /.autorelabel",
     "none": "for p in selinux-policy-targeted selinux-policy-strict selinux-policy-mls; do "
             "! rpm -q $p >/dev/null || rpm -e $p || exit 1; done; rm -f /etc/selinux/config"}
