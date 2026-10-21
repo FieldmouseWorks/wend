@@ -588,7 +588,7 @@ upgrade = ["{pm} -y distro-sync"]
 # before the box boots it, and `after` sets enforcing again. The config is never touched; a chroot (not PID 1's
 # root) is left alone.
 before_transaction = ["[ / -ef /proc/1/root ] || exit 0; for d in /sys/fs/selinux /selinux; do [ -e $d/enforce ] || continue; [ \"$(cat $d/enforce)\" = 1 ] || exit 0; mkdir -p /var/lib/wend && touch /var/lib/wend/selinux-was-enforcing && setenforce 0 && echo 'SELinux permissive for the transaction' && exit 0; exit 1; done"]
-after_transaction = ["[ -e /var/lib/wend/selinux-was-enforcing ] || exit 0; semodule -B || exit 1; echo \"policy rebuilt with the arriving release's tools: $(ls /etc/selinux/targeted/policy/ | tr '\\n' ' ')\"; fixfiles restore > /var/lib/wend/relabel.log 2>&1; echo \"relabelled under the new policy (fixfiles rc=$?): $(tail -n 3 /var/lib/wend/relabel.log | tr '\\n' ' ')\""]
+after_transaction = ["[ -e /var/lib/wend/selinux-was-enforcing ] || exit 0; semodule -B || exit 1; echo \"policy rebuilt with the arriving release's tools: $(ls /etc/selinux/targeted/policy/ | tr '\\n' ' ')\"; fixfiles restore > /var/lib/wend/relabel.log 2>&1 || { tail -n 20 /var/lib/wend/relabel.log; echo 'the relabel failed: the box would boot enforcing on stale labels'; exit 1; }; echo \"relabelled under the new policy: $(tail -n 3 /var/lib/wend/relabel.log | tr '\\n' ' ')\""]
 verify = "grep -q 'release {major}[. ]' /etc/redhat-release"
 after = [
   "{clean_repos}",

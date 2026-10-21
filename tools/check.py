@@ -167,7 +167,7 @@ def check_adapter(a, where):
                         "a repo for")
     if a.get("addons") and "{addons}" not in str(a.get("hop", {}).get("set_release", "")):
         errs.append(f"{where}: an adapter with addons must put {{addons}} in hop.set_release")
-    for k in ("kernel_before", "kernel_after"):
+    for k in ("kernel_before", "kernel_after", "before_transaction", "after_transaction"):
         if k in a.get("hop", {}) and not (isinstance(a["hop"][k], list) and all(isinstance(c, str) for c in a["hop"][k])):
             errs.append(f"{where}: hop.{k} must be a list of commands")
     errs += check_keys(a, where)

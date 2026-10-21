@@ -220,6 +220,14 @@ for fam, a in adapters.items():
     errs = check.check_adapter(a, f"adapters/{fam}.toml")
     print(("passed  " if not errs else "WRONG   ") + f"adapters/{fam}.toml" + (f" ({errs})" if errs else ""))
     bad += bool(errs)
+# the hop's command lists run one command per item: a string would run as one command per character
+for k in ("kernel_before", "kernel_after", "before_transaction", "after_transaction"):
+    loose = copy.deepcopy(adapters["el"])
+    loose["hop"][k] = "true"
+    errs = check.check_adapter(loose, "adapters/el.toml")
+    print(("refused " if errs else "MISSED  ") + f"hop.{k} as a string, not a list" +
+          (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
+    bad += not errs
 # rpm names carry capitals: installing NetworkManager and enabling its unit must pass, a capitalized name with shell in
 # it must not
 nm = {**el_good, "when": {"installed": "initscripts"}, "adds": ["NetworkManager"], "post": [
