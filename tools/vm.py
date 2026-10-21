@@ -1349,8 +1349,11 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
         if (a["releases"].get(hop) or {}).get("reboot") == "before-post":
             # boot the new kernel before the post steps run the release's binaries (SPEC "Kernels and the bootloader")
             ok, steps = run_hop(g, first, [])  # hop.after runs once, after everything (SPEC "How a hop runs")
-            if not ok:  # ...whatever happened
-                steps += run_hop(g, [], after)[1]
+            if not ok:  # ...whatever happened, if the guest still answers (a silent one fails here, wend#158)
+                try:
+                    steps += run_hop(g, [], after)[1]
+                except RuntimeError as e:
+                    steps += f"\n##### hop.after not run: {e}"
             if ok:
                 back, forced = g.reboot()
                 h["mid_reboot"], h["mid_reboot_forced"] = back, forced
