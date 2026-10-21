@@ -129,6 +129,13 @@ os.makedirs(f"{w}/precious/vm/el_centos7-lamp-bios-0000aaaa0000")
 os.symlink(f"{w}/precious", f"{lab}/vmwork-link")
 age(f"{w}/precious")
 
+installing = f"{lab}/vmwork/vm/el_centos4-dns-bios-1111aaaa1111"
+os.makedirs(installing)
+age(installing)
+import fcntl  # noqa: E402
+inst_lock = open(installing + ".lock", "a")
+fcntl.flock(inst_lock, fcntl.LOCK_EX)
+
 hold = open(f"{held_run}/centos7.steps.log")
 
 
@@ -197,9 +204,13 @@ check(os.path.isdir(stale_backed), "a stale box backing a recent run stays")
 check(not os.path.exists(stale_root), "a stale box nothing uses goes (vmwork-root too)")
 check(all(os.path.isdir(d) for d in made.values()), "every box a current head makes stays, however old")
 check(os.path.exists(f"{w}/elsewhere/r/x.qcow2"), "a symlinked run directory is never followed")
+check(os.path.isdir(installing), "a box whose install lock is held stays")
+check(not os.path.exists(f"{stale_root}.lock") and not os.path.exists(f"{stale}.lock"),
+      "the prune never creates a box's install lock (as root it would lock dev out)")
 check(os.path.isdir(f"{w}/precious/vm/el_centos7-lamp-bios-0000aaaa0000"), "nor a box dir under a symlinked vmwork*")
 
 hold.close()
+inst_lock.close()
 shutil.rmtree(w)
 print(f"\n{sum(results)}/{len(results)} passed")
 sys.exit(0 if all(results) else 1)

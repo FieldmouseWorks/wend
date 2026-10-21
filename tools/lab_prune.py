@@ -355,7 +355,11 @@ def main(argv):
         if only is not None and d.rstrip("/") not in only:
             kept.append((d, "not listed"))
             continue
-        lock = open(d + ".lock", "a")
+        # vm.Locked's lock, opened read-only and never created: a root-owned new one would lock dev's installs out
+        try:
+            lock = open(d + ".lock", "rb") if not os.path.islink(d + ".lock") else open(os.devnull, "rb")
+        except FileNotFoundError:
+            lock = open(os.devnull, "rb")  # nothing ever installed under this lock, so nothing is installing
         try:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
