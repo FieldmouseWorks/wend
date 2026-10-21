@@ -20,7 +20,8 @@ Jobs (ROUTE is routes/<family>/<name>.toml, BOX is <family>/<name>, both as they
   replay ROUTE BOX       tools/vm.py replay ROUTE BOX
   relocate BOX           tools/vm.py relocate BOX (give it --vm-flags "--extra-disk GB")
   rehearse ROUTE BOX     the client built with cargo build --release --locked, then tools/vm.py rehearse, as root
-  upgrade ROUTE BOX      the client built the same way, then tools/vm.py upgrade, as root (--vm-flags "--extra-disk GB",
+  upgrade ROUTE BOX      the client built static (--target x86_64-unknown-linux-musl, it runs inside the old box), then
+                         tools/vm.py upgrade, as root (--vm-flags "--extra-disk GB",
                          and on purpose --break-after HOP, --reset-trial, --kill-ssh or --rollback-by-hand)
 
 --vm-flags takes vm.py's flags before the command: --uefi --no-hwaddr --lvm --relocate --root-fs FS --extra-disk GB
@@ -70,6 +71,7 @@ LAB = os.environ.get("WEND_LAB", "/data/wend-lab")
 SRC = os.environ.get("WEND_LAB_SRC", "/data/dev/src")
 BASE = os.path.join(SRC, "wend")  # the clone every job's worktree is added from
 CARGO = os.environ.get("WEND_LAB_CARGO", "/data/dev/cache/cargo/bin/cargo")
+MUSL = "x86_64-unknown-linux-musl"
 QUEUE, LOGS = os.path.join(LAB, "queue"), os.path.join(LAB, "logs")
 WORK = {"dev": os.path.join(LAB, "vmwork"), "root": os.path.join(LAB, "vmwork-root")}
 # tests only (tools/test_remi.py): run root's and kvm's commands as the caller, and skip the runner's own origin check
@@ -717,12 +719,14 @@ def vm_job(e, v, wt, deadline):
     user = v["user"]
     tail = list(e["args"])
     if e["job"] in ("rehearse", "upgrade"):
-        c = command(v, "cargo-build", as_user("dev", [CARGO, "build", "--release", "--locked"], os.path.join(wt, "client")),
-                    os.path.join(wt, "client"), deadline)
+        # an upgrade's client runs inside the old box, on its libc: static, as released
+        target = ["--target", MUSL] if e["job"] == "upgrade" else []
+        c = command(v, "cargo-build", as_user("dev", [CARGO, "build", "--release", "--locked", *target],
+                                              os.path.join(wt, "client")), os.path.join(wt, "client"), deadline)
         if c["rc"]:
             v["reasons"].append(f"cargo build exited {c['rc']}")
             return
-        tail += ["--client", "client/target/release/wend"]
+        tail += ["--client", f"client/target/{MUSL}/release/wend" if target else "client/target/release/wend"]
     argv = ["python3", "-P", "-u", "tools/vm.py", *e["vm_flags"], e["job"], *tail]
     c = command(v, e["job"], as_user(user, argv, wt), wt, deadline)
     found = RUN_LINE.findall(open(c["log"], errors="replace").read())

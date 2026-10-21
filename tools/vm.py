@@ -87,6 +87,7 @@ import shutil
 import signal
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -1898,6 +1899,21 @@ def wait_boot(g, before, timeout=1500):
     return False
 
 
+def dynamic(path):
+    """Whether the ELF at PATH asks for a program interpreter (ld.so): the owner's copy runs on the box's own libc,
+    which on an old release is older than the build host's, so it has to be static."""
+    with open(path, "rb") as f:
+        h = f.read(64)
+        if h[:4] != b"\x7fELF" or h[4] != 2:
+            raise SystemExit(f"{path} isn't a 64-bit ELF binary")
+        phoff, phentsize, phnum = struct.unpack_from("<Q", h, 32)[0], *struct.unpack_from("<HH", h, 54)
+        for i in range(phnum):
+            f.seek(phoff + i * phentsize)
+            if struct.unpack("<I", f.read(4))[0] == 3:  # PT_INTERP
+                return True
+    return False
+
+
 def upgrade(route_path, box_id, client):
     """SPEC "Proof": `wend upgrade` run by the client inside a fresh copy of BOX, the owner played from this host. The
     client is rehearsed from here (`wend rehearse --from` the running guest), its binary, the atlas and the plan go
@@ -1907,6 +1923,9 @@ def upgrade(route_path, box_id, client):
     commit` and a plain reboot onto the committed root. UPGRADE's flags make it fail or stumble on purpose."""
     if os.geteuid() != 0:
         raise SystemExit("upgrade rehearses with the client's walk, which needs root (sudo -E)")
+    if dynamic(client):
+        raise SystemExit(f"{client} is dynamically linked, so it won't run on an old box's libc: build it static "
+                         "(cargo build --release --locked --target x86_64-unknown-linux-musl)")
     d, box_doc = build(box_id)
     route = load(route_path)
     a = guest_adapter(route["family"])
