@@ -532,6 +532,22 @@ fn keep(s: &State, d: &Digest, bytes: &[u8]) -> Result<PathBuf, (u16, String)> {
 
 /// The bytes for a pin: the cache, else the first source whose bytes hash right.
 fn fetch(s: &State, key: &str, p: &Pin) -> Result<PathBuf, (u16, String)> {
+    let r = fetch_from_any(s, key, p);
+    used(s, key, &r);
+    r
+}
+
+/// A file the proxy had, served or only read to learn what it lists (a repomd's primary.xml when yum reads the
+/// sqlite form): a plan's cache needs both, or `upgrade` offline can't vouch for the packages.
+fn used(s: &State, key: &str, r: &Result<PathBuf, (u16, String)>) {
+    if let Ok(f) = r {
+        if f.starts_with(&s.cache) {
+            lock(&s.served).insert(key.to_string(), f.clone());
+        }
+    }
+}
+
+fn fetch_from_any(s: &State, key: &str, p: &Pin) -> Result<PathBuf, (u16, String)> {
     let dst = cached(s, &p.digest);
     if std::fs::read(&dst).is_ok_and(|b| Digest::of(p.digest.alg, &b) == p.digest) {
         return Ok(dst);
@@ -602,6 +618,7 @@ fn fetch_plain(s: &State, key: &str, p: &Pin, gz: bool) -> Result<PathBuf, (u16,
     };
     learn_index(s, key, &x);
     let f = keep(s, &p.digest, &x)?;
+    used(s, key, &Ok(f.clone()));
     if !gz {
         return Ok(f);
     }
@@ -1122,6 +1139,18 @@ mod tests {
         // the alias is only a pointer: the blob it names still has to hash to the digest the index gave
         assert_eq!(get(px.port, "GET", "/h.test/el5/b.rpm").0, 502);
         assert_eq!(get(px.port, "GET", "/h.test/el5/c.rpm").0, 403);
+        // a plan's cache is what was used, the primary read only to learn from included: offline, it still vouches
+        let used = px.served();
+        assert!(used.iter().any(|(k, _)| k == "h.test/el5/repodata/primary.xml.gz"));
+        let plan = dir.join("plan-cache");
+        for (_, f) in &used {
+            let to = plan.join(f.strip_prefix(dir.join("cache")).unwrap());
+            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+            std::fs::copy(f, to).unwrap();
+        }
+        let off = Proxy::start(&run, &plan, vec![], vec![], true).unwrap();
+        off.ensure_pinned().unwrap();
+        assert_eq!(get(off.port, "GET", "/h.test/el5/a.rpm").0, 200);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
