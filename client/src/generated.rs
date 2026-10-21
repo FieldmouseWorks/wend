@@ -350,10 +350,12 @@ pub fn render(g: &Doc, s: &Seen) -> Value {
         for (d, tables) in &s.dbs {
             let list = format!("$($C -S $S -N -e {} 2>&1)", sq(&format!("show tables from `{d}`")));
             body.push_str(&format!("; T={list}"));
-            lv.push_str(&format!(
-                "; T=$($C -N -e {} 2>&1)",
-                sq(&format!("show tables from `{d}`"))
-            ));
+            if !tables.is_empty() {
+                lv.push_str(&format!(
+                    "; T=$($C -N -e {} 2>&1)",
+                    sq(&format!("show tables from `{d}`"))
+                ));
+            }
             let want: Vec<String> = if tables.is_empty() {
                 vec![format!(
                     "{{ $C -S $S -N -e 'show databases' | grep -qxF -- {} || {{ echo {}; f=1; }}; }}",
@@ -493,7 +495,9 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("{ /usr/sbin/sshd -t; } >/tmp/wend-gen-test.log"));
-        assert!(g["live"]["gen-db"].as_str().unwrap().contains("database empty is gone"));
+        let live_db = g["live"]["gen-db"].as_str().unwrap();
+        assert!(live_db.contains("database empty is gone"));
+        assert!(!live_db.contains("show tables from `empty`"));
         assert!(roles["gen-web"].as_str().unwrap().contains("[ \"$c\" = 200 ]"));
         assert!(roles["gen-db"].as_str().unwrap().contains("--skip-grant-tables"));
         assert!(roles["gen-cron"]

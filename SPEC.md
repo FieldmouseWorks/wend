@@ -2384,8 +2384,9 @@ needed.
   (`WEND_CHROOT_BOX=1`, "Kernels and the bootloader"): `hop.kernel_before` drops the kernel packages' records and
   keeps their files, as the machine's own walk will, and no kernel is installed in the copy (the steps that read the
   running kernel or install one act only on a machine booted from the root, `[ / -ef /proc/1/root ]`). After each hop the rehearsal downloads, without installing, what
-  `hop.kernel_after` would install (the release's `kernel` and what it pulls in, through the same proxy), so the
-  machine's offline walk finds it in the cache. `net.ifcfg-to-keyfile` reads a profile's missing `HWADDR` from the
+  `hop.kernel_after` would install (the release's `kernel` and what it pulls in, through the same proxy: the
+  adapter's `hop.kernel_fetch`), so the machine's offline walk finds it in the cache. A hop whose kernel couldn't be
+  downloaded fails the rehearsal there (that hop is the run's failed hop and the download its failed stage) and writes no plan. `net.ifcfg-to-keyfile` reads a profile's missing `HWADDR` from the
   running machine's `/sys/class/net`, which on the copy is the scratch host's NIC (a static profile refuses there, a
   DHCP one pins that NIC). That is harmless only because nothing the copy wrote reaches the machine: `upgrade` runs
   the op again on the machine itself. An engine that ever deploys a copy's output must supply the machine's own NIC
@@ -2398,7 +2399,8 @@ needed.
   the copy, but it still judges every boot of the upgrade, so nothing that worked at the start leaves the verdict
   without the owner saying so.
 - **The result.** A pass writes the plan directory. A fail writes the run and the scrubbed gap report (`wend report`'s,
-  with its issue link) and no plan.
+  with its issue link) and no plan: `wend-gap-<key>.md` beside the run, scrubbed of the copy's hostname, the
+  machine's and its login accounts, with the failing command's output when a command, not a check, broke.
 
 ### The plan
 
@@ -2410,7 +2412,8 @@ A directory, `wend-plan-<machine id>/`, carried to the machine (scp, or a USB st
   version and architecture, and their sha256), the running kernel, the release file, and which pinned fixes' preconditions hold.
   It holds nothing particular to one machine (addresses, disks, hostnames), so another machine can match it ("Fleets");
 - the facts preflight read on the rehearsed machine, kept for the report only: every machine is judged on its own
-  facts, read when `upgrade` starts, never on these;
+  facts, read when `upgrade` starts, never on these. They are `wend facts` run on the machine and given as
+  `--facts FILE` (the copy runs nothing of wend's there), and null when none was given;
 - `checks.toml`, the checks, in the format a box's `[roles]` and `[vm].live` use, so `walk` and the VM tier read it
   as they read a box;
 - `cache/`, every file the walk and the kernel downloads fetched, laid out as the verifying proxy's cache (`sha256/`

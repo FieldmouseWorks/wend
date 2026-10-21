@@ -13,6 +13,7 @@ mod hardware;
 mod hop;
 mod native;
 mod rehearse;
+mod report;
 mod runtime;
 mod sandbox;
 mod share;
@@ -45,13 +46,16 @@ wend: walk a proven upgrade route on a machine. No model, no network beyond your
                                     pinned file no source has refuses the walk before it touches anything.
                                     --live: no pins, today's mirrors, nothing verified; the run says so
   wend rehearse ROUTE --root DIR --run RUN.json --checks FILE [--from [USER@]HOST [--ssh CMD]]
-                [--kernel VERSION] [--plan DIR] [--cache DIR] [--source URL|DIR]... [--archive URL|DIR]...
+                [--kernel VERSION] [--plan DIR] [--facts FILE] [--cache DIR] [--source URL|DIR]...
+                [--archive URL|DIR]...
                                     the walk `wend upgrade` will make, on a copy of the machine (root needed):
                                     --from copies the machine's root into DIR over ssh (rsync, one filesystem
                                     at a time; CMD defaults to ssh), else DIR is a copy made another way and
                                     --kernel is the machine's uname -r. Walks it as walk --run does and, on a
                                     pass, writes the plan (default wend-plan-<machine id>): plan.json with the
                                     machine's fingerprint, the run, the checks, and every file the walk fetched
+                                    (each hop's kernel too); FILE is `wend facts` from the machine, kept in it for
+                                    the report. On a fail, no plan: the run and a scrubbed gap report to post
   wend facts                        what preflight reads about this machine: CPU level features, firmware, memory,
                                     free disk, PCI devices and their drivers, its own Python 2 programs (JSON)
   wend preflight ROUTE [--facts FILE] [--json]
@@ -121,6 +125,7 @@ fn main() -> ExitCode {
         ssh: opt(&mut args, "--ssh").unwrap_or_else(|| "ssh".into()),
         kernel: opt(&mut args, "--kernel"),
         plan: opt(&mut args, "--plan"),
+        facts: facts.clone(),
     };
     let redact: Vec<String> = std::iter::from_fn(|| opt(&mut args, "--redact")).collect();
     let Some(cmd) = args.first().cloned() else {
@@ -525,6 +530,8 @@ pub struct Walked {
     /// with --run: the proxy's cache and every "host/path" it served from it
     pub cache: Option<PathBuf>,
     pub served: Vec<(String, PathBuf)>,
+    /// every step the walk took, with its commands' output (`--steps` writes the same)
+    pub steps: Vec<Value>,
 }
 
 /// `wend walk` (and the walk `wend rehearse` makes): its run, and what a plan needs from the walk.
@@ -804,6 +811,7 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<Walked, String> 
         holding,
         cache: proxy.as_ref().map(|p| p.cache().to_path_buf()),
         served: proxy.as_ref().map(|p| p.served()).unwrap_or_default(),
+        steps: w.steps().to_vec(),
     })
 }
 
