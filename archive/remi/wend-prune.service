@@ -1,0 +1,17 @@
+# remi's daily disk prune (docs/remi.md, "Disk"): tools/lab_prune.py --apply, from wend-runner (kept at origin/main by
+# `remi.py update`), so main's copy decides what goes. Installed by hand on remi, with wend-prune.timer:
+#   sudo install -m 644 archive/remi/wend-prune.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now wend-prune.timer
+# Root: rehearse and upgrade run directories have root-only work/ and copy/, and vmwork-root is root's.
+[Unit]
+Description=wend lab: strip old VM run disks and delete boxes no head can reuse
+
+[Service]
+Type=oneshot
+User=root
+Nice=19
+IOSchedulingClass=idle
+Environment=GIT_OPTIONAL_LOCKS=0
+WorkingDirectory=/data/dev/src/wend-runner
+ExecStart=/usr/bin/python3 -P -u tools/lab_prune.py --apply
+TimeoutStartSec=2h

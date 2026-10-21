@@ -1,0 +1,11 @@
+# Daily, at a quiet hour on remi's clock (UTC-7). A run started since stays: the prune skips what's written to in 3 days.
+[Unit]
+Description=wend lab prune, daily
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
