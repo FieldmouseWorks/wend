@@ -69,8 +69,8 @@ For each hop on a route, the harness (not the fix) does:
 3. the `pre` steps of every fix whose `when` held, in route order,
 4. the upgrade transaction: the arriving release's own `upgrade` list if the adapter gives one, else `hop.upgrade`
    (Debian: `dist-upgrade`, then `autoremove --purge`; EL: from `yum upgrade` on EL6 to
-   `dnf distro-sync --allowerasing` on EL9 and 10), then the kernel handover's second half (`hop.kernel_after`) and `hop.after_transaction` (EL: that machine's files relabelled
-   under the arriving policy, so it boots enforcing). On a real machine, a release whose adapter says `reboot = "before-post"` boots its new kernel here,
+   `dnf distro-sync --allowerasing` on EL9 and 10), then the kernel handover's second half (`hop.kernel_after`) and `hop.after_transaction` (EL: that machine's policy rebuilt with the
+   arriving release's tools and its files relabelled under it, so it boots enforcing). On a real machine, a release whose adapter says `reboot = "before-post"` boots its new kernel here,
 5. the `post` steps of those fixes, in route order, then the harness appends their `adds` to
    `/var/lib/wend/added-families` (see "restores and adds"),
 6. remove the drop-ins of any `pm-option` used on this hop,

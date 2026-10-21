@@ -582,11 +582,13 @@ refresh = "rm -f /var/lib/rpm/__db.*; rpm --rebuilddb && {pm} clean all"
 upgrade = ["{pm} -y distro-sync"]
 # wend#158: on an enforcing box the arriving release's scriptlets (groupadd, semanage, load_policy) run under the
 # leaving release's policy, which denies them, and the new policy loads mid-transaction: a CentOS 5 box stops
-# answering in the CentOS 6 transaction. So the transaction runs permissive, the files are relabelled under the new
-# policy before the box boots it, and `after` sets enforcing again. The config is never touched; a chroot (not
-# PID 1's root) is left alone.
+# answering in the CentOS 6 transaction. So the transaction runs permissive; then the policy is rebuilt with the
+# arriving release's own tools (the transaction builds EL6's modules with EL5's semodule, and EL6's dracut then loads
+# a policy without EL6's permissions: udev can't label /dev and the boot stops), the files are relabelled under it
+# before the box boots it, and `after` sets enforcing again. The config is never touched; a chroot (not PID 1's
+# root) is left alone.
 before_transaction = ["[ / -ef /proc/1/root ] || exit 0; for d in /sys/fs/selinux /selinux; do [ -e $d/enforce ] || continue; [ \"$(cat $d/enforce)\" = 1 ] || exit 0; mkdir -p /var/lib/wend && touch /var/lib/wend/selinux-was-enforcing && setenforce 0 && echo 'SELinux permissive for the transaction' && exit 0; exit 1; done"]
-after_transaction = ["[ -e /var/lib/wend/selinux-was-enforcing ] || exit 0; fixfiles restore > /var/lib/wend/relabel.log 2>&1; echo \"relabelled under the new policy (fixfiles rc=$?): $(tail -n 3 /var/lib/wend/relabel.log | tr '\\n' ' ')\""]
+after_transaction = ["[ -e /var/lib/wend/selinux-was-enforcing ] || exit 0; semodule -B || exit 1; echo \"policy rebuilt with the arriving release's tools: $(ls /etc/selinux/targeted/policy/ | tr '\\n' ' ')\"; fixfiles restore > /var/lib/wend/relabel.log 2>&1; echo \"relabelled under the new policy (fixfiles rc=$?): $(tail -n 3 /var/lib/wend/relabel.log | tr '\\n' ' ')\""]
 verify = "grep -q 'release {major}[. ]' /etc/redhat-release"
 after = [
   "{clean_repos}",
