@@ -747,31 +747,36 @@ for name, fails, reboots, resets, silent, want_back, want_forced, want_notes in 
     bad += not ok
 
 
-class _HopGuest:  # a hop's guest: ssh answers until `stops` s into the hop, then (if `back`) again from `back` on
-    console = "/x/hop.console.log"
+class _HopGuest:  # a hop's guest: ssh answers until `stops` s into the hop, then (if `back`) again from `back` on;
+    console = "/x/hop.console.log"  # `broken`: from `stops` on, sshd answers but every shell command fails
 
-    def __init__(self, clock, stops, back=None, done_at=None):
+    def __init__(self, clock, stops, back=None, done_at=None, broken=False):
         self.clock, self.stops, self.back, self.done_at, self.t0 = clock, stops, back, done_at, clock.now
+        self.broken = broken
 
     def ssh(self, cmd, timeout=600, stdin=None):
         at = self.clock.now - self.t0
         if at >= self.stops and (self.back is None or at < self.back):
+            if self.broken:
+                return 1, "sh: /dev/null: Permission denied"
             self.clock.now += timeout
             return 255, "TIMEOUT"
-        if cmd.startswith("cat /root/wend-hop/DONE"):
-            return (0, "0\n") if self.done_at is not None and at >= self.done_at else (1, "")
+        if "/root/wend-hop/DONE" in cmd:
+            return 0, ("0\n" if self.done_at is not None and at >= self.done_at else "running\n")
         return 0, ""
 
     def running(self):
         return True
 
 
-for name, stops, back, done_at, want in (
-        ("a hop whose sshd is gone a minute while it's replaced finishes", 120, 200, 600, True),
-        ("a hop whose guest stops answering ssh fails in half an hour, not four hours", 120, None, None, False)):
+for name, stops, back, done_at, broken, want in (
+        ("a hop whose sshd is gone a minute while it's replaced finishes", 120, 200, 600, False, True),
+        ("a hop whose guest stops answering ssh fails in half an hour, not four hours", 120, None, None, False, False),
+        ("a hop whose guest's shell fails every command fails in half an hour, not four hours", 120, None, None, True,
+         False)):
     _vm.time = _Clock()
     try:
-        g_ = _HopGuest(_vm.time, stops, back, done_at)
+        g_ = _HopGuest(_vm.time, stops, back, done_at, broken)
         t_ = _vm.time.now
         ok_, out_ = _vm.run_hop(g_, ["true"], [])
         took = _vm.time.now - t_

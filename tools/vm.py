@@ -1061,10 +1061,11 @@ def run_hop(g, cmds, after):
     t = answered = time.time()
     while time.time() - t < 4 * 3600 and g.running():
         time.sleep(20)
-        rc, o = g.ssh("cat /root/wend-hop/DONE 2>/dev/null", timeout=60)
+        # no /dev/null: a guest whose /dev went unlabelled under enforcing fails it, and that's no answer (wend#158)
+        rc, o = g.ssh("if [ -e /root/wend-hop/DONE ]; then cat /root/wend-hop/DONE; else echo running; fi", timeout=60)
         if rc == 0 and o.strip() in ("0", "1"):
             break
-        if rc not in (124, 255):  # ssh's own failures; anything else is the guest answering, DONE or not
+        if rc == 0:  # the guest answered, the hop still running; anything else (ssh's or the shell's failure) isn't
             answered = time.time()
         elif time.time() - answered > SILENT_HOP:  # sshd is replaced in seconds, not this long (wend#158)
             return False, (f"the guest stopped answering ssh {round(time.time() - answered)}s ago, mid-hop; "
