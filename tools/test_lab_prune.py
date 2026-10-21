@@ -124,6 +124,11 @@ qcow2(f"{w}/elsewhere/r/x.qcow2")
 os.makedirs(f"{src}/wend-link/.wend/vm")
 os.symlink(f"{w}/elsewhere/r", f"{src}/wend-link/.wend/vm/r")
 
+# a vmwork* through a symlink, onto something old: never followed
+os.makedirs(f"{w}/precious/vm/el_centos7-lamp-bios-0000aaaa0000")
+os.symlink(f"{w}/precious", f"{lab}/vmwork-link")
+age(f"{w}/precious")
+
 hold = open(f"{held_run}/centos7.steps.log")
 
 
@@ -192,6 +197,7 @@ check(os.path.isdir(stale_backed), "a stale box backing a recent run stays")
 check(not os.path.exists(stale_root), "a stale box nothing uses goes (vmwork-root too)")
 check(all(os.path.isdir(d) for d in made.values()), "every box a current head makes stays, however old")
 check(os.path.exists(f"{w}/elsewhere/r/x.qcow2"), "a symlinked run directory is never followed")
+check(os.path.isdir(f"{w}/precious/vm/el_centos7-lamp-bios-0000aaaa0000"), "nor a box dir under a symlinked vmwork*")
 
 hold.close()
 shutil.rmtree(w)

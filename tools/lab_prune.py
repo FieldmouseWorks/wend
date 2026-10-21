@@ -30,6 +30,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 
@@ -94,6 +95,11 @@ def held():
         except OSError:
             pass
     return out
+
+
+def plain(root, d):
+    """Whether d is root/<relative> with no symlink anywhere below root, so a delete there stays there."""
+    return os.path.realpath(d) == os.path.join(os.path.realpath(root), os.path.relpath(d, root))
 
 
 def under(paths, d):
@@ -170,15 +176,14 @@ def build_source(src):
     mod = ast.Module(body=[ast.Import(names=[ast.alias(name="ast")]), ast.Import(names=[ast.alias(name="os")]), fn],
                      type_ignores=[])
     exec(compile(ast.fix_missing_locations(mod), os.path.join(HERE, "vm.py"), "exec"), ns)
-    tmp = f"/tmp/wend-lab-prune-{os.getpid()}.py"
-    try:
-        with open(tmp, "w") as f:
+    with tempfile.TemporaryDirectory(prefix="wend-lab-prune-") as tmp:  # 0700, made fresh: nothing to race
+        path = os.path.join(tmp, "vm.py")
+        with open(path, "x") as f:
             f.write(src)
-        return ns["build_source"](tmp)
-    except SyntaxError:
-        return None
-    finally:
-        os.unlink(tmp)
+        try:
+            return ns["build_source"](path)
+        except SyntaxError:
+            return None
 
 
 def parse_tag(tag):
@@ -317,7 +322,7 @@ def main(argv):
     stripped = set()
     for d in sorted(glob.glob(os.path.join(src, "*", ".wend", "vm", "*"))):
         wt = d.split("/.wend/vm/")[0]
-        if not os.path.isdir(d) or os.path.islink(d) or os.path.islink(wt) or os.path.islink(os.path.join(wt, ".wend")):
+        if not os.path.isdir(d) or not plain(src, d):
             continue
         why = ("not listed" if only is not None and d.rstrip("/") not in only else
                "a queued or running job's worktree" if wt in busy else
@@ -344,7 +349,7 @@ def main(argv):
         print(f"lab_prune: no box is deleted this time: {e}")
         sources = None
     for d in sorted(glob.glob(os.path.join(lab, "vmwork*", "vm", "*")) if sources is not None else []):
-        if not os.path.isdir(d) or os.path.islink(d):
+        if not os.path.isdir(d) or not plain(lab, d):
             continue
         name = os.path.basename(d)
         if only is not None and d.rstrip("/") not in only:
