@@ -291,6 +291,13 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
                     "{root} isn't empty: --from copies into an empty or new directory"
                 ));
             }
+            // the client `upgrade` carries over is x86_64; 32-bit machines are parked
+            let arch = m.run("uname -m")?.trim().to_string();
+            if arch != "x86_64" {
+                return Err(format!(
+                    "{from} is {arch}: wend's client runs on x86_64 only, and 32-bit machines are parked"
+                ));
+            }
             std::fs::create_dir_all(dir).map_err(|e| format!("{root}: {e}"))?;
             std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))
                 .map_err(|e| format!("{root}: {e}"))?;
