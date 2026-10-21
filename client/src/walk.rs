@@ -214,6 +214,34 @@ impl<'a> Walk<'a> {
         Ok(ok)
     }
 
+    /// SPEC "The rehearsal": the adapter's `hop.kernel_fetch`, after a hop, downloads what `kernel_after` will install
+    /// on the machine, through the proxy, so the plan's cache has it. Changes nothing a check reads, so it's no step of
+    /// its own: its output goes to the log. Whether it got the kernel (null when the adapter has no such step).
+    fn fetch_kernel(&mut self) -> Result<Value, String> {
+        let cmds = list_of(get(self.adapter, "hop").unwrap_or(&Value::Null), "kernel_fetch").unwrap_or_default();
+        if cmds.is_empty() {
+            return Ok(Value::Null);
+        }
+        let t0 = Instant::now();
+        let (mut ok, mut outs, mut stage) = (true, vec![], "ok".to_string());
+        for c in &cmds {
+            let c = fill(c, &self.vars);
+            let (rc, out) = self.root.run(&c, 1800, false);
+            self.log(&format!("kernel download: rc {rc}\n{}", tail(&out, 1500)));
+            outs.push(json!({"cmd": c, "rc": rc, "out": tail(&out, 4000)}));
+            if rc != 0 {
+                (ok, stage) = (false, format!("kernel download failed: {c}"));
+                break;
+            }
+        }
+        // a step like any other, so a failed download is the run's failed stage and its output is the gap report's
+        self.steps.push(
+            json!({"why": "kernel download", "ok": ok, "stage": stage, "outputs": outs,
+                               "seconds": round1(t0.elapsed().as_secs_f64())}),
+        );
+        Ok(json!(ok))
+    }
+
     /// The pinned fixes whose `when` holds on the root as it is now, by content id (SPEC "The plan": part of the
     /// machine's fingerprint).
     pub fn holding(&self) -> Result<Vec<String>, String> {
@@ -361,8 +389,17 @@ impl<'a> Walk<'a> {
             if ok {
                 let s = self.sources(hop)?;
                 self.hops.last_mut().unwrap()["sources"] = Value::Object(s);
+                if crate::sandbox::REHEARSAL.load(std::sync::atomic::Ordering::Relaxed) {
+                    let cached = self.fetch_kernel()?;
+                    let h = self.hops.last_mut().unwrap();
+                    // a hop whose kernel can't be fetched is the gap, as tools/report.py finds it
+                    if cached == json!(false) {
+                        h["ok"] = json!(false);
+                    }
+                    h["kernel_cached"] = cached;
+                }
             }
-            if !ok {
+            if self.hops.last().unwrap()["ok"] != json!(true) {
                 break;
             }
         }

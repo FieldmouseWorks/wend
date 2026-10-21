@@ -942,13 +942,13 @@ fn transit(s: &Value, adapter: &Doc, v: &Vars) -> Result<String, String> {
              > {b}/dl.log 2>&1 || tail -n 20 {b}/dl.log"
         ),
         [
-            &format!("cd {b}/pkgs; for n in rpm rpm-libs glibc dnf python3-dnf; do ls | grep -qE \"^$n-[0-9]\" || "),
-            "{ echo \"not downloaded: $n\"; exit 1; }; done",
+            format!("cd {b}/pkgs; for n in rpm rpm-libs glibc dnf python3-dnf; do ls | grep -qE \"^$n-[0-9]\" || ").as_str(),
+            format!("{{ echo \"not downloaded: $n\"; tail -n 30 {b}/dl.log; exit 1; }}; done").as_str(),
         ]
         .concat(),
         format!(
             "ls | {NAMES} > {b}/got; M=$(for n in $P; do grep -qxF \"$n\" {b}/got || echo $n; done); \
-             [ -z \"$M\" ] || {{ echo \"not downloaded:\" $M; exit 1; }}"
+             [ -z \"$M\" ] || {{ echo \"not downloaded:\" $M; tail -n 30 {b}/dl.log; exit 1; }}"
         ),
         "rpm -e dnf; rm -f /var/lib/rpm/__db.*; rpm --rebuilddb".into(),
         format!(
