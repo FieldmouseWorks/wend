@@ -215,8 +215,8 @@ reachable. So the archive is kept current on a timer, and checked from outside.
   else uses (`/data/dev/src/wend-archive-main`), updated to `origin/main` first, so ingest always reads the runs main
   has now. A cycle downloads the gate artifacts behind the passing runs on main no ingest has walked yet
   (`gate_fetched.py --runs --have --lost`: a pin isn't in the store's index naming that run, lost.txt aside), stops
-  there if main's `runs/` and the artifacts are what the last good cycle saw (under a day ago), and otherwise ingests,
-  verifies the store (signatures aside: the push signs) and runs remi's push wrapper (`sudo -n
+  there if main's `runs/`, its `tools/` and the artifacts are what the last good cycle saw (under a day ago), and
+  otherwise ingests, verifies the store (signatures aside: the push signs) and runs remi's push wrapper (`sudo -n
   /data/wend-lab/scripts/r2push-run.sh`: sign, then `r2push.py`, from that same worktree). It pushes what it stored
   even when the ingest missed something, then exits 1, and keeps retrying each hour until a cycle finds everything.
   After a good cycle it deletes artifacts unpacked over 30 days ago.
