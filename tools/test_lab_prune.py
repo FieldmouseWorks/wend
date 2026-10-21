@@ -48,6 +48,7 @@ git("init", "-q")
 git("add", "-A")
 git("commit", "-q", "-m", "base")
 git("update-ref", "refs/remotes/origin/main", "HEAD")
+HEAD = subprocess.run(["git", "-C", f"{src}/wend", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
 
 # the boxes vm.build makes at that commit, by vm.build itself (install stubbed): their names are the keys to match
 vm.WORK = f"{lab}/vmwork/vm"
@@ -110,12 +111,12 @@ def run(wt, name, back, extra=()):
 
 old_run = run("wend-92", "20261014-el_centos7-lamp-bios-1", stale)
 new_run = run("wend-160", "20261021-el_centos5-web-bios-2", stale_backed)
-busy_run = run("wend-174-8254a319559c", "20261015-el_centos4-dns-bios-3", stale)
+busy_run = run(f"wend-174-{HEAD[:12]}", "20261015-el_centos4-dns-bios-3", stale)
 held_run = run("wend-103", "20261015-el_centos7-lamp-bios-4", stale)
 for d in (old_run, busy_run, held_run, *made.values(), stale, stale_backed, stale_root):
     age(d)
 os.makedirs(f"{lab}/queue")
-json.dump({"id": "20261021-133308-replay-f707", "state": "running", "pr": 174, "sha": "8254a319559c" + "0" * 28},
+json.dump({"id": "20261021-133308-replay-f707", "state": "running", "pr": 174, "sha": HEAD},
           open(f"{lab}/queue/20261021-133308-replay-f707.json", "w"))
 # a run directory through a symlink: never followed
 os.makedirs(f"{w}/elsewhere/r")
@@ -144,6 +145,22 @@ check(lab_prune.current("el_centos7-lamp-bios-x3-0123456789ab", sources),
       "a box with more than two extra disks is kept: its sizes can't all be tried")
 check(lab_prune.parse_tag("xfs-v4-lvm-x2-nohwaddr") == ("xfs-v4", True, 2, True) and lab_prune.parse_tag("") ==
       (None, False, 0, False) and lab_prune.parse_tag("lvm-bogus") is None, "layout tags read back as layout_tag wrote them")
+
+# a branch's own build_source is parsed, never run (the prune runs as root)
+evil = open(f"{HERE}/vm.py").read().replace('def build_source(path=None):\n',
+                                             f'def build_source(path=None):\n    open("{w}/ran", "w").close()\n', 1)
+open(f"{src}/wend/tools/vm.py", "w").write(evil)
+git("commit", "-qam", "evil")
+git("update-ref", "refs/remotes/origin/evil", "HEAD")
+git("checkout", "-q", "HEAD~1", "--", "tools/vm.py")
+lab_prune.box_sources(f"{src}/wend", lab_prune.heads(f"{src}/wend", []))
+check(not os.path.exists(f"{w}/ran"), "a branch's vm.py code never runs: its build_source is only parsed")
+
+# a base clone that can't be read in full: no box is judged on it
+os.rename(f"{src}/wend", f"{src}/wend-away")
+rc, out = prune("--apply", "--only", "/dev/null")
+os.rename(f"{src}/wend-away", f"{src}/wend")
+check(rc == 0 and "no box is deleted this time" in out, "an unreadable base clone deletes no box")
 
 rc, out = prune()
 check(rc == 0 and "dry run" in out and os.path.exists(f"{old_run}/centos7.qcow2") and os.path.isdir(stale),

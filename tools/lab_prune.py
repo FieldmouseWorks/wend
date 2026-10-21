@@ -38,9 +38,20 @@ DISK_SIZES = range(1, 501)  # vm.py's --extra-disk GB, 1 to 500: the name says h
 RUN_BULK = ("copy", "work", os.path.join("plan", "cache"))
 
 
-def git(base, *a):
-    return subprocess.run(["git", "-c", "safe.directory=*", "-C", base, *a], capture_output=True, text=True,
-                          env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+class Unsure(Exception):
+    """The base clone couldn't be read in full: no box is judged stale on a partial inventory."""
+
+
+def git(base, *a, text=True):
+    """git in the base clone, read-only; any failure is Unsure."""
+    r = subprocess.run(["git", "-c", "safe.directory=*", "-C", base, *a], capture_output=True, text=text,
+                       env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
+    if r.returncode:
+        raise Unsure(f"git {' '.join(a)} in {base}: rc {r.returncode}: {(r.stderr or '')[:300]!r}")
+    return r
 
 
 def size(path):
@@ -143,25 +154,29 @@ def heads(base, js):
     """Every commit a VM run could be at next: origin's branch tips, the PR heads remi.py fetched, queued jobs."""
     r = git(base, "for-each-ref", "--format=%(objectname)", "refs/remotes/origin", "refs/wend-lab/pr")
     out = set(r.stdout.split()) | {e["sha"] for e in js if re.fullmatch(r"[0-9a-f]{40}", e.get("sha", ""))}
+    if not out:
+        raise Unsure(f"no branch tips or jobs in {base}")
     return sorted(out)
 
 
 def build_source(src):
-    """vm.build_source, run on another commit's vm.py (its own definition of it, so a change to the key follows)."""
+    """vm.build_source's bytes for another commit's vm.py source. The function run is this checkout's (main's, on
+    remi), never the candidate's: a branch is only parsed here, as vm.build_source parses, so no branch code runs as
+    root. A branch that changes build_source itself gets main's reading of its file, so its boxes may look stale."""
     import ast
-    tree = ast.parse(src)
-    fn = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "build_source"]
-    if not fn:
-        return None
+    mine = open(os.path.join(HERE, "vm.py")).read()
+    fn = [n for n in ast.parse(mine).body if isinstance(n, ast.FunctionDef) and n.name == "build_source"][0]
     ns = {}
-    mod = ast.Module(body=[ast.Import(names=[ast.alias(name="ast")]), ast.Import(names=[ast.alias(name="os")]), fn[0]],
+    mod = ast.Module(body=[ast.Import(names=[ast.alias(name="ast")]), ast.Import(names=[ast.alias(name="os")]), fn],
                      type_ignores=[])
-    exec(compile(ast.fix_missing_locations(mod), "<vm.py build_source>", "exec"), ns)
+    exec(compile(ast.fix_missing_locations(mod), os.path.join(HERE, "vm.py"), "exec"), ns)
     tmp = f"/tmp/wend-lab-prune-{os.getpid()}.py"
     try:
         with open(tmp, "w") as f:
             f.write(src)
         return ns["build_source"](tmp)
+    except SyntaxError:
+        return None
     finally:
         os.unlink(tmp)
 
@@ -228,29 +243,29 @@ def current(name, sources):
 
 
 def box_sources(base, commits):
-    """{box id: {(box.toml, adapter, build_source) bytes}} over commits, deduplicated by content."""
+    """{box id: {(box.toml, adapter, build_source) bytes}} over commits, deduplicated by content. Unsure on any failed
+    read: a file a commit lacks is fine, a git that fails is not."""
     out, bs_by_blob = {}, {}
     for c in commits:
-        vm_blob = git(base, "rev-parse", f"{c}:tools/vm.py").stdout.strip()
-        if not vm_blob:
+        if not git(base, "ls-tree", "--name-only", c, "tools/vm.py").stdout.strip():
             continue
+        vm_blob = git(base, "rev-parse", f"{c}:tools/vm.py").stdout.strip()
         if vm_blob not in bs_by_blob:
             bs_by_blob[vm_blob] = build_source(git(base, "cat-file", "blob", vm_blob).stdout)
         bs = bs_by_blob[vm_blob]
         if bs is None:
             continue
-        for path in git(base, "ls-tree", "-r", "--name-only", c, "boxes").stdout.split():
-            if not path.endswith("/box.toml"):
+        files = set(git(base, "ls-tree", "-r", "--name-only", c, "boxes", "adapters").stdout.split())
+        for path in sorted(files):
+            if not (path.startswith("boxes/") and path.endswith("/box.toml")):
                 continue
-            raw_box = subprocess.run(["git", "-c", "safe.directory=*", "-C", base, "show", f"{c}:{path}"],
-                                     capture_output=True).stdout
+            raw_box = git(base, "show", f"{c}:{path}", text=False).stdout
             try:
                 fam = tomllib.loads(raw_box.decode())["family"]
             except (ValueError, KeyError, UnicodeDecodeError):
                 continue
-            raw_ad = subprocess.run(["git", "-c", "safe.directory=*", "-C", base, "show", f"{c}:adapters/{fam}.toml"],
-                                    capture_output=True).stdout
-            if raw_ad:
+            if f"adapters/{fam}.toml" in files:
+                raw_ad = git(base, "show", f"{c}:adapters/{fam}.toml", text=False).stdout
                 out.setdefault(path[len("boxes/"):-len("/box.toml")], set()).add((raw_box, raw_ad, bs))
     return out
 
@@ -323,8 +338,12 @@ def main(argv):
         if apply or os.path.dirname(q) not in stripped:
             backed |= set(chain(q)[1:])
     base = os.path.join(src, "wend")
-    sources = box_sources(base, heads(base, js))
-    for d in sorted(glob.glob(os.path.join(lab, "vmwork*", "vm", "*"))):
+    try:
+        sources = box_sources(base, heads(base, js))
+    except Unsure as e:
+        print(f"lab_prune: no box is deleted this time: {e}")
+        sources = None
+    for d in sorted(glob.glob(os.path.join(lab, "vmwork*", "vm", "*")) if sources is not None else []):
         if not os.path.isdir(d) or os.path.islink(d):
             continue
         name = os.path.basename(d)
