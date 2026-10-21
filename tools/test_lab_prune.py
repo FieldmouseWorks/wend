@@ -40,6 +40,10 @@ os.makedirs(f"{src}/wend/adapters")
 shutil.copy(f"{HERE}/vm.py", f"{src}/wend/tools/vm.py")
 shutil.copy(f"{HERE}/../boxes/{BOX}/box.toml", f"{src}/wend/boxes/{BOX}/box.toml")
 shutil.copy(f"{HERE}/../adapters/el.toml", f"{src}/wend/adapters/el.toml")
+# a box id with a "-bios" of its own: its cache name has to be read from its own prefix
+TRICKY = "el/lamp-bios-x"
+os.makedirs(f"{src}/wend/boxes/{TRICKY}")
+shutil.copy(f"{HERE}/../boxes/{BOX}/box.toml", f"{src}/wend/boxes/{TRICKY}/box.toml")
 git("init", "-q")
 git("add", "-A")
 git("commit", "-q", "-m", "base")
@@ -47,14 +51,17 @@ git("update-ref", "refs/remotes/origin/main", "HEAD")
 
 # the boxes vm.build makes at that commit, by vm.build itself (install stubbed): their names are the keys to match
 vm.WORK = f"{lab}/vmwork/vm"
+vm.ROOT = f"{src}/wend"  # the base clone: the same files, and the tricky box beside them
 vm.install = lambda box_id, box_doc, d: (os.makedirs(d, exist_ok=True), open(f"{d}/base.qcow2", "wb").close())
 made = {}
-for fw, layout in (("bios", {}), ("uefi", {}), ("bios", {"lvm": True, "extra_disks": [30]}),
-                   ("bios", {"root_fs": "xfs-v4", "lvm": True, "extra_disks": [30]}), ("bios", {"no_hwaddr": True})):
+for box, fw, layout in ((BOX, "bios", {}), (BOX, "uefi", {}), (BOX, "bios", {"lvm": True, "extra_disks": [30]}),
+                        (BOX, "bios", {"root_fs": "xfs-v4", "lvm": True, "extra_disks": [30]}),
+                        (BOX, "bios", {"no_hwaddr": True}), (BOX, "bios", {"lvm": True, "extra_disks": [300, 40]}),
+                        (TRICKY, "uefi", {}), (TRICKY, "bios", {"extra_disks": [500]})):
     vm.FIRMWARE = fw
     vm.LAYOUT.update({"root_fs": None, "lvm": False, "extra_disks": [], "no_hwaddr": False, **layout})
-    d, _ = vm.build(BOX)
-    made[(fw, json.dumps(layout, sort_keys=True))] = d
+    d, _ = vm.build(box)
+    made[(box, fw, json.dumps(layout, sort_keys=True))] = d
 vm.LAYOUT.update({"root_fs": None, "lvm": False, "extra_disks": [], "no_hwaddr": False})
 vm.FIRMWARE = "bios"
 
@@ -133,6 +140,8 @@ check(all(lab_prune.current(n, sources) for n in names),
       f"every box vm.build makes at a branch tip is current ({', '.join(sorted(names))})")
 check(not any(lab_prune.current(os.path.basename(d), sources) for d in (stale, stale_backed, stale_root)),
       "a box dir whose key no head makes isn't current")
+check(lab_prune.current("el_centos7-lamp-bios-x3-0123456789ab", sources),
+      "a box with more than two extra disks is kept: its sizes can't all be tried")
 check(lab_prune.parse_tag("xfs-v4-lvm-x2-nohwaddr") == ("xfs-v4", True, 2, True) and lab_prune.parse_tag("") ==
       (None, False, 0, False) and lab_prune.parse_tag("lvm-bogus") is None, "layout tags read back as layout_tag wrote them")
 

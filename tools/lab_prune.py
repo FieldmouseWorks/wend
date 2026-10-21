@@ -33,9 +33,8 @@ import sys
 import time
 import tomllib
 
-LAYOUT_RE = re.compile(r"^(?P<box>[a-z0-9]+_[A-Za-z0-9._-]+?)-(?P<fw>bios|uefi)(?:-(?P<tag>.+?))?-(?P<key>[0-9a-f]{12})$")
 ROOT_FS = ("ext3", "ext4", "xfs", "xfs-v4")  # vm.ROOT_FS's names, longest match first below
-DISK_SIZES = range(1, 1025)  # --extra-disk GB: the name says how many, not how big
+DISK_SIZES = range(1, 501)  # vm.py's --extra-disk GB, 1 to 500: the name says how many disks, not how big
 RUN_BULK = ("copy", "work", os.path.join("plan", "cache"))
 
 
@@ -186,31 +185,45 @@ def parse_tag(tag):
     return root_fs, lvm, n, nohw
 
 
+def disk_lists(n):
+    """Every extra_disks list of n (at most 2) disks vm.py could have hashed."""
+    if not n:
+        return [[]]
+    if n == 1:
+        return [[s] for s in DISK_SIZES]
+    return [[a, b] for a in DISK_SIZES for b in DISK_SIZES]
+
+
 def current(name, sources):
-    """Whether some commit's box file, adapter and build_source make box dir `name` (vm.build's key)."""
-    m = LAYOUT_RE.match(name)
-    if not m:
-        return False
-    lay = parse_tag(m["tag"])
-    if lay is None:
-        return False
-    root_fs, lvm, n, nohw = lay
-    box_id = m["box"].replace("_", "/", 1)
-    for raw_box, raw_ad, bs in sources.get(box_id, ()):
-        h = hashlib.sha256(raw_box + raw_ad + bs + m["fw"].encode())
-        if not m["tag"]:
-            if h.hexdigest()[:12] == m["key"]:
-                return True
-            continue
-        sizes = [[]] if not n else ([[s] for s in DISK_SIZES] if n == 1 else
-                                    [[s] * n for s in DISK_SIZES] + [[a, b] for a in range(1, 257) for b in range(1, 257)
-                                                                     if n == 2 and a != b])
-        for ex in sizes:
-            lay = {"root_fs": root_fs, "lvm": lvm, "extra_disks": ex, "no_hwaddr": nohw}
-            k = h.copy()
-            k.update(json.dumps(lay, sort_keys=True).encode())
-            if k.hexdigest()[:12] == m["key"]:
-                return True
+    """Whether some commit's box file, adapter and build_source make box dir `name` (vm.build's key), or it can't be
+    ruled out. The name is vm.build's: <box id, / as _>-<firmware>[-<layout_tag>]-<12 hex>, read from each candidate
+    box id's own prefix, since a box id or a layout can hold a "-"."""
+    for box_id, srcs in sources.items():
+        for fw in ("bios", "uefi"):
+            pre = f"{box_id.replace('/', '_')}-{fw}-"
+            rest = name[len(pre):] if name.startswith(pre) else ""
+            if not re.fullmatch(r"(.+-)?[0-9a-f]{12}", rest):
+                continue
+            tag, key = rest[:-13], rest[-12:]
+            lay = parse_tag(tag)
+            if lay is None:
+                continue
+            root_fs, lvm, n, nohw = lay
+            if n > 2:
+                return True  # 500^n size lists can't all be tried: keep it
+            lays = [json.dumps({"root_fs": root_fs, "lvm": lvm, "extra_disks": ex, "no_hwaddr": nohw},
+                               sort_keys=True).encode() for ex in disk_lists(n)] if tag else []
+            for raw_box, raw_ad, bs in srcs:
+                h = hashlib.sha256(raw_box + raw_ad + bs + fw.encode())
+                if not tag:
+                    if h.hexdigest()[:12] == key:
+                        return True
+                    continue
+                for lay in lays:
+                    k = h.copy()
+                    k.update(lay)
+                    if k.hexdigest()[:12] == key:
+                        return True
     return False
 
 
