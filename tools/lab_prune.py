@@ -28,6 +28,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -36,6 +37,7 @@ import tomllib
 
 ROOT_FS = ("ext3", "ext4", "xfs", "xfs-v4")  # vm.ROOT_FS's names, longest match first below
 DISK_SIZES = range(1, 501)  # vm.py's --extra-disk GB, 1 to 500: the name says how many disks, not how big
+UNJUDGED = b"\0unjudged"  # build_source's bytes for a commit whose key main's code can't reproduce
 RUN_BULK = ("copy", "work", os.path.join("plan", "cache"))
 
 
@@ -168,7 +170,7 @@ def heads(base, js):
 def build_source(src):
     """vm.build_source's bytes for another commit's vm.py source. The function run is this checkout's (main's, on
     remi), never the candidate's: a branch is only parsed here, as vm.build_source parses, so no branch code runs as
-    root. A branch that changes build_source itself gets main's reading of its file, so its boxes may look stale."""
+    root. A commit whose build_source isn't main's is UNJUDGED: its boxes are kept, never guessed at."""
     import ast
     mine = open(os.path.join(HERE, "vm.py")).read()
     fn = [n for n in ast.parse(mine).body if isinstance(n, ast.FunctionDef) and n.name == "build_source"][0]
@@ -176,6 +178,12 @@ def build_source(src):
     mod = ast.Module(body=[ast.Import(names=[ast.alias(name="ast")]), ast.Import(names=[ast.alias(name="os")]), fn],
                      type_ignores=[])
     exec(compile(ast.fix_missing_locations(mod), os.path.join(HERE, "vm.py"), "exec"), ns)
+    try:
+        theirs = [n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == "build_source"]
+    except SyntaxError:
+        return None
+    if not theirs or ast.dump(theirs[0]) != ast.dump(fn):
+        return UNJUDGED  # its own traversal may pick other source: its boxes can't be judged by main's
     with tempfile.TemporaryDirectory(prefix="wend-lab-prune-") as tmp:  # 0700, made fresh: nothing to race
         path = os.path.join(tmp, "vm.py")
         with open(path, "x") as f:
@@ -233,6 +241,8 @@ def current(name, sources):
                 return True  # 500^n size lists can't all be tried: keep it
             lays = [json.dumps({"root_fs": root_fs, "lvm": lvm, "extra_disks": ex, "no_hwaddr": nohw},
                                sort_keys=True).encode() for ex in disk_lists(n)] if tag else []
+            if any(bs == UNJUDGED for _, _, bs in srcs):
+                return True  # some head's vm.py keys boxes its own way
             for raw_box, raw_ad, bs in srcs:
                 h = hashlib.sha256(raw_box + raw_ad + bs + fw.encode())
                 if not tag:
@@ -275,25 +285,58 @@ def box_sources(base, commits):
     return out
 
 
-def remove(path, apply):
-    if os.path.islink(path):
+def opendir(root, rel):
+    """An fd on root/rel, each component below root opened without following a symlink: what's checked is what's
+    deleted, however a directory above is swapped meanwhile."""
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in [p for p in rel.split(os.sep) if p and p != "."]:
+            nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def remove(root, path, apply):
+    """Delete path (below root) through no-follow directory fds; a symlink anywhere below root deletes nothing."""
+    parent, name = os.path.split(os.path.relpath(path, root))
+    try:
+        pfd = opendir(root, parent)
+    except OSError:
         return 0
-    n = size(path) if os.path.isdir(path) else os.lstat(path).st_blocks * 512
-    if apply:
-        shutil.rmtree(path) if os.path.isdir(path) else os.unlink(path)
-    return n
+    try:
+        try:
+            st = os.stat(name, dir_fd=pfd, follow_symlinks=False)
+        except FileNotFoundError:
+            return 0
+        if stat.S_ISDIR(st.st_mode):
+            n = sum(os.stat(f, dir_fd=dfd, follow_symlinks=False).st_blocks * 512
+                    for top, dirs, files, dfd in os.fwalk(name, dir_fd=pfd) for f in files)
+            if apply:
+                shutil.rmtree(name, dir_fd=pfd)  # fd-based: never leaves the tree it opened
+        elif stat.S_ISREG(st.st_mode):
+            n = st.st_blocks * 512
+            if apply:
+                os.unlink(name, dir_fd=pfd)
+        else:
+            return 0
+        return n
+    finally:
+        os.close(pfd)
 
 
-def strip_run(d, apply):
+def strip_run(root, d, apply):
     """A run directory without its disks and box copies: what vm.py writes to resume or inspect, not to judge."""
     n = 0
     for b in RUN_BULK:
         p = os.path.join(d, b)
         if os.path.lexists(p):
-            n += remove(p, apply)
+            n += remove(root, p, apply)
     for p in glob.glob(os.path.join(d, "*.qcow2")) + glob.glob(os.path.join(d, "*.vars.fd")):
-        if os.path.isfile(p) and not os.path.islink(p):
-            n += remove(p, apply)
+        n += remove(root, p, apply)
     return n
 
 
@@ -331,7 +374,7 @@ def main(argv):
         if why:
             kept.append((d, why))
             continue
-        n = strip_run(d, apply)
+        n = strip_run(src, d, apply)
         stripped.add(d)
         if n:
             print(f"{verb} {n / 1e9:.1f} GB of disks from run {d}")
@@ -373,7 +416,7 @@ def main(argv):
             if why:
                 kept.append((d, why))
                 continue
-            n = remove(d, apply)
+            n = remove(lab, d, apply)
             print(f"{verb} {n / 1e9:.1f} GB box {d}")
             freed += n
         finally:

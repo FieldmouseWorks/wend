@@ -165,8 +165,11 @@ open(f"{src}/wend/tools/vm.py", "w").write(evil)
 git("commit", "-qam", "evil")
 git("update-ref", "refs/remotes/origin/evil", "HEAD")
 git("checkout", "-q", "HEAD~1", "--", "tools/vm.py")
-lab_prune.box_sources(f"{src}/wend", lab_prune.heads(f"{src}/wend", []))
+evil_sources = lab_prune.box_sources(f"{src}/wend", lab_prune.heads(f"{src}/wend", []))
 check(not os.path.exists(f"{w}/ran"), "a branch's vm.py code never runs: its build_source is only parsed")
+check(lab_prune.current(os.path.basename(stale), evil_sources),
+      "a box a head with its own build_source might key is kept, not guessed at")
+git("update-ref", "-d", "refs/remotes/origin/evil")
 
 # a base clone that can't be read in full: no box is judged on it
 os.rename(f"{src}/wend", f"{src}/wend-away")
@@ -208,6 +211,12 @@ check(os.path.isdir(installing), "a box whose install lock is held stays")
 check(not os.path.exists(f"{stale_root}.lock") and not os.path.exists(f"{stale}.lock"),
       "the prune never creates a box's install lock (as root it would lock dev out)")
 check(os.path.isdir(f"{w}/precious/vm/el_centos7-lamp-bios-0000aaaa0000"), "nor a box dir under a symlinked vmwork*")
+
+# the delete itself goes through no-follow fds: a directory above swapped for a link deletes nothing
+os.makedirs(f"{w}/target/vm/box")
+os.symlink(f"{w}/target", f"{lab}/swapped")
+check(lab_prune.remove(lab, f"{lab}/swapped/vm/box", True) == 0 and os.path.isdir(f"{w}/target/vm/box"),
+      "remove() never follows a symlinked ancestor")
 
 hold.close()
 inst_lock.close()
