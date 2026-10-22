@@ -1552,16 +1552,18 @@ impl Worker {
                     return self.red("the trial boot came back on the old system twice");
                 } else {
                     log("the old system came up instead of the new root's trial boot: arming the trial once more");
-                    self.s["retries"][&key] = json!(n + 1);
                 }
-                // the retry is counted on disk before the trial is armed, so a power cut can't make it a first again
-                save(STATE, &self.s)?;
                 let (rc, out) = sh(&rel_cmd(&adapter, &self.table(), "arm")?, 300);
                 if rc != 0 {
                     return self.red(&format!(
                         "arming the trial from the old system failed: {}",
                         tail(&out, 500)
                     ));
+                }
+                // the retry counts once its trial is armed, and reboot() saves it before the reboot: a power cut
+                // before the arm wastes no retry, one after it gives at most one trial more
+                if phase != "landed" {
+                    self.s["retries"][&key] = json!(n + 1);
                 }
                 self.reboot("the trial boot of the new root, again", false)
             }
