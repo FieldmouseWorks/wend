@@ -36,6 +36,8 @@ const PID: &str = "/var/lib/wend/upgrade/worker.pid";
 const RC: &str = "/var/lib/wend/upgrade/worker.rc";
 const RUNS: &str = "/var/lib/wend/runs";
 const ENV_FILE: &str = "/var/lib/wend/relocate.env";
+/// relocate's flip leaves this once it has armed the trial; cleanup leaves the stopped services to the trial boot
+const FLIPPED: &str = "/var/lib/wend/relocate-flipped";
 /// the relocate steps tools/vm.py runs, in order; cleanup after them whatever happened
 const STEPS: &[&str] = &["preflight", "refresh", "place", "copy", "fixup", "flip", "release"];
 /// the line the new root's /etc/motd carries until the upgrade ends
@@ -903,8 +905,23 @@ impl Worker {
                 }
                 "relocating" => {
                     // the worker stopped mid-relocate (a crash, a power cut): the old system runs, its default
-                    // unchanged; what was copied stays on the new disk
-                    self.s["why"] = json!("relocate was interrupted");
+                    // unchanged; what was copied stays on the new disk. A flip that ran armed the trial, which the
+                    // next ordinary reboot would take onto a copy nothing judged: disarm it as a failed relocate does
+                    let t = get(&adapter, &self.table()).ok_or("no relocate table")?.clone();
+                    let mut stages: Vec<Value> = vec![];
+                    let flipped = self.s["flip_started"] == json!(true) || Path::new(FLIPPED).exists();
+                    let armed = flipped && self.disarm(&t, &mut stages)?;
+                    self.cleanup(&t)?;
+                    self.s["relocate_recovery"] = json!(stages);
+                    self.s["why"] = json!(if armed {
+                        format!(
+                            "relocate was interrupted after the flip, and disarming the trial failed: the next \
+                             reboot may boot the copy once; run `{}` before rebooting",
+                            str_of(&t, "rollback_next")?
+                        )
+                    } else {
+                        "relocate was interrupted".to_string()
+                    });
                     self.set("relocate-failed")?;
                     return Ok(ROLLED_BACK);
                 }
@@ -998,6 +1015,9 @@ impl Worker {
                 let motd = "/run/wend/new/etc/motd";
                 let old = std::fs::read_to_string(motd).unwrap_or_default();
                 std::fs::write(motd, format!("{old}{MOTD}\n")).map_err(|e| format!("{motd}: {e}"))?;
+                // a worker that stops from here on may leave the trial armed, before the flip's marker says so
+                self.s["flip_started"] = json!(true);
+                save(STATE, &self.s)?;
             }
             let t0 = Instant::now();
             for c in list_of(&t, k)? {
@@ -1016,23 +1036,8 @@ impl Worker {
         // a step at or after the flip failed: the flip may have armed the one-shot trial, which the next ordinary
         // reboot would take onto a root nothing judged. Disarm it (the next boot is the old system, as is the default)
         // and drop the flip's marker, so cleanup starts the services the copy stopped
-        let mut armed = false;
-        if !ok && stages.iter().any(|s| s["stage"] == json!("flip")) {
-            let (rc, out) = sh(str_of(&t, "rollback_next")?, 600);
-            log(&format!(
-                "relocate failed after the flip, disarming the trial: rc {rc} {}",
-                tail(&out, 500)
-            ));
-            stages.push(json!({"stage": "disarm", "rc": rc, "out": tail(&out, 3000)}));
-            armed = rc != 0;
-            if !armed {
-                let _ = std::fs::remove_file("/var/lib/wend/relocate-flipped");
-            }
-        }
-        for c in list_of(&t, "cleanup")? {
-            let (rc, out) = sh(&fill(&c, &fills), 600);
-            log(&format!("relocate cleanup: rc {rc} {}", tail(&out, 500)));
-        }
+        let armed = !ok && stages.iter().any(|s| s["stage"] == json!("flip")) && self.disarm(&t, &mut stages)?;
+        self.cleanup(&t)?;
         self.s["relocate"] = json!(stages);
         if !ok {
             // before the flip nothing on the old root changed; after it, the trial is disarmed and the default is
@@ -1063,6 +1068,36 @@ impl Worker {
         }
         self.s["phase"] = json!("relocated");
         self.reboot("the trial boot onto the new root", false)
+    }
+
+    /// Undo a flip's one-shot trial (the next boot is the old system, as is the default) and drop the flip's marker, so
+    /// cleanup starts the services the copy stopped. True: disarming failed and the trial may still be armed.
+    fn disarm(&self, t: &Value, stages: &mut Vec<Value>) -> Result<bool, String> {
+        let (rc, out) = sh(str_of(t, "rollback_next")?, 600);
+        log(&format!(
+            "relocate failed after the flip, disarming the trial: rc {rc} {}",
+            tail(&out, 500)
+        ));
+        stages.push(json!({"stage": "disarm", "rc": rc, "out": tail(&out, 3000)}));
+        if rc == 0 {
+            let _ = std::fs::remove_file(FLIPPED);
+        }
+        Ok(rc != 0)
+    }
+
+    /// relocate's cleanup: unmount what it mounted, start what it stopped unless the flip stands
+    fn cleanup(&self, t: &Value) -> Result<(), String> {
+        let fills: Vec<(String, String)> = self.s["fills"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+            .collect();
+        for c in list_of(t, "cleanup")? {
+            let (rc, out) = sh(&fill(&c, &fills), 600);
+            log(&format!("relocate cleanup: rc {rc} {}", tail(&out, 500)));
+        }
+        Ok(())
     }
 
     /// Judge the boot that just came up on the new root (SPEC "Checks the machine is held to"). False: it was red and
@@ -1413,18 +1448,21 @@ impl Worker {
     /// write the state, reboot. A `reboot` that does nothing for two minutes gets the forced reset.
     fn reboot(&mut self, what: &str, arm: bool) -> Result<u8, String> {
         let adapter = self.adapter()?.clone();
-        if arm {
-            let (rc, out) = sh(&rel_cmd(&adapter, &self.table(), "arm_new")?, 300);
-            if rc != 0 {
-                return self.red(&format!("arming the trial boot failed: {}", tail(&out, 500)));
-            }
-        }
+        // what the next boot is held to goes to disk before the one-shot is armed: a power cut between the two then
+        // boots the old system (the default), which arms the trial again, never a new root whose state is behind it
         self.s["boot_id"] = json!(boot_id());
         self.s["reboots"]
             .as_array_mut()
             .unwrap()
             .push(json!({"for": what, "at": now()}));
         save(STATE, &self.s)?;
+        if arm {
+            let (rc, out) = sh(&rel_cmd(&adapter, &self.table(), "arm_new")?, 300);
+            if rc != 0 {
+                self.s["reboots"].as_array_mut().unwrap().pop();
+                return self.red(&format!("arming the trial boot failed: {}", tail(&out, 500)));
+            }
+        }
         let _ = std::fs::write(RC, AGAIN.to_string());
         log(&format!(
             "rebooting: {what}. Run `wend upgrade` again once the machine is back"
@@ -1575,6 +1613,13 @@ impl Worker {
                     .collect()
             })
             .collect();
+        // as the rehearsal's walk ran each prune: [hop].after whatever happened
+        let vars = hop_vars(&compile_with, &to)?;
+        let after: Vec<String> = list_of(&h, "after")
+            .unwrap_or_default()
+            .iter()
+            .map(|c| fill(c, &vars))
+            .collect();
         let mut recs = vec![];
         for g in &groups {
             let rm = step(
@@ -1582,7 +1627,7 @@ impl Worker {
                 &compile_with,
                 &to,
             )?;
-            let (ok, r) = self.commands(&[rm, str_of(&h, "autoremove")?.to_string()], &[]);
+            let (ok, r) = self.commands(&[rm, str_of(&h, "autoremove")?.to_string()], &after);
             recs.extend(r);
             if !ok {
                 self.s["prune"] = json!(recs);
@@ -1604,7 +1649,7 @@ impl Worker {
             return self.red(&format!("after the prune, checks lost: {}", lost.join(", ")));
         }
         if let Some(c) = get(&h, "land_repos").and_then(Value::as_str) {
-            let c = fill(c, &hop_vars(&compile_with, &to)?);
+            let c = fill(c, &vars);
             let (ok, r) = self.commands(&[c], &[]);
             self.s["land_repos"] = json!(r);
             if !ok {
