@@ -955,6 +955,12 @@ impl Worker {
                     }
                     return self.hop(i);
                 }
+                "hopping" | "finishing" => {
+                    // the worker stopped partway through a transaction (a crash, a kill): what it changed can't be
+                    // picked up where it stopped, so the old system comes back
+                    let what = if phase == "hopping" { "a hop" } else { "the finish" };
+                    return self.red(&format!("the worker stopped partway through {what}"));
+                }
                 "landed" | "committed" => {
                     println!("the machine has landed ({phase}); `wend commit` makes the new system stay");
                     return Ok(LANDED);
@@ -1340,6 +1346,7 @@ impl Worker {
                 "hop to {hop}: the fixes that hold ({got:?}) aren't the rehearsal's ({want:?})"
             ));
         }
+        self.set("hopping")?;
         let (proxy, compile_with) = self.proxy()?;
         log(&format!(
             "hop to {hop} with {names:?}; repos through the verifying proxy at {}, offline",
@@ -1413,6 +1420,7 @@ impl Worker {
         log(&format!(
             "hop to {hop}: the post steps, after the reboot into its kernel"
         ));
+        self.set("hopping")?;
         let (ok, recs) = self.commands(&plan.commands[plan.post_at..], &plan.after);
         drop(proxy);
         if let Some(c) = self.last_hop()["commands"].as_array_mut() {
@@ -1552,6 +1560,12 @@ impl Worker {
                 }
                 self.reboot("the trial boot of the new root, again", false)
             }
+            "hopping" | "finishing" => {
+                // the machine went down partway through a transaction on the new root (nothing was armed, so the
+                // default brought the old system back): that's the first red
+                let what = if phase == "hopping" { "a hop" } else { "the finish" };
+                self.red(&format!("the machine went down partway through {what}"))
+            }
             p => {
                 log(&format!(
                     "on the old system, and the new root's state says {p:?}: nothing to do"
@@ -1620,6 +1634,7 @@ impl Worker {
             .iter()
             .map(|c| fill(c, &vars))
             .collect();
+        self.set("finishing")?;
         let mut recs = vec![];
         for g in &groups {
             let rm = step(
