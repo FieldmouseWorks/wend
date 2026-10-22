@@ -2043,8 +2043,13 @@ pub fn landing_addons(adapter: &Doc, to: &str, on: &dyn Fn(&str) -> bool) -> Vec
 /// the hops keep, so the rehearsal can see it on the copy as the landing will)
 pub fn key_conflict(root: &Path, r: &crate::backend::LandRepo) -> Option<String> {
     let key = root.join(&r.key_file[1..]);
-    (key.exists() && std::fs::read(&key).ok().as_deref() != Some(r.key.as_bytes()))
-        .then(|| format!("{} is already there, holding another key", r.key_file))
+    match std::fs::symlink_metadata(&key) {
+        Err(_) => None,
+        // a link (dangling or not) or anything but a plain file: a write would go where it points
+        Ok(m) if !m.file_type().is_file() => Some(format!("{} is already there, and isn't a plain file", r.key_file)),
+        Ok(_) => (std::fs::read(&key).ok().as_deref() != Some(r.key.as_bytes()))
+            .then(|| format!("{} is already there, holding another key", r.key_file)),
+    }
 }
 
 /// SPEC "Carried repositories": what the landing does for each add-on on a machine, `{addon, url}` or `{addon, none}`.
@@ -2080,15 +2085,26 @@ pub fn landing_preview(adapter: &Doc, to: &str, root: &Path, run: &dyn Fn(&str) 
 fn write_addon(root: &Path, r: &crate::backend::LandRepo) -> Result<Option<String>, String> {
     let repo = root.join(&r.file[1..]);
     let key = root.join(&r.key_file[1..]);
-    if repo.exists() {
+    // symlink_metadata, not exists(): a dangling link is there too, and a write would follow it
+    if std::fs::symlink_metadata(&repo).is_ok() {
         return Ok(Some(format!("{} is already there", r.file)));
     }
     if let Some(why) = key_conflict(root, r) {
         return Ok(Some(why));
     }
+    // the same key already there (key_conflict passed) stays; each file written is new (O_EXCL: never through a link)
+    let key_there = std::fs::symlink_metadata(&key).is_ok();
     for (p, text) in [(&key, &r.key), (&repo, &r.text)] {
+        if *p == key && key_there {
+            continue;
+        }
         std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| format!("{}: {e}", p.display()))?;
-        std::fs::write(p, text).map_err(|e| format!("{}: {e}", p.display()))?;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(p)
+            .and_then(|mut f| f.write_all(text.as_bytes()))
+            .map_err(|e| format!("{}: {e}", p.display()))?;
     }
     Ok(None)
 }
@@ -2282,6 +2298,25 @@ mod tests {
         assert!(key_conflict(&t, &r).unwrap().contains("holding another key"));
         std::fs::write(&other, &r.key).unwrap();
         assert_eq!(key_conflict(&t, &r), None);
+        // a link at either path, dangling or not, is never written through
+        let outside = t.join("outside");
+        std::os::unix::fs::symlink(&outside, d.join("nginx.repo")).unwrap();
+        assert!(write_addon(&t, &r)
+            .unwrap()
+            .unwrap()
+            .contains("nginx.repo is already there"));
+        assert!(!outside.exists());
+        std::fs::remove_file(d.join("nginx.repo")).unwrap();
+        std::fs::remove_file(&other).unwrap();
+        std::os::unix::fs::symlink(&outside, &other).unwrap();
+        assert!(key_conflict(&t, &r).unwrap().contains("isn't a plain file"));
+        assert!(write_addon(&t, &r).unwrap().unwrap().contains("isn't a plain file"));
+        assert!(!outside.exists());
+        // the same key already there stays, and the repo file is written beside it
+        std::fs::remove_file(&other).unwrap();
+        std::fs::write(&other, &r.key).unwrap();
+        assert_eq!(write_addon(&t, &r).unwrap(), None);
+        assert_eq!(std::fs::read_to_string(d.join("nginx.repo")).unwrap(), r.text);
         // a package owns the repo file's path: it comes back at landing, so wend writes none
         let p = landing_preview(&a, "alma10", &t, &|c| {
             !c.starts_with("rpm -qf") || c.ends_with("/nginx.repo")
