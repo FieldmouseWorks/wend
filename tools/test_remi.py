@@ -55,6 +55,7 @@ json.dump({"box": box, "result": res, "head": {"commit": head, "dirty": False}, 
           open(d + "/run.json", "w"))
 if cmd == "rehearse":
     open(d + "/rehearse.log", "w").write("".join(f"line {i}\n" for i in range(300)) + "hop to 8: fired 3\nERROR x\n")
+    os.makedirs(d + "/plan/cache/h.test")  # an offline cache, as a rehearse or an upgrade leaves in plan/
     open(d + "/plan/checks.toml", "w").write('[web]\nok = "true"\n[generated]\nsvc-httpd = "systemctl is-enabled httpd"\n')
     json.dump({"hops": [{"to": "8", "fired": ["a"]}]}, open(d + "/plan/plan.json", "w"))
     json.dump({"hops": [{"to": "8", "ok": True, "fired_names": ["a"], "seconds": 3}], "final": {"passed": ["web"]}},
@@ -219,6 +220,8 @@ check([s["why"] for s in r["steps"]["failed"]] == ["fix b"] and r["walk"]["hops"
       "it carries every failed step and the walk's hops")
 check({f["path"] for f in r["files"]} >= {"run.json", "plan/checks.toml"} and all(f["sha256"] for f in r["files"]),
       "it lists the run directory's files with hashes")
+check("plan/cache" not in {f["path"] for f in r["files"]} and r["run_json"] is not None,
+      "a directory in plan/ (the offline cache) isn't hashed as a file, and run.json is still read")
 check([c["name"] for c in v1["commands"]] == ["cargo-build", "rehearse"] and v1["commands"][0]["rc"] == 0,
       "a rehearse builds the client first, each command with its own log, rc and hash")
 check(all(c["log"].startswith(f"{w}/lab/logs/main/{old}/{j1}/") for c in v1["commands"]),
