@@ -19,6 +19,7 @@ Jobs (ROUTE is routes/<family>/<name>.toml, BOX is <family>/<name>, both as they
   build BOX              tools/vm.py build BOX
   replay ROUTE BOX       tools/vm.py replay ROUTE BOX
   relocate BOX           tools/vm.py relocate BOX (give it --vm-flags "--extra-disk GB")
+  smoke BOX              the client built static, then tools/vm.py smoke BOX: the client run inside the box
   rehearse ROUTE BOX     the client built with cargo build --release --locked, then tools/vm.py rehearse, as root
   upgrade ROUTE BOX      the client built static (--target x86_64-unknown-linux-musl, it runs inside the old box), then
                          tools/vm.py upgrade, as root (--vm-flags "--extra-disk GB",
@@ -86,6 +87,7 @@ JOBS = {  # name: (slot class, argument patterns, hours before it is stopped)
     "build": ("vm", [BOX], 3),
     "replay": ("vm", [ROUTE, BOX], 8),
     "relocate": ("vm", [BOX], 3),
+    "smoke": ("vm", [BOX], 3),
     "rehearse": ("rehearse", [ROUTE, BOX], 4),
     "upgrade": ("rehearse", [ROUTE, BOX], 10),
 }
@@ -561,7 +563,9 @@ def worktree(e, user):
 
 RUN_LINE = re.compile(r"^\S+ (PASS|FAIL|PARTIAL\S*)\S*: .* in (\.wend/vm/\S+)$", re.M)
 KEY = re.compile(r"(?i)(error|fail|refus|warn|denied|pass|fired|generated|hop |plan|walk|fingerprint|checks?)")
-LISTED = ("plan",)  # run directory subdirectories whose files are listed; copy/ and work/ are a whole box root
+# run directory subdirectories whose files are listed (not their subdirectories: plan/cache is a tree); copy/ and work/
+# are a whole box root
+LISTED = ("plan",)
 
 
 def run_dir(d, v):
@@ -569,7 +573,7 @@ def run_dir(d, v):
     r = {"dir": d, "files": []}
     names = [n for n in sorted(os.listdir(d)) if os.path.isfile(os.path.join(d, n))]
     names += [f"{s}/{n}" for s in LISTED if os.path.isdir(os.path.join(d, s))
-              for n in sorted(os.listdir(os.path.join(d, s)))]
+              for n in sorted(os.listdir(os.path.join(d, s))) if os.path.isfile(os.path.join(d, s, n))]
     for n in names:
         p = os.path.join(d, n)
         size = os.path.getsize(p)
@@ -718,9 +722,9 @@ def tests(v, wt, deadline):
 def vm_job(e, v, wt, deadline):
     user = v["user"]
     tail = list(e["args"])
-    if e["job"] in ("rehearse", "upgrade"):
-        # an upgrade's client runs inside the old box, on its libc: static, as released
-        target = ["--target", MUSL] if e["job"] == "upgrade" else []
+    if e["job"] in ("rehearse", "upgrade", "smoke"):
+        # an upgrade's or a smoke's client runs inside the old box, on its libc: static, as released
+        target = ["--target", MUSL] if e["job"] in ("upgrade", "smoke") else []
         c = command(v, "cargo-build", as_user("dev", [CARGO, "build", "--release", "--locked", *target],
                                               os.path.join(wt, "client")), os.path.join(wt, "client"), deadline)
         if c["rc"]:

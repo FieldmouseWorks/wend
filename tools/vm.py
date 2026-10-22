@@ -37,6 +37,10 @@ not runs/ (runs/ holds what CI proved).
                                            itself), --reset-trial (a reset during the first trial boot), --kill-ssh
                                            (the owner's session killed during the first hop), --rollback-by-hand
                                            (`wend rollback` after landing)
+  python3 tools/vm.py smoke BOX --client WEND
+                                           the static client WEND inside a fresh copy of BOX: --version, selftest
+                                           (what it needs of the box's kernel), facts, check, share, and an upgrade
+                                           that must refuse a missing plan
   python3 tools/vm.py --extra-disk GB --relocate replay ROUTE BOX
                                            the same relocate (trial, commit) before ROUTE's first hop, every hop on the
                                            new root, then a rollback to the old root and forward again after the last
@@ -1949,6 +1953,78 @@ def dynamic(path):
     return False
 
 
+def atlas_copy(out_dir):
+    """The atlas the client reads in a guest (adapters, fixes, routes, runs), copied under out_dir: its path."""
+    atlas = os.path.join(out_dir, "atlas")
+    os.makedirs(atlas)
+    for x in ("adapters", "fixes", "routes", "runs", ".wend/sonames"):
+        if os.path.exists(os.path.join(ROOT, x)):
+            os.makedirs(os.path.dirname(os.path.join(atlas, x)), exist_ok=True)
+            shutil.copytree(os.path.join(ROOT, x), os.path.join(atlas, x))
+    return atlas
+
+
+# what smoke runs in the guest, and the exit status each must give: the box's kernel, not its libc, is what a static
+# client depends on (Rust's std targets Linux 3.2; CentOS 4 to 6 run 2.6.9 to 2.6.32)
+SMOKE = [("version", "{c} --version", 0),
+         ("selftest", "{c} selftest", 0),
+         ("facts", "{c} facts", 0),
+         ("check", "cd /root/wend-atlas && {c} check", 0),
+         ("share", "cd /root/wend-atlas && {c} share", 0),
+         ("upgrade refuses", "{c} --atlas /root/wend-atlas upgrade /tmp/wend-no-such-plan", 20)]
+
+
+def smoke(box_id, client):
+    """The static client run inside a fresh copy of BOX: --version, selftest (what it needs of the kernel), facts,
+    check over the atlas, share, and an upgrade that must refuse a missing plan. Passes only if every one exits as
+    SMOKE says. Nothing on the box is changed beyond /root and /tmp."""
+    if dynamic(client):
+        raise SystemExit(f"{client} is dynamically linked: build it static "
+                         "(cargo build --release --locked --target x86_64-unknown-linux-musl)")
+    d, box_doc = build(box_id)
+    hw = hardware(guest_adapter(box_doc["family"]), box_doc["release"])
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    tag = "-".join(filter(None, [FIRMWARE, layout_tag()]))
+    out_dir = os.path.join(ROOT, ".wend", "vm", f"{stamp}-{box_id.replace('/', '_')}-{tag}-smoke-{os.getpid()}")
+    os.makedirs(out_dir)
+    disk = os.path.join(out_dir, "smoke.qcow2")
+    overlay(os.path.join(d, "base.qcow2"), disk)
+    g = Guest(disk, os.path.join(d, "key"), box_doc.get("vm", {}).get("ssh_port", 22), hw)
+    g.start()
+    steps = []
+    run = {"schema": "wend.vmsmoke/0", "box": box_id, "release": box_doc["release"], "started": stamp, "head": head(),
+           "firmware": FIRMWARE, "client_sha256": hashlib.sha256(open(client, "rb").read()).hexdigest(),
+           "steps": steps, "runner": {"kind": "vm", "host": os.uname().nodename, "kernel": os.uname().release}}
+
+    def finish(result, why=""):
+        run["result"], run["why"] = result, why
+        json.dump(run, open(os.path.join(out_dir, "run.json"), "w"), indent=1)
+        log(f"{result.upper()}: smoke {box_id}{': ' + why if why else ''}; run in {os.path.relpath(out_dir, ROOT)}")
+        g.stop()
+        if result == "pass":  # a passing smoke's disk holds nothing to look at
+            os.remove(disk)
+        return 0 if result == "pass" else 1
+
+    if not g.wait_ssh():
+        run["console_tail"] = open(g.console, errors="replace").read()[-4000:]
+        return finish("fail", "the guest didn't come up")
+    run["guest"] = g.ssh("uname -m; uname -r", timeout=60)[1].split()
+    with open(client, "rb") as f:
+        p = subprocess.run(g.ssh_argv(f"cat > {CLIENT_IN_GUEST} && chmod 755 {CLIENT_IN_GUEST}"), stdin=f,
+                           capture_output=True, timeout=600)
+    if p.returncode:
+        return finish("fail", f"copying the client into the guest failed: {p.stderr[-300:]!r}")
+    rc, o = push_dir(g, atlas_copy(out_dir), "/root/wend-atlas")
+    if rc:
+        return finish("fail", f"copying the atlas into the guest failed: {o[-300:]}")
+    for name, cmd, want in SMOKE:
+        rc, o = g.ssh(cmd.format(c=CLIENT_IN_GUEST), timeout=900)
+        steps.append({"step": name, "rc": rc, "want": want, "ok": rc == want, "out": o[-3000:]})
+        log(f"smoke {box_id}: {name} exited {rc}{'' if rc == want else f' (want {want})'}")
+    bad = [x["step"] for x in steps if not x["ok"]]
+    return finish("fail", "not as wanted: " + ", ".join(bad)) if bad else finish("pass")
+
+
 def upgrade(route_path, box_id, client):
     """SPEC "Proof": `wend upgrade` run by the client inside a fresh copy of BOX, the owner played from this host. The
     client is rehearsed from here (`wend rehearse --from` the running guest), its binary, the atlas and the plan go
@@ -2013,12 +2089,7 @@ def upgrade(route_path, box_id, client):
                            capture_output=True, timeout=600)
     if p.returncode:
         return finish("fail", f"copying the client into the guest failed: {p.stderr[-300:]!r}")
-    atlas = os.path.join(out_dir, "atlas")
-    os.makedirs(atlas)
-    for x in ("adapters", "fixes", "routes", "runs", ".wend/sonames"):
-        if os.path.exists(os.path.join(ROOT, x)):
-            os.makedirs(os.path.dirname(os.path.join(atlas, x)), exist_ok=True)
-            shutil.copytree(os.path.join(ROOT, x), os.path.join(atlas, x))
+    atlas = atlas_copy(out_dir)
     for src, dst in ((atlas, "/root/wend-atlas"), (os.path.join(out_dir, "plan"), "/root/wend-plan")):
         rc, o = push_dir(g, src, dst)
         if rc:
@@ -2163,7 +2234,7 @@ def main(args):
         raise SystemExit("--break-after, --reset-trial, --kill-ssh and --rollback-by-hand are for upgrade")
     if args[:1] == ["shim-stop"] and len(args) == 2 and args[1].isdigit():
         return shim_stop(int(args[1]))
-    if args[:1] in (["build"], ["replay"], ["relocate"], ["rehearse"], ["upgrade"]):
+    if args[:1] in (["build"], ["replay"], ["relocate"], ["rehearse"], ["upgrade"], ["smoke"]):
         use_shim()
     if args[:1] == ["build"] and len(args) == 2:
         build(args[1])
@@ -2176,6 +2247,8 @@ def main(args):
         return rehearse(args[1], args[2], os.path.abspath(args[4]))
     if args[:1] == ["upgrade"] and len(args) == 5 and args[3] == "--client" and not RELOCATE:
         return upgrade(args[1], args[2], os.path.abspath(args[4]))
+    if args[:1] == ["smoke"] and len(args) == 4 and args[2] == "--client" and not RELOCATE:
+        return smoke(args[1], os.path.abspath(args[3]))
     if args[:1] == ["relocate"] and len(args) == 2 and not RELOCATE:
         return relocate(args[1])
     return __doc__

@@ -562,6 +562,6 @@ mod tests {
         assert!(run("printf 200"));
         assert!(!run("printf 500"));
         assert!(!run("printf 000; exit 7"));
-        std::fs::remove_dir_all(&bin).unwrap();
+        crate::fsx::remove_dir_all(&bin).unwrap();
     }
 }
