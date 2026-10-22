@@ -421,6 +421,27 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
             "the kernel for {missing:?} couldn't be downloaded (the walk's log says why)"
         ));
     }
+    // SPEC "The upgrade", at the end: which add-on repos the landing will write, and which add-ons it can't (said
+    // here and again before `upgrade` starts, so the owner reads it before anything is touched)
+    let mut landing_addons = vec![];
+    if crate::backend::backend_of(crate::adapter_of(atlas, rdoc)?) == "rpm" {
+        let copy = crate::sandbox::Root::new(Path::new(root))?;
+        let to = str_of(rdoc, "to")?;
+        for a in crate::upgrade::landing_addons(crate::adapter_of(atlas, rdoc)?, to, &|t| {
+            copy.run(&format!("{t} >/dev/null 2>&1"), 600, false).0 == 0
+        }) {
+            match &a.repo {
+                Ok(r) => {
+                    eprintln!("at landing wend writes {} for {} ({})", r.file, a.name, r.url);
+                    landing_addons.push(json!({"addon": a.name, "url": r.url}));
+                }
+                Err(why) => {
+                    eprintln!("at landing {}'s packages get no repo, so no updates: {why}", a.name);
+                    landing_addons.push(json!({"addon": a.name, "none": why}));
+                }
+            }
+        }
+    }
     let fp = json!({
         "installed": w.installed, "installed_sha256": format!("sha256:{}", sha256_hex(w.installed.join("\n").as_bytes())),
         "kernel": kernel, "release": w.release, "holding": w.holding,
@@ -460,7 +481,7 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
         "from": w.run["from"], "to": get(rdoc, "to"), "hops": hops,
         "fingerprint": fp, "fingerprint_sha256": fingerprint,
         "checks_sha256": format!("sha256:{}", sha256_hex(&checks_bytes)), "generated_checks": generated_names,
-        "cache_files": listed.len(), "facts": facts, "prune": w.pruned,
+        "cache_files": listed.len(), "facts": facts, "prune": w.pruned, "landing_addons": landing_addons,
     });
     let write = |name: &str, text: &[u8]| -> Result<(), String> {
         std::fs::write(dir.join(name), text).map_err(|e| format!("{}: {e}", dir.join(name).display()))
