@@ -369,7 +369,7 @@ class Rpm:
     OPS = {"rpm.swap-release", "rpm.drop-arch", "rpm.drop-unneeded", "rpm.bootstrap", "rpm.transit", "rpm.adopt-rpmnew",
            "rpm.set-aside-unowned", "fs.layout", "kv.set", "kv.unset", "mysql.set-password", "mysql.clean-shutdown",
            "mysql.upgrade-data", "ssh.generate-host-keys", "httpd.drop-missing-modules", "php.mysqli-report-off",
-           "service.record", "service.enable", "net.ifcfg-to-keyfile"}
+           "service.record", "service.enable", "net.ifcfg-to-keyfile", "selinux.keep-disabled"}
     # no --justdb for fixes: dropping a package from the database while its files stay is how a fix would fake the
     # pkgdb check. rpm.transit uses it internally, on the previous release's leftovers only.
     FORCE = {"depends", "scripts"}
@@ -762,6 +762,25 @@ class Rpm:
                 "[ -n \"$L\" ] || L=3; [ -d /etc/rc.d/rc$L.d ] || { echo \"no /etc/rc.d/rc$L.d: no SysV runlevels to record\"; exit 1; }; "
                 f"mkdir -p /var/lib/wend && ls /etc/rc.d/rc$L.d | sed -n 's/^S[0-9][0-9]//p' | sort -u > {r}.new && "
                 f"mv {r}.new {r} && echo \"runlevel $L starts: $(tr '\\n' ' ' < {r})\"")
+
+    # ----- SELinux -----
+
+    def op_selinux_keep_disabled(self, s, adapter, release, v, rel):
+        """On a box that runs with no SELinux policy loaded, say so in /etc/selinux/config (SELINUX=disabled), so the
+        next release boots the way this one runs: EL7's systemd freezes at boot when the config says enforcing and no
+        policy loads (wend#158), and EL5's selinux-policy writes SELINUX=enforcing when there is no config at all.
+        Refuses where a policy is loaded: carrying a running SELinux is another job. The old config is kept under
+        /var/lib/wend/saved."""
+        c = "/etc/selinux/config"
+        return ("for d in /sys/fs/selinux /selinux; do [ -e $d/enforce ] || continue; "
+                "if tr -d '\\0' < /proc/self/attr/current 2>/dev/null | grep -q :; then "
+                "echo \"a SELinux policy is loaded ($d/enforce, context $(tr -d '\\0' < /proc/self/attr/current)): "
+                "selinux.keep-disabled is for a box running without one\"; exit 1; fi; done; "
+                f"if [ -f {c} ]; then mkdir -p {SAVED}/etc/selinux; [ -e {SAVED}{c} ] || cp -a {c} {SAVED}{c} || exit 1; "
+                f"sed -i '/^[[:space:]]*SELINUX[[:space:]]*=/d' {c} && {{ [ -z \"$(tail -c 1 {c})\" ] || echo >> {c}; }} && "
+                f"echo SELINUX=disabled >> {c}; "
+                f"else mkdir -p /etc/selinux && printf 'SELINUX=disabled\\nSELINUXTYPE=targeted\\n' > {c}; fi; "
+                f"grep -qx SELINUX=disabled {c} && echo \"SELinux stays disabled: $(tr '\\n' ' ' < {c})\"")
 
     def op_net_ifcfg_to_keyfile(self, s, adapter, release, v, rel):
         return net_ifcfg_to_keyfile()
