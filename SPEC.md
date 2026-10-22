@@ -76,10 +76,10 @@ For each hop on a route, the harness (not the fix) does:
    `/var/lib/wend/added-families` (see "restores and adds"),
 6. remove the drop-ins of any `pm-option` used on this hop,
 7. `hop.verify` if the adapter has one (EL: the release file names the new major),
-8. `hop.after`, whatever happened above (cleanup: package caches, the rpm database; EL: the config enforcing again
-   if step 2 set permissive, the policy first rebuilt and the files relabelled where the running kernel can load the
-   arriving policy; enforcing itself comes with the next boot, since what this boot labelled under the old policy is
-   unlabelled under the new one),
+8. `hop.after`, whatever happened above (cleanup: package caches, the rpm database; EL: the config enforcing again if
+   step 2 set permissive, the policy first rebuilt from the arriving package's modules and the files relabelled where
+   the running kernel can load the arriving policy; enforcing itself comes with the next boot, since what this boot
+   labelled under the old policy is unlabelled under the new one),
 9. all health checks. Any command that fails in 1 to 7, or any check that passed before the hop and fails now,
    rolls the whole hop back.
 
