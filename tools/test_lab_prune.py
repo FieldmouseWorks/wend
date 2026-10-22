@@ -135,6 +135,14 @@ age(installing)
 import fcntl  # noqa: E402
 inst_lock = open(installing + ".lock", "a")
 fcntl.flock(inst_lock, fcntl.LOCK_EX)
+fifo_box = f"{lab}/vmwork/vm/el_centos4-dns-bios-2222bbbb2222"
+os.makedirs(fifo_box)
+age(fifo_box)
+os.mkfifo(fifo_box + ".lock")  # opened blocking, this would hang the prune
+link_box = f"{lab}/vmwork/vm/el_centos4-dns-bios-3333cccc3333"
+os.makedirs(link_box)
+age(link_box)
+os.symlink(f"{w}/precious", link_box + ".lock")
 
 hold = open(f"{held_run}/centos7.steps.log")
 
@@ -208,6 +216,7 @@ check(not os.path.exists(stale_root), "a stale box nothing uses goes (vmwork-roo
 check(all(os.path.isdir(d) for d in made.values()), "every box a current head makes stays, however old")
 check(os.path.exists(f"{w}/elsewhere/r/x.qcow2"), "a symlinked run directory is never followed")
 check(os.path.isdir(installing), "a box whose install lock is held stays")
+check(os.path.isdir(fifo_box) and os.path.isdir(link_box), "a box whose lock is a FIFO or a symlink stays, and the prune doesn't hang")
 check(not os.path.exists(f"{stale_root}.lock") and not os.path.exists(f"{stale}.lock"),
       "the prune never creates a box's install lock (as root it would lock dev out)")
 check(os.path.isdir(f"{w}/precious/vm/el_centos7-lamp-bios-0000aaaa0000"), "nor a box dir under a symlinked vmwork*")

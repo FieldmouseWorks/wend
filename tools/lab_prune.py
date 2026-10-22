@@ -401,11 +401,21 @@ def main(argv):
         if only is not None and d.rstrip("/") not in only:
             kept.append((d, "not listed"))
             continue
-        # vm.Locked's lock, opened read-only and never created: a root-owned new one would lock dev's installs out
+        # vm.Locked's lock, opened read-only and never created: a root-owned new one would lock dev's installs out.
+        # Not through a symlink, and never blocking (a FIFO would hang the open): anything but a plain file keeps it.
         try:
-            lock = open(d + ".lock", "rb") if not os.path.islink(d + ".lock") else open(os.devnull, "rb")
+            lock = os.open(d + ".lock", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            plain_lock = stat.S_ISREG(os.fstat(lock).st_mode)
         except FileNotFoundError:
-            lock = open(os.devnull, "rb")  # nothing ever installed under this lock, so nothing is installing
+            lock = os.open(os.devnull, os.O_RDONLY)  # nothing ever installed under this lock, so nothing is installing
+            plain_lock = True
+        except OSError:
+            kept.append((d, "its lock isn't a plain file"))
+            continue
+        if not plain_lock:
+            os.close(lock)
+            kept.append((d, "its lock isn't a plain file"))
+            continue
         try:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -423,7 +433,7 @@ def main(argv):
             print(f"{verb} {n / 1e9:.1f} GB box {d}")
             freed += n
         finally:
-            lock.close()
+            os.close(lock)
     for d, why in kept:
         if why != "not listed":
             print(f"kept {d}: {why}")
