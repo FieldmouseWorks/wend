@@ -1502,7 +1502,7 @@ impl Worker {
         self.s["why"] = json!(why);
         let adapter = self.adapter()?.clone();
         let on = booted(&adapter, &self.table());
-        if on != "new" {
+        if on == "old" {
             self.s["phase"] = json!("rolling-back");
             save(STATE, &self.s)?;
             return self.judge_old();
