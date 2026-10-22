@@ -563,7 +563,9 @@ def worktree(e, user):
 
 RUN_LINE = re.compile(r"^\S+ (PASS|FAIL|PARTIAL\S*)\S*: .* in (\.wend/vm/\S+)$", re.M)
 KEY = re.compile(r"(?i)(error|fail|refus|warn|denied|pass|fired|generated|hop |plan|walk|fingerprint|checks?)")
-LISTED = ("plan",)  # run directory subdirectories whose files are listed; copy/ and work/ are a whole box root
+# run directory subdirectories whose files are listed (not their subdirectories: plan/cache is a tree); copy/ and work/
+# are a whole box root
+LISTED = ("plan",)
 
 
 def run_dir(d, v):
@@ -571,7 +573,7 @@ def run_dir(d, v):
     r = {"dir": d, "files": []}
     names = [n for n in sorted(os.listdir(d)) if os.path.isfile(os.path.join(d, n))]
     names += [f"{s}/{n}" for s in LISTED if os.path.isdir(os.path.join(d, s))
-              for n in sorted(os.listdir(os.path.join(d, s)))]
+              for n in sorted(os.listdir(os.path.join(d, s))) if os.path.isfile(os.path.join(d, s, n))]
     for n in names:
         p = os.path.join(d, n)
         size = os.path.getsize(p)
