@@ -551,6 +551,76 @@ fn addon_vendors(adapter: &Doc) -> String {
     out
 }
 
+/// SPEC "The upgrade", at the end: an add-on with no marker package (nginx.org's), whose repo file no package brings
+/// back when the landing release's repo files are reinstalled. `on_box` is shell that is true when it is on the
+/// machine (addon_installed); `repo` is the file wend writes for it, or why it gets none.
+pub struct LandAddon {
+    pub name: String,
+    pub on_box: String,
+    pub repo: Result<LandRepo, String>,
+}
+
+pub struct LandRepo {
+    pub file: String,
+    pub text: String,
+    pub url: String,
+    pub key_file: String,
+    pub key: String,
+}
+
+/// LandAddon for every add-on without a marker. Its repo for `release` goes to /etc/yum.repos.d/<name>.repo, pointed
+/// at upstream (not the shim), and always signed: an add-on with no repo or no key for the release gets no file.
+pub fn land_addons(adapter: &Doc, release: &str) -> Vec<LandAddon> {
+    let mut out = vec![];
+    for (n, a) in get(adapter, "addons").and_then(Value::as_object).into_iter().flatten() {
+        if get(a, "marker").is_some() {
+            continue;
+        }
+        let repo = (|| {
+            let u = get(a, "repos")
+                .and_then(|r| get(r, release))
+                .map(scalar)
+                .ok_or(format!("the adapter has no {n} repository for {release}"))?;
+            let k = get(a, "gpgkeys")
+                .and_then(|g| get(g, release))
+                .map(scalar)
+                .ok_or(format!(
+                    "the adapter has no {n} signing key for {release}, and wend writes no unsigned repo"
+                ))?;
+            let key = get(adapter, "keys")
+                .and_then(|ks| get(ks, &k))
+                .map(scalar)
+                .ok_or(format!("the adapter's [keys] has no {k}"))?;
+            let url = format!("https://{u}/");
+            let key_file = format!("/etc/pki/rpm-gpg/{k}");
+            let hotfixes = if get(a, "module_hotfixes").and_then(Value::as_bool) == Some(true) {
+                "module_hotfixes=true\n"
+            } else {
+                ""
+            };
+            Ok(LandRepo {
+                file: format!("/etc/yum.repos.d/{n}.repo"),
+                text: format!(
+                    "# wend wrote this when the machine landed on {release}: the {n} repository the upgrade carried \
+                     this machine's {n} packages on,\n# for {release}, checked against the key wend pinned. The repo \
+                     files the machine had before are under /var/lib/wend/saved/yum.repos.d/.\n[{n}]\nname={n} \
+                     ({release}, written by wend)\nbaseurl={url}\ngpgcheck=1\ngpgkey=file://{key_file}\n{hotfixes}\
+                     enabled=1\n"
+                ),
+                url,
+                key_file,
+                key: if key.ends_with('\n') { key } else { key + "\n" },
+            })
+        })();
+        out.push(LandAddon {
+            name: n.clone(),
+            on_box: addon_installed(a),
+            repo,
+        });
+    }
+    out
+}
+
 /// {repo id: repomd.xml URL} for every add-on repo a hop or rpm.transit uses (<release>-<addon>).
 pub fn addon_repo_ids(adapter: &Doc) -> Vec<(String, String)> {
     let mut ids = vec![];

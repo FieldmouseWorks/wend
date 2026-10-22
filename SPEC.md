@@ -505,6 +505,8 @@ nginx) in other repos unless their repo says so.
 - An adapter with `[addons]` must put `{addons}` in `hop.set_release`, or it would carry an add-on through the
   transit and then drop it from the hops after.
 - Software Collections, vendor SIG repos and other third-party repos are not add-ons: `rpm.transit` still refuses them.
+- A live upgrade that lands writes the landing release's repo file for an add-on with no marker package, since no
+  package brings it back ("The upgrade", "Carried repositories").
 
 #### Signed packages
 
@@ -2413,6 +2415,8 @@ A directory, `wend-plan-<machine id>/`, carried to the machine (scp, or a USB st
 - the machine's **fingerprint** at the moment of the copy: the adapter's `installed_versions` (every package's name,
   version and architecture, and their sha256), the running kernel, the release file, and which pinned fixes' preconditions hold.
   It holds nothing particular to one machine (addresses, disks, hostnames), so another machine can match it ("Fleets");
+- `landing_addons`: the add-on repo files the landing will write, or why an add-on on the machine gets none
+  ("Carried repositories");
 - the facts preflight read on the rehearsed machine, kept for the report only: every machine is judged on its own
   facts, read when `upgrade` starts, never on these. They are `wend facts` run on the machine and given as
   `--facts FILE` (the copy runs nothing of wend's there), and null when none was given;
@@ -2525,9 +2529,42 @@ Then:
    the trial again only once (a second failure is a red).
 6. **At the end**, the prune removes exactly the packages the rehearsal's prune removed (no bisecting on the machine),
    then the checks run once more. The package manager is pointed at the landing release's own repositories (the
-   release package's repo files, as a fresh install has them), never left on the proxy. The run (`wend.vmrun/0`'s
+   release package's repo files, as a fresh install has them), never left on the proxy, plus the add-on repositories
+   the route carried the machine's packages on ("Carried repositories" below). The run (`wend.vmrun/0`'s
    shape, `runner.kind = "live"`, the real downtime) goes to `/var/lib/wend/runs/` on the new root, where `wend share`
    can attach it. The machine now runs the landed system, booted on trial each time until the owner commits.
+
+**Carried repositories.** What wend promises about repo config, and all it promises: at landing, the package
+manager goes by the landing release's own repositories plus the add-on repositories wend carried the machine's
+packages on (EPEL, nginx.org), each pointed at upstream for the landing release and checked against the key wend
+pinned. wend puts back no other repository and carries no other configuration. On EL:
+
+- Before the first hop touches anything, every `/etc/yum.repos.d/*.repo` (but the ladder repo) is copied to
+  `/var/lib/wend/saved/yum.repos.d/` on the new root, beside an older copy that differs, never over it, and the state
+  records each one's owning package and sections (id, enabled, baseurl, mirrorlist and metalink URLs). No package
+  manager reads that directory.
+- An add-on with a marker package (EPEL) needs nothing more: `land_repos` reinstalls the marker, whose landing-release
+  build brings its own repo files. An add-on without one (nginx.org's, whose owners wrote the repo file by hand) that
+  is on the machine at landing (an installed package carries its `vendor`) gets `/etc/yum.repos.d/<name>.repo`: one
+  section `[<name>]`, `baseurl=https://<addons.<name>.repos[landing release]>/`, `gpgcheck=1`,
+  `gpgkey=file:///etc/pki/rpm-gpg/<key>` (the adapter's `[keys]` entry that `addons.<name>.gpgkeys` names for the
+  landing release, written there too), `module_hotfixes=true` where the add-on says so, and a comment saying wend
+  wrote it. It gets no file when the add-on has no repo or no key for the landing release (wend never writes an
+  unsigned repo), or when that file, or a different key at that path, is already there. The add-on's packages stay
+  installed then, with no updates, and the run says so and why. A write that fails is a red.
+- The rehearsal works out the same thing on the upgraded copy (a different key already at the key's path, or a repo file
+  path an installed package owns, included): `plan.json`'s `landing_addons` lists each add-on as
+  `{addon, url}` or `{addon, none: why}`, the rehearsal prints it, and `upgrade` prints every `none` again before it
+  starts, with the same check run on the machine itself (a fleet machine that matches the plan can still hold
+  another key). It doesn't refuse: the packages run, they just won't update, and the owner has read that first.
+- The run's `repos` table: `before` (what was copied), `addons` (what was written, or why not) and `files`, one row per
+  removed file with its outcome: `replaced` (wend's add-on file is at its path, or one of its URLs names that add-on's
+  host; the row has the old URLs as `was` and the new one as `now`, so an owner on nginx.org's mainline sees they are
+  on its stable repo now), `restored` (a package put the same file back) or `left out`. The log names every file left
+  out, with its saved copy: those are the owner's to write for the new release, if they still want them.
+- Nothing at landing touches the network: whether a written repo answers is the owner's first `dnf check-update`.
+
+Growing what is carried means adding an `[addons.*]` table, which needs a route proof of its own.
 
 **The first red rolls back.** A hop's commands failing, a check lost, the network changed, the wrong kernel running,
 or a trial boot that comes back on the old system twice: wend stops, makes the old system the stub's default and its
