@@ -1507,11 +1507,14 @@ impl Worker {
             save(STATE, &self.s)?;
             return self.judge_old();
         }
+        // the red goes to disk before the rollback is asked for: a power cut between the two then brings back an old
+        // system that judges itself, never one that reads a trial and arms the red root again
+        self.s["phase"] = json!("rolling-back");
+        save(STATE, &self.s)?;
         let (rc, out) = sh(&rel_cmd(&adapter, &self.table(), "rollback")?, 300);
         if rc != 0 {
             log(&format!("the rollback command failed: {}", tail(&out, 500)));
         }
-        self.s["phase"] = json!("rolling-back");
         self.reboot("the rollback onto the old system", false)
     }
 
@@ -1551,6 +1554,8 @@ impl Worker {
                     log("the old system came up instead of the new root's trial boot: arming the trial once more");
                     self.s["retries"][&key] = json!(n + 1);
                 }
+                // the retry is counted on disk before the trial is armed, so a power cut can't make it a first again
+                save(STATE, &self.s)?;
                 let (rc, out) = sh(&rel_cmd(&adapter, &self.table(), "arm")?, 300);
                 if rc != 0 {
                     return self.red(&format!(
