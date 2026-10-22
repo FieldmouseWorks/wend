@@ -121,13 +121,14 @@ upgrade = ["yum -y distro-sync"]
 # Scientific Linux 7 (Fermilab's EL7 rebuild, ended 2024): off the ladder, it joins it at centos7. Same EL7 packages
 # rebuilt and signed by SL, so its boxes take the routes from centos7, and the fixes that differ say so in their own
 # `when` (sl-release, not centos-release). Fermilab keeps the final tree under obsolete/; ftp.scientificlinux.org's
-# https certificate doesn't name that host, so it is fetched from Fermilab's own mirror host. The installer is EL7's
-# anaconda, so the VM install is centos7's.
+# https certificate doesn't name that host, so it is fetched from Fermilab's own mirror host. Since 2026-10-22 that
+# host 404s every file under updates/security/repodata, so that repo comes from Princeton's mirror (the same
+# repomd.xml as SL's own). The installer is EL7's anaconda, so the VM install is centos7's.
 [releases.sl7]
 joins = "centos7"
 major = 7
 pm = "yum"
-repos = { os = "linux-mirrors.fnal.gov/linux/scientific/obsolete/7.9/x86_64/os", security = "linux-mirrors.fnal.gov/linux/scientific/obsolete/7.9/x86_64/updates/security", fastbugs = "linux-mirrors.fnal.gov/linux/scientific/obsolete/7.9/x86_64/updates/fastbugs" }
+repos = { os = "linux-mirrors.fnal.gov/linux/scientific/obsolete/7.9/x86_64/os", security = "mirror.math.princeton.edu/pub/scientific/obsolete/7.9/x86_64/updates/security", fastbugs = "linux-mirrors.fnal.gov/linux/scientific/obsolete/7.9/x86_64/updates/fastbugs" }
 install = { tree = "linux-mirrors.fnal.gov/linux/scientific/obsolete/7.9/x86_64/os", pxeboot = "images/pxeboot", packages = ["grub2"], ks_end = true, append = "net.ifnames=0 biosdevname=0", ifname = true, boot_part_mib = 1024, uefi = true, root_fs = ["ext3", "xfs", "xfs-v4"] }
 
 [releases.centos8]
