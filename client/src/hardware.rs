@@ -1612,7 +1612,7 @@ mod tests {
     #[test]
     fn repo_packages_are_whoever_owns_the_repo_files() {
         let d = std::env::temp_dir().join(format!("wend-repos-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
+        let _ = crate::fsx::remove_dir_all(&d);
         let put = |p: &str, t: &str| {
             let f = d.join(p);
             fs::create_dir_all(f.parent().unwrap()).unwrap();
@@ -1638,7 +1638,7 @@ mod tests {
         );
         let o = crate::runtime::Owners::new(&d);
         assert_eq!(repo_packages(&d, &o), vec!["base-files", "vendor-archive"]);
-        let _ = fs::remove_dir_all(&d);
+        let _ = crate::fsx::remove_dir_all(&d);
     }
 
     #[test]
@@ -1753,7 +1753,7 @@ mod tests {
     fn firmware_reads_secure_boot_from_either_interface_and_fails_closed() {
         let t = std::env::temp_dir().join(format!("wend-fw-{}", std::process::id()));
         let sb = "SecureBoot-8be4df61-93ca-11d0-aa0d-00e098032b8c";
-        let _ = std::fs::remove_dir_all(&t);
+        let _ = crate::fsx::remove_dir_all(&t);
         std::fs::create_dir_all(&t).unwrap();
         assert_eq!(firmware(&t), "bios");
         std::fs::create_dir_all(t.join("firmware/efi/efivars")).unwrap();
@@ -1774,7 +1774,7 @@ mod tests {
             "uefi",
             "no SecureBoot variable is a firmware without Secure Boot"
         );
-        std::fs::remove_dir_all(t.join("firmware/efi/efivars")).unwrap();
+        crate::fsx::remove_dir_all(t.join("firmware/efi/efivars")).unwrap();
         std::fs::create_dir_all(t.join("firmware/efi/vars").join(sb)).unwrap();
         std::fs::write(t.join("firmware/efi/vars").join(sb).join("data"), [0u8]).unwrap();
         assert_eq!(firmware(&t), "uefi");
@@ -1787,7 +1787,7 @@ mod tests {
             "uefi-secureboot",
             "an unreadable efivarfs SecureBoot fails closed"
         );
-        std::fs::remove_dir_all(t.join("firmware/efi/efivars")).unwrap();
+        crate::fsx::remove_dir_all(t.join("firmware/efi/efivars")).unwrap();
         std::fs::remove_file(t.join("firmware/efi/vars").join(sb).join("data")).unwrap();
         std::fs::create_dir_all(t.join("firmware/efi/vars").join(sb).join("data")).unwrap();
         assert_eq!(
@@ -1795,13 +1795,13 @@ mod tests {
             "uefi-secureboot",
             "an unreadable sysfs SecureBoot fails closed"
         );
-        std::fs::remove_dir_all(t.join("firmware/efi/vars").join(sb)).unwrap();
+        crate::fsx::remove_dir_all(t.join("firmware/efi/vars").join(sb)).unwrap();
         std::fs::create_dir_all(t.join("firmware/efi/efivars")).unwrap();
         std::fs::write(t.join("firmware/efi/efivars").join(sb), [6u8, 0, 0, 0, 1]).unwrap();
         assert_eq!(firmware(&t), "uefi-secureboot", "efivarfs wins, and says on");
         std::fs::write(t.join("firmware/efi/efivars").join(sb), [6u8, 0, 0, 0, 0]).unwrap();
         assert_eq!(firmware(&t), "uefi");
-        std::fs::remove_dir_all(&t).unwrap();
+        crate::fsx::remove_dir_all(&t).unwrap();
     }
 
     fn verdict(route: &str, facts: &Value) -> Value {
