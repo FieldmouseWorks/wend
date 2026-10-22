@@ -55,6 +55,14 @@ const NET: &str = "(ip -o -4 addr 2>/dev/null || /sbin/ip -o -4 addr) | awk '$2 
                    if grep -qx 'nameserver 127.0.0.53' /etc/resolv.conf; then grep '^nameserver' \
                    /run/systemd/resolve/resolv.conf; fi; } 2>/dev/null | sort -u";
 const FW_NOW: &str = "{ [ -d /sys/firmware/efi ] && echo uefi || echo bios; } 2>/dev/null";
+/// tools/vm.py's SELINUX_NOW: the running SELinux mode (Disabled when no policy is loaded, whatever selinuxfs says),
+/// then the config's SELINUX= ("none": no config). A machine lands in the mode it started in (wend#158)
+const SELINUX_NOW: &str = "( m=Disabled; for d in /sys/fs/selinux /selinux; do if [ -e $d/enforce ]; then \
+                           tr -d '\\0' < /proc/self/attr/current 2>/dev/null | grep -q : || break; \
+                           [ \"$(cat $d/enforce)\" = 1 ] && m=Enforcing || m=Permissive; break; fi; done; echo $m; \
+                           if [ -f /etc/selinux/config ]; then \
+                           v=$(sed -n 's/^SELINUX=//p' /etc/selinux/config | tail -1); \
+                           echo ${v:-unset}; else echo none; fi )";
 /// tools/vm.py's FORCED_RESET, from inside: when `reboot` did nothing (the first boot onto systemd, EL8 to EL9),
 /// stop every process but this one, sync, remount read-only and reset with sysrq
 const FORCED_RESET: &str = "sleep 2; kill -TERM -1; sleep 10; kill -KILL -1; sleep 3; sync; echo 1 > \
@@ -73,6 +81,15 @@ pub struct UpgradeOpts {
 fn log(msg: &str) {
     let t = sh("date '+%H:%M:%S'", 10).1;
     eprintln!("[wend upgrade {}] {msg}", t.trim());
+}
+
+/// SELinux's running mode (SELINUX_NOW's first word); "unread" when the read fails, which is no mode kept
+fn selinux_mode() -> String {
+    let (rc, out) = sh(SELINUX_NOW, 60);
+    match out.split_whitespace().next() {
+        Some(m @ ("Enforcing" | "Permissive" | "Disabled")) if rc == 0 => m.to_string(),
+        _ => "unread".to_string(),
+    }
 }
 
 /// A command on this machine, through sh with ENV, its output (both streams) and its exit status; 124 when it ran
@@ -987,6 +1004,7 @@ impl Worker {
         self.s["start_net"] = json!(sh(NET, 60).1);
         self.s["start_firmware"] = json!(sh(FW_NOW, 30).1.trim());
         self.s["start_kernel"] = json!(sh("uname -r", 30).1.trim());
+        self.s["start_selinux"] = json!(selinux_mode());
         log(&format!(
             "start: {}/{} checks pass",
             passed(&results).len(),
@@ -1161,6 +1179,14 @@ impl Worker {
             j.insert("sshd_answers".into(), json!(ssh));
             if !ssh {
                 why.push("sshd doesn't answer a new connection".into());
+            }
+            // a state written before start_selinux was has nothing to hold the mode to
+            if let Some(want) = self.s["start_selinux"].as_str() {
+                let mode = selinux_mode();
+                j.insert("selinux".into(), json!(mode));
+                if mode != want {
+                    why.push(format!("SELinux is {mode}, not {want} as the machine started"));
+                }
             }
             let results = run_checks(&self.checks()?);
             let lost: Vec<String> = self.s["start_checks"]
