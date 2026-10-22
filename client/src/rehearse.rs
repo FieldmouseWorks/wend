@@ -430,7 +430,14 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
         for a in crate::upgrade::landing_addons(crate::adapter_of(atlas, rdoc)?, to, &|t| {
             copy.run(&format!("{t} >/dev/null 2>&1"), 600, false).0 == 0
         }) {
-            match &a.repo {
+            let repo = match &a.repo {
+                Ok(r) => match crate::upgrade::key_conflict(Path::new(root), r) {
+                    Some(why) => Err(why),
+                    None => Ok(r),
+                },
+                Err(why) => Err(why.clone()),
+            };
+            match repo {
                 Ok(r) => {
                     eprintln!("at landing wend writes {} for {} ({})", r.file, a.name, r.url);
                     landing_addons.push(json!({"addon": a.name, "url": r.url}));

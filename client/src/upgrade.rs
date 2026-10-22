@@ -2001,6 +2001,14 @@ pub fn landing_addons(adapter: &Doc, to: &str, on: &dyn Fn(&str) -> bool) -> Vec
         .collect()
 }
 
+/// Why an add-on's key can't go to its path under `root`: a different key is already there (the machine's own, which
+/// the hops keep, so the rehearsal can see it on the copy as the landing will)
+pub fn key_conflict(root: &Path, r: &crate::backend::LandRepo) -> Option<String> {
+    let key = root.join(&r.key_file[1..]);
+    (key.exists() && std::fs::read(&key).ok().as_deref() != Some(r.key.as_bytes()))
+        .then(|| format!("{} is already there, holding another key", r.key_file))
+}
+
 /// Write an add-on's key and repo file under `root`. Ok(None) when written, Ok(Some(why)) when it gets none because
 /// a file is already there (a package's: the landing release's repo files were just reinstalled), Err when a write
 /// failed.
@@ -2010,8 +2018,8 @@ fn write_addon(root: &Path, r: &crate::backend::LandRepo) -> Result<Option<Strin
     if repo.exists() {
         return Ok(Some(format!("{} is already there", r.file)));
     }
-    if key.exists() && std::fs::read(&key).ok().as_deref() != Some(r.key.as_bytes()) {
-        return Ok(Some(format!("{} is already there, holding another key", r.key_file)));
+    if let Some(why) = key_conflict(root, r) {
+        return Ok(Some(why));
     }
     for (p, text) in [(&key, &r.key), (&repo, &r.text)] {
         std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| format!("{}: {e}", p.display()))?;
@@ -2202,6 +2210,10 @@ mod tests {
         std::fs::write(&other, "another").unwrap();
         std::fs::remove_file(d.join("nginx.repo")).unwrap();
         assert!(write_addon(&t, &r).unwrap().unwrap().contains("holding another key"));
+        // the rehearsal sees the same on the copy, before anything is touched
+        assert!(key_conflict(&t, &r).unwrap().contains("holding another key"));
+        std::fs::write(&other, &r.key).unwrap();
+        assert_eq!(key_conflict(&t, &r), None);
         let _ = std::fs::remove_dir_all(&t);
     }
 
