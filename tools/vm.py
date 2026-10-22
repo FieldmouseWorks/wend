@@ -137,8 +137,11 @@ LAYOUT = {"root_fs": None, "lvm": False, "extra_disks": [], "no_hwaddr": False}
 SELINUX = None
 # what SELinux is doing now, read from selinuxfs (EL4 to 6 mount it at /selinux, EL7 on at /sys/fs/selinux), so a box
 # without getenforce reads too; then the config's SELINUX= ("none" without the file, "unset" without the line). After every boot of a replay the
-# mode has to be the one the box started in (SPEC "VM tier")
+# mode has to be the one the box started in (SPEC "VM tier"). Disabled is also no policy loaded: EL4 to 6 mount
+# selinuxfs and say enforce 0 even when init loaded none, and then every process is still the kernel's initial SID,
+# a context with no ":" (a loaded policy gives the shell a user:role:type one)
 SELINUX_NOW = ("( m=Disabled; for d in /sys/fs/selinux /selinux; do if [ -e $d/enforce ]; then "
+               "tr -d '\\0' < /proc/self/attr/current 2>/dev/null | grep -q : || break; "
                "[ \"$(cat $d/enforce)\" = 1 ] && m=Enforcing || m=Permissive; break; fi; done; echo $m; "
                "if [ -f /etc/selinux/config ]; then v=$(sed -n 's/^SELINUX=//p' /etc/selinux/config | tail -1); "
                "echo ${v:-unset}; else echo none; fi )")

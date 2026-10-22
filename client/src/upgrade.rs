@@ -1013,20 +1013,51 @@ impl Worker {
                 break;
             }
         }
+        // a step at or after the flip failed: the flip may have armed the one-shot trial, which the next ordinary
+        // reboot would take onto a root nothing judged. Disarm it (the next boot is the old system, as is the default)
+        // and drop the flip's marker, so cleanup starts the services the copy stopped
+        let mut armed = false;
+        if !ok && stages.iter().any(|s| s["stage"] == json!("flip")) {
+            let (rc, out) = sh(str_of(&t, "rollback_next")?, 600);
+            log(&format!(
+                "relocate failed after the flip, disarming the trial: rc {rc} {}",
+                tail(&out, 500)
+            ));
+            stages.push(json!({"stage": "disarm", "rc": rc, "out": tail(&out, 3000)}));
+            armed = rc != 0;
+            if !armed {
+                let _ = std::fs::remove_file("/var/lib/wend/relocate-flipped");
+            }
+        }
         for c in list_of(&t, "cleanup")? {
             let (rc, out) = sh(&fill(&c, &fills), 600);
             log(&format!("relocate cleanup: rc {rc} {}", tail(&out, 500)));
         }
         self.s["relocate"] = json!(stages);
         if !ok {
-            // before the flip nothing on the old root changed; after it, its default is still the old system
-            self.s["why"] = json!(format!(
-                "relocate's {} step failed",
-                stages.last().and_then(|s| s["stage"].as_str()).unwrap_or("?")
-            ));
+            // before the flip nothing on the old root changed; after it, the trial is disarmed and the default is
+            // still the old system
+            let step = stages
+                .iter()
+                .rev()
+                .find(|s| s["rc"] != json!(0) && s["stage"] != json!("disarm"))
+                .and_then(|s| s["stage"].as_str())
+                .unwrap_or("?");
+            self.s["why"] = json!(if armed {
+                format!(
+                    "relocate's {step} step failed, and disarming the trial failed too: the next reboot may boot \
+                     the copy once; run `{}` before rebooting",
+                    str_of(&t, "rollback_next")?
+                )
+            } else {
+                format!("relocate's {step} step failed")
+            });
             self.s["phase"] = json!("relocate-failed");
             save(STATE, &self.s)?;
-            log("relocate failed: the machine runs its old system as before; the new disk holds what was copied");
+            log(&format!(
+                "relocate failed: {}. The machine runs its old system; the new disk holds what was copied",
+                self.s["why"].as_str().unwrap_or("")
+            ));
             self.write_run("relocate-failed")?;
             return Ok(ROLLED_BACK);
         }
