@@ -1032,9 +1032,11 @@ def checks(g, box_doc, adapter):
     return out
 
 
+# hop.after sees WEND_HOP_FAILED=1 when a command before it failed, on this run or (passed in) an earlier part
 RUNNER = r"""cd /root/wend-hop
-for f in $(ls main-*.sh | sort); do sh $f > $f.out 2>&1; rc=$?; echo $rc > $f.rc; [ $rc = 0 ] || break; done
-for f in $(ls after-*.sh 2>/dev/null | sort); do sh $f > $f.out 2>&1; echo $? > $f.rc; done
+for f in $(ls main-*.sh 2>/dev/null | sort); do sh $f > $f.out 2>&1; rc=$?; echo $rc > $f.rc; [ $rc = 0 ] || break; done
+F=${WEND_HOP_FAILED:-0}; for r in $(ls main-*.rc 2>/dev/null); do [ "$(cat $r)" = 0 ] || F=1; done
+for f in $(ls after-*.sh 2>/dev/null | sort); do WEND_HOP_FAILED=$F sh $f > $f.out 2>&1; echo $? > $f.rc; done
 ls main-*.rc | while read r; do cat $r; done | grep -qv '^0$' && echo 1 > DONE || echo 0 > DONE
 """
 
@@ -1043,9 +1045,10 @@ ls main-*.rc | while read r; do cat $r; done | grep -qv '^0$' && echo 1 > DONE |
 SILENT_HOP = 1800
 
 
-def run_hop(g, cmds, after):
+def run_hop(g, cmds, after, failed=False):
     """The hop's commands inside the guest, detached: the transaction replaces sshd and glibc under the session.
-    Stops at the first failing command, then runs `after` whatever happened (SPEC "How a hop runs")."""
+    Stops at the first failing command, then runs `after` whatever happened (SPEC "How a hop runs"), told whether
+    anything failed: `failed` says an earlier run_hop of the same hop did."""
     rc, o = g.ssh("rm -rf /root/wend-hop && mkdir -p /root/wend-hop && test ! -e /root/wend-hop/DONE")
     if rc:  # the previous hop's directory (and its DONE) is on this overlay: never read it as this hop's result
         raise RuntimeError(f"clearing the previous hop's work dir in the guest failed: {o}")
@@ -1055,7 +1058,8 @@ def run_hop(g, cmds, after):
         rc, o = g.ssh(f"cat > /root/wend-hop/{name}", stdin=ENV + "\n" + body if name != "runner.sh" else body)
         if rc:
             raise RuntimeError(f"copying {name} into the guest failed: {o}")
-    rc, o = g.ssh("cd /root/wend-hop && (setsid nohup sh runner.sh >runner.log 2>&1 </dev/null &)", timeout=30)
+    rc, o = g.ssh(f"cd /root/wend-hop && (WEND_HOP_FAILED={int(failed)} setsid nohup sh runner.sh >runner.log 2>&1 "
+                  "</dev/null &)", timeout=30)
     if rc:
         raise RuntimeError(f"starting the hop in the guest failed: {o}")
     t = answered = time.time()
@@ -1353,7 +1357,7 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
             ok, steps = run_hop(g, first, [])  # hop.after runs once, after everything (SPEC "How a hop runs")
             if not ok:  # ...whatever happened, if the guest still answers (a silent one fails here, wend#158)
                 try:
-                    steps += run_hop(g, [], after)[1]
+                    steps += run_hop(g, [], after, failed=True)[1]
                 except RuntimeError as e:
                     steps += f"\n##### hop.after not run: {e}"
             if ok:

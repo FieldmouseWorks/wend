@@ -1,6 +1,7 @@
 """The gate must say no. Each case is a broken fix the schema check has to refuse.  python3 tools/test_check.py"""
 import copy
 import os
+import subprocess
 import sys
 import tempfile
 
@@ -784,6 +785,25 @@ for name, stops, back, done_at, broken, want in (
         _vm.time = _real_time
     good = ok_ is want and (want or ("stopped answering ssh" in out_ and g_.console in out_ and took < 2 * 3600))
     print(("passed  " if good else "WRONG   ") + f"vm run_hop: {name}  ({ok_}, {round(took)}s)")
+    bad += not good
+
+
+# hop.after is told whether the hop failed: by a command on this run, or by the caller for an earlier part (wend#158)
+for name, mains, env, want in (
+        ("a hop whose commands passed tells hop.after so", ["true", "true"], "", "0"),
+        ("a hop whose transaction failed tells hop.after so", ["true", "false", "true"], "", "1"),
+        ("hop.after run alone for a part that failed is told so", [], "WEND_HOP_FAILED=1", "1"),
+        ("hop.after run alone for a part that passed is told so", [], "WEND_HOP_FAILED=0", "0")):
+    with tempfile.TemporaryDirectory() as d_:
+        for i, c in enumerate(mains):
+            open(os.path.join(d_, f"main-{i:02d}.sh"), "w").write(c + "\n")
+        open(os.path.join(d_, "after-00.sh"), "w").write("echo \"$WEND_HOP_FAILED\"\n")
+        subprocess.run(["sh", "-c", f"{env} sh -s"], input=_vm.RUNNER.replace("/root/wend-hop", d_), text=True,
+                       capture_output=True)
+        got = open(os.path.join(d_, "after-00.sh.out")).read().strip()
+        done = open(os.path.join(d_, "DONE")).read().strip()
+    good = got == want and done == ("1" if "false" in mains else "0")
+    print(("passed  " if good else "WRONG   ") + f"vm run_hop: {name}  ({got}, DONE {done})")
     bad += not good
 
 
