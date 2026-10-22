@@ -440,6 +440,14 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
             let repo = match &a.repo {
                 Ok(r) => match crate::upgrade::key_conflict(Path::new(root), r) {
                     Some(why) => Err(why),
+                    // a package that owns the path (the hops removed the file, the database still lists it) puts
+                    // it back when the landing reinstalls the repo packages, and then wend writes none there
+                    None if copy.run(&format!("rpm -qf {} >/dev/null 2>&1", r.file), 600, false).0 == 0 => {
+                        Err(format!(
+                            "{} belongs to an installed package, which puts it back at landing",
+                            r.file
+                        ))
+                    }
                     None => Ok(r),
                 },
                 Err(why) => Err(why.clone()),

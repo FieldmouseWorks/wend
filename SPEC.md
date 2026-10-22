@@ -2552,8 +2552,8 @@ pinned. wend puts back no other repository and carries no other configuration. O
   wrote it. It gets no file when the add-on has no repo or no key for the landing release (wend never writes an
   unsigned repo), or when that file, or a different key at that path, is already there. The add-on's packages stay
   installed then, with no updates, and the run says so and why. A write that fails is a red.
-- The rehearsal works out the same thing on the upgraded copy (a different key already at the key's path included,
-  since the hops keep it): `plan.json`'s `landing_addons` lists each add-on as
+- The rehearsal works out the same thing on the upgraded copy (a different key already at the key's path, or a repo file
+  path an installed package owns, included): `plan.json`'s `landing_addons` lists each add-on as
   `{addon, url}` or `{addon, none: why}`, the rehearsal prints it, and `upgrade` prints every `none` again before it
   starts. It doesn't refuse: the packages run, they just won't update, and the owner has read that first.
 - The run's `repos` table: `before` (what was copied), `addons` (what was written, or why not) and `files`, one row per
