@@ -291,6 +291,13 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
                     "{root} isn't empty: --from copies into an empty or new directory"
                 ));
             }
+            // the client `upgrade` carries over is x86_64; 32-bit machines are parked
+            let arch = m.run("uname -m")?.trim().to_string();
+            if arch != "x86_64" {
+                return Err(format!(
+                    "{from} is {arch}: wend's client runs on x86_64 only, and 32-bit machines are parked"
+                ));
+            }
             std::fs::create_dir_all(dir).map_err(|e| format!("{root}: {e}"))?;
             std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))
                 .map_err(|e| format!("{root}: {e}"))?;
@@ -600,7 +607,7 @@ mod tests {
     #[test]
     fn boot_clean_clears_runtime_files_but_not_dirs_or_symlinked_trees() {
         let d = std::env::temp_dir().join(format!("wend-clean-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
+        let _ = crate::fsx::remove_dir_all(&d);
         for p in [
             "var/run/mysqld",
             "var/lock/subsys",
@@ -635,10 +642,10 @@ mod tests {
         assert!(d.join("var/run/mysqld").is_dir() && d.join("var/lock/subsys").is_dir());
         assert!(d.join("var/lib/rpm/Packages").exists() && d.join("run/keep/x.pid").exists());
         assert!(d.join("outside/f").exists() && !d.join("var/run/link").exists());
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::fsx::remove_dir_all(&d).unwrap();
         // EL7: var/run is a symlink to ../run, which is left alone
         let e = std::env::temp_dir().join(format!("wend-clean7-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&e);
+        let _ = crate::fsx::remove_dir_all(&e);
         std::fs::create_dir_all(e.join("run")).unwrap();
         std::fs::create_dir_all(e.join("var")).unwrap();
         std::fs::write(e.join("run/a.pid"), "x").unwrap();
@@ -651,7 +658,7 @@ mod tests {
         std::fs::write(e.join("run/utmp"), "x").unwrap();
         assert_eq!(stale_pids(&e), Ok(2));
         assert!(e.join("run/utmp").exists() && !e.join("run/a.pid").exists());
-        std::fs::remove_dir_all(&e).unwrap();
+        crate::fsx::remove_dir_all(&e).unwrap();
     }
 
     #[test]
@@ -661,6 +668,6 @@ mod tests {
         assert_eq!(machine_id(&d, "sha256:0123456789abcdef0123"), "0123456789abcdef");
         std::fs::write(d.join("var/lib/dbus/machine-id"), "ABCDEF0123456789abcdef0123456789\n").unwrap();
         assert_eq!(machine_id(&d, "sha256:00"), "abcdef0123456789abcdef0123456789");
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::fsx::remove_dir_all(&d).unwrap();
     }
 }

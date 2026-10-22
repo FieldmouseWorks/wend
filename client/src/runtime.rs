@@ -541,7 +541,7 @@ mod tests {
 
     fn tempdir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("wend-runtime-{}-{name}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
+        let _ = crate::fsx::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
     }

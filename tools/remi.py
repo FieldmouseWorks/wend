@@ -19,6 +19,7 @@ Jobs (ROUTE is routes/<family>/<name>.toml, BOX is <family>/<name>, both as they
   build BOX              tools/vm.py build BOX
   replay ROUTE BOX       tools/vm.py replay ROUTE BOX
   relocate BOX           tools/vm.py relocate BOX (give it --vm-flags "--extra-disk GB")
+  smoke BOX              the client built static, then tools/vm.py smoke BOX: the client run inside the box
   rehearse ROUTE BOX     the client built with cargo build --release --locked, then tools/vm.py rehearse, as root
   upgrade ROUTE BOX      the client built static (--target x86_64-unknown-linux-musl, it runs inside the old box), then
                          tools/vm.py upgrade, as root (--vm-flags "--extra-disk GB",
@@ -86,6 +87,7 @@ JOBS = {  # name: (slot class, argument patterns, hours before it is stopped)
     "build": ("vm", [BOX], 3),
     "replay": ("vm", [ROUTE, BOX], 8),
     "relocate": ("vm", [BOX], 3),
+    "smoke": ("vm", [BOX], 3),
     "rehearse": ("rehearse", [ROUTE, BOX], 4),
     "upgrade": ("rehearse", [ROUTE, BOX], 10),
 }
@@ -718,9 +720,9 @@ def tests(v, wt, deadline):
 def vm_job(e, v, wt, deadline):
     user = v["user"]
     tail = list(e["args"])
-    if e["job"] in ("rehearse", "upgrade"):
-        # an upgrade's client runs inside the old box, on its libc: static, as released
-        target = ["--target", MUSL] if e["job"] == "upgrade" else []
+    if e["job"] in ("rehearse", "upgrade", "smoke"):
+        # an upgrade's or a smoke's client runs inside the old box, on its libc: static, as released
+        target = ["--target", MUSL] if e["job"] in ("upgrade", "smoke") else []
         c = command(v, "cargo-build", as_user("dev", [CARGO, "build", "--release", "--locked", *target],
                                               os.path.join(wt, "client")), os.path.join(wt, "client"), deadline)
         if c["rc"]:
