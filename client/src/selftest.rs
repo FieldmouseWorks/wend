@@ -73,23 +73,31 @@ fn detached(_: &std::path::Path) -> Result<String, String> {
 }
 
 fn files(dir: &std::path::Path) -> Result<String, String> {
-    let e = |e: std::io::Error| e.to_string();
+    // each step named: a kernel too old for one of them says which
+    let e = |what: &'static str| move |e: std::io::Error| format!("{what}: {e}");
     let t = dir.join("tree/a/b");
-    std::fs::create_dir_all(&t).map_err(e)?;
-    std::fs::write(t.join("f"), b"bytes").map_err(e)?;
-    std::fs::copy(t.join("f"), t.join("g")).map_err(e)?;
-    std::fs::rename(t.join("g"), t.join("h")).map_err(e)?;
-    symlink("h", t.join("l")).map_err(e)?;
-    let m = std::fs::symlink_metadata(t.join("l")).map_err(e)?;
-    if !m.file_type().is_symlink() || std::fs::metadata(t.join("l")).map_err(e)?.len() != 5 {
+    std::fs::create_dir_all(&t).map_err(e("create_dir_all"))?;
+    std::fs::write(t.join("f"), b"bytes").map_err(e("write"))?;
+    std::fs::copy(t.join("f"), t.join("g")).map_err(e("copy"))?;
+    std::fs::rename(t.join("g"), t.join("h")).map_err(e("rename"))?;
+    symlink("h", t.join("l")).map_err(e("symlink"))?;
+    let m = std::fs::symlink_metadata(t.join("l")).map_err(e("symlink_metadata"))?;
+    if !m.file_type().is_symlink() || std::fs::metadata(t.join("l")).map_err(e("metadata"))?.len() != 5 {
         return Err("a symlink or its target read wrong".into());
     }
-    let n = std::fs::read_dir(&t).map_err(e)?.count();
-    std::fs::remove_dir_all(dir.join("tree")).map_err(e)?;
+    let n = std::fs::read_dir(&t).map_err(e("read_dir"))?.count();
+    // std's own, to say whether the client's by-path fallback is what runs here
+    let how = match std::fs::remove_dir_all(dir.join("tree")) {
+        Err(x) if x.raw_os_error() == Some(libc::ENOSYS) => {
+            crate::fsx::remove_dir_all(dir.join("tree")).map_err(e("remove_dir_all by path"))?;
+            ", removed by path (no openat in this kernel)"
+        }
+        r => r.map(|_| "").map_err(e("remove_dir_all"))?,
+    };
     if dir.join("tree").exists() {
         Err("remove_dir_all left the tree".into())
     } else {
-        Ok(format!("{n} entries made, read and removed"))
+        Ok(format!("{n} entries made, read and removed{how}"))
     }
 }
 
@@ -191,7 +199,7 @@ pub fn run() -> bool {
             }
         }
     }
-    let _ = std::fs::remove_dir_all(&dir);
+    let _ = crate::fsx::remove_dir_all(&dir);
     ok
 }
 

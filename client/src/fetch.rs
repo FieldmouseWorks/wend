@@ -918,7 +918,7 @@ mod tests {
     #[test]
     fn proxy_serves_only_the_chain() {
         let dir = std::env::temp_dir().join(format!("wend-proxy-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
         let src = dir.join("src/h.test/el");
         std::fs::create_dir_all(src.join("repodata")).unwrap();
         std::fs::create_dir_all(src.join("Packages")).unwrap();
@@ -959,7 +959,7 @@ mod tests {
         assert_eq!(get(px.port, "POST", "/h.test/el/Packages/a.rpm").0, 405);
         assert_eq!(get(px.port, "HEAD", "/h.test/el/repodata/repomd.xml").0, 200);
         assert_eq!(px.take_refused().len(), 3);
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
     }
 
     /// Two packages cut from EPEL's own primary.xml (2026-10-15), compressed by xz and zstd themselves: EPEL 9 lists its
@@ -1020,7 +1020,7 @@ mod tests {
     fn learns_packages_from_a_primary_listed_only_as_xz_or_zst() {
         for (i, (name, z, want)) in EPEL.into_iter().enumerate() {
             let dir = std::env::temp_dir().join(format!("wend-epel-test-{}-{i}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
+            let _ = crate::fsx::remove_dir_all(&dir);
             let src = dir.join("src/h.test/epel");
             std::fs::create_dir_all(src.join("repodata")).unwrap();
             std::fs::create_dir_all(src.join("Packages/3")).unwrap();
@@ -1057,14 +1057,14 @@ mod tests {
                 403,
                 "{name}"
             );
-            let _ = std::fs::remove_dir_all(&dir);
+            let _ = crate::fsx::remove_dir_all(&dir);
         }
     }
 
     #[test]
     fn plain_index_serves_only_the_verified_member() {
         let dir = std::env::temp_dir().join(format!("wend-plain-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
         let base = dir.join("src/h.test/debian");
         let idx = base.join("dists/wheezy/main/binary-amd64");
         std::fs::create_dir_all(&idx).unwrap();
@@ -1104,13 +1104,13 @@ mod tests {
         assert_eq!(gunzip(&body).unwrap(), pinned.as_bytes());
         assert_eq!(get(px.port, "GET", "/h.test/debian/pool/a.deb"), (200, a));
         assert_eq!(get(px.port, "GET", "/h.test/debian/pool/b.deb").0, 403);
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
     }
 
     #[test]
     fn archive_serves_by_digest_through_aliases() {
         let dir = std::env::temp_dir().join(format!("wend-archive-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
         let arch = dir.join("archive");
         let blob = |b: &[u8]| {
             let h = sha256_hex(b);
@@ -1165,13 +1165,13 @@ mod tests {
         let off = Proxy::start(&run, &plan, vec![], vec![], true).unwrap();
         off.ensure_pinned().unwrap();
         assert_eq!(get(off.port, "GET", "/h.test/el5/a.rpm").0, 200);
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
     }
 
     #[test]
     fn archive_serves_an_index_pinned_uncompressed() {
         let dir = std::env::temp_dir().join(format!("wend-archive-plain-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
         let pinned = b"Package: a\nFilename: pool/a.deb\nSHA256: 00\n\n".to_vec();
         let h = sha256_hex(&pinned);
         let d = dir.join("archive/blob/sha256").join(&h[..2]);
@@ -1195,13 +1195,13 @@ mod tests {
         );
         assert_eq!(code, 200);
         assert_eq!(gunzip(&body).unwrap(), pinned);
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_vanished_snapshot_refuses_before_the_walk() {
         let dir = std::env::temp_dir().join(format!("wend-pinned-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
         let src = dir.join("src/h.test/el/repodata");
         std::fs::create_dir_all(&src).unwrap();
         let repomd = "<repomd></repomd>";
@@ -1222,7 +1222,7 @@ mod tests {
         // a source that still has the snapshot
         std::fs::write(src.join("repomd.xml"), repomd).unwrap();
         px.ensure_pinned().unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1236,7 +1236,7 @@ mod tests {
         assert!(write_new(&target, b"evil").is_err());
         assert_eq!(std::fs::read(&target).unwrap(), b"keep");
         write_new(&d.join("fresh"), b"ok").unwrap();
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::fsx::remove_dir_all(&d).unwrap();
     }
 
     #[test]

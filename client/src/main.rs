@@ -8,6 +8,7 @@ mod backend;
 mod canon;
 mod check;
 mod fetch;
+mod fsx;
 mod generated;
 mod hardware;
 mod hop;
