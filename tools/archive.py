@@ -207,6 +207,8 @@ SOURCE_REPOS = (
     # Scientific Linux 7: one source repo for os and both update repos
     (r"^(https://linux-mirrors\.fnal\.gov/linux/scientific/obsolete/7\.9/)x86_64/(os|updates/security|updates/fastbugs)/$",
      r"\1SRPMS/"),
+    (r"^https://mirror\.math\.princeton\.edu/pub/scientific/obsolete/7\.9/x86_64/updates/security/$",
+     "https://linux-mirrors.fnal.gov/linux/scientific/obsolete/7.9/SRPMS/"),
     (r"^(https://nginx\.org/packages/(?:centos|rhel)/\d+/)x86_64/$", r"\1SRPMS/"),
 )
 

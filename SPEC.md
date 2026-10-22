@@ -151,7 +151,8 @@ Adapter ops are named `<tool>.<verb>`. The adapter declares which ones its famil
   (release packages by hand: epochs and vendor switches), `rpm.drop-arch` (multilib leftovers), `rpm.drop-unneeded`, `rpm.adopt-rpmnew`,
   `rpm.set-aside-unowned`, `fs.layout` (`usrmove`, `run`), `kv.set` / `kv.unset` (key=value lines),
   `mysql.set-password`, `mysql.clean-shutdown`, `mysql.upgrade-data`, `ssh.generate-host-keys`,
-  `httpd.drop-missing-modules`, `php.mysqli-report-off`, `service.record`, `service.enable`, `net.ifcfg-to-keyfile`.
+  `httpd.drop-missing-modules`, `php.mysqli-report-off`, `service.record`, `service.enable`, `net.ifcfg-to-keyfile`,
+  `selinux.keep-disabled`.
 
 `rpm.bootstrap`, `rpm.transit` and `fs.layout` are surgery: dozens of shell lines each, replayed as root on a
 stranger's box. They are exactly why ops are typed. The surgery is written once, reviewed as a spec change, and every
@@ -863,6 +864,18 @@ now. `like` names what the unit replaces (`mysqld` for `mariadb`) or follows (`h
 the site needs). Never disables anything, and a unit whose `like` services were all off is left as it is. Fails if
 `systemctl enable` fails (the unit doesn't exist) or the unit isn't `enabled` afterwards. Works offline, as in a
 chroot. Reference: `systemctl enable {unit}`, then `systemctl is-enabled {unit}` must print `enabled`.
+
+**`selinux.keep-disabled`** (no arguments). For a box that runs with no SELinux policy loaded. EL4 writes
+`/etc/selinux/config` only from `selinux-policy-targeted`'s `%post`, so a CentOS 4 box without that package has no config
+and runs with SELinux off; at the CentOS 5 hop, EL5's `selinux-policy` `%post` sees no config and writes
+`SELINUX=enforcing` with no targeted policy beside it. EL5's and EL6's init boot such a box anyway; EL7's systemd reads
+`enforcing`, can't load a policy and freezes at the first boot (wend#158). This op makes the config say what the box
+runs: `SELINUX=disabled`, replacing every `SELINUX=` line (not `SELINUXTYPE=`), or a new config with `SELINUX=disabled`
+and `SELINUXTYPE=targeted` where there is none; the old file is kept under `/var/lib/wend/saved`. Refuses, changing
+nothing, where a policy is loaded: selinuxfs has an `enforce` file and the running shell's context
+(`/proc/self/attr/current`) is a `user:role:type` one, not the kernel's initial SID. Carrying a running SELinux is
+another job. A fix gates it on the targeted policy not being installed and runs it before the transaction of the
+hop into EL7.
 
 **`net.ifcfg-to-keyfile`** (no arguments). EL10's NetworkManager can't read the initscripts profiles
 (`/etc/sysconfig/network-scripts/ifcfg-*`) that EL9's still does. Without this op, a box with a static address comes
@@ -1913,7 +1926,8 @@ After every hop:
 A hop ends the replay when its commands fail, when the guest doesn't come back, when its network differs from the
 start, when the newest installed kernel isn't the one running (or the query names none), when the guest no longer
 runs on the firmware the replay boots, when SELinux no longer runs in the mode the box started in (enforcing,
-permissive or disabled, read from selinuxfs after every reboot), or when a check that passed before it fails after the
+permissive or disabled, read from selinuxfs after every reboot; no policy loaded counts as disabled, though EL4 to 6
+mount selinuxfs anyway), or when a check that passed before it fails after the
 reboot. Its disk and serial console are kept.
 
 The VM box differs from the chroot box in ways a replay can show: it has what the installer adds (`@core`, a kernel, a
@@ -2190,8 +2204,10 @@ mechanism of either. Each step below names what it comes from, and the short lis
 
 The first target is Enterprise Linux on BIOS: `centos5-to-alma10` and `centos7-to-alma10`, the routes the VM tier has
 proved, and CentOS 6 machines joining the first one at its `centos6` rung. EL on UEFI, Debian and Ubuntu come after,
-each once its own proof below has run. Nothing here is built. It moves into the sections it changes, piece by piece,
-in the PRs that build it.
+each once its own proof below has run. `wend rehearse` and the plan (step 4 of the order of work) are built, and
+`wend upgrade`, `wend rollback` and `wend commit` (step 5) are built for a new root on a spare disk the owner names;
+step 5 says what of them is still to come. The rest is design. It moves into the sections it changes, piece by
+piece, in the PRs that build it.
 
 ### Four verbs
 
@@ -2493,7 +2509,11 @@ Then:
    runs on the new root, whose fstab no longer has the stub's `/boot`, so this is `arm_new`: `arm`'s write, made
    the way `commit_trial` and `rollback_next` make theirs (mount the stub's home by `STUB_UUID`, write the flag
    there, sync, freeze and thaw, unmount); relocate's own `arm` writes the running root's `/boot` and only arms
-   from the old system. The stub's default stays the old system until `wend commit`, so a new kernel that hangs or
+   from the old system. Before that, `arm_new` makes the new root's own default one the stub's EL7 GRUB reads as
+   meant: EL8 and later's grubby saves a BLS id (`<machine-id>-<kernel>`), and EL7's GRUB takes a `saved_entry` that
+   starts with a digit as a menu index (a machine id of `4fc3...` boots entry 4, which os-prober had made the old
+   root's install kernel). So a BLS id, under a `grub.cfg` without `blscfg`, becomes the `10_linux` entry id of the
+   same kernel, flushed with a freeze of `/`; a BLS id that names no entry fails the arm, and the trial isn't taken. The stub's default stays the old system until `wend commit`, so a new kernel that hangs or
    panics, a power cut, or anyone's reboot at a bad moment brings back the old system, whole. When `reboot` returns
    and the old boot is still running two minutes later (the first boot onto systemd, and EL8 to EL9), it does what the
    VM tier does from outside, from inside: stops every process but itself (`kill -TERM -1`, then `-KILL`), syncs,
@@ -2655,7 +2675,16 @@ downloads. Nothing else.
    the walk with CI's run of the same route (`vm.py rehearse`). In three parts: the copy, the walk and the plan
    first; then the generated checks; then the kernel downloads, the facts and the failed rehearsal's report.
 5. `wend upgrade`, `wend rollback`, `wend commit` and `vm.py upgrade`, on `el/centos7-lamp`, then `el/centos5-web`,
-   with the proof above.
+   with the proof above. Built (`client/src/upgrade.rs`): the refusals, the detached worker, relocate onto a disk
+   named with `--new-root-disk` (the adapter's `[relocate]` or `[relocate_grub_legacy]` steps), each hop on the new
+   root offline through the verifying proxy with its fixes held to the rehearsal's, `arm_new` before every reboot of
+   the new root, the judgment after each boot, the rollback on the first red (the trial coming back twice included),
+   the rehearsal's prune (the plan's `prune`, each removal it kept), the landing release's repo files (the adapter's
+   `hop.land_repos`), the run, the state file and the exit codes. `vm.py upgrade` plays the owner, with
+   `--break-after HOP`, `--reset-trial`, `--kill-ssh` and `--rollback-by-hand`. Not yet: the free-extents
+   placement, carrying other mounted filesystems (relocate's preflight still refuses them, so the proof's extra data
+   disk waits on it), hardware preflight judged with the relocation assumed (it is judged on the machine as it is),
+   `stub_home` for an XFS v4 `/boot`, and `wend upgrade --resume`.
 6. Fleets: plan reuse, the exit codes and the loop in `docs/`, with the proof in "Fleets".
 7. `el/centos6-lamp` and its proof.
 8. README and docs/try-it.md say what's real.

@@ -89,6 +89,9 @@ pub struct Walk<'a> {
     pub mid_step: bool,
     /// The rung the root sits on partway along the route (SPEC "Route"): the walk takes only the hops after it.
     pub joins_at: Option<String>,
+    /// each removal the prune kept, in order, as the package list it removed (a plan's prune: SPEC "The upgrade"
+    /// makes exactly these removals on the machine)
+    pub pruned: Vec<Vec<String>>,
 }
 
 impl<'a> Walk<'a> {
@@ -119,6 +122,7 @@ impl<'a> Walk<'a> {
             steps: vec![],
             hops: vec![],
             joins_at: None,
+            pruned: vec![],
             t0: Instant::now(),
             stamp: host("date +%Y%m%d-%H%M%S").1.trim().to_string(),
             mid_step: false,
@@ -319,7 +323,10 @@ impl<'a> Walk<'a> {
                 str_of(self.route, "to")?,
             )?;
             let cmds = [rm, str_of(&h, "autoremove")?.to_string()];
-            if !self.execute(&cmds, &format!("prune {} obsolete packages", pkgs.len()))? && pkgs.len() > 1 {
+            let kept = self.execute(&cmds, &format!("prune {} obsolete packages", pkgs.len()))?;
+            if kept {
+                self.pruned.push(pkgs.clone());
+            } else if pkgs.len() > 1 {
                 let mid = pkgs.len() / 2;
                 todo.push(pkgs[mid..].to_vec()); // popped second: the first half goes first, as in tools/walk.py
                 todo.push(pkgs[..mid].to_vec());

@@ -121,13 +121,14 @@ upgrade = ["yum -y distro-sync"]
 # Scientific Linux 7 (Fermilab's EL7 rebuild, ended 2024): off the ladder, it joins it at centos7. Same EL7 packages
 # rebuilt and signed by SL, so its boxes take the routes from centos7, and the fixes that differ say so in their own
 # `when` (sl-release, not centos-release). Fermilab keeps the final tree under obsolete/; ftp.scientificlinux.org's
-# https certificate doesn't name that host, so it is fetched from Fermilab's own mirror host. The installer is EL7's
-# anaconda, so the VM install is centos7's.
+# https certificate doesn't name that host, so it is fetched from Fermilab's own mirror host. Since 2026-10-22 that
+# host 404s every file under updates/security/repodata, so that repo comes from Princeton's mirror (the same
+# repomd.xml as SL's own). The installer is EL7's anaconda, so the VM install is centos7's.
 [releases.sl7]
 joins = "centos7"
 major = 7
 pm = "yum"
-repos = { os = "linux-mirrors.fnal.gov/linux/scientific/obsolete/7.9/x86_64/os", security = "linux-mirrors.fnal.gov/linux/scientific/obsolete/7.9/x86_64/updates/security", fastbugs = "linux-mirrors.fnal.gov/linux/scientific/obsolete/7.9/x86_64/updates/fastbugs" }
+repos = { os = "linux-mirrors.fnal.gov/linux/scientific/obsolete/7.9/x86_64/os", security = "mirror.math.princeton.edu/pub/scientific/obsolete/7.9/x86_64/updates/security", fastbugs = "linux-mirrors.fnal.gov/linux/scientific/obsolete/7.9/x86_64/updates/fastbugs" }
 install = { tree = "linux-mirrors.fnal.gov/linux/scientific/obsolete/7.9/x86_64/os", pxeboot = "images/pxeboot", packages = ["grub2"], ks_end = true, append = "net.ifnames=0 biosdevname=0", ifname = true, boot_part_mib = 1024, uefi = true, root_fs = ["ext3", "xfs", "xfs-v4"] }
 
 [releases.centos8]
@@ -602,6 +603,12 @@ installed_list = "rpm -qa --qf '%{NAME}\\n' | sort -u"
 # SPEC "The plan": a rehearsed machine's fingerprint, every package with its epoch, version and architecture
 # (%{EPOCH}, "(none)" when unset: CentOS 5's rpm 4.4 has no %{EPOCHNUM})
 installed_versions = "rpm -qa --qf '%{NAME}-%{EPOCH}:%{VERSION}-%{RELEASE}.%{ARCH}\\n' | sort"
+# SPEC "The upgrade", at the end: the landed machine's package manager goes by the landing release's own repo files,
+# as a fresh install has them, never by the verifying proxy. set_release and hop.after removed them, so every
+# installed package that owns a repo file is reinstalled, through the proxy from the plan's cache (the walk fetched
+# each of them), and then the ladder repo goes.
+# (--filesbypkg, not a --qf iterator: EL10's rpm refuses NAME beside FILENAMES in one [...])
+land_repos = '''P=$(rpm -qa --filesbypkg | awk '$2 ~ /^\/etc\/yum\.repos\.d\/[^\/]*\.repo$/ {print $1}' | sort -u); [ -n "$P" ] || { echo "no installed package owns a repo file"; exit 1; }; {pm} -y reinstall $P && rm -f /etc/yum.repos.d/ladder.repo && ls /etc/yum.repos.d/'''
 # tools/vm.py: the newest installed kernel, as `uname -r` would name it; after every reboot it has to be the running one
 kernel_newest = "rpm -q --qf '%{INSTALLTIME} %{VERSION}-%{RELEASE}.%{ARCH}\\n' kernel-core kernel 2>/dev/null | grep -v 'is not installed' | sort -n | tail -n1 | cut -d' ' -f2"
 # A real machine's kernel (SPEC "Kernels and the bootloader"). A chroot box has none, and these do nothing there. The
@@ -639,7 +646,7 @@ kernel_after = [
 # after. Before EL7, yum needs the downloadonly plugin (its exit status says nothing: an Error line in its output, or no kernel in the cache, fails the download).
 # They are removed from the copy after; the proxy has kept them.
 kernel_fetch = [
-  "{clean_repos}; rm -f /var/lib/rpm/__db.*; rpm --rebuilddb; C='/var/cache/dnf /var/cache/yum /var/cache/libdnf5'; find $C -name '*.rpm' -delete 2>/dev/null; D=$(rpm -E %_dbpath); S=/var/lib/wend/kernel-fetch-rpmdb; rm -rf $S; mkdir -p /var/lib/wend && cp -a $D $S || exit 1; K=$(for p in kernel kernel-smp kernel-largesmp kernel-xenU kernel-core kernel-modules kernel-modules-core kernel-modules-extra; do rpm -q $p 2>/dev/null | grep -v 'is not installed'; done); [ -z \"$K\" ] || rpm -e --justdb --nodeps --noscripts --notriggers $K >/dev/null 2>&1; if command -v dnf >/dev/null 2>&1; then dnf -y {dnf_opts} install --downloadonly kernel; R=$?; else O=/var/lib/wend/kernel-fetch.log; yum -y install --downloadonly kernel >$O 2>&1; Y=$?; cat $O; if [ $Y != 0 ] && ! grep -q 'downloadonly specified' $O; then yum -y install yum-plugin-downloadonly >/dev/null 2>&1 || yum -y install yum-downloadonly >/dev/null 2>&1; yum -y install --downloadonly kernel >$O 2>&1; cat $O; fi; R=0; grep -q '^Error' $O && R=1; rm -f $O; fi; rm -rf $D && mv $S $D; [ $R = 0 ] || { echo 'the kernel download failed'; exit 1; }; F=$(find $C -name 'kernel-[0-9]*.rpm' -o -name 'kernel-core-[0-9]*.rpm' 2>/dev/null); [ -n \"$F\" ] || { echo 'the kernel was not downloaded'; exit 1; }; echo $F | tr ' ' '\\n' | sed 's,.*/,downloaded: ,'; find $C -name '*.rpm' -delete 2>/dev/null; true",
+  "{clean_repos}; rm -f /var/lib/rpm/__db.*; rpm --rebuilddb; C='/var/cache/dnf /var/cache/yum /var/cache/libdnf5'; find $C -name '*.rpm' -delete 2>/dev/null; D=$(rpm -E %_dbpath); S=/var/lib/wend/kernel-fetch-rpmdb; rm -rf $S; mkdir -p /var/lib/wend && cp -a $D $S || exit 1; K=$(for p in kernel kernel-smp kernel-largesmp kernel-xenU kernel-core kernel-modules kernel-modules-core kernel-modules-extra; do rpm -q $p 2>/dev/null | grep -v 'is not installed'; done); [ -z \"$K\" ] || rpm -e --justdb --nodeps --noscripts --notriggers $K >/dev/null 2>&1; if command -v dnf >/dev/null 2>&1; then dnf -y {dnf_opts} install --downloadonly kernel; R=$?; else O=/var/lib/wend/kernel-fetch.log; yum -y install --downloadonly kernel >$O 2>&1; Y=$?; cat $O; if [ $Y != 0 ] && ! grep -q 'downloadonly specified' $O; then yum -y install yum-plugin-downloadonly >/dev/null 2>&1 || yum -y install yum-downloadonly >/dev/null 2>&1; yum -y install --downloadonly kernel >$O 2>&1; cat $O; fi; R=0; grep -q '^Error' $O && R=1; rm -f $O; fi; rm -rf $D && mv $S $D; [ $R = 0 ] || { echo 'the kernel download failed'; exit 1; }; F=$(find $C -name 'kernel-[0-9]*.rpm' -o -name 'kernel-core-[0-9]*.rpm' -o -name 'kernel-smp-[0-9]*.rpm' -o -name 'kernel-largesmp-[0-9]*.rpm' -o -name 'kernel-xenU-[0-9]*.rpm' -o -name 'kernel-PAE-[0-9]*.rpm' 2>/dev/null); [ -n \"$F\" ] || { echo 'the kernel was not downloaded'; exit 1; }; echo $F | tr ' ' '\\n' | sed 's,.*/,downloaded: ,'; find $C -name '*.rpm' -delete 2>/dev/null; true",
 ]
 
 # SPEC "Checks the machine is held to", the generated checks (client/src/generated.rs): the services a rehearsal
@@ -850,6 +857,12 @@ booted = '''. /var/lib/wend/relocate.env; L=$(lvs --noheadings -o lv_name "$(fin
 # by hand (no grub2-editenv needed) and flushed with a freeze of / from one process; it sticks until `forward`, from
 # the old root, mounts the new LV and removes it.
 arm = '''grub2-editenv /boot/grub2/grubenv set wend_next=0 && sync && fsfreeze -f /boot && fsfreeze -u /boot'''
+# arm's write from the new root (SPEC "The upgrade", "Every reboot is a trial"): `wend upgrade` arms the trial before
+# every reboot of the new root, whose fstab has no old /boot, so it mounts the stub's home the way commit_trial does.
+# First the new root's own default: EL8 and later's grubby saves a BLS id (<machine-id>-<kernel>), and the stub's EL7
+# GRUB reads a saved_entry that starts with a digit as a menu index (4fc3... is entry 4, an os-prober entry for the
+# old root), so a BLS id becomes the 10_linux entry id of the same kernel, flushed past the XFS log GRUB doesn't replay
+arm_new = '''. /var/lib/wend/relocate.env; E=/boot/grub2/grubenv; C=/boot/grub2/grub.cfg; S=$(grub2-editenv $E list 2>/dev/null | sed -n 's/^saved_entry=//p'); K=$(printf '%s\n' "$S" | sed -n 's/^[0-9a-f]\{32\}-//p'); if [ -n "$K" ] && ! grep -q '^[[:space:]]*blscfg' $C; then I=$(awk -v p="gnulinux-$K-advanced-" '{for (i = 1; i <= NF; i++) {f = $i; gsub(/\047/, "", f); if (index(f, p) == 1) {print f; exit}}}' $C); [ -n "$I" ] || { echo "saved_entry $S names no entry of $C"; exit 1; }; grub2-editenv $E set saved_entry="$I" && sync && xfs_io -x -c freeze -c thaw / || exit 1; echo "saved_entry: $S -> $I"; fi; O=/run/wend/oldboot; mkdir -p $O && mount "UUID=${STUB_UUID:-$BOOT_UUID}" $O || exit 1; grub2-editenv $O/grub2/grubenv set wend_next=0 && sync && fsfreeze -f $O && fsfreeze -u $O; r=$?; umount $O && exit $r'''
 commit_trial = '''. /var/lib/wend/relocate.env; O=/run/wend/oldboot; mkdir -p $O && mount "UUID=$BOOT_UUID" $O || exit 1; grub2-editenv $O/grub2/grubenv set wend_default=0 && grub2-editenv $O/grub2/grubenv unset wend_next && sync && fsfreeze -f $O && fsfreeze -u $O; r=$?; umount $O && exit $r'''
 rollback_next = '''. /var/lib/wend/relocate.env; O=/run/wend/oldboot; mkdir -p $O && mount "UUID=$BOOT_UUID" $O || exit 1; grub2-editenv $O/grub2/grubenv set wend_next=1 && sync && fsfreeze -f $O && fsfreeze -u $O; r=$?; umount $O && exit $r'''
 rollback = '''L=$(lvs --noheadings -o lv_name "$(findmnt -no SOURCE /)" 2>/dev/null | tr -d ' '); [ "$L" = wend-root ] || { echo "not booted from the relocated root ($L)"; exit 1; }; F=/var/lib/wend/relocate.grubenv; { printf '# GRUB Environment Block\nwend_rollback=1\n'; head -c 1024 /dev/zero | tr '\0' '#'; } | head -c 1024 > $F.new && mv $F.new $F && sync && xfs_io -x -c freeze -c thaw /'''
@@ -1088,6 +1101,8 @@ if [ ! -e /var/lib/wend/relocate-flipped ] && [ -s /var/lib/wend/relocate-stoppe
 # other.
 booted = '''/var/lib/wend/relocate-grub which'''
 arm = '''/var/lib/wend/relocate-grub set 0 --once'''
+# the helper writes the stub home's stage2 from either root, so arming from the new root is arm's own write
+arm_new = '''/var/lib/wend/relocate-grub set 0 --once'''
 commit_trial = '''[ "$(/var/lib/wend/relocate-grub which)" = new ] || { echo "not booted from the relocated root"; exit 1; }; /var/lib/wend/relocate-grub set 0'''
 rollback_next = '''/var/lib/wend/relocate-grub set 1 --once'''
 rollback = '''[ "$(/var/lib/wend/relocate-grub which)" = new ] || { echo "not booted from the relocated root"; exit 1; }; /var/lib/wend/relocate-grub set 1'''
@@ -1182,6 +1197,10 @@ args = {}
 
 [ops."net.ifcfg-to-keyfile"]
 summary = "turn /etc/sysconfig/network-scripts/ifcfg-* into NetworkManager keyfiles (nmcli --offline, mode 0600) and pin each interface's name to its HWADDR (else the MAC of the physical NIC running the profile now, which must hold a static profile's address), before EL10, whose NetworkManager can't read ifcfg; fails, changing nothing, on any setting it doesn't convert"
+args = {}
+
+[ops."selinux.keep-disabled"]
+summary = "on a box running with no SELinux policy loaded, write SELINUX=disabled into /etc/selinux/config (making it if missing), so the next release's init doesn't freeze trying to load a policy the box never had; refuses where a policy is loaded"
 args = {}
 
 [ops."service.enable"]

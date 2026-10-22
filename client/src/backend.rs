@@ -136,6 +136,7 @@ pub const RPM: Caps = Caps {
         "service.record",
         "service.enable",
         "net.ifcfg-to-keyfile",
+        "selinux.keep-disabled",
     ],
     // no --justdb for fixes: dropping a package from the database while its files stay is how a fix would fake
     // the pkgdb check. rpm.transit uses it internally, on the previous release's leftovers only.
@@ -362,6 +363,8 @@ fn upgrade_db() -> String {
 }
 /// what adopt-rpmnew replaced and set-aside-unowned moved, kept for the admin
 const SAVED: &str = "/var/lib/wend/saved";
+// SPEC.md, selinux.keep-disabled: SELINUX=disabled on a box running with no policy loaded; refuses where one is
+const SELINUX_KEEP_DISABLED: &str = r#"for d in /sys/fs/selinux /selinux; do [ -e $d/enforce ] || continue; if tr -d '\0' < /proc/self/attr/current 2>/dev/null | grep -q :; then echo "a SELinux policy is loaded ($d/enforce, context $(tr -d '\0' < /proc/self/attr/current)): selinux.keep-disabled is for a box running without one"; exit 1; fi; done; if [ -f /etc/selinux/config ]; then mkdir -p /var/lib/wend/saved/etc/selinux; [ -e /var/lib/wend/saved/etc/selinux/config ] || cp -a /etc/selinux/config /var/lib/wend/saved/etc/selinux/config || exit 1; sed -i '/^[[:space:]]*SELINUX[[:space:]]*=/d' /etc/selinux/config && { [ -z "$(tail -c 1 /etc/selinux/config)" ] || echo >> /etc/selinux/config; } && echo SELINUX=disabled >> /etc/selinux/config; else mkdir -p /etc/selinux && printf 'SELINUX=disabled\nSELINUXTYPE=targeted\n' > /etc/selinux/config; fi; grep -qx SELINUX=disabled /etc/selinux/config && echo "SELinux stays disabled: $(tr '\n' ' ' < /etc/selinux/config)""#;
 /// service.record: the SysV services the box started at boot, one per line
 const SYSV_RECORD: &str = "/var/lib/wend/sysv-enabled";
 /// <hop>/<repo id>.repomd.xml: metadata an op fetched through repos the hop then drops
@@ -708,6 +711,7 @@ fn rpm_step(s: &Value, adapter: &Doc, release: &str) -> Result<String, String> {
             upgrade_db()
         ),
         "ssh.generate-host-keys" => "ssh-keygen -A".into(),
+        "selinux.keep-disabled" => SELINUX_KEEP_DISABLED.into(),
         "httpd.drop-missing-modules" => HTTPD_DROP_MISSING_MODULES.into(),
         "php.mysqli-report-off" => php_mysqli_report_off(),
         "service.record" => service_record(),

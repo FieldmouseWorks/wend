@@ -55,6 +55,7 @@ json.dump({"box": box, "result": res, "head": {"commit": head, "dirty": False}, 
           open(d + "/run.json", "w"))
 if cmd == "rehearse":
     open(d + "/rehearse.log", "w").write("".join(f"line {i}\n" for i in range(300)) + "hop to 8: fired 3\nERROR x\n")
+    os.makedirs(d + "/plan/cache/h.test")  # an offline cache, as a rehearse or an upgrade leaves in plan/
     open(d + "/plan/checks.toml", "w").write('[web]\nok = "true"\n[generated]\nsvc-httpd = "systemctl is-enabled httpd"\n')
     json.dump({"hops": [{"to": "8", "fired": ["a"]}]}, open(d + "/plan/plan.json", "w"))
     json.dump({"hops": [{"to": "8", "ok": True, "fired_names": ["a"], "seconds": 3}], "final": {"passed": ["web"]}},
@@ -122,7 +123,7 @@ subprocess.run(["git", "-C", seed, "commit", "-qm", "fork"], env=ENV, check=True
 fork = sh("git", "-C", seed, "rev-parse", "HEAD")
 sh("git", "-C", seed, "push", "-q", origin, f"{fork}:refs/pull/8/head")
 sh("git", "clone", "-q", origin, f"{w}/src/wend")
-open(f"{w}/cargo", "w").write("#!/bin/sh\nmkdir -p target/release && touch target/release/wend && echo built\n")
+open(f"{w}/cargo", "w").write('#!/bin/sh\nmkdir -p target/release && touch target/release/wend && echo built "$@"\n')
 os.chmod(f"{w}/cargo", 0o755)
 os.makedirs(f"{w}/lab")
 NOW = dict(ENV, WEND_LAB_NO_WORKER="1")
@@ -165,6 +166,11 @@ for args, what in (
          "a replay --relocate with no extra disk"),
         (["build", "el/c7", "--sha", main, "--by", "t", "--vm-flags", "--relocate --extra-disk 20"],
          "--relocate on a job that isn't a replay"),
+        (["upgrade", "routes/el/c7-to-a10.toml", "el/c7", "--sha", main, "--by", "t"], "an upgrade with no extra disk"),
+        (["replay", "routes/el/c7-to-a10.toml", "el/c7", "--sha", main, "--by", "t", "--vm-flags",
+          "--reset-trial"], "an upgrade's stumble on a replay"),
+        (["upgrade", "routes/el/c7-to-a10.toml", "el/c7", "--sha", main, "--by", "t", "--vm-flags",
+          "--extra-disk 20 --break-after 'alma9; reboot'"], "a hop name that isn't one"),
         (["shell", "--sha", main, "--by", "t"], "a job that doesn't exist")):
     rc, out = remi("enqueue", *args, env=NOW)
     check(rc != 0 and "refused" in out, f"enqueue refuses {what}")
@@ -214,6 +220,8 @@ check([s["why"] for s in r["steps"]["failed"]] == ["fix b"] and r["walk"]["hops"
       "it carries every failed step and the walk's hops")
 check({f["path"] for f in r["files"]} >= {"run.json", "plan/checks.toml"} and all(f["sha256"] for f in r["files"]),
       "it lists the run directory's files with hashes")
+check("plan/cache" not in {f["path"] for f in r["files"]} and r["run_json"] is not None,
+      "a directory in plan/ (the offline cache) isn't hashed as a file, and run.json is still read")
 check([c["name"] for c in v1["commands"]] == ["cargo-build", "rehearse"] and v1["commands"][0]["rc"] == 0,
       "a rehearse builds the client first, each command with its own log, rc and hash")
 check(all(c["log"].startswith(f"{w}/lab/logs/main/{old}/{j1}/") for c in v1["commands"]),
@@ -276,6 +284,19 @@ for _ in range(100):
 remi("cancel", j10)
 rc, out = remi("wait", j10)
 check("CANCELLED" in out and verdict(j10)["reasons"] == ["cancelled"], "cancel stops a running job, verdict cancelled")
+
+# a smoke builds the client static, as dev, and hands it to vm.py smoke after the box
+rc, out = remi("enqueue", "smoke", "el/c7", "--sha", main, "--by", "t", env=NOW)
+j13 = entry(out)
+remi("worker")
+v13 = verdict(j13)
+smokes = [l for l in open(f"{w}/lab/trace").read().splitlines() if l.startswith("start smoke")]
+check(v13["result"] == "pass" and [c["name"] for c in v13["commands"]] == ["cargo-build", "smoke"] and
+      "--release --locked --target x86_64-unknown-linux-musl" in open(v13["commands"][0]["log"]).read(),
+      "a smoke builds the client static first")
+check(len(smokes) == 1 and smokes[0].split()[3] == f"{w}/lab/vmwork" and
+      smokes[0].endswith("smoke el/c7 --client client/target/x86_64-unknown-linux-musl/release/wend"),
+      "a smoke runs as dev and passes vm.py the static client after the box")
 
 # every VM job shares the one shim on remi, so two VM jobs on the same mirror.py still run one at a time
 seen = len(open(f"{w}/lab/trace").read().splitlines())

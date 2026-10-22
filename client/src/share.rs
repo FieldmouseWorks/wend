@@ -435,7 +435,7 @@ mod tests {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let d = std::env::temp_dir().join(format!("wend-share-{}-{n}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
+        let _ = crate::fsx::remove_dir_all(&d);
         for (p, c) in files {
             let f = d.join(p);
             fs::create_dir_all(f.parent().unwrap()).unwrap();

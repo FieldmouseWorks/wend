@@ -8,6 +8,7 @@ mod backend;
 mod canon;
 mod check;
 mod fetch;
+mod fsx;
 mod generated;
 mod hardware;
 mod hop;
@@ -16,7 +17,9 @@ mod rehearse;
 mod report;
 mod runtime;
 mod sandbox;
+mod selftest;
 mod share;
+mod upgrade;
 mod walk;
 
 use atlas::{get, str_of, Atlas, Doc};
@@ -68,6 +71,9 @@ wend: walk a proven upgrade route on a machine. No model, no network beyond your
                                     the route that starts there (or ROUTE), with its hostname, users, home
                                     directories, IPs and secrets scrubbed. Shows it all, saves it, and prints a
                                     prefilled issue link; sends nothing. Read-only, root needed, like facts
+  wend selftest                     what wend needs from this machine's kernel (processes, pipes, files, locks,
+                                    loopback, threads), tried one by one; exits 1 naming what failed
+  wend --version
   wend parity INPUT.json            machine output for client/parity.py (the Python engine must agree)
 
 Options: --atlas DIR (default: the current directory, laid out like the wend repo).
@@ -128,6 +134,11 @@ fn main() -> ExitCode {
         facts: facts.clone(),
     };
     let redact: Vec<String> = std::iter::from_fn(|| opt(&mut args, "--redact")).collect();
+    let upgrade_opts = upgrade::UpgradeOpts {
+        new_root_disk: opt(&mut args, "--new-root-disk"),
+        status: flag(&mut args, "--status"),
+        work: flag(&mut args, "--work"),
+    };
     let Some(cmd) = args.first().cloned() else {
         println!("{USAGE}");
         return ExitCode::from(2);
@@ -135,6 +146,17 @@ fn main() -> ExitCode {
     if matches!(cmd.as_str(), "-h" | "--help" | "help") {
         println!("{USAGE}");
         return ExitCode::SUCCESS;
+    }
+    if matches!(cmd.as_str(), "--version" | "version") && args.len() == 1 {
+        println!("wend {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
+    if cmd == "selftest" && args.len() == 1 {
+        return if selftest::run() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
     }
     if cmd == "facts" && args.len() == 1 {
         // no atlas needed: run it on the machine, judge the file anywhere (`preflight --facts`)
@@ -147,6 +169,11 @@ fn main() -> ExitCode {
         };
         println!("{}", serde_json::to_string_pretty(&f).unwrap());
         return ExitCode::SUCCESS;
+    }
+    // SPEC "Upgrading a running machine": exit codes a loop can drive, and an atlas of its own once under way
+    match cmd.as_str() {
+        "upgrade" | "rollback" | "commit" => return ExitCode::from(upgrade::main(&root, &args, &upgrade_opts)),
+        _ => {}
     }
     if cmd == "share" && args.len() <= 2 {
         // the atlas is optional: without one the report has the facts and no verdict
@@ -532,6 +559,8 @@ pub struct Walked {
     pub served: Vec<(String, PathBuf)>,
     /// every step the walk took, with its commands' output (`--steps` writes the same)
     pub steps: Vec<Value>,
+    /// each removal its prune kept
+    pub pruned: Vec<Vec<String>>,
 }
 
 /// `wend walk` (and the walk `wend rehearse` makes): its run, and what a plan needs from the walk.
@@ -812,6 +841,7 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<Walked, String> 
         cache: proxy.as_ref().map(|p| p.cache().to_path_buf()),
         served: proxy.as_ref().map(|p| p.served()).unwrap_or_default(),
         steps: w.steps().to_vec(),
+        pruned: w.pruned.clone(),
     })
 }
 

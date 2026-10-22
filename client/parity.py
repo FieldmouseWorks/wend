@@ -82,6 +82,7 @@ STEPS = [
     {"op": "mysql.clean-shutdown"},
     {"op": "mysql.upgrade-data"},
     {"op": "ssh.generate-host-keys"},
+    {"op": "selinux.keep-disabled"},
     {"op": "httpd.drop-missing-modules"},
     {"op": "php.mysqli-report-off"},
     {"op": "service.record"},

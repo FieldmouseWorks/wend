@@ -58,6 +58,7 @@ struct Pin {
     plain: bool,
 }
 
+#[derive(Clone)]
 pub struct Proxy {
     pub port: u16,
     state: Arc<State>,
@@ -97,6 +98,19 @@ impl Proxy {
         archives: Vec<String>,
         offline: bool,
     ) -> Result<Proxy, String> {
+        Self::start_on(run, cache, sources, archives, offline, 0)
+    }
+
+    /// The same on a given loopback port (0: any free one). `upgrade` keeps one port across reboots, so the repo
+    /// file a hop wrote still reaches the proxy after the trial boot.
+    pub fn start_on(
+        run: &Value,
+        cache: &Path,
+        sources: Vec<String>,
+        archives: Vec<String>,
+        offline: bool,
+        port: u16,
+    ) -> Result<Proxy, String> {
         let mut pins = HashMap::new();
         for h in run.get("hops").and_then(Value::as_array).into_iter().flatten() {
             for (url, d) in h.get("sources").and_then(Value::as_object).into_iter().flatten() {
@@ -126,7 +140,7 @@ impl Proxy {
             );
         }
         std::fs::create_dir_all(cache).map_err(|e| format!("{}: {e}", cache.display()))?;
-        let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("proxy: {e}"))?;
+        let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| format!("proxy on 127.0.0.1:{port}: {e}"))?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
         let tops = pins.iter().map(|(k, p)| (k.clone(), p.clone())).collect();
         let state = Arc::new(State {
@@ -532,6 +546,22 @@ fn keep(s: &State, d: &Digest, bytes: &[u8]) -> Result<PathBuf, (u16, String)> {
 
 /// The bytes for a pin: the cache, else the first source whose bytes hash right.
 fn fetch(s: &State, key: &str, p: &Pin) -> Result<PathBuf, (u16, String)> {
+    let r = fetch_from_any(s, key, p);
+    used(s, key, &r);
+    r
+}
+
+/// A file the proxy had, served or only read to learn what it lists (a repomd's primary.xml when yum reads the
+/// sqlite form): a plan's cache needs both, or `upgrade` offline can't vouch for the packages.
+fn used(s: &State, key: &str, r: &Result<PathBuf, (u16, String)>) {
+    if let Ok(f) = r {
+        if f.starts_with(&s.cache) {
+            lock(&s.served).insert(key.to_string(), f.clone());
+        }
+    }
+}
+
+fn fetch_from_any(s: &State, key: &str, p: &Pin) -> Result<PathBuf, (u16, String)> {
     let dst = cached(s, &p.digest);
     if std::fs::read(&dst).is_ok_and(|b| Digest::of(p.digest.alg, &b) == p.digest) {
         return Ok(dst);
@@ -602,6 +632,7 @@ fn fetch_plain(s: &State, key: &str, p: &Pin, gz: bool) -> Result<PathBuf, (u16,
     };
     learn_index(s, key, &x);
     let f = keep(s, &p.digest, &x)?;
+    used(s, key, &Ok(f.clone()));
     if !gz {
         return Ok(f);
     }
@@ -887,7 +918,7 @@ mod tests {
     #[test]
     fn proxy_serves_only_the_chain() {
         let dir = std::env::temp_dir().join(format!("wend-proxy-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
         let src = dir.join("src/h.test/el");
         std::fs::create_dir_all(src.join("repodata")).unwrap();
         std::fs::create_dir_all(src.join("Packages")).unwrap();
@@ -928,7 +959,7 @@ mod tests {
         assert_eq!(get(px.port, "POST", "/h.test/el/Packages/a.rpm").0, 405);
         assert_eq!(get(px.port, "HEAD", "/h.test/el/repodata/repomd.xml").0, 200);
         assert_eq!(px.take_refused().len(), 3);
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
     }
 
     /// Two packages cut from EPEL's own primary.xml (2026-10-15), compressed by xz and zstd themselves: EPEL 9 lists its
@@ -989,7 +1020,7 @@ mod tests {
     fn learns_packages_from_a_primary_listed_only_as_xz_or_zst() {
         for (i, (name, z, want)) in EPEL.into_iter().enumerate() {
             let dir = std::env::temp_dir().join(format!("wend-epel-test-{}-{i}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
+            let _ = crate::fsx::remove_dir_all(&dir);
             let src = dir.join("src/h.test/epel");
             std::fs::create_dir_all(src.join("repodata")).unwrap();
             std::fs::create_dir_all(src.join("Packages/3")).unwrap();
@@ -1026,14 +1057,14 @@ mod tests {
                 403,
                 "{name}"
             );
-            let _ = std::fs::remove_dir_all(&dir);
+            let _ = crate::fsx::remove_dir_all(&dir);
         }
     }
 
     #[test]
     fn plain_index_serves_only_the_verified_member() {
         let dir = std::env::temp_dir().join(format!("wend-plain-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
         let base = dir.join("src/h.test/debian");
         let idx = base.join("dists/wheezy/main/binary-amd64");
         std::fs::create_dir_all(&idx).unwrap();
@@ -1073,13 +1104,13 @@ mod tests {
         assert_eq!(gunzip(&body).unwrap(), pinned.as_bytes());
         assert_eq!(get(px.port, "GET", "/h.test/debian/pool/a.deb"), (200, a));
         assert_eq!(get(px.port, "GET", "/h.test/debian/pool/b.deb").0, 403);
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
     }
 
     #[test]
     fn archive_serves_by_digest_through_aliases() {
         let dir = std::env::temp_dir().join(format!("wend-archive-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
         let arch = dir.join("archive");
         let blob = |b: &[u8]| {
             let h = sha256_hex(b);
@@ -1122,13 +1153,25 @@ mod tests {
         // the alias is only a pointer: the blob it names still has to hash to the digest the index gave
         assert_eq!(get(px.port, "GET", "/h.test/el5/b.rpm").0, 502);
         assert_eq!(get(px.port, "GET", "/h.test/el5/c.rpm").0, 403);
-        let _ = std::fs::remove_dir_all(&dir);
+        // a plan's cache is what was used, the primary read only to learn from included: offline, it still vouches
+        let used = px.served();
+        assert!(used.iter().any(|(k, _)| k == "h.test/el5/repodata/primary.xml.gz"));
+        let plan = dir.join("plan-cache");
+        for (_, f) in &used {
+            let to = plan.join(f.strip_prefix(dir.join("cache")).unwrap());
+            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+            std::fs::copy(f, to).unwrap();
+        }
+        let off = Proxy::start(&run, &plan, vec![], vec![], true).unwrap();
+        off.ensure_pinned().unwrap();
+        assert_eq!(get(off.port, "GET", "/h.test/el5/a.rpm").0, 200);
+        let _ = crate::fsx::remove_dir_all(&dir);
     }
 
     #[test]
     fn archive_serves_an_index_pinned_uncompressed() {
         let dir = std::env::temp_dir().join(format!("wend-archive-plain-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
         let pinned = b"Package: a\nFilename: pool/a.deb\nSHA256: 00\n\n".to_vec();
         let h = sha256_hex(&pinned);
         let d = dir.join("archive/blob/sha256").join(&h[..2]);
@@ -1152,13 +1195,13 @@ mod tests {
         );
         assert_eq!(code, 200);
         assert_eq!(gunzip(&body).unwrap(), pinned);
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_vanished_snapshot_refuses_before_the_walk() {
         let dir = std::env::temp_dir().join(format!("wend-pinned-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
         let src = dir.join("src/h.test/el/repodata");
         std::fs::create_dir_all(&src).unwrap();
         let repomd = "<repomd></repomd>";
@@ -1179,7 +1222,7 @@ mod tests {
         // a source that still has the snapshot
         std::fs::write(src.join("repomd.xml"), repomd).unwrap();
         px.ensure_pinned().unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::fsx::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1193,7 +1236,7 @@ mod tests {
         assert!(write_new(&target, b"evil").is_err());
         assert_eq!(std::fs::read(&target).unwrap(), b"keep");
         write_new(&d.join("fresh"), b"ok").unwrap();
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::fsx::remove_dir_all(&d).unwrap();
     }
 
     #[test]
