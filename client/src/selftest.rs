@@ -180,8 +180,13 @@ pub fn run() -> bool {
         field(&u.machine),
         field(&u.release)
     );
-    let dir = std::env::temp_dir().join(format!("wend-selftest-{}", std::process::id()));
-    if let Err(e) = std::fs::create_dir_all(&dir) {
+    // made here, 0700, never one that was already there: a user who made it first would own the tree the items
+    // write into and remove as root
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let dir = std::env::temp_dir().join(format!("wend-selftest-{}-{t}", std::process::id()));
+    if let Err(e) = std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700).create(&dir) {
         println!("FAIL files: {}: {e}", dir.display());
         return false;
     }
