@@ -231,7 +231,7 @@ def check_signed(a, where):
 
 # SPEC "Relocate": the harness's steps, in the order tools/vm.py runs them, then the commands it runs between boots
 RELOCATE_STEPS = ("preflight", "refresh", "place", "copy", "fixup", "flip", "release", "cleanup")
-RELOCATE_COMMANDS = ("booted", "arm", "commit_trial", "rollback_next", "rollback", "forward")
+RELOCATE_COMMANDS = ("booted", "arm", "arm_new", "commit_trial", "rollback_next", "rollback", "forward")
 
 
 def check_relocate(a, where):

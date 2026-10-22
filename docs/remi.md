@@ -87,6 +87,7 @@ Nothing VM-bound runs on remi outside the queue. A hand-run replay would hold a 
 | `replay ROUTE BOX` | `tools/vm.py replay ROUTE BOX` | the same |
 | `relocate BOX` | `tools/vm.py relocate BOX` (needs `--vm-flags "--extra-disk GB"`) | the same |
 | `rehearse ROUTE BOX` | `cargo build --release --locked` in `client/` as dev, then `tools/vm.py rehearse ROUTE BOX --client client/target/release/wend` | root (`sudo -n`, `WEND_WORK=/data/wend-lab/vmwork-root`) |
+| `upgrade ROUTE BOX` | the same build with `--target x86_64-unknown-linux-musl` (the client runs inside the old box), then `tools/vm.py upgrade ROUTE BOX --client client/target/x86_64-unknown-linux-musl/release/wend` (needs `--vm-flags "--extra-disk GB"`; `--break-after HOP`, `--reset-trial`, `--kill-ssh` and `--rollback-by-hand` go in `--vm-flags` too) | root, as a rehearse, and in the rehearse slot |
 
 A verdict is `pass` only when every command exits 0, every run directory's `run.json` says `pass`, and its `head` is
 the job's commit and clean. Otherwise it's `fail`, with every reason listed. A job the runner wouldn't start is
