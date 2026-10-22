@@ -1265,9 +1265,10 @@ impl Worker {
         Ok((p, a))
     }
 
-    /// Commands in order, stopping at the first that fails, then `after` whatever happened. Whether all of the first
-    /// list passed, and their records.
-    fn commands(&self, cmds: &[String], after: &[String]) -> (bool, Vec<Value>) {
+    /// Commands in order, stopping at the first that fails, then `after` whatever happened, told in WEND_HOP_FAILED
+    /// whether anything failed (`failed`: an earlier part of the same hop did; SPEC "How a hop runs" 8). Whether all
+    /// of the first list passed, and their records.
+    fn commands(&self, cmds: &[String], after: &[String], failed: bool) -> (bool, Vec<Value>) {
         let mut recs = vec![];
         let mut ok = true;
         for c in cmds {
@@ -1285,8 +1286,9 @@ impl Worker {
                 break;
             }
         }
+        let f = u8::from(failed || !ok);
         for c in after {
-            let (rc, out) = sh(c, 1800);
+            let (rc, out) = sh(&format!("WEND_HOP_FAILED={f}; export WEND_HOP_FAILED; {c}"), 1800);
             log(&format!("after: rc {rc}: {}\n{}", tail(c, 200), tail(&out, 1000)));
             recs.push(json!({"cmd": c, "rc": rc, "out": tail(&out, 2000), "after": true}));
         }
@@ -1358,10 +1360,10 @@ impl Worker {
         } else {
             (&plan.commands[..], plan.after.clone())
         };
-        let (ok, recs) = self.commands(first, &after);
+        let (ok, recs) = self.commands(first, &after, false);
         let (ok, recs) = if !ok && before_post {
             // hop.after runs whatever happened
-            let (_, more) = self.commands(&[], &plan.after);
+            let (_, more) = self.commands(&[], &plan.after, true);
             (false, recs.into_iter().chain(more).collect())
         } else {
             (ok, recs)
@@ -1413,7 +1415,7 @@ impl Worker {
         log(&format!(
             "hop to {hop}: the post steps, after the reboot into its kernel"
         ));
-        let (ok, recs) = self.commands(&plan.commands[plan.post_at..], &plan.after);
+        let (ok, recs) = self.commands(&plan.commands[plan.post_at..], &plan.after, false);
         drop(proxy);
         if let Some(c) = self.last_hop()["commands"].as_array_mut() {
             c.extend(recs.clone());
@@ -1627,7 +1629,7 @@ impl Worker {
                 &compile_with,
                 &to,
             )?;
-            let (ok, r) = self.commands(&[rm, str_of(&h, "autoremove")?.to_string()], &after);
+            let (ok, r) = self.commands(&[rm, str_of(&h, "autoremove")?.to_string()], &after, false);
             recs.extend(r);
             if !ok {
                 self.s["prune"] = json!(recs);
@@ -1650,7 +1652,7 @@ impl Worker {
         }
         if let Some(c) = get(&h, "land_repos").and_then(Value::as_str) {
             let c = fill(c, &vars);
-            let (ok, r) = self.commands(&[c], &[]);
+            let (ok, r) = self.commands(&[c], &[], false);
             self.s["land_repos"] = json!(r);
             if !ok {
                 return self.red("pointing the package manager at the landing release's repos failed");
