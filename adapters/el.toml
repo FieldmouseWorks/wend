@@ -606,7 +606,8 @@ installed_versions = "rpm -qa --qf '%{NAME}-%{EPOCH}:%{VERSION}-%{RELEASE}.%{ARC
 # as a fresh install has them, never by the verifying proxy. set_release and hop.after removed them, so every
 # installed package that owns a repo file is reinstalled, through the proxy from the plan's cache (the walk fetched
 # each of them), and then the ladder repo goes.
-land_repos = '''P=$(rpm -qa --qf '[%{NAME} %{FILENAMES}\n]' | awk '$2 ~ /^\/etc\/yum\.repos\.d\/[^\/]*\.repo$/ {print $1}' | sort -u); [ -n "$P" ] || { echo "no installed package owns a repo file"; exit 1; }; {pm} -y reinstall $P && rm -f /etc/yum.repos.d/ladder.repo && ls /etc/yum.repos.d/'''
+# (--filesbypkg, not a --qf iterator: EL10's rpm refuses NAME beside FILENAMES in one [...])
+land_repos = '''P=$(rpm -qa --filesbypkg | awk '$2 ~ /^\/etc\/yum\.repos\.d\/[^\/]*\.repo$/ {print $1}' | sort -u); [ -n "$P" ] || { echo "no installed package owns a repo file"; exit 1; }; {pm} -y reinstall $P && rm -f /etc/yum.repos.d/ladder.repo && ls /etc/yum.repos.d/'''
 # tools/vm.py: the newest installed kernel, as `uname -r` would name it; after every reboot it has to be the running one
 kernel_newest = "rpm -q --qf '%{INSTALLTIME} %{VERSION}-%{RELEASE}.%{ARCH}\\n' kernel-core kernel 2>/dev/null | grep -v 'is not installed' | sort -n | tail -n1 | cut -d' ' -f2"
 # A real machine's kernel (SPEC "Kernels and the bootloader"). A chroot box has none, and these do nothing there. The

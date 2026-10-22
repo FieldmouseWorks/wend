@@ -58,6 +58,7 @@ struct Pin {
     plain: bool,
 }
 
+#[derive(Clone)]
 pub struct Proxy {
     pub port: u16,
     state: Arc<State>,
@@ -97,6 +98,19 @@ impl Proxy {
         archives: Vec<String>,
         offline: bool,
     ) -> Result<Proxy, String> {
+        Self::start_on(run, cache, sources, archives, offline, 0)
+    }
+
+    /// The same on a given loopback port (0: any free one). `upgrade` keeps one port across reboots, so the repo
+    /// file a hop wrote still reaches the proxy after the trial boot.
+    pub fn start_on(
+        run: &Value,
+        cache: &Path,
+        sources: Vec<String>,
+        archives: Vec<String>,
+        offline: bool,
+        port: u16,
+    ) -> Result<Proxy, String> {
         let mut pins = HashMap::new();
         for h in run.get("hops").and_then(Value::as_array).into_iter().flatten() {
             for (url, d) in h.get("sources").and_then(Value::as_object).into_iter().flatten() {
@@ -126,7 +140,7 @@ impl Proxy {
             );
         }
         std::fs::create_dir_all(cache).map_err(|e| format!("{}: {e}", cache.display()))?;
-        let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("proxy: {e}"))?;
+        let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| format!("proxy on 127.0.0.1:{port}: {e}"))?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
         let tops = pins.iter().map(|(k, p)| (k.clone(), p.clone())).collect();
         let state = Arc::new(State {

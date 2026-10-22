@@ -837,6 +837,8 @@ struct Worker {
     atlas: Atlas,
     s: Value,
     plan: Plan,
+    /// the proxy once started: it serves until the process ends, so a second start on its port would fail
+    px: Option<crate::fetch::Proxy>,
 }
 
 impl Worker {
@@ -847,7 +849,12 @@ impl Worker {
         if plan.sha()? != s["plan_sha256"].as_str().unwrap_or("") {
             return Err("the plan changed since the upgrade started".into());
         }
-        Ok(Worker { atlas, s, plan })
+        Ok(Worker {
+            atlas,
+            s,
+            plan,
+            px: None,
+        })
     }
 
     fn route(&self) -> Result<&Doc, String> {
@@ -1170,8 +1177,23 @@ impl Worker {
 
     /// The verifying proxy, offline, from the plan's cache and pinned by the rehearsal's run; and the adapter with the
     /// repos pointed at it
-    fn proxy(&self) -> Result<(crate::fetch::Proxy, Doc), String> {
-        let p = crate::fetch::Proxy::start(&self.plan.run, &self.plan.dir.join("cache"), vec![], vec![], true)?;
+    /// The verifying proxy over the plan's cache, on the same port every boot: the repo file the last hop wrote
+    /// (and dnf's own cache) name it, and the finish and a split hop's post steps run after a reboot.
+    fn proxy(&mut self) -> Result<(crate::fetch::Proxy, Doc), String> {
+        let p = match &self.px {
+            Some(p) => p.clone(),
+            None => {
+                let port = self.s["proxy_port"].as_u64().unwrap_or(0) as u16;
+                let cache = self.plan.dir.join("cache");
+                let p = crate::fetch::Proxy::start_on(&self.plan.run, &cache, vec![], vec![], true, port)?;
+                if port == 0 {
+                    self.s["proxy_port"] = json!(p.port);
+                    save(STATE, &self.s)?;
+                }
+                self.px = Some(p.clone());
+                p
+            }
+        };
         p.ensure_pinned()?;
         let a = crate::proxied_adapter(self.adapter()?, &p.base())?;
         Ok((p, a))
