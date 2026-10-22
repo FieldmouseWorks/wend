@@ -2509,7 +2509,11 @@ Then:
    runs on the new root, whose fstab no longer has the stub's `/boot`, so this is `arm_new`: `arm`'s write, made
    the way `commit_trial` and `rollback_next` make theirs (mount the stub's home by `STUB_UUID`, write the flag
    there, sync, freeze and thaw, unmount); relocate's own `arm` writes the running root's `/boot` and only arms
-   from the old system. The stub's default stays the old system until `wend commit`, so a new kernel that hangs or
+   from the old system. Before that, `arm_new` makes the new root's own default one the stub's EL7 GRUB reads as
+   meant: EL8 and later's grubby saves a BLS id (`<machine-id>-<kernel>`), and EL7's GRUB takes a `saved_entry` that
+   starts with a digit as a menu index (a machine id of `4fc3...` boots entry 4, which os-prober had made the old
+   root's install kernel). So a BLS id, under a `grub.cfg` without `blscfg`, becomes the `10_linux` entry id of the
+   same kernel, flushed with a freeze of `/`; a BLS id that names no entry fails the arm, and the trial isn't taken. The stub's default stays the old system until `wend commit`, so a new kernel that hangs or
    panics, a power cut, or anyone's reboot at a bad moment brings back the old system, whole. When `reboot` returns
    and the old boot is still running two minutes later (the first boot onto systemd, and EL8 to EL9), it does what the
    VM tier does from outside, from inside: stops every process but itself (`kill -TERM -1`, then `-KILL`), syncs,
