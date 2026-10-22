@@ -982,6 +982,12 @@ impl Worker {
                     }
                     return self.hop(i);
                 }
+                "hopping" | "finishing" => {
+                    // the worker stopped partway through a transaction (a crash, a kill): what it changed can't be
+                    // picked up where it stopped, so the old system comes back
+                    let what = if phase == "hopping" { "a hop" } else { "the finish" };
+                    return self.red(&format!("the worker stopped partway through {what}"));
+                }
                 "landed" | "committed" => {
                     println!("the machine has landed ({phase}); `wend commit` makes the new system stay");
                     return Ok(LANDED);
@@ -1383,6 +1389,7 @@ impl Worker {
                 }
             }
         }
+        self.set("hopping")?;
         let (proxy, compile_with) = self.proxy()?;
         log(&format!(
             "hop to {hop} with {names:?}; repos through the verifying proxy at {}, offline",
@@ -1456,6 +1463,7 @@ impl Worker {
         log(&format!(
             "hop to {hop}: the post steps, after the reboot into its kernel"
         ));
+        self.set("hopping")?;
         let (ok, recs) = self.commands(&plan.commands[plan.post_at..], &plan.after);
         drop(proxy);
         if let Some(c) = self.last_hop()["commands"].as_array_mut() {
@@ -1537,16 +1545,19 @@ impl Worker {
         self.s["why"] = json!(why);
         let adapter = self.adapter()?.clone();
         let on = booted(&adapter, &self.table());
-        if on != "new" {
+        if on == "old" {
             self.s["phase"] = json!("rolling-back");
             save(STATE, &self.s)?;
             return self.judge_old();
         }
+        // the red goes to disk before the rollback is asked for: a power cut between the two then brings back an old
+        // system that judges itself, never one that reads a trial and arms the red root again
+        self.s["phase"] = json!("rolling-back");
+        save(STATE, &self.s)?;
         let (rc, out) = sh(&rel_cmd(&adapter, &self.table(), "rollback")?, 300);
         if rc != 0 {
             log(&format!("the rollback command failed: {}", tail(&out, 500)));
         }
-        self.s["phase"] = json!("rolling-back");
         self.reboot("the rollback onto the old system", false)
     }
 
@@ -1584,7 +1595,6 @@ impl Worker {
                     return self.red("the trial boot came back on the old system twice");
                 } else {
                     log("the old system came up instead of the new root's trial boot: arming the trial once more");
-                    self.s["retries"][&key] = json!(n + 1);
                 }
                 let (rc, out) = sh(&rel_cmd(&adapter, &self.table(), "arm")?, 300);
                 if rc != 0 {
@@ -1593,7 +1603,18 @@ impl Worker {
                         tail(&out, 500)
                     ));
                 }
+                // the retry counts once its trial is armed, and reboot() saves it before the reboot: a power cut
+                // before the arm wastes no retry, one after it gives at most one trial more
+                if phase != "landed" {
+                    self.s["retries"][&key] = json!(n + 1);
+                }
                 self.reboot("the trial boot of the new root, again", false)
+            }
+            "hopping" | "finishing" => {
+                // the machine went down partway through a transaction on the new root (nothing was armed, so the
+                // default brought the old system back): that's the first red
+                let what = if phase == "hopping" { "a hop" } else { "the finish" };
+                self.red(&format!("the machine went down partway through {what}"))
             }
             p => {
                 log(&format!(
@@ -1663,6 +1684,7 @@ impl Worker {
             .iter()
             .map(|c| fill(c, &vars))
             .collect();
+        self.set("finishing")?;
         let mut recs = vec![];
         for g in &groups {
             let rm = step(
