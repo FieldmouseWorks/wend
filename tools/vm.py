@@ -28,6 +28,15 @@ not runs/ (runs/ holds what CI proved).
                                            copy pinned by CI's newest passing run in runs/, writes the plan, and
                                            passes only if each hop fired that run's fixes, every hop's kernel is in
                                            the plan's cache and the guest was only read (a fail logs its gap report)
+  python3 tools/vm.py --extra-disk GB upgrade ROUTE BOX --client WEND
+                                           `wend upgrade` by the client inside a fresh copy of BOX (SPEC "Proof"):
+                                           rehearsed from here as rehearse does, the binary, atlas and plan pushed in,
+                                           then the owner played over ssh until it lands (then `wend commit` and a
+                                           reboot) or rolls back, every boot judged by the harness too. On purpose:
+                                           --break-after HOP (a check broken after that hop: it must roll back by
+                                           itself), --reset-trial (a reset during the first trial boot), --kill-ssh
+                                           (the owner's session killed during the first hop), --rollback-by-hand
+                                           (`wend rollback` after landing)
   python3 tools/vm.py --extra-disk GB --relocate replay ROUTE BOX
                                            the same relocate (trial, commit) before ROUTE's first hop, every hop on the
                                            new root, then a rollback to the old root and forward again after the last
@@ -78,6 +87,7 @@ import shutil
 import signal
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -1731,45 +1741,20 @@ def prune(a, w, to, box_doc, out_dir, prev, key, port, hw, start_net, plan):
     return [{"to": "prune", "ok": True, "obsolete_before": len(pkgs), "obsolete_after": len(left), "attempts": steps}]
 
 
-def rehearse(route_path, box_id, client):
-    """SPEC "Order of work" 4: `wend rehearse` from this host on a fresh copy of BOX, running. The client copies the
-    guest's root over ssh, walks ROUTE on the copy, verified against CI's newest passing run of ROUTE on BOX
-    (runs/), and writes a plan; it passes only if each hop fired the fixes that run did, each hop's kernel was
-    downloaded into the plan's cache and the guest was only read."""
-    if os.geteuid() != 0:
-        raise SystemExit("rehearse runs the client's walk, which needs root (sudo -E)")
-    d, box_doc = build(box_id)
-    route = load(route_path)
-    a = guest_adapter(route["family"])
-    sandbox.ensure_mirror(load(f"adapters/{route['family']}.toml"))
+def ci_run_for(route, route_path, box_id):
+    """CI's newest passing run of ROUTE on BOX (runs/): what a rehearsal is pinned by."""
     rid = check.content_id(route)
     name = os.path.basename(route_path)[:-len(".toml")]
     runs = sorted(glob.glob(os.path.join(ROOT, "runs", route["family"], name, box_id.split("/")[1], "*.json")))
     ci = [p for p in runs if (j := json.load(open(p)))["route"] == rid and j["result"] == "pass"]
     if not ci:
         raise SystemExit(f"runs/ has no passing CI run of this {route_path} on {box_id} to pin the rehearsal by")
-    ci_path, ci_run = ci[-1], json.load(open(ci[-1]))
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    out_dir = os.path.join(ROOT, ".wend", "vm", f"{stamp}-{box_id.replace('/', '_')}-{FIRMWARE}-rehearse-{os.getpid()}")
-    os.makedirs(out_dir)
-    disk = os.path.join(out_dir, "rehearse.qcow2")
-    overlay(os.path.join(d, "base.qcow2"), disk)
-    g = Guest(disk, os.path.join(d, "key"), box_doc.get("vm", {}).get("ssh_port", 22), hardware(a, box_doc["release"]))
-    g.start()
-    run = {"schema": "wend.vmrehearse/0", "box": box_id, "route": rid, "started": stamp, "head": head(),
-           "firmware": FIRMWARE, "pinned_by": os.path.relpath(ci_path, ROOT),
-           "runner": {"kind": "vm", "host": os.uname().nodename, "kernel": os.uname().release}}
+    return ci[-1], json.load(open(ci[-1]))
 
-    def finish(result):
-        run["result"] = result
-        json.dump(run, open(os.path.join(out_dir, "run.json"), "w"), indent=1)
-        log(f"{result.upper()}: rehearse {box_id} on {route_path}; run and plan in {os.path.relpath(out_dir, ROOT)}")
-        g.stop()
-        return 0 if result == "pass" else 1
 
-    if not g.wait_ssh():
-        run["console_tail"] = open(g.console, errors="replace").read()[-4000:]
-        return finish("fail")
+def rehearse_guest(g, route_path, route, a, box_id, client, ci_path, ci_run, out_dir, run):
+    """`wend rehearse` from this host on the running guest g, recorded in run: whether it passed, i.e. each hop fired
+    the fixes CI's run did, every hop's kernel is in the plan's cache (out_dir/plan) and the guest was only read."""
     # read only: the boot and the package set (the adapter's installed_versions, the fingerprint's), before and after
     iv = load(f"adapters/{route['family']}.toml")["hop"]["installed_versions"]
     seen = f"cat /proc/sys/kernel/random/boot_id; ( {iv} ) | sha256sum"
@@ -1793,7 +1778,7 @@ def rehearse(route_path, box_id, client):
         for f in sorted(glob.glob(os.path.join(out_dir, "wend-gap-*.md"))):
             run["gap_report"] = os.path.relpath(f, ROOT)
             log(f"gap report: {run['gap_report']}")
-        return finish("fail")
+        return False
     plan = json.load(open(plan_path))
     want = {h["to"]: sorted(h["fired"]) for h in ci_run["hops"]}
     got = {h["to"]: sorted(h["fired"]) for h in plan["hops"]}
@@ -1812,7 +1797,305 @@ def rehearse(route_path, box_id, client):
     run["plan"]["kernel_cached"] = {h["to"]: h["kernel_cached"] for h in plan["hops"]}
     kernels = not a.get("hop", {}).get("kernel_fetch") or all(run["plan"]["kernel_cached"].values())
     log(f"kernels cached: {run['plan']['kernel_cached']}")
-    return finish("pass" if run["machine_untouched"] and run["fired_match"] and gen and kernels else "fail")
+    return run["machine_untouched"] and run["fired_match"] and gen and kernels
+
+
+def rehearse(route_path, box_id, client):
+    """SPEC "Order of work" 4: `wend rehearse` from this host on a fresh copy of BOX, running. The client copies the
+    guest's root over ssh, walks ROUTE on the copy, verified against CI's newest passing run of ROUTE on BOX
+    (runs/), and writes a plan; it passes only if each hop fired the fixes that run did, each hop's kernel was
+    downloaded into the plan's cache and the guest was only read."""
+    if os.geteuid() != 0:
+        raise SystemExit("rehearse runs the client's walk, which needs root (sudo -E)")
+    d, box_doc = build(box_id)
+    route = load(route_path)
+    a = guest_adapter(route["family"])
+    sandbox.ensure_mirror(load(f"adapters/{route['family']}.toml"))
+    ci_path, ci_run = ci_run_for(route, route_path, box_id)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    out_dir = os.path.join(ROOT, ".wend", "vm", f"{stamp}-{box_id.replace('/', '_')}-{FIRMWARE}-rehearse-{os.getpid()}")
+    os.makedirs(out_dir)
+    disk = os.path.join(out_dir, "rehearse.qcow2")
+    overlay(os.path.join(d, "base.qcow2"), disk)
+    g = Guest(disk, os.path.join(d, "key"), box_doc.get("vm", {}).get("ssh_port", 22), hardware(a, box_doc["release"]))
+    g.start()
+    run = {"schema": "wend.vmrehearse/0", "box": box_id, "route": check.content_id(route), "started": stamp,
+           "head": head(), "firmware": FIRMWARE, "pinned_by": os.path.relpath(ci_path, ROOT),
+           "runner": {"kind": "vm", "host": os.uname().nodename, "kernel": os.uname().release}}
+
+    def finish(result):
+        run["result"] = result
+        json.dump(run, open(os.path.join(out_dir, "run.json"), "w"), indent=1)
+        log(f"{result.upper()}: rehearse {box_id} on {route_path}; run and plan in {os.path.relpath(out_dir, ROOT)}")
+        g.stop()
+        return 0 if result == "pass" else 1
+
+    if not g.wait_ssh():
+        run["console_tail"] = open(g.console, errors="replace").read()[-4000:]
+        return finish("fail")
+    return finish("pass" if rehearse_guest(g, route_path, route, a, box_id, client, ci_path, ci_run, out_dir, run)
+                  else "fail")
+
+
+# vm.py upgrade (SPEC "Upgrading a running machine", "Proof"): what the harness does to the guest on purpose, from
+# main's flags. break_after: a hop name; after that hop's boot the harness breaks a check in the guest, so the client
+# must roll back by itself. reset_trial: QEMU's system_reset during the first trial boot (relocate's), which must come
+# back on the old system. kill_ssh: the owner's ssh session killed while the first hop's transaction runs.
+# rollback_by_hand: `wend rollback` after landing, instead of `wend commit`.
+UPGRADE = {"break_after": None, "reset_trial": False, "kill_ssh": False, "rollback_by_hand": False}
+# what breaks a check on the new root only: the web server stopped and kept from starting (a LAMP box's web checks)
+BREAK = ("if command -v systemctl >/dev/null && [ -d /run/systemd/system ]; then systemctl mask --now httpd; "
+         "else service httpd stop; chkconfig httpd off; fi")
+STATE_JSON = "cat /var/lib/wend/upgrade/state.json"
+CLIENT_IN_GUEST = "/root/wend-client"
+
+
+def push_dir(g, src, dst, timeout=3600):
+    """The host directory src (its contents, numeric owners and modes kept) into the guest at dst, replacing it."""
+    with tempfile.TemporaryFile() as err:
+        tar = subprocess.Popen(["tar", "-C", src, "--numeric-owner", "-cf", "-", "."], stdout=subprocess.PIPE,
+                               stderr=err)
+        try:
+            p = subprocess.run(g.ssh_argv(f"rm -rf {dst} && mkdir -p {dst} && tar -C {dst} --numeric-owner -xpf -"),
+                               stdin=tar.stdout, capture_output=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            tar.kill()
+            return 124, "TIMEOUT"
+        finally:
+            tar.stdout.close()
+            tar.wait()
+        err.seek(0)
+        return p.returncode or tar.returncode, (p.stdout + p.stderr + err.read()).decode(errors="replace")
+
+
+def guest_state(g):
+    rc, out = g.ssh(STATE_JSON, timeout=60)
+    try:
+        return json.loads(out) if rc == 0 else None
+    except ValueError:
+        return None
+
+
+def owner(g, cmd, kill_after=None):
+    """The owner running `wend upgrade` over ssh, as a loop would: its exit status and output. With kill_after (s),
+    the session is killed that long in, as a dropped connection would; the work goes on detached in the guest."""
+    p = subprocess.Popen(g.ssh_argv(cmd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                         errors="replace")
+    try:
+        out, _ = p.communicate(timeout=kill_after or 6 * 3600)
+        return p.returncode, out
+    except subprocess.TimeoutExpired:
+        p.kill()
+        out, _ = p.communicate()
+        return None, (out or "") + f"\n[harness: the owner's ssh session killed after {kill_after} s]"
+
+
+def wait_boot(g, before, timeout=1500):
+    """Wait for a boot other than `before` to answer over ssh (the client reboots by itself, and resets by itself
+    when `reboot` does nothing). Whether one did."""
+    t = time.time()
+    while time.time() - t < timeout and g.running():
+        now = g.boot_id()
+        if now and now != before:
+            return True
+        time.sleep(10)
+    return False
+
+
+def dynamic(path):
+    """Whether the ELF at PATH asks for a program interpreter (ld.so): the owner's copy runs on the box's own libc,
+    which on an old release is older than the build host's, so it has to be static."""
+    with open(path, "rb") as f:
+        h = f.read(64)
+        if h[:4] != b"\x7fELF" or h[4] != 2:
+            raise SystemExit(f"{path} isn't a 64-bit ELF binary")
+        phoff, phentsize, phnum = struct.unpack_from("<Q", h, 32)[0], *struct.unpack_from("<HH", h, 54)
+        for i in range(phnum):
+            f.seek(phoff + i * phentsize)
+            if struct.unpack("<I", f.read(4))[0] == 3:  # PT_INTERP
+                return True
+    return False
+
+
+def upgrade(route_path, box_id, client):
+    """SPEC "Proof": `wend upgrade` run by the client inside a fresh copy of BOX, the owner played from this host. The
+    client is rehearsed from here (`wend rehearse --from` the running guest), its binary, the atlas and the plan go
+    into the guest, and `wend upgrade` runs over ssh, again after each boot, until it exits 0, 20, 21 or 30. The
+    harness judges every boot on its own (which root, the network, the box's checks, the newest kernel, the
+    firmware) and the run passes only if every boot is green by both the client's verdict and its own; then `wend
+    commit` and a plain reboot onto the committed root. UPGRADE's flags make it fail or stumble on purpose."""
+    if os.geteuid() != 0:
+        raise SystemExit("upgrade rehearses with the client's walk, which needs root (sudo -E)")
+    if dynamic(client):
+        raise SystemExit(f"{client} is dynamically linked, so it won't run on an old box's libc: build it static "
+                         "(cargo build --release --locked --target x86_64-unknown-linux-musl)")
+    d, box_doc = build(box_id)
+    route = load(route_path)
+    a = guest_adapter(route["family"])
+    relocate_ready(a)
+    hw = hardware(a, box_doc["release"])
+    sandbox.ensure_mirror(load(f"adapters/{route['family']}.toml"))
+    ci_path, ci_run = ci_run_for(route, route_path, box_id)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    tag = "-".join(filter(None, [FIRMWARE, layout_tag()]))
+    out_dir = os.path.join(ROOT, ".wend", "vm", f"{stamp}-{box_id.replace('/', '_')}-{tag}-upgrade-{os.getpid()}")
+    os.makedirs(out_dir)
+    disk = os.path.join(out_dir, "upgrade.qcow2")
+    overlay(os.path.join(d, "base.qcow2"), disk)
+    g = Guest(disk, os.path.join(d, "key"), box_doc.get("vm", {}).get("ssh_port", 22), hw)
+    g.start()
+    boots, rehearsal = [], {}
+    run = {"schema": "wend.vmrun/0", "route": check.content_id(route), "box": box_id, "from": route["from"],
+           "to": route["to"], "started": stamp, "head": head(), "firmware": FIRMWARE,
+           "layout": {k: v for k, v in LAYOUT.items() if v}, "pinned_by": os.path.relpath(ci_path, ROOT),
+           "scenario": {k: v for k, v in UPGRADE.items() if v}, "rehearsal": rehearsal, "boots": boots,
+           "runner": {"kind": "vm-client", "host": os.uname().nodename, "kernel": os.uname().release}}
+
+    def finish(result, why=""):
+        run["result"], run["why"] = result, why
+        st = guest_state(g) if g.running() else None
+        if st:
+            run["client_state"] = st
+        json.dump(run, open(os.path.join(out_dir, "run.json"), "w"), indent=1)
+        log(f"{result.upper()}: upgrade {box_id} on {route_path}{': ' + why if why else ''}; run in "
+            f"{os.path.relpath(out_dir, ROOT)}")
+        if g.running():
+            _, o = g.ssh("cat /var/lib/wend/upgrade/upgrade.log", timeout=120)
+            open(os.path.join(out_dir, "client-upgrade.log"), "w").write(o)
+        g.stop()
+        return 0 if result == "pass" else 1
+
+    if not g.wait_ssh():
+        run["console_tail"] = open(g.console, errors="replace").read()[-4000:]
+        return finish("fail", "the guest didn't come up")
+    start_net = net_read(g, {})
+    if f"default via {GUEST_HOST}" not in start_net or ADDR not in start_net:
+        return finish("fail", f"the box's network can't be read at the start: {start_net!r}")
+    before = checks(g, box_doc, a)
+    run["start_checks"] = sorted(n for n, (ok, _) in before.items() if ok)
+    if not rehearse_guest(g, route_path, route, a, box_id, client, ci_path, ci_run, out_dir, rehearsal):
+        return finish("fail", "the rehearsal failed")
+    # the owner's copy of wend, the atlas and the plan, carried to the machine
+    with open(client, "rb") as f:
+        p = subprocess.run(g.ssh_argv(f"cat > {CLIENT_IN_GUEST} && chmod 755 {CLIENT_IN_GUEST}"), stdin=f,
+                           capture_output=True, timeout=600)
+    if p.returncode:
+        return finish("fail", f"copying the client into the guest failed: {p.stderr[-300:]!r}")
+    atlas = os.path.join(out_dir, "atlas")
+    os.makedirs(atlas)
+    for x in ("adapters", "fixes", "routes", "runs", ".wend/sonames"):
+        if os.path.exists(os.path.join(ROOT, x)):
+            os.makedirs(os.path.dirname(os.path.join(atlas, x)), exist_ok=True)
+            shutil.copytree(os.path.join(ROOT, x), os.path.join(atlas, x))
+    for src, dst in ((atlas, "/root/wend-atlas"), (os.path.join(out_dir, "plan"), "/root/wend-plan")):
+        rc, o = push_dir(g, src, dst)
+        if rc:
+            return finish("fail", f"copying {src} into the guest failed: {o[-300:]}")
+    table = "relocate_grub_legacy" if "relocate_grub_legacy" in a and \
+        g.ssh("[ -f /boot/grub/grub.conf ] && [ ! -e /boot/grub2 ]")[0] == 0 else "relocate"
+    booted_cmd = a[table]["booted"]
+    cmd = (f"{CLIENT_IN_GUEST} --atlas /root/wend-atlas upgrade /root/wend-plan "
+           f"--new-root-disk {new_disk(hw)}")
+    calls, landed, rolled_back, reset_done, killed, broke = [], False, False, False, False, False
+    for _ in range(60):
+        prev = g.boot_id()
+        st = guest_state(g) or {}
+        kill_after = 120 if UPGRADE["kill_ssh"] and not killed and st.get("phase") == "relocated" else None
+        t0 = time.time()
+        rc, out = owner(g, cmd, kill_after)
+        killed = killed or kill_after is not None
+        calls.append({"cmd": cmd, "rc": rc, "seconds": round(time.time() - t0), "tail": out[-3000:]})
+        log(f"wend upgrade: rc {rc} after {round(time.time() - t0)} s\n{out[-1500:]}")
+        cmd = f"{CLIENT_IN_GUEST} upgrade"
+        if rc is None or rc == 255:  # the session dropped: the work goes on; a reboot may have started
+            time.sleep(30)
+            if not g.wait_ssh(timeout=1500):
+                return finish("fail", "the guest stopped answering after the owner's session dropped")
+            if g.boot_id() in (None, prev):
+                continue  # the same boot: `wend upgrade` again follows the work
+            rc = 10
+        if rc in (0, 20, 21):
+            landed = rc == 0
+            break
+        if rc == 30:
+            rolled_back = True
+            break
+        if rc != 10:
+            return finish("fail", f"wend upgrade exited {rc}")
+        if not wait_boot(g, prev) or not g.wait_ssh():
+            return finish("fail", "the guest didn't come back from the client's reboot")
+        # the harness's own judgment of the boot that came up
+        st = guest_state(g) or {}
+        _, kv = g.ssh("uname -r; " + a["hop"]["kernel_newest"])
+        k = (kv.split() + [None, None])[:2]
+        after = checks(g, box_doc, a)
+        b = {"client_phase": st.get("phase"), "hop_to": st.get("hop_to"),
+             "booted": g.ssh(booted_cmd)[1].strip(), "net_kept": net_read(g, {}) == start_net,
+             "lost": sorted(n for n, (ok, _) in before.items() if ok and not after.get(n, (False,))[0]),
+             "kernel": k[0], "kernel_current": kernel_is(*k), "firmware": g.ssh(FW_NOW)[1].strip()}
+        b["ok"] = b["net_kept"] and not b["lost"] and b["kernel_current"] and b["firmware"] == FIRMWARE
+        log(f"harness: boot {len(boots) + 1} on the {b['booted']} root, client phase {b['client_phase']}: "
+            f"{'green' if b['ok'] else 'RED'} (lost {b['lost']}, network kept {b['net_kept']}, kernel {b['kernel']})")
+        boots.append(b)
+        if UPGRADE["reset_trial"] and not reset_done and b["client_phase"] == "relocated" and b["booted"] == "new":
+            reset_done = True
+            came = g.reset()
+            r = {"reset_during_trial": True, "came_back": came, "booted": g.ssh(booted_cmd)[1].strip() if came else None}
+            log(f"harness: reset during the trial boot; came back on the {r['booted']} root")
+            boots.append(r)
+            if r["booted"] != "old":
+                return finish("fail", "a reset during the trial boot didn't come back on the old system")
+        if UPGRADE["break_after"] and not broke and b["client_phase"] == "after-hop" and \
+                b["hop_to"] == UPGRADE["break_after"] and b["booted"] == "new":
+            broke = True
+            rc3, o3 = g.ssh(BREAK)
+            log(f"harness: broke a check on the new root after the hop to {b['hop_to']} (rc {rc3}): {o3[-300:]}")
+            boots[-1]["broken_on_purpose"] = True
+    else:
+        return finish("fail", "wend upgrade didn't end in 60 runs")
+    run["owner_calls"] = calls
+    st = guest_state(g) or {}
+    client_hops = st.get("hops", [])
+    harness_red = [b for b in boots if b.get("ok") is False and b.get("booted") == "new" and not b.get("broken_on_purpose")]
+    if UPGRADE["break_after"]:
+        # the client must have rolled back by itself, onto the old system as it was at the start
+        old = g.ssh(booted_cmd)[1].strip()
+        after = checks(g, box_doc, a)
+        lost = sorted(n for n, (ok, _) in before.items() if ok and not after.get(n, (False,))[0])
+        run["after_rollback"] = {"booted": old, "lost": lost, "net_kept": net_read(g, {}) == start_net,
+                                 "kernel": g.ssh("uname -r")[1].strip(), "client_phase": st.get("phase")}
+        ok = rolled_back and broke and old == "old" and not lost and run["after_rollback"]["net_kept"] and \
+            st.get("phase") == "rolled-back"
+        return finish("pass" if ok else "fail", "" if ok else f"the rollback: {run['after_rollback']}")
+    if not landed:
+        return finish("fail", f"the client didn't land: phase {st.get('phase')}, why {st.get('why')}")
+    if harness_red or not client_hops or not all(h.get("ok") for h in client_hops):
+        return finish("fail", f"a boot was red: harness {harness_red}, client {[h.get('to') for h in client_hops if not h.get('ok')]}")
+    if UPGRADE["rollback_by_hand"]:
+        prev = g.boot_id()
+        rc, out = owner(g, f"{CLIENT_IN_GUEST} rollback")
+        calls.append({"cmd": "wend rollback", "rc": rc, "tail": out[-3000:]})
+        if rc != 10 or not wait_boot(g, prev) or not g.wait_ssh():
+            return finish("fail", f"wend rollback exited {rc}, or the guest didn't come back")
+        rc, out = owner(g, f"{CLIENT_IN_GUEST} upgrade")
+        calls.append({"cmd": "wend upgrade", "rc": rc, "tail": out[-3000:]})
+        after = checks(g, box_doc, a)
+        lost = sorted(n for n, (ok, _) in before.items() if ok and not after.get(n, (False,))[0])
+        run["after_rollback"] = {"booted": g.ssh(booted_cmd)[1].strip(), "lost": lost, "rc": rc,
+                                 "net_kept": net_read(g, {}) == start_net, "kernel": g.ssh("uname -r")[1].strip()}
+        ok = rc == 30 and run["after_rollback"]["booted"] == "old" and not lost and run["after_rollback"]["net_kept"]
+        return finish("pass" if ok else "fail", "" if ok else f"the rollback by hand: {run['after_rollback']}")
+    rc, out = owner(g, f"{CLIENT_IN_GUEST} commit")
+    calls.append({"cmd": "wend commit", "rc": rc, "tail": out[-3000:]})
+    if rc != 0:
+        return finish("fail", f"wend commit exited {rc}")
+    back, forced = g.reboot()  # a plain reboot, nothing armed: the committed root is the default now
+    after = checks(g, box_doc, a) if back else {}
+    lost = sorted(n for n, (ok, _) in before.items() if ok and not after.get(n, (False,))[0])
+    run["after_commit"] = {"came_back": back, "forced": forced, "booted": g.ssh(booted_cmd)[1].strip() if back else None,
+                           "lost": lost, "release": g.ssh("cat /etc/redhat-release")[1].strip() if back else None}
+    ok = back and run["after_commit"]["booted"] == "new" and not lost
+    return finish("pass" if ok else "fail", "" if ok else f"after commit: {run['after_commit']}")
 
 
 def main(args):
@@ -1827,6 +2110,10 @@ def main(args):
                     raise SystemExit(f"--uefi needs OVMF ({f}; Debian and Ubuntu: the ovmf package)")
         elif args[0] == "--no-hwaddr":
             LAYOUT["no_hwaddr"], args = True, args[1:]
+        elif args[0] == "--break-after" and len(args) > 1:
+            UPGRADE["break_after"], args = args[1], args[2:]
+        elif args[0] in ("--reset-trial", "--kill-ssh", "--rollback-by-hand"):
+            UPGRADE[args[0][2:].replace("-", "_")], args = True, args[1:]
         elif args[0] == "--selinux" and len(args) > 1 and args[1] in SELINUX_MAKE:
             SELINUX, args = args[1], args[2:]
         elif args[0] == "--lvm":
@@ -1840,9 +2127,11 @@ def main(args):
     if SELINUX and (args[:1] != ["replay"] or RELOCATE):
         # relocate's boots aren't held to the mode yet, and a build is the box as installed
         raise SystemExit("--selinux is for replay, without --relocate, so far")
+    if any(UPGRADE.values()) and args[:1] != ["upgrade"]:
+        raise SystemExit("--break-after, --reset-trial, --kill-ssh and --rollback-by-hand are for upgrade")
     if args[:1] == ["shim-stop"] and len(args) == 2 and args[1].isdigit():
         return shim_stop(int(args[1]))
-    if args[:1] in (["build"], ["replay"], ["relocate"], ["rehearse"]):
+    if args[:1] in (["build"], ["replay"], ["relocate"], ["rehearse"], ["upgrade"]):
         use_shim()
     if args[:1] == ["build"] and len(args) == 2:
         build(args[1])
@@ -1853,6 +2142,8 @@ def main(args):
         return replay(args[1], args[2], (args[4], args[5]))
     if args[:1] == ["rehearse"] and len(args) == 5 and args[3] == "--client" and not RELOCATE:
         return rehearse(args[1], args[2], os.path.abspath(args[4]))
+    if args[:1] == ["upgrade"] and len(args) == 5 and args[3] == "--client" and not RELOCATE:
+        return upgrade(args[1], args[2], os.path.abspath(args[4]))
     if args[:1] == ["relocate"] and len(args) == 2 and not RELOCATE:
         return relocate(args[1])
     return __doc__

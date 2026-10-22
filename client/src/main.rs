@@ -17,6 +17,7 @@ mod report;
 mod runtime;
 mod sandbox;
 mod share;
+mod upgrade;
 mod walk;
 
 use atlas::{get, str_of, Atlas, Doc};
@@ -128,6 +129,11 @@ fn main() -> ExitCode {
         facts: facts.clone(),
     };
     let redact: Vec<String> = std::iter::from_fn(|| opt(&mut args, "--redact")).collect();
+    let upgrade_opts = upgrade::UpgradeOpts {
+        new_root_disk: opt(&mut args, "--new-root-disk"),
+        status: flag(&mut args, "--status"),
+        work: flag(&mut args, "--work"),
+    };
     let Some(cmd) = args.first().cloned() else {
         println!("{USAGE}");
         return ExitCode::from(2);
@@ -147,6 +153,11 @@ fn main() -> ExitCode {
         };
         println!("{}", serde_json::to_string_pretty(&f).unwrap());
         return ExitCode::SUCCESS;
+    }
+    // SPEC "Upgrading a running machine": exit codes a loop can drive, and an atlas of its own once under way
+    match cmd.as_str() {
+        "upgrade" | "rollback" | "commit" => return ExitCode::from(upgrade::main(&root, &args, &upgrade_opts)),
+        _ => {}
     }
     if cmd == "share" && args.len() <= 2 {
         // the atlas is optional: without one the report has the facts and no verdict
@@ -532,6 +543,8 @@ pub struct Walked {
     pub served: Vec<(String, PathBuf)>,
     /// every step the walk took, with its commands' output (`--steps` writes the same)
     pub steps: Vec<Value>,
+    /// each removal its prune kept
+    pub pruned: Vec<Vec<String>>,
 }
 
 /// `wend walk` (and the walk `wend rehearse` makes): its run, and what a plan needs from the walk.
@@ -812,6 +825,7 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<Walked, String> 
         cache: proxy.as_ref().map(|p| p.cache().to_path_buf()),
         served: proxy.as_ref().map(|p| p.served()).unwrap_or_default(),
         steps: w.steps().to_vec(),
+        pruned: w.pruned.clone(),
     })
 }
 

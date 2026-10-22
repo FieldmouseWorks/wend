@@ -165,6 +165,11 @@ for args, what in (
          "a replay --relocate with no extra disk"),
         (["build", "el/c7", "--sha", main, "--by", "t", "--vm-flags", "--relocate --extra-disk 20"],
          "--relocate on a job that isn't a replay"),
+        (["upgrade", "routes/el/c7-to-a10.toml", "el/c7", "--sha", main, "--by", "t"], "an upgrade with no extra disk"),
+        (["replay", "routes/el/c7-to-a10.toml", "el/c7", "--sha", main, "--by", "t", "--vm-flags",
+          "--reset-trial"], "an upgrade's stumble on a replay"),
+        (["upgrade", "routes/el/c7-to-a10.toml", "el/c7", "--sha", main, "--by", "t", "--vm-flags",
+          "--extra-disk 20 --break-after 'alma9; reboot'"], "a hop name that isn't one"),
         (["shell", "--sha", main, "--by", "t"], "a job that doesn't exist")):
     rc, out = remi("enqueue", *args, env=NOW)
     check(rc != 0 and "refused" in out, f"enqueue refuses {what}")

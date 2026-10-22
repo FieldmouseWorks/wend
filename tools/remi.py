@@ -20,10 +20,13 @@ Jobs (ROUTE is routes/<family>/<name>.toml, BOX is <family>/<name>, both as they
   replay ROUTE BOX       tools/vm.py replay ROUTE BOX
   relocate BOX           tools/vm.py relocate BOX (give it --vm-flags "--extra-disk GB")
   rehearse ROUTE BOX     the client built with cargo build --release --locked, then tools/vm.py rehearse, as root
+  upgrade ROUTE BOX      the client built static (--target x86_64-unknown-linux-musl, it runs inside the old box), then
+                         tools/vm.py upgrade, as root (--vm-flags "--extra-disk GB",
+                         and on purpose --break-after HOP, --reset-trial, --kill-ssh or --rollback-by-hand)
 
 --vm-flags takes vm.py's flags before the command: --uefi --no-hwaddr --lvm --relocate --root-fs FS --extra-disk GB
---selinux MODE (a replay only).
-VM jobs run as dev under `sg kvm` with WEND_WORK=<lab>/vmwork, except a rehearse and any job on a box with a [shelter]
+--selinux MODE (a replay only), --break-after HOP --reset-trial --kill-ssh --rollback-by-hand (an upgrade only).
+VM jobs run as dev under `sg kvm` with WEND_WORK=<lab>/vmwork, except a rehearse, an upgrade and any job on a box with a [shelter]
 plan, which run as root (sudo -n) with WEND_WORK=<lab>/vmwork-root, as they always have on remi.
 
 What it enforces, so nobody has to remember it:
@@ -32,7 +35,7 @@ What it enforces, so nobody has to remember it:
 - Each job runs in its own worktree, <src>/wend-<PR or main>-<sha12> (…-root for root's jobs), created from <src>/wend
   at SHA; a worktree that exists must be at SHA with `git status --porcelain` empty, or the job is refused. Worktrees
   are left in place.
-- Slots: one rehearse at a time; at most 3 VM jobs (rehearse included) and 2 test jobs at once. A queued job starts
+- Slots: one rehearse or upgrade at a time; at most 3 VM jobs (rehearse included) and 2 test jobs at once. A queued job starts
   when its slot is free, everything ranked before it in its class has started, and its --after job has ended.
 - The mirror shim (tools/mirror.py on 8085) is shared only by jobs whose tools/mirror.py is byte for byte the same. A
   job whose mirror.py differs waits for the VM jobs using the other one; a shim from another checkout that nothing
@@ -68,6 +71,7 @@ LAB = os.environ.get("WEND_LAB", "/data/wend-lab")
 SRC = os.environ.get("WEND_LAB_SRC", "/data/dev/src")
 BASE = os.path.join(SRC, "wend")  # the clone every job's worktree is added from
 CARGO = os.environ.get("WEND_LAB_CARGO", "/data/dev/cache/cargo/bin/cargo")
+MUSL = "x86_64-unknown-linux-musl"
 QUEUE, LOGS = os.path.join(LAB, "queue"), os.path.join(LAB, "logs")
 WORK = {"dev": os.path.join(LAB, "vmwork"), "root": os.path.join(LAB, "vmwork-root")}
 # tests only (tools/test_remi.py): run root's and kvm's commands as the caller, and skip the runner's own origin check
@@ -83,12 +87,17 @@ JOBS = {  # name: (slot class, argument patterns, hours before it is stopped)
     "replay": ("vm", [ROUTE, BOX], 8),
     "relocate": ("vm", [BOX], 3),
     "rehearse": ("rehearse", [ROUTE, BOX], 4),
+    "upgrade": ("rehearse", [ROUTE, BOX], 10),
 }
 SLOTS = {"rehearse": 1, "vm": 1, "tests": 2}  # a rehearse also takes the vm slot: VM jobs share the one shim
 VM_FLAGS = {"--uefi": None, "--no-hwaddr": None, "--lvm": None, "--relocate": None,
             # what tools/vm.py's main takes: ROOT_FS's keys, and 1 to 500 GB
             "--root-fs": re.compile(r"ext3|ext4|xfs|xfs-v4"), "--extra-disk": re.compile(r"[1-9][0-9]?|[1-4][0-9]{2}|500"),
-            "--selinux": re.compile(r"enforcing|none")}
+            "--selinux": re.compile(r"enforcing|none"),
+            # tools/vm.py upgrade's on-purpose stumbles (SPEC "Proof")
+            "--break-after": re.compile(r"[a-z][a-z0-9]*"), "--reset-trial": None, "--kill-ssh": None,
+            "--rollback-by-hand": None}
+UPGRADE_FLAGS = ("--break-after", "--reset-trial", "--kill-ssh", "--rollback-by-hand")
 DONE = ("done", "refused", "error", "cancelled")
 
 
@@ -281,6 +290,10 @@ def enqueue(args):
         raise Refused("--relocate goes with a replay only")
     if "--selinux" in flags and (job != "replay" or "--relocate" in flags):
         raise Refused("--selinux goes with a replay only, without --relocate")
+    if job == "upgrade" and "--extra-disk" not in flags:
+        raise Refused("an upgrade relocates first: --vm-flags \"--extra-disk GB\"")
+    if job != "upgrade" and any(f in flags for f in UPGRADE_FLAGS):
+        raise Refused(f"{', '.join(UPGRADE_FLAGS)} go with an upgrade only")
     runner_check()
     where = trusted(sha, pr)
     with QueueLock():
@@ -527,7 +540,7 @@ def job_user(e):
         if subprocess.run(["git", "-C", BASE, "cat-file", "-e", f"{e['sha']}:{path}"], capture_output=True).returncode:
             raise Refused(f"{a} doesn't exist at {e['sha']}")
     box = tomllib.loads(git("show", f"{e['sha']}:boxes/{e['args'][-1]}/box.toml"))
-    return "root" if e["job"] == "rehearse" or "shelter" in box else "dev"
+    return "root" if e["job"] in ("rehearse", "upgrade") or "shelter" in box else "dev"
 
 
 def worktree(e, user):
@@ -705,13 +718,15 @@ def tests(v, wt, deadline):
 def vm_job(e, v, wt, deadline):
     user = v["user"]
     tail = list(e["args"])
-    if e["job"] == "rehearse":
-        c = command(v, "cargo-build", as_user("dev", [CARGO, "build", "--release", "--locked"], os.path.join(wt, "client")),
-                    os.path.join(wt, "client"), deadline)
+    if e["job"] in ("rehearse", "upgrade"):
+        # an upgrade's client runs inside the old box, on its libc: static, as released
+        target = ["--target", MUSL] if e["job"] == "upgrade" else []
+        c = command(v, "cargo-build", as_user("dev", [CARGO, "build", "--release", "--locked", *target],
+                                              os.path.join(wt, "client")), os.path.join(wt, "client"), deadline)
         if c["rc"]:
             v["reasons"].append(f"cargo build exited {c['rc']}")
             return
-        tail += ["--client", "client/target/release/wend"]
+        tail += ["--client", f"client/target/{MUSL}/release/wend" if target else "client/target/release/wend"]
     argv = ["python3", "-P", "-u", "tools/vm.py", *e["vm_flags"], e["job"], *tail]
     c = command(v, e["job"], as_user(user, argv, wt), wt, deadline)
     found = RUN_LINE.findall(open(c["log"], errors="replace").read())
