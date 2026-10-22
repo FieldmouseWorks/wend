@@ -101,9 +101,10 @@ Archiving isn't a job. The hourly archive cycle on remi (docs/archive.md, "Keepi
 
 VM runs fill remi's disk fast (about 200 GB a day in October 2026): every run directory keeps its hop disks, and every
 change to a box, `adapters/el.toml` or vm.py's install code makes a new installed box beside the old ones. A daily
-timer, `archive/remi/wend-prune.timer`, runs `tools/lab_prune.py --apply` as root from wend-runner (so main's copy
-decides). It strips run directories nothing has written to in 3 days down to their run.json, logs and plan (remi.py's
-verdict already holds every run.json), and deletes installed boxes no current head can reuse, by recomputing vm.py's
+timer, `archive/remi/wend-prune.timer`, runs `tools/lab_prune.py --apply` as root from a root-owned clone of main,
+`/var/lib/wend/prune-main`, so main's copy decides and nothing dev can write runs as root. It strips run directories
+nothing has written to in 3 days down to their run.json, logs and plan (remi.py's verdict already holds every
+run.json), and deletes installed boxes no current head can reuse, by recomputing vm.py's
 box key at every branch tip on origin and queued job. Anything held open, a queued or running job's worktree, a box
 being installed or one a kept run's disk backs onto stays. `python3 -P tools/lab_prune.py` alone says what it would
 delete. Worktrees, logs, the archive, salvage and the mirror caches are never its business.

@@ -49,7 +49,8 @@ class Unsure(Exception):
 
 
 def git(base, *a, text=True):
-    """git in the base clone, read-only; any failure is Unsure."""
+    """git in the base clone, read-only; any failure is Unsure. dev owns that clone and this runs as root: plumbing
+    only (cat-file, not show), so nothing in its config or attributes gets a say in what runs."""
     r = subprocess.run(["git", "-c", "safe.directory=*", "-C", base, *a], capture_output=True, text=text,
                        env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
     if r.returncode:
@@ -276,13 +277,13 @@ def box_sources(base, commits):
         for path in sorted(files):
             if not (path.startswith("boxes/") and path.endswith("/box.toml")):
                 continue
-            raw_box = git(base, "show", f"{c}:{path}", text=False).stdout
+            raw_box = git(base, "cat-file", "blob", f"{c}:{path}", text=False).stdout
             try:
                 fam = tomllib.loads(raw_box.decode())["family"]
             except (ValueError, KeyError, UnicodeDecodeError):
                 continue
             if f"adapters/{fam}.toml" in files:
-                raw_ad = git(base, "show", f"{c}:adapters/{fam}.toml", text=False).stdout
+                raw_ad = git(base, "cat-file", "blob", f"{c}:adapters/{fam}.toml", text=False).stdout
                 out.setdefault(path[len("boxes/"):-len("/box.toml")], set()).add((raw_box, raw_ad, bs))
     return out
 
