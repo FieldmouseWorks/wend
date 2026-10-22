@@ -2555,7 +2555,8 @@ pinned. wend puts back no other repository and carries no other configuration. O
 - The rehearsal works out the same thing on the upgraded copy (a different key already at the key's path, or a repo file
   path an installed package owns, included): `plan.json`'s `landing_addons` lists each add-on as
   `{addon, url}` or `{addon, none: why}`, the rehearsal prints it, and `upgrade` prints every `none` again before it
-  starts. It doesn't refuse: the packages run, they just won't update, and the owner has read that first.
+  starts, with the same check run on the machine itself (a fleet machine that matches the plan can still hold
+  another key). It doesn't refuse: the packages run, they just won't update, and the owner has read that first.
 - The run's `repos` table: `before` (what was copied), `addons` (what was written, or why not) and `files`, one row per
   removed file with its outcome: `replaced` (wend's add-on file is at its path, or one of its URLs names that add-on's
   host; the row has the old URLs as `was` and the new one as `now`, so an owner on nginx.org's mainline sees they are

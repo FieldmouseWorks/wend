@@ -434,33 +434,19 @@ pub fn cmd_rehearse(atlas: &Atlas, route: &str, o: &WalkOpts, r: &RehearseOpts) 
     if crate::backend::backend_of(crate::adapter_of(atlas, rdoc)?) == "rpm" {
         let copy = crate::sandbox::Root::new(Path::new(root))?;
         let to = str_of(rdoc, "to")?;
-        for a in crate::upgrade::landing_addons(crate::adapter_of(atlas, rdoc)?, to, &|t| {
-            copy.run(&format!("{t} >/dev/null 2>&1"), 600, false).0 == 0
-        }) {
-            let repo = match &a.repo {
-                Ok(r) => match crate::upgrade::key_conflict(Path::new(root), r) {
-                    Some(why) => Err(why),
-                    // a package that owns the path (the hops removed the file, the database still lists it) puts
-                    // it back when the landing reinstalls the repo packages, and then wend writes none there
-                    None if copy.run(&format!("rpm -qf {} >/dev/null 2>&1", r.file), 600, false).0 == 0 => {
-                        Err(format!(
-                            "{} belongs to an installed package, which puts it back at landing",
-                            r.file
-                        ))
-                    }
-                    None => Ok(r),
-                },
-                Err(why) => Err(why.clone()),
-            };
-            match repo {
-                Ok(r) => {
-                    eprintln!("at landing wend writes {} for {} ({})", r.file, a.name, r.url);
-                    landing_addons.push(json!({"addon": a.name, "url": r.url}));
-                }
-                Err(why) => {
-                    eprintln!("at landing {}'s packages get no repo, so no updates: {why}", a.name);
-                    landing_addons.push(json!({"addon": a.name, "none": why}));
-                }
+        let run = |t: &str| copy.run(&format!("{t} >/dev/null 2>&1"), 600, false).0 == 0;
+        landing_addons = crate::upgrade::landing_preview(crate::adapter_of(atlas, rdoc)?, to, Path::new(root), &run);
+        for a in &landing_addons {
+            match a["url"].as_str() {
+                Some(u) => eprintln!(
+                    "at landing wend writes /etc/yum.repos.d/{}.repo ({u})",
+                    a["addon"].as_str().unwrap_or("?")
+                ),
+                None => eprintln!(
+                    "at landing {}'s packages get no repo, so no updates: {}",
+                    a["addon"].as_str().unwrap_or("?"),
+                    a["none"].as_str().unwrap_or("")
+                ),
             }
         }
     }

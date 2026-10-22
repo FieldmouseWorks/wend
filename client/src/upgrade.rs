@@ -564,15 +564,31 @@ fn start(atlas_dir: &Path, plan_arg: Option<&String>, o: &UpgradeOpts) -> Result
                 return Err(format!("copying the atlas to {DIR}/atlas failed: {out}"));
             }
             save(STATE, &state)?;
-            for a in Plan::read(Path::new(p))
+            // the plan's answer from the rehearsal's copy, and this machine's own now: a fleet machine that matches
+            // the plan's fingerprint can still hold another key, which the fingerprint doesn't cover
+            let mut said = std::collections::BTreeSet::new();
+            let mut nones: Vec<Value> = Plan::read(Path::new(p))
                 .map(|p| p.doc["landing_addons"].as_array().cloned().unwrap_or_default())
-                .unwrap_or_default()
-            {
+                .unwrap_or_default();
+            if let Ok(atlas) = Atlas::load(&PathBuf::from(format!("{DIR}/atlas"))) {
+                if let Some(a) = route_of(&atlas, &Plan::read(Path::new(p))?)
+                    .ok()
+                    .and_then(|(_, r)| crate::adapter_of(&atlas, r).ok().map(|a| (a.clone(), r.clone())))
+                    .filter(|(a, _)| crate::backend::backend_of(a) == "rpm")
+                {
+                    let to = str_of(&a.1, "to").unwrap_or("").to_string();
+                    let run = |t: &str| sh(&format!("{t} >/dev/null 2>&1"), 600).0 == 0;
+                    nones.extend(landing_preview(&a.0, &to, Path::new("/"), &run));
+                }
+            }
+            for a in nones {
                 if let Some(why) = a["none"].as_str() {
-                    println!(
-                        "{}'s packages land with no repo, so they get no updates after: {why}",
-                        a["addon"].as_str().unwrap_or("?")
-                    );
+                    if said.insert(why.to_string()) {
+                        println!(
+                            "{}'s packages land with no repo, so they get no updates after: {why}",
+                            a["addon"].as_str().unwrap_or("?")
+                        );
+                    }
                 }
             }
             println!(
@@ -2009,6 +2025,33 @@ pub fn key_conflict(root: &Path, r: &crate::backend::LandRepo) -> Option<String>
         .then(|| format!("{} is already there, holding another key", r.key_file))
 }
 
+/// SPEC "Carried repositories": what the landing does for each add-on on a machine, `{addon, url}` or `{addon, none}`.
+/// `run` runs shell there (true when it exits 0) and `root` is where its files are: the rehearsal's copy, or the
+/// machine itself before `upgrade` starts. A package that owns the repo file's path (the hops removed the file, the
+/// database still lists it) puts it back when the landing reinstalls the repo packages, and then wend writes none.
+pub fn landing_preview(adapter: &Doc, to: &str, root: &Path, run: &dyn Fn(&str) -> bool) -> Vec<Value> {
+    landing_addons(adapter, to, run)
+        .into_iter()
+        .map(|a| {
+            let why = match &a.repo {
+                Ok(r) => key_conflict(root, r).or_else(|| {
+                    run(&format!("rpm -qf {}", r.file)).then(|| {
+                        format!(
+                            "{} belongs to an installed package, which puts it back at landing",
+                            r.file
+                        )
+                    })
+                }),
+                Err(why) => Some(why.clone()),
+            };
+            match (why, &a.repo) {
+                (None, Ok(r)) => json!({"addon": a.name, "url": r.url}),
+                (why, _) => json!({"addon": a.name, "none": why}),
+            }
+        })
+        .collect()
+}
+
 /// Write an add-on's key and repo file under `root`. Ok(None) when written, Ok(Some(why)) when it gets none because
 /// a file is already there (a package's: the landing release's repo files were just reinstalled), Err when a write
 /// failed.
@@ -2210,10 +2253,29 @@ mod tests {
         std::fs::write(&other, "another").unwrap();
         std::fs::remove_file(d.join("nginx.repo")).unwrap();
         assert!(write_addon(&t, &r).unwrap().unwrap().contains("holding another key"));
+        // the preview says the same, on a copy or on the machine before it starts
+        let p = landing_preview(&a, "alma10", &t, &|_| true);
+        assert!(p[0]["none"].as_str().unwrap().contains("holding another key"), "{p:?}");
         // the rehearsal sees the same on the copy, before anything is touched
         assert!(key_conflict(&t, &r).unwrap().contains("holding another key"));
         std::fs::write(&other, &r.key).unwrap();
         assert_eq!(key_conflict(&t, &r), None);
+        // a package owns the repo file's path: it comes back at landing, so wend writes none
+        let p = landing_preview(&a, "alma10", &t, &|c| {
+            !c.starts_with("rpm -qf") || c.ends_with("/nginx.repo")
+        });
+        assert!(
+            p[0]["none"]
+                .as_str()
+                .unwrap()
+                .contains("belongs to an installed package"),
+            "{p:?}"
+        );
+        let p = landing_preview(&a, "alma10", &t, &|c| !c.starts_with("rpm -qf"));
+        assert_eq!(
+            p[0],
+            json!({"addon": "nginx", "url": "https://nginx.org/packages/rhel/10/x86_64/"})
+        );
         let _ = std::fs::remove_dir_all(&t);
     }
 
