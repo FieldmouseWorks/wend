@@ -132,16 +132,19 @@ SELINUX_NOW = ("( m=Disabled; for d in /sys/fs/selinux /selinux; do if [ -e $d/e
                "if [ -f /etc/selinux/config ]; then v=$(sed -n 's/^SELINUX=//p' /etc/selinux/config | tail -1); "
                "echo ${v:-unset}; else echo none; fi )")
 # how each --selinux mode is made on a running copy of the box (then a reboot: the relabel, or the boot without a policy)
+# yum from the harness's repos only ({release}: the box's): the release package's last update puts the vendor's .repo
+# back beside ladder.repo, and its mirrorlist is long gone (CentOS 7's on wend#158)
 SELINUX_MAKE = {
-    "enforcing": "rpm -q selinux-policy-targeted >/dev/null || yum -y install selinux-policy-targeted || exit 1; "
+    "enforcing": "Y=\"yum -y --disablerepo=* --enablerepo={release}-*\"; "
+                 "rpm -q selinux-policy-targeted >/dev/null || $Y install selinux-policy-targeted || exit 1; "
                  "if [ -f /etc/selinux/config ]; then sed -i -e 's/^SELINUX=.*/SELINUX=enforcing/' "
                  "-e 's/^SELINUXTYPE=.*/SELINUXTYPE=targeted/' /etc/selinux/config; else "
                  "printf 'SELINUX=enforcing\\nSELINUXTYPE=targeted\\n' > /etc/selinux/config; fi; "
                  # sshd on a port the policy doesn't give it (every EL box's 2222) can't bind once enforcing: an owner
                  # who moved it labelled the port. EL4 has no semanage, and its targeted policy leaves sshd unconfined
                  "for p in $(awk 'tolower($1) == \"port\" && $2 != 22 {print $2}' /etc/ssh/sshd_config); do "
-                 "command -v semanage >/dev/null || yum -y install policycoreutils-python || "
-                 "yum -y install policycoreutils-python-utils || true; if command -v semanage >/dev/null; then "
+                 "command -v semanage >/dev/null || $Y install policycoreutils-python || "
+                 "$Y install policycoreutils-python-utils || true; if command -v semanage >/dev/null; then "
                  "semanage port -a -t ssh_port_t -p tcp $p || semanage port -m -t ssh_port_t -p tcp $p || exit 1; "
                  "semanage port -l | grep -q \"^ssh_port_t .*[ ,]$p\\(,\\|$\\)\" || "
                  "{ semanage port -l | grep ^ssh_port_t; exit 1; }; "
@@ -987,7 +990,7 @@ def selinux_start(d, box_doc, a):
             if not g.wait_ssh():
                 raise RuntimeError(f"the box didn't come up to be made --selinux {SELINUX}; console: {g.console}")
             log(f"making the box SELinux {SELINUX}")
-            rc, out = g.ssh(SELINUX_MAKE[SELINUX], timeout=1800)
+            rc, out = g.ssh(SELINUX_MAKE[SELINUX].replace("{release}", box_doc["release"]), timeout=1800)
             if rc:
                 raise RuntimeError(f"--selinux {SELINUX}: setting it up failed:\n{out[-2000:]}")
             if not g.reboot()[0]:  # a relabel first, then the boot in that mode
