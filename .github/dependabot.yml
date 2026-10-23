@@ -1,16 +1,24 @@
-# Keeps the toolchain from going stale: one batched PR a week per ecosystem. Actions stay pinned by commit SHA (Dependabot
-# moves the SHA and its "# vX.Y.Z" comment together). The Rust toolchain itself (client/rust-toolchain.toml) is bumped
-# by hand. Claude reviews these like any PR and flags anything that changes the MSRV, the static musl build, or what
-# gate.yml copies from the base branch.
+# Keeps everything current, daily: the time from a published fix to an exploit for it is down to hours. Actions stay
+# pinned by commit SHA (Dependabot moves the SHA and its "# vX.Y.Z" comment together); the Rust toolchain
+# (client/rust-toolchain.toml) is Dependabot's too. A new release waits 3 days first, since hijacked releases are
+# usually pulled by then; security updates don't wait. Minor and patch updates come grouped, one PR per ecosystem;
+# a major one comes on its own. Claude reviews these like any PR and flags anything that changes the MSRV, the static
+# musl build, or what gate.yml copies from the base branch.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
-    schedule: { interval: weekly }
+    schedule: { interval: daily }
+    cooldown: { default-days: 3 }
     groups:
-      actions: { patterns: ["*"] }
+      actions: { patterns: ["*"], update-types: [minor, patch] }
   - package-ecosystem: cargo
     directory: /client
-    schedule: { interval: weekly }
+    schedule: { interval: daily }
+    cooldown: { default-days: 3 }
     groups:
-      cargo: { patterns: ["*"] }
+      cargo: { patterns: ["*"], update-types: [minor, patch] }
+  - package-ecosystem: rust-toolchain
+    directory: /client
+    schedule: { interval: daily }
+    cooldown: { default-days: 3 }

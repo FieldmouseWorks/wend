@@ -65,7 +65,8 @@ For each hop on a route, the harness (not the fix) does:
 
 1. set the release (adapter `hop.set_release`; harness-owned files are rewritten),
 2. refresh the indexes (`hop.refresh`), then the kernel handover's first half (`hop.kernel_before`, see "Kernels
-   and the bootloader"),
+   and the bootloader"), then `hop.before_transaction` (EL: an enforcing machine runs the hop permissive, its config
+   too, wend#158),
 3. the `pre` steps of every fix whose `when` held, in route order,
 4. the upgrade transaction: the arriving release's own `upgrade` list if the adapter gives one, else `hop.upgrade`
    (Debian: `dist-upgrade`, then `autoremove --purge`; EL: from `yum upgrade` on EL6 to
@@ -75,7 +76,11 @@ For each hop on a route, the harness (not the fix) does:
    `/var/lib/wend/added-families` (see "restores and adds"),
 6. remove the drop-ins of any `pm-option` used on this hop,
 7. `hop.verify` if the adapter has one (EL: the release file names the new major),
-8. `hop.after`, whatever happened above (cleanup: package caches, the rpm database),
+8. `hop.after`, whatever happened above, with `WEND_HOP_FAILED=1` in its environment if a command in 1 to 7 failed
+   (cleanup: package caches, the rpm database; EL: the config enforcing again if step 2 set permissive and nothing
+   failed, the policy first rebuilt from the arriving package's modules and the files relabelled where the running
+   kernel can load the arriving policy; enforcing itself comes with the next boot, since what this boot labelled
+   under the old policy is unlabelled under the new one),
 9. all health checks. Any command that fails in 1 to 7, or any check that passed before the hop and fails now,
    rolls the whole hop back.
 
@@ -505,6 +510,8 @@ nginx) in other repos unless their repo says so.
 - An adapter with `[addons]` must put `{addons}` in `hop.set_release`, or it would carry an add-on through the
   transit and then drop it from the hops after.
 - Software Collections, vendor SIG repos and other third-party repos are not add-ons: `rpm.transit` still refuses them.
+- A live upgrade that lands writes the landing release's repo file for an add-on with no marker package, since no
+  package brings it back ("The upgrade", "Carried repositories").
 
 #### Signed packages
 
@@ -974,7 +981,7 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`; each an http(s) URL, or host/path through the `[mirror]` shim), and optional `releases.<id>.upgrade` like rpm's. rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader"), `joins` (a start release off the ladder: the ladder release with the same major whose routes its boxes take; see Route). apt: a start release may have `releases.<id>.install` too, and any release `signed` (see "Signed packages") |
 | `[addons.<name>]` | rpm: `marker`, `vendor`, `repos` (see "Add-on repositories") |
 | `[mirror]` | `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts): every rpm repo, and an apt mirror given as host/path |
-| `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), `autoremove`, `obsolete`, `installed_list`, `kernel_newest` (the VM tier's newest-kernel query); apt also `apt_conf`, the harness's apt config, and `apt_unsigned`, the lines added on hops into unsigned releases |
+| `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), optional `before_transaction` (list, see "How a hop runs"), `autoremove`, `obsolete`, `installed_list`, `kernel_newest` (the VM tier's newest-kernel query); apt also `apt_conf`, the harness's apt config, and `apt_unsigned`, the lines added on hops into unsigned releases |
 | `[predicates]` | `installed`, `file`, `file-contains`, `mysql-option` command templates |
 | `[pm_options.<name>]` | `path`, `content`. apt: only `overwrite-conflicting-files`; rpm: none |
 | `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear. Whatever a `pattern`, `list` or `table` says, every value a fix passes through one must also match `[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*`: no quote, whitespace, backslash, glob character, `%`, any of `` $`;&|<>(){}~ ``, or leading `-` |
@@ -1927,7 +1934,8 @@ A hop ends the replay when its commands fail, when the guest doesn't come back, 
 start, when the newest installed kernel isn't the one running (or the query names none), when the guest no longer
 runs on the firmware the replay boots, when SELinux no longer runs in the mode the box started in (enforcing,
 permissive or disabled, read from selinuxfs after every reboot; no policy loaded counts as disabled, though EL4 to 6
-mount selinuxfs anyway), or when a check that passed before it fails after the
+mount selinuxfs anyway; an enforcing box may be permissive at a hop's middle reboot, since the hop runs permissive),
+or when a check that passed before it fails after the
 reboot. Its disk and serial console are kept.
 
 The VM box differs from the chroot box in ways a replay can show: it has what the installer adds (`@core`, a kernel, a
@@ -2018,7 +2026,8 @@ The rules:
 - SELinux: a VM box installs permissive. `replay --selinux MODE` (EL) starts from the box as an owner who set SELinux
   otherwise has it, made once per mode from a running copy of the installed box rather than a second install, as an
   admin turns it: `enforcing` installs the release's targeted policy if it's missing, sets `SELINUX=enforcing` and
-  relabels the whole filesystem (`/.autorelabel`), as a stock install runs; `none` removes the policy packages and
+  relabels the whole filesystem (`/.autorelabel`), as a stock install runs, and labels sshd's port `ssh_port_t` when the
+  box moved it (`semanage port`, EL5 on); `none` removes the policy packages and
   `/etc/selinux/config`, so no policy loads (CentOS 4 to 6 only: a CentOS 4 box without `selinux-policy-targeted` has
   no config at all, wend#158; EL7's systemd freezes rather than boot such a box). The disk is kept beside the box's
   and isn't part of its cache key; it's made only if the box comes up in that mode and still passes every check it
@@ -2413,6 +2422,8 @@ A directory, `wend-plan-<machine id>/`, carried to the machine (scp, or a USB st
 - the machine's **fingerprint** at the moment of the copy: the adapter's `installed_versions` (every package's name,
   version and architecture, and their sha256), the running kernel, the release file, and which pinned fixes' preconditions hold.
   It holds nothing particular to one machine (addresses, disks, hostnames), so another machine can match it ("Fleets");
+- `landing_addons`: the add-on repo files the landing will write, or why an add-on on the machine gets none
+  ("Carried repositories");
 - the facts preflight read on the rehearsed machine, kept for the report only: every machine is judged on its own
   facts, read when `upgrade` starts, never on these. They are `wend facts` run on the machine and given as
   `--facts FILE` (the copy runs nothing of wend's there), and null when none was given;
@@ -2525,9 +2536,42 @@ Then:
    the trial again only once (a second failure is a red).
 6. **At the end**, the prune removes exactly the packages the rehearsal's prune removed (no bisecting on the machine),
    then the checks run once more. The package manager is pointed at the landing release's own repositories (the
-   release package's repo files, as a fresh install has them), never left on the proxy. The run (`wend.vmrun/0`'s
+   release package's repo files, as a fresh install has them), never left on the proxy, plus the add-on repositories
+   the route carried the machine's packages on ("Carried repositories" below). The run (`wend.vmrun/0`'s
    shape, `runner.kind = "live"`, the real downtime) goes to `/var/lib/wend/runs/` on the new root, where `wend share`
    can attach it. The machine now runs the landed system, booted on trial each time until the owner commits.
+
+**Carried repositories.** What wend promises about repo config, and all it promises: at landing, the package
+manager goes by the landing release's own repositories plus the add-on repositories wend carried the machine's
+packages on (EPEL, nginx.org), each pointed at upstream for the landing release and checked against the key wend
+pinned. wend puts back no other repository and carries no other configuration. On EL:
+
+- Before the first hop touches anything, every `/etc/yum.repos.d/*.repo` (but the ladder repo) is copied to
+  `/var/lib/wend/saved/yum.repos.d/` on the new root, beside an older copy that differs, never over it, and the state
+  records each one's owning package and sections (id, enabled, baseurl, mirrorlist and metalink URLs). No package
+  manager reads that directory.
+- An add-on with a marker package (EPEL) needs nothing more: `land_repos` reinstalls the marker, whose landing-release
+  build brings its own repo files. An add-on without one (nginx.org's, whose owners wrote the repo file by hand) that
+  is on the machine at landing (an installed package carries its `vendor`) gets `/etc/yum.repos.d/<name>.repo`: one
+  section `[<name>]`, `baseurl=https://<addons.<name>.repos[landing release]>/`, `gpgcheck=1`,
+  `gpgkey=file:///etc/pki/rpm-gpg/<key>` (the adapter's `[keys]` entry that `addons.<name>.gpgkeys` names for the
+  landing release, written there too), `module_hotfixes=true` where the add-on says so, and a comment saying wend
+  wrote it. It gets no file when the add-on has no repo or no key for the landing release (wend never writes an
+  unsigned repo), or when that file, or a different key at that path, is already there. The add-on's packages stay
+  installed then, with no updates, and the run says so and why. A write that fails is a red.
+- The rehearsal works out the same thing on the upgraded copy (a different key already at the key's path, or a repo file
+  path an installed package owns, included): `plan.json`'s `landing_addons` lists each add-on as
+  `{addon, url}` or `{addon, none: why}`, the rehearsal prints it, and `upgrade` prints every `none` again before it
+  starts, with the same check run on the machine itself (a fleet machine that matches the plan can still hold
+  another key). It doesn't refuse: the packages run, they just won't update, and the owner has read that first.
+- The run's `repos` table: `before` (what was copied), `addons` (what was written, or why not) and `files`, one row per
+  removed file with its outcome: `replaced` (wend's add-on file is at its path, or one of its URLs names that add-on's
+  host; the row has the old URLs as `was` and the new one as `now`, so an owner on nginx.org's mainline sees they are
+  on its stable repo now), `restored` (a package put the same file back) or `left out`. The log names every file left
+  out, with its saved copy: those are the owner's to write for the new release, if they still want them.
+- Nothing at landing touches the network: whether a written repo answers is the owner's first `dnf check-update`.
+
+Growing what is carried means adding an `[addons.*]` table, which needs a route proof of its own.
 
 **The first red rolls back.** A hop's commands failing, a check lost, the network changed, the wrong kernel running,
 or a trial boot that comes back on the old system twice: wend stops, makes the old system the stub's default and its

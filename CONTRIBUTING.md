@@ -113,10 +113,12 @@ verdict stands: remi-proof.yml never overwrites a status a person posted or one 
 statuses as its own. To re-judge an open PR that was opened before the workflow existed, run it by hand: Actions,
 remi-proof, Run workflow, PR number.
 
-### 5. Claude review (automatic, minutes)
+### 5. Review until settled (automatic, minutes to hours)
 
-Every PR is labeled `needs-claude-review`. A standing Claude reviewer reruns the PR's replays and reads the diff,
-hunting specifically for:
+Codex reviews every PR, and its findings are review threads on the diff. Whoever opened the PR (a Claude session,
+usually) fixes each one, or answers it with the reason it's wrong, and resolves it, then asks for another round
+(`@codex review`). The loop ends when Codex finds nothing on the PR's exact head. Codex reads the review checklist in
+AGENTS.md ("Code Review Rules"), which hunts specifically for:
 
 - **check gaming:** a fix that makes a check pass without fixing the thing. dep-lab's model forged empty dpkg
   md5sums files to pass `dpkg --audit`, and left PHP 5 serving the site on trixie. Ask: would an admin call this fixed?
@@ -129,17 +131,23 @@ hunting specifically for:
   writable paths
 - **provenance claims** that the runs don't back up
 
-The verdict is one PR comment that explains it. Today the `claude-review` job only applies the label; nothing in
-CI waits for the verdict, so branch protection can't enforce it yet. Until a `claude-review` commit status exists and
-is required, whoever merges checks for the review comment first. The review is one layer among several, not a
-shortcut past them.
+The maintainer's steward on remi turns that into the `review-settled` commit status, which branch protection
+requires. It's success on a head only when Codex reviewed that exact commit and found nothing, no review thread is
+open (whoever opened it), nobody's review asks for changes, and every other check on the commit is green. Every push
+starts over. Dependabot's non-major bumps skip the Codex round: CI is their review.
+After four Codex rounds that still find something, the steward stops and asks the maintainer.
 
-### 6. The maintainer or Claude merges
+A PR from a fork, or from anyone but the maintainer, the maintainer's Claude sessions and Dependabot, gets the same
+review, but `review-settled` waits for the maintainer.
 
-Only after every required check is green **and** the Claude review has signed off on the PR. The maintainer
-(CODEOWNERS) can merge, and so can Claude, under a standing permission from the maintainer. Either way the bar is
-the same: a red check, an unresolved review finding, or no review at all means no merge. Nobody, human or bot, can
-push to `main` directly.
+### 6. It merges itself
+
+Once every required check is green, `review-settled` included, the steward marks the PR ready and turns on
+auto-merge; GitHub merges it and deletes the branch. Nobody, human or bot, can push to `main` directly.
+
+A PR that changes `.github/` (the workflows that are the gate, and CODEOWNERS) is the one exception: it can loosen its
+own judge, so CODEOWNERS makes the maintainer sign off. The steward settles it the same way, then tells the maintainer
+it's waiting for them.
 
 ## What a cloud Claude session can write on GitHub
 

@@ -146,11 +146,24 @@ SELINUX_NOW = ("( m=Disabled; for d in /sys/fs/selinux /selinux; do if [ -e $d/e
                "if [ -f /etc/selinux/config ]; then v=$(sed -n 's/^SELINUX=//p' /etc/selinux/config | tail -1); "
                "echo ${v:-unset}; else echo none; fi )")
 # how each --selinux mode is made on a running copy of the box (then a reboot: the relabel, or the boot without a policy)
+# yum from the harness's repos only ({release}: the box's): the release package's last update puts the vendor's .repo
+# back beside ladder.repo, and its mirrorlist is long gone (CentOS 7's on wend#158)
 SELINUX_MAKE = {
-    "enforcing": "rpm -q selinux-policy-targeted >/dev/null || yum -y install selinux-policy-targeted || exit 1; "
+    "enforcing": "Y=\"yum -y --disablerepo=* --enablerepo={release}-*\"; "
+                 "rpm -q selinux-policy-targeted >/dev/null || $Y install selinux-policy-targeted || exit 1; "
                  "if [ -f /etc/selinux/config ]; then sed -i -e 's/^SELINUX=.*/SELINUX=enforcing/' "
                  "-e 's/^SELINUXTYPE=.*/SELINUXTYPE=targeted/' /etc/selinux/config; else "
                  "printf 'SELINUX=enforcing\\nSELINUXTYPE=targeted\\n' > /etc/selinux/config; fi; "
+                 # sshd on a port the policy doesn't give it (every EL box's 2222) can't bind once enforcing: an owner
+                 # who moved it labelled the port. EL4 has no semanage, and its targeted policy leaves sshd unconfined
+                 "for p in $(awk 'tolower($1) == \"port\" && $2 != 22 {print $2}' /etc/ssh/sshd_config); do "
+                 "command -v semanage >/dev/null || $Y install policycoreutils-python || "
+                 "$Y install policycoreutils-python-utils || true; if command -v semanage >/dev/null; then "
+                 "semanage port -a -t ssh_port_t -p tcp $p || semanage port -m -t ssh_port_t -p tcp $p || exit 1; "
+                 "semanage port -l | grep -q \"^ssh_port_t .*[ ,]$p\\(,\\|$\\)\" || "
+                 "{ semanage port -l | grep ^ssh_port_t; exit 1; }; "
+                 "elif grep -q 'release 4' /etc/redhat-release; then echo \"no semanage: sshd's port $p stays unlabelled\"; "
+                 "else echo \"sshd listens on $p and semanage can't be had to label it\"; exit 1; fi; done; "
                  "grep -qx SELINUX=enforcing /etc/selinux/config && touch /.autorelabel",
     "none": "for p in selinux-policy-targeted selinux-policy-strict selinux-policy-mls; do "
             "! rpm -q $p >/dev/null || rpm -e $p || exit 1; done; rm -f /etc/selinux/config"}
@@ -991,7 +1004,7 @@ def selinux_start(d, box_doc, a):
             if not g.wait_ssh():
                 raise RuntimeError(f"the box didn't come up to be made --selinux {SELINUX}; console: {g.console}")
             log(f"making the box SELinux {SELINUX}")
-            rc, out = g.ssh(SELINUX_MAKE[SELINUX], timeout=1800)
+            rc, out = g.ssh(SELINUX_MAKE[SELINUX].replace("{release}", box_doc["release"]), timeout=1800)
             if rc:
                 raise RuntimeError(f"--selinux {SELINUX}: setting it up failed:\n{out[-2000:]}")
             if not g.reboot()[0]:  # a relabel first, then the boot in that mode
@@ -1036,16 +1049,23 @@ def checks(g, box_doc, adapter):
     return out
 
 
+# hop.after sees WEND_HOP_FAILED=1 when a command before it failed, on this run or (passed in) an earlier part
 RUNNER = r"""cd /root/wend-hop
-for f in $(ls main-*.sh | sort); do sh $f > $f.out 2>&1; rc=$?; echo $rc > $f.rc; [ $rc = 0 ] || break; done
-for f in $(ls after-*.sh 2>/dev/null | sort); do sh $f > $f.out 2>&1; echo $? > $f.rc; done
+for f in $(ls main-*.sh 2>/dev/null | sort); do sh $f > $f.out 2>&1; rc=$?; echo $rc > $f.rc; [ $rc = 0 ] || break; done
+F=${WEND_HOP_FAILED:-0}; for r in $(ls main-*.rc 2>/dev/null); do [ "$(cat $r)" = 0 ] || F=1; done
+for f in $(ls after-*.sh 2>/dev/null | sort); do WEND_HOP_FAILED=$F sh $f > $f.out 2>&1; echo $? > $f.rc; done
 ls main-*.rc | while read r; do cat $r; done | grep -qv '^0$' && echo 1 > DONE || echo 0 > DONE
 """
 
 
-def run_hop(g, cmds, after):
+# how long a hop's guest may go without answering ssh before the hop fails: the transaction restarts sshd, briefly
+SILENT_HOP = 1800
+
+
+def run_hop(g, cmds, after, failed=False):
     """The hop's commands inside the guest, detached: the transaction replaces sshd and glibc under the session.
-    Stops at the first failing command, then runs `after` whatever happened (SPEC "How a hop runs")."""
+    Stops at the first failing command, then runs `after` whatever happened (SPEC "How a hop runs"), told whether
+    anything failed: `failed` says an earlier run_hop of the same hop did."""
     rc, o = g.ssh("rm -rf /root/wend-hop && mkdir -p /root/wend-hop && test ! -e /root/wend-hop/DONE")
     if rc:  # the previous hop's directory (and its DONE) is on this overlay: never read it as this hop's result
         raise RuntimeError(f"clearing the previous hop's work dir in the guest failed: {o}")
@@ -1055,15 +1075,22 @@ def run_hop(g, cmds, after):
         rc, o = g.ssh(f"cat > /root/wend-hop/{name}", stdin=ENV + "\n" + body if name != "runner.sh" else body)
         if rc:
             raise RuntimeError(f"copying {name} into the guest failed: {o}")
-    rc, o = g.ssh("cd /root/wend-hop && (setsid nohup sh runner.sh >runner.log 2>&1 </dev/null &)", timeout=30)
+    rc, o = g.ssh(f"cd /root/wend-hop && (WEND_HOP_FAILED={int(failed)} setsid nohup sh runner.sh >runner.log 2>&1 "
+                  "</dev/null &)", timeout=30)
     if rc:
         raise RuntimeError(f"starting the hop in the guest failed: {o}")
-    t = time.time()
+    t = answered = time.time()
     while time.time() - t < 4 * 3600 and g.running():
         time.sleep(20)
-        rc, o = g.ssh("cat /root/wend-hop/DONE 2>/dev/null", timeout=60)
+        # no /dev/null: a guest whose /dev went unlabelled under enforcing fails it, and that's no answer (wend#158)
+        rc, o = g.ssh("if [ -e /root/wend-hop/DONE ]; then cat /root/wend-hop/DONE; else echo running; fi", timeout=60)
         if rc == 0 and o.strip() in ("0", "1"):
             break
+        if rc == 0:  # the guest answered, the hop still running; anything else (ssh's or the shell's failure) isn't
+            answered = time.time()
+        elif time.time() - answered > SILENT_HOP:  # sshd is replaced in seconds, not this long (wend#158)
+            return False, (f"the guest stopped answering ssh {round(time.time() - answered)}s ago, mid-hop; "
+                           f"console: {g.console}")
     else:
         return False, "the hop didn't finish in 4 hours, or the guest stopped"
     rc, o = g.ssh("cd /root/wend-hop; for f in main-*.sh after-*.sh; do [ -f $f.rc ] || continue; "
@@ -1345,16 +1372,21 @@ def walk_vm(route, route_path, box_id, box_doc, a, w, pinned, todo, resume, out_
         if (a["releases"].get(hop) or {}).get("reboot") == "before-post":
             # boot the new kernel before the post steps run the release's binaries (SPEC "Kernels and the bootloader")
             ok, steps = run_hop(g, first, [])  # hop.after runs once, after everything (SPEC "How a hop runs")
-            if not ok:  # ...whatever happened
-                steps += run_hop(g, [], after)[1]
+            if not ok:  # ...whatever happened, if the guest still answers (a silent one fails here, wend#158)
+                try:
+                    steps += run_hop(g, [], after, failed=True)[1]
+                except RuntimeError as e:
+                    steps += f"\n##### hop.after not run: {e}"
             if ok:
                 back, forced = g.reboot()
                 h["mid_reboot"], h["mid_reboot_forced"] = back, forced
                 if g.reboot_notes:
                     h["mid_reboot_notes"] = g.reboot_notes
-                if back:  # the post steps run in the mode the box started in, too
+                if back:  # the post steps run in the mode the box started in, too; an enforcing box runs the hop
+                    # permissive (hop.before_transaction, wend#158)
                     h["mid_selinux"] = selinux_read(g)
-                    back = h["mid_selinux"]["mode"] is not None and h["mid_selinux"]["mode"] == start_selinux["mode"]
+                    mode = start_selinux["mode"]
+                    back = h["mid_selinux"]["mode"] in ({mode, "Permissive"} if mode == "Enforcing" else {mode})
                 ok = back
                 if back:
                     ok, rest = run_hop(g, second, after)

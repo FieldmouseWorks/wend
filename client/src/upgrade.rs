@@ -55,6 +55,14 @@ const NET: &str = "(ip -o -4 addr 2>/dev/null || /sbin/ip -o -4 addr) | awk '$2 
                    if grep -qx 'nameserver 127.0.0.53' /etc/resolv.conf; then grep '^nameserver' \
                    /run/systemd/resolve/resolv.conf; fi; } 2>/dev/null | sort -u";
 const FW_NOW: &str = "{ [ -d /sys/firmware/efi ] && echo uefi || echo bios; } 2>/dev/null";
+/// tools/vm.py's SELINUX_NOW: the running SELinux mode (Disabled when no policy is loaded, whatever selinuxfs says),
+/// then the config's SELINUX= ("none": no config). A machine lands in the mode it started in (wend#158)
+const SELINUX_NOW: &str = "( m=Disabled; for d in /sys/fs/selinux /selinux; do if [ -e $d/enforce ]; then \
+                           tr -d '\\0' < /proc/self/attr/current 2>/dev/null | grep -q : || break; \
+                           [ \"$(cat $d/enforce)\" = 1 ] && m=Enforcing || m=Permissive; break; fi; done; echo $m; \
+                           if [ -f /etc/selinux/config ]; then \
+                           v=$(sed -n 's/^SELINUX=//p' /etc/selinux/config | tail -1); \
+                           echo ${v:-unset}; else echo none; fi )";
 /// tools/vm.py's FORCED_RESET, from inside: when `reboot` did nothing (the first boot onto systemd, EL8 to EL9),
 /// stop every process but this one, sync, remount read-only and reset with sysrq
 const FORCED_RESET: &str = "sleep 2; kill -TERM -1; sleep 10; kill -KILL -1; sleep 3; sync; echo 1 > \
@@ -73,6 +81,15 @@ pub struct UpgradeOpts {
 fn log(msg: &str) {
     let t = sh("date '+%H:%M:%S'", 10).1;
     eprintln!("[wend upgrade {}] {msg}", t.trim());
+}
+
+/// SELinux's running mode (SELINUX_NOW's first word); "unread" when the read fails, which is no mode kept
+fn selinux_mode() -> String {
+    let (rc, out) = sh(SELINUX_NOW, 60);
+    match out.split_whitespace().next() {
+        Some(m @ ("Enforcing" | "Permissive" | "Disabled")) if rc == 0 => m.to_string(),
+        _ => "unread".to_string(),
+    }
 }
 
 /// A command on this machine, through sh with ENV, its output (both streams) and its exit status; 124 when it ran
@@ -564,6 +581,33 @@ fn start(atlas_dir: &Path, plan_arg: Option<&String>, o: &UpgradeOpts) -> Result
                 return Err(format!("copying the atlas to {DIR}/atlas failed: {out}"));
             }
             save(STATE, &state)?;
+            // the plan's answer from the rehearsal's copy, and this machine's own now: a fleet machine that matches
+            // the plan's fingerprint can still hold another key, which the fingerprint doesn't cover
+            let mut said = std::collections::BTreeSet::new();
+            let mut nones: Vec<Value> = Plan::read(Path::new(p))
+                .map(|p| p.doc["landing_addons"].as_array().cloned().unwrap_or_default())
+                .unwrap_or_default();
+            if let Ok(atlas) = Atlas::load(&PathBuf::from(format!("{DIR}/atlas"))) {
+                if let Some(a) = route_of(&atlas, &Plan::read(Path::new(p))?)
+                    .ok()
+                    .and_then(|(_, r)| crate::adapter_of(&atlas, r).ok().map(|a| (a.clone(), r.clone())))
+                    .filter(|(a, _)| crate::backend::backend_of(a) == "rpm")
+                {
+                    let to = str_of(&a.1, "to").unwrap_or("").to_string();
+                    let run = |t: &str| sh(&format!("{t} >/dev/null 2>&1"), 600).0 == 0;
+                    nones.extend(landing_preview(&a.0, &to, Path::new("/"), &run));
+                }
+            }
+            for a in nones {
+                if let Some(why) = a["none"].as_str() {
+                    if said.insert(why.to_string()) {
+                        println!(
+                            "{}'s packages land with no repo, so they get no updates after: {why}",
+                            a["addon"].as_str().unwrap_or("?")
+                        );
+                    }
+                }
+            }
             println!(
                 "An undo on the same machine is no help against its disk dying: a backup is still yours to take.\n\
                  The rehearsal's hops took {} s; add relocate's second copy pass and {} reboots. Each boot after the \
@@ -993,6 +1037,7 @@ impl Worker {
         self.s["start_net"] = json!(sh(NET, 60).1);
         self.s["start_firmware"] = json!(sh(FW_NOW, 30).1.trim());
         self.s["start_kernel"] = json!(sh("uname -r", 30).1.trim());
+        self.s["start_selinux"] = json!(selinux_mode());
         log(&format!(
             "start: {}/{} checks pass",
             passed(&results).len(),
@@ -1168,6 +1213,14 @@ impl Worker {
             if !ssh {
                 why.push("sshd doesn't answer a new connection".into());
             }
+            // a state written before start_selinux was has nothing to hold the mode to
+            if let Some(want) = self.s["start_selinux"].as_str() {
+                let mode = selinux_mode();
+                j.insert("selinux".into(), json!(mode));
+                if mode != want {
+                    why.push(format!("SELinux is {mode}, not {want} as the machine started"));
+                }
+            }
             let results = run_checks(&self.checks()?);
             let lost: Vec<String> = self.s["start_checks"]
                 .as_array()
@@ -1271,9 +1324,10 @@ impl Worker {
         Ok((p, a))
     }
 
-    /// Commands in order, stopping at the first that fails, then `after` whatever happened. Whether all of the first
-    /// list passed, and their records.
-    fn commands(&self, cmds: &[String], after: &[String]) -> (bool, Vec<Value>) {
+    /// Commands in order, stopping at the first that fails, then `after` whatever happened, told in WEND_HOP_FAILED
+    /// whether anything failed (`failed`: an earlier part of the same hop did; SPEC "How a hop runs" 8). Whether all
+    /// of the first list passed, and their records.
+    fn commands(&self, cmds: &[String], after: &[String], failed: bool) -> (bool, Vec<Value>) {
         let mut recs = vec![];
         let mut ok = true;
         for c in cmds {
@@ -1291,8 +1345,9 @@ impl Worker {
                 break;
             }
         }
+        let f = u8::from(failed || !ok);
         for c in after {
-            let (rc, out) = sh(c, 1800);
+            let (rc, out) = sh(&format!("WEND_HOP_FAILED={f}; export WEND_HOP_FAILED; {c}"), 1800);
             log(&format!("after: rc {rc}: {}\n{}", tail(c, 200), tail(&out, 1000)));
             recs.push(json!({"cmd": c, "rc": rc, "out": tail(&out, 2000), "after": true}));
         }
@@ -1346,6 +1401,22 @@ impl Worker {
                 "hop to {hop}: the fixes that hold ({got:?}) aren't the rehearsal's ({want:?})"
             ));
         }
+        // the machine's own repo files, before the first hop's set_release takes them away: kept, for the run's
+        // account at landing of what became of each
+        if i == 0 && self.s["repos"].is_null() && crate::backend::backend_of(&adapter) == "rpm" {
+            let owners = crate::runtime::Owners::new(Path::new("/"));
+            match keep_repo_files(Path::new("/"), &|p| owners.of(p)) {
+                Ok(b) => {
+                    log(&format!("kept a copy of {} repo files under /{SAVED_REPOS}", b.len()));
+                    self.s["repos"] = json!({"before": b});
+                    save(STATE, &self.s)?;
+                }
+                Err(e) => {
+                    self.last_hop()["stage"] = json!("keeping a copy of the repo files");
+                    return self.red(&format!("keeping a copy of the machine's repo files failed: {e}"));
+                }
+            }
+        }
         self.set("hopping")?;
         let (proxy, compile_with) = self.proxy()?;
         log(&format!(
@@ -1365,10 +1436,10 @@ impl Worker {
         } else {
             (&plan.commands[..], plan.after.clone())
         };
-        let (ok, recs) = self.commands(first, &after);
+        let (ok, recs) = self.commands(first, &after, false);
         let (ok, recs) = if !ok && before_post {
             // hop.after runs whatever happened
-            let (_, more) = self.commands(&[], &plan.after);
+            let (_, more) = self.commands(&[], &plan.after, true);
             (false, recs.into_iter().chain(more).collect())
         } else {
             (ok, recs)
@@ -1421,7 +1492,7 @@ impl Worker {
             "hop to {hop}: the post steps, after the reboot into its kernel"
         ));
         self.set("hopping")?;
-        let (ok, recs) = self.commands(&plan.commands[plan.post_at..], &plan.after);
+        let (ok, recs) = self.commands(&plan.commands[plan.post_at..], &plan.after, false);
         drop(proxy);
         if let Some(c) = self.last_hop()["commands"].as_array_mut() {
             c.extend(recs.clone());
@@ -1649,7 +1720,7 @@ impl Worker {
                 &compile_with,
                 &to,
             )?;
-            let (ok, r) = self.commands(&[rm, str_of(&h, "autoremove")?.to_string()], &after);
+            let (ok, r) = self.commands(&[rm, str_of(&h, "autoremove")?.to_string()], &after, false);
             recs.extend(r);
             if !ok {
                 self.s["prune"] = json!(recs);
@@ -1672,10 +1743,15 @@ impl Worker {
         }
         if let Some(c) = get(&h, "land_repos").and_then(Value::as_str) {
             let c = fill(c, &vars);
-            let (ok, r) = self.commands(&[c], &[]);
+            let (ok, r) = self.commands(&[c], &[], false);
             self.s["land_repos"] = json!(r);
             if !ok {
                 return self.red("pointing the package manager at the landing release's repos failed");
+            }
+        }
+        if crate::backend::backend_of(&adapter) == "rpm" {
+            if let Err(e) = self.land_addons(&adapter, &to) {
+                return self.red(&format!("writing the add-on repo files failed: {e}"));
             }
         }
         drop(proxy);
@@ -1688,6 +1764,59 @@ impl Worker {
              run is {run}"
         ));
         Ok(LANDED)
+    }
+
+    /// SPEC "The upgrade", at the end: each add-on without a marker package that is on the machine gets the landing
+    /// release's repo file, signed, or the run says why not; then what became of every repo file the first hop
+    /// removed, with the ones left out named in the log for the owner
+    fn land_addons(&mut self, adapter: &Doc, to: &str) -> Result<(), String> {
+        let mut addons = vec![];
+        let mut written = vec![];
+        for a in landing_addons(adapter, to, &|t| sh(&format!("{t} >/dev/null 2>&1"), 600).0 == 0) {
+            let why = match &a.repo {
+                Ok(r) => match write_addon(Path::new("/"), r)? {
+                    None => {
+                        written.push((r.file.clone(), r.url.clone()));
+                        addons.push(json!({"addon": a.name, "file": r.file, "url": r.url, "key": r.key_file}));
+                        log(&format!("{}: wrote {} for {to} ({})", a.name, r.file, r.url));
+                        continue;
+                    }
+                    Some(w) => w,
+                },
+                Err(w) => w.clone(),
+            };
+            log(&format!(
+                "{}: its packages are installed and get no updates: {why}",
+                a.name
+            ));
+            addons.push(json!({"addon": a.name, "none": why}));
+        }
+        let before: Vec<Value> = self.s["repos"]["before"].as_array().cloned().unwrap_or_default();
+        let rows = repo_rows(Path::new("/"), &before, &written);
+        let left: Vec<String> = rows
+            .iter()
+            .filter(|r| r["outcome"] == json!("left out"))
+            .map(|r| {
+                format!(
+                    "{} (kept as {})",
+                    r["file"].as_str().unwrap_or(""),
+                    r["saved"].as_str().unwrap_or("")
+                )
+            })
+            .collect();
+        if !left.is_empty() {
+            log(&format!(
+                "repo files the upgrade removed and didn't put back, disabled copies kept: {}. They named the old \
+                 release's repositories; any you still need are yours to write for {to}",
+                left.join(", ")
+            ));
+        }
+        if self.s["repos"].is_null() {
+            self.s["repos"] = json!({});
+        }
+        self.s["repos"]["addons"] = json!(addons);
+        self.s["repos"]["files"] = json!(rows);
+        save(STATE, &self.s)
     }
 
     /// The run (`wend.vmrun/0`'s shape, runner.kind "live") in /var/lib/wend/runs/ on the root that's running
@@ -1703,6 +1832,7 @@ impl Worker {
             "to": self.s["to"], "started": self.s["started"], "result": result, "why": self.s["why"],
             "relocate": {"table": self.s["table"], "fills": self.s["fills"], "stages": self.s["relocate"], "trial": self.s["trial"]},
             "hops": self.s["hops"], "prune": self.s["prune"], "final": self.s["final"], "old_system": self.s["old_system"],
+            "repos": self.s["repos"],
             "start": {"checks": self.s["start_checks"], "firmware": self.s["start_firmware"], "kernel": self.s["start_kernel"]},
             "plan_sha256": self.s["plan_sha256"], "reboots": self.s["reboots"], "downtime_seconds": down,
             "wall_seconds": now().saturating_sub(self.s["started_at"].as_u64().unwrap_or(now())),
@@ -1804,9 +1934,435 @@ fn commit() -> Result<u8, String> {
     Ok(LANDED)
 }
 
+/// SPEC "The upgrade": the repo files the machine had before the first hop, kept where no package manager reads them
+const SAVED_REPOS: &str = "var/lib/wend/saved/yum.repos.d";
+const REPOS: &str = "etc/yum.repos.d";
+
+/// The sections of a yum .repo file: each one's id, whether it is enabled (yum's default: yes), and the URLs it
+/// fetches from (baseurl, mirrorlist, metalink; a baseurl's further URLs may be on indented lines after it)
+fn repo_sections(text: &str) -> Vec<Value> {
+    let mut out: Vec<Value> = vec![];
+    let mut in_url = false;
+    for raw in text.lines() {
+        let l = raw.trim();
+        if l.is_empty() || l.starts_with('#') || l.starts_with(';') {
+            continue;
+        }
+        if l.starts_with('[') && l.ends_with(']') {
+            out.push(json!({"id": &l[1..l.len() - 1], "enabled": true, "urls": []}));
+            in_url = false;
+            continue;
+        }
+        let Some(s) = out.last_mut() else {
+            continue;
+        };
+        let urls = |v: &str| -> Vec<Value> {
+            v.split(|c: char| c.is_whitespace() || c == ',')
+                .filter(|u| !u.is_empty())
+                .map(|u| json!(u))
+                .collect()
+        };
+        if in_url && raw.starts_with(char::is_whitespace) && !l.contains('=') {
+            s["urls"].as_array_mut().unwrap().extend(urls(l));
+            continue;
+        }
+        in_url = false;
+        if let Some((k, v)) = l.split_once('=') {
+            match k.trim() {
+                "enabled" => s["enabled"] = json!(!matches!(v.trim(), "0" | "no" | "false" | "False")),
+                "baseurl" | "mirrorlist" | "metalink" => {
+                    s["urls"].as_array_mut().unwrap().extend(urls(v));
+                    in_url = k.trim() == "baseurl";
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// The host a repo URL names (`nginx.org` for `http://nginx.org/packages/...`)
+fn url_host(u: &str) -> &str {
+    let rest = u.split_once("://").map(|x| x.1).unwrap_or(u);
+    rest.split(['/', ':']).next().unwrap_or("")
+}
+
+/// The machine's repo files under `root` before the first hop removes them: each one's name, owning package (null:
+/// none) and sections, after a copy of it is kept under SAVED_REPOS (beside an older copy that differs, never over it)
+fn keep_repo_files(root: &Path, owner: &dyn Fn(&str) -> Option<String>) -> Result<Vec<Value>, String> {
+    let saved = root.join(SAVED_REPOS);
+    let mut names: Vec<String> = std::fs::read_dir(root.join(REPOS))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".repo") && n != "ladder.repo")
+        .collect();
+    names.sort();
+    let mut out = vec![];
+    for n in names {
+        let p = root.join(REPOS).join(&n);
+        if !p.is_file() {
+            continue;
+        }
+        let bytes = std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+        std::fs::create_dir_all(&saved).map_err(|e| format!("{}: {e}", saved.display()))?;
+        let mut dst = saved.join(&n);
+        let mut i = 1;
+        while dst.exists() && std::fs::read(&dst).ok().as_deref() != Some(&bytes[..]) {
+            dst = saved.join(format!("{n}.{i}"));
+            i += 1;
+        }
+        std::fs::write(&dst, &bytes).map_err(|e| format!("{}: {e}", dst.display()))?;
+        out.push(json!({
+            "file": n, "owner": owner(&format!("/{REPOS}/{n}")),
+            "saved": format!("/{}", dst.strip_prefix(root).unwrap_or(&dst).display()),
+            "sections": repo_sections(&String::from_utf8_lossy(&bytes)),
+        }));
+    }
+    Ok(out)
+}
+
+/// What became of each repo file the route removed, once the machine has landed: `replaced` by the file wend wrote
+/// for an add-on (at the same path, or one of its sections fetched from that add-on's host), `restored` (its
+/// package put the same file back), or `left out`, the owner's to put back. `written` is (file, url) per add-on file.
+fn repo_rows(root: &Path, before: &[Value], written: &[(String, String)]) -> Vec<Value> {
+    before
+        .iter()
+        .map(|f| {
+            let name = f["file"].as_str().unwrap_or("");
+            let path = format!("/{REPOS}/{name}");
+            let was: Vec<&str> = f["sections"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|s| s["urls"].as_array().into_iter().flatten().filter_map(Value::as_str))
+                .collect();
+            let by = written.iter().find(|(file, _)| *file == path).or_else(|| {
+                written
+                    .iter()
+                    .find(|(_, url)| was.iter().any(|w| url_host(w) == url_host(url)))
+            });
+            let mut row = json!({"file": name, "owner": f["owner"], "saved": f["saved"], "was": was});
+            match by {
+                Some((file, url)) => {
+                    row["outcome"] = json!("replaced");
+                    row["by"] = json!(file);
+                    row["now"] = json!(url);
+                }
+                None if root.join(REPOS).join(name).is_file() => row["outcome"] = json!("restored"),
+                None => row["outcome"] = json!("left out"),
+            }
+            row
+        })
+        .collect()
+}
+
+/// SPEC "The upgrade", at the end: the add-ons without a marker package that are on the machine (`on` runs an
+/// add-on's on_box test), each with the repo file wend writes for it or why it gets none
+pub fn landing_addons(adapter: &Doc, to: &str, on: &dyn Fn(&str) -> bool) -> Vec<crate::backend::LandAddon> {
+    crate::backend::land_addons(adapter, to)
+        .into_iter()
+        .filter(|a| on(&a.on_box))
+        .collect()
+}
+
+/// Why an add-on's key can't go to its path under `root`: a different key is already there (the machine's own, which
+/// the hops keep, so the rehearsal can see it on the copy as the landing will)
+pub fn key_conflict(root: &Path, r: &crate::backend::LandRepo) -> Option<String> {
+    let key = root.join(&r.key_file[1..]);
+    match std::fs::symlink_metadata(&key) {
+        Err(_) => None,
+        // a link (dangling or not) or anything but a plain file: a write would go where it points
+        Ok(m) if !m.file_type().is_file() => Some(format!("{} is already there, and isn't a plain file", r.key_file)),
+        Ok(_) => (std::fs::read(&key).ok().as_deref() != Some(r.key.as_bytes()))
+            .then(|| format!("{} is already there, holding another key", r.key_file)),
+    }
+}
+
+/// SPEC "Carried repositories": what the landing does for each add-on on a machine, `{addon, url}` or `{addon, none}`.
+/// `run` runs shell there (true when it exits 0) and `root` is where its files are: the rehearsal's copy, or the
+/// machine itself before `upgrade` starts. A package that owns the repo file's path (the hops removed the file, the
+/// database still lists it) puts it back when the landing reinstalls the repo packages, and then wend writes none.
+pub fn landing_preview(adapter: &Doc, to: &str, root: &Path, run: &dyn Fn(&str) -> bool) -> Vec<Value> {
+    landing_addons(adapter, to, run)
+        .into_iter()
+        .map(|a| {
+            let why = match &a.repo {
+                Ok(r) => key_conflict(root, r).or_else(|| {
+                    run(&format!("rpm -qf {}", r.file)).then(|| {
+                        format!(
+                            "{} belongs to an installed package, which puts it back at landing",
+                            r.file
+                        )
+                    })
+                }),
+                Err(why) => Some(why.clone()),
+            };
+            match (why, &a.repo) {
+                (None, Ok(r)) => json!({"addon": a.name, "url": r.url}),
+                (why, _) => json!({"addon": a.name, "none": why}),
+            }
+        })
+        .collect()
+}
+
+/// Write an add-on's key and repo file under `root`. Ok(None) when written, Ok(Some(why)) when it gets none because
+/// a file is already there (a package's: the landing release's repo files were just reinstalled), Err when a write
+/// failed.
+fn write_addon(root: &Path, r: &crate::backend::LandRepo) -> Result<Option<String>, String> {
+    let repo = root.join(&r.file[1..]);
+    let key = root.join(&r.key_file[1..]);
+    // symlink_metadata, not exists(): a dangling link is there too, and a write would follow it
+    if std::fs::symlink_metadata(&repo).is_ok() {
+        return Ok(Some(format!("{} is already there", r.file)));
+    }
+    if let Some(why) = key_conflict(root, r) {
+        return Ok(Some(why));
+    }
+    // the same key already there (key_conflict passed) stays; each file written is new (O_EXCL: never through a link)
+    let key_there = std::fs::symlink_metadata(&key).is_ok();
+    for (p, text) in [(&key, &r.key), (&repo, &r.text)] {
+        if *p == key && key_there {
+            continue;
+        }
+        std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| format!("{}: {e}", p.display()))?;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(p)
+            .and_then(|mut f| f.write_all(text.as_bytes()))
+            .map_err(|e| format!("{}: {e}", p.display()))?;
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tempdir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("wend-upgrade-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    const NGINX_REPO: &str = "[nginx-stable]\nname=nginx stable repo\nbaseurl=http://nginx.org/packages/centos/$releasever/$basearch/\n\
+                              gpgcheck=1\nenabled=1\ngpgkey=https://nginx.org/keys/nginx_signing.key\nmodule_hotfixes=true\n\n\
+                              [nginx-mainline]\nbaseurl=http://nginx.org/packages/mainline/centos/$releasever/$basearch/\nenabled=0\n";
+
+    #[test]
+    fn repo_sections_read_ids_enabled_and_every_url() {
+        let s = repo_sections(NGINX_REPO);
+        assert_eq!(s.len(), 2);
+        assert_eq!(s[0]["id"], "nginx-stable");
+        assert_eq!(s[0]["enabled"], true);
+        assert_eq!(s[1]["enabled"], false);
+        let s = repo_sections(
+            "# c\n[base]\nmirrorlist=http://mirrorlist.centos.org/?release=7\nbaseurl=http://a/7/\n  http://b/7/,http://c/7/\n\
+             gpgcheck=0\n",
+        );
+        assert_eq!(
+            s[0]["urls"],
+            json!([
+                "http://mirrorlist.centos.org/?release=7",
+                "http://a/7/",
+                "http://b/7/",
+                "http://c/7/"
+            ])
+        );
+        assert_eq!(url_host("http://mirror.corp:8080/centos/7"), "mirror.corp");
+    }
+
+    #[test]
+    fn repo_files_are_kept_never_over_a_copy_that_differs() {
+        let t = tempdir("keep");
+        let d = t.join(REPOS);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("nginx.repo"), NGINX_REPO).unwrap();
+        std::fs::write(d.join("ladder.repo"), "[x]\n").unwrap();
+        std::fs::write(d.join("README"), "not a repo").unwrap();
+        std::fs::create_dir_all(t.join(SAVED_REPOS)).unwrap();
+        std::fs::write(t.join(SAVED_REPOS).join("nginx.repo"), "older").unwrap();
+        let owner = |p: &str| (p == "/etc/yum.repos.d/epel.repo").then(|| "epel-release".to_string());
+        let kept = keep_repo_files(&t, &owner).unwrap();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0]["owner"], Value::Null);
+        assert_eq!(kept[0]["saved"], "/var/lib/wend/saved/yum.repos.d/nginx.repo.1");
+        assert_eq!(
+            std::fs::read_to_string(t.join(SAVED_REPOS).join("nginx.repo")).unwrap(),
+            "older"
+        );
+        // the same bytes again: the copy already there is the one
+        assert_eq!(keep_repo_files(&t, &owner).unwrap()[0]["saved"], kept[0]["saved"]);
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    fn adapter(nginx: &str) -> Doc {
+        crate::atlas::parse_toml(&format!(
+            "[addons.epel]\nmarker = \"epel-release\"\nvendor = \"Fedora Project\"\nrepos = {{ alma10 = \"dl.f.o/epel/10\" }}\n\
+             [addons.nginx]\nvendor = \"NGINX Packaging <nginx-packaging@f5.com>\"\nmodule_hotfixes = true\n{nginx}\n\
+             [keys]\n\"RPM-GPG-KEY-nginx\" = \"\"\"\n-----BEGIN PGP PUBLIC KEY BLOCK-----\nx\n-----END PGP PUBLIC KEY BLOCK-----\n\"\"\"\n"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn add_ons_without_a_marker_get_a_signed_upstream_repo_or_a_reason() {
+        let a = adapter("repos = { alma9 = \"nginx.org/packages/rhel/9/x86_64\", alma10 = \"nginx.org/packages/rhel/10/x86_64\" }\n\
+                         gpgkeys = { alma10 = \"RPM-GPG-KEY-nginx\" }");
+        // epel has a marker: its own package brings its repo files back
+        let all = landing_addons(&a, "alma10", &|_| true);
+        assert_eq!(all.len(), 1);
+        let r = all[0].repo.as_ref().unwrap();
+        assert!(all[0]
+            .on_box
+            .contains("grep -qxF 'NGINX Packaging <nginx-packaging@f5.com>'"));
+        assert_eq!(r.file, "/etc/yum.repos.d/nginx.repo");
+        assert_eq!(r.url, "https://nginx.org/packages/rhel/10/x86_64/");
+        assert!(r.text.contains("\n[nginx]\n"), "{}", r.text);
+        assert!(r
+            .text
+            .contains("\nbaseurl=https://nginx.org/packages/rhel/10/x86_64/\ngpgcheck=1\n"));
+        assert!(r
+            .text
+            .contains("\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-nginx\nmodule_hotfixes=true\nenabled=1\n"));
+        assert!(r.key.starts_with("-----BEGIN PGP PUBLIC KEY BLOCK-----\n") && r.key.ends_with("-----\n"));
+        // not on the box: nothing
+        assert!(landing_addons(&a, "alma10", &|_| false).is_empty());
+        // no key for the release: no unsigned repo
+        let why = landing_addons(&a, "alma9", &|_| true).remove(0).repo.err().unwrap();
+        assert!(why.contains("no nginx signing key for alma9"), "{why}");
+        let why = landing_addons(&a, "alma8", &|_| true).remove(0).repo.err().unwrap();
+        assert!(why.contains("no nginx repository for alma8"), "{why}");
+        let a = adapter(
+            "repos = { alma10 = \"nginx.org/packages/rhel/10/x86_64\" }\ngpgkeys = { alma10 = \"RPM-GPG-KEY-gone\" }",
+        );
+        let why = landing_addons(&a, "alma10", &|_| true).remove(0).repo.err().unwrap();
+        assert!(why.contains("[keys] has no RPM-GPG-KEY-gone"), "{why}");
+    }
+
+    #[test]
+    fn landing_writes_the_add_on_file_and_names_what_became_of_each_old_one() {
+        let t = tempdir("land");
+        let d = t.join(REPOS);
+        std::fs::create_dir_all(&d).unwrap();
+        for (n, text) in [
+            ("nginx.repo", NGINX_REPO),
+            (
+                "CentOS-Base.repo",
+                "[base]\nmirrorlist=http://mirrorlist.centos.org/?release=7\n",
+            ),
+            (
+                "epel.repo",
+                "[epel]\nmetalink=https://mirrors.fedoraproject.org/metalink?repo=epel-7\n",
+            ),
+            ("corp.repo", "[corp]\nbaseurl=http://mirror.corp/centos/7/\n"),
+        ] {
+            std::fs::write(d.join(n), text).unwrap();
+        }
+        let owner = |p: &str| match p {
+            "/etc/yum.repos.d/epel.repo" => Some("epel-release".to_string()),
+            "/etc/yum.repos.d/CentOS-Base.repo" => Some("centos-release".to_string()),
+            _ => None,
+        };
+        let before = keep_repo_files(&t, &owner).unwrap();
+        // the hops clear them; landing reinstalls the packages that own repo files: EPEL's comes back, CentOS's doesn't
+        for n in ["nginx.repo", "CentOS-Base.repo", "epel.repo", "corp.repo"] {
+            std::fs::remove_file(d.join(n)).unwrap();
+        }
+        std::fs::write(d.join("epel.repo"), "[epel]\n").unwrap();
+        std::fs::write(d.join("almalinux-baseos.repo"), "[baseos]\n").unwrap();
+        let a = adapter(
+            "repos = { alma10 = \"nginx.org/packages/rhel/10/x86_64\" }\ngpgkeys = { alma10 = \"RPM-GPG-KEY-nginx\" }",
+        );
+        let r = landing_addons(&a, "alma10", &|_| true).remove(0).repo.unwrap();
+        assert_eq!(write_addon(&t, &r).unwrap(), None);
+        assert_eq!(std::fs::read_to_string(d.join("nginx.repo")).unwrap(), r.text);
+        assert_eq!(
+            std::fs::read_to_string(t.join("etc/pki/rpm-gpg/RPM-GPG-KEY-nginx")).unwrap(),
+            r.key
+        );
+        // a second time: the file is there, so it gets none
+        assert!(write_addon(&t, &r).unwrap().unwrap().contains("already there"));
+        let rows = repo_rows(&t, &before, &[(r.file.clone(), r.url.clone())]);
+        let by: std::collections::BTreeMap<&str, &str> = rows
+            .iter()
+            .map(|r| (r["file"].as_str().unwrap(), r["outcome"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            by,
+            [
+                ("CentOS-Base.repo", "left out"),
+                ("corp.repo", "left out"),
+                ("epel.repo", "restored"),
+                ("nginx.repo", "replaced")
+            ]
+            .into_iter()
+            .collect()
+        );
+        let n = rows.iter().find(|r| r["file"] == "nginx.repo").unwrap();
+        assert_eq!(n["now"], "https://nginx.org/packages/rhel/10/x86_64/");
+        assert_eq!(
+            n["was"][1],
+            "http://nginx.org/packages/mainline/centos/$releasever/$basearch/"
+        );
+        // a file of another name that fetched from the add-on's host is replaced by it too
+        let rows = repo_rows(
+            &t,
+            &[json!({"file": "ngx.repo", "sections": [{"urls": ["http://nginx.org/x"]}]})],
+            &[(r.file.clone(), r.url.clone())],
+        );
+        assert_eq!(rows[0]["outcome"], "replaced");
+        let other = t.join("etc/pki/rpm-gpg/RPM-GPG-KEY-nginx");
+        std::fs::write(&other, "another").unwrap();
+        std::fs::remove_file(d.join("nginx.repo")).unwrap();
+        assert!(write_addon(&t, &r).unwrap().unwrap().contains("holding another key"));
+        // the preview says the same, on a copy or on the machine before it starts
+        let p = landing_preview(&a, "alma10", &t, &|_| true);
+        assert!(p[0]["none"].as_str().unwrap().contains("holding another key"), "{p:?}");
+        // the rehearsal sees the same on the copy, before anything is touched
+        assert!(key_conflict(&t, &r).unwrap().contains("holding another key"));
+        std::fs::write(&other, &r.key).unwrap();
+        assert_eq!(key_conflict(&t, &r), None);
+        // a link at either path, dangling or not, is never written through
+        let outside = t.join("outside");
+        std::os::unix::fs::symlink(&outside, d.join("nginx.repo")).unwrap();
+        assert!(write_addon(&t, &r)
+            .unwrap()
+            .unwrap()
+            .contains("nginx.repo is already there"));
+        assert!(!outside.exists());
+        std::fs::remove_file(d.join("nginx.repo")).unwrap();
+        std::fs::remove_file(&other).unwrap();
+        std::os::unix::fs::symlink(&outside, &other).unwrap();
+        assert!(key_conflict(&t, &r).unwrap().contains("isn't a plain file"));
+        assert!(write_addon(&t, &r).unwrap().unwrap().contains("isn't a plain file"));
+        assert!(!outside.exists());
+        // the same key already there stays, and the repo file is written beside it
+        std::fs::remove_file(&other).unwrap();
+        std::fs::write(&other, &r.key).unwrap();
+        assert_eq!(write_addon(&t, &r).unwrap(), None);
+        assert_eq!(std::fs::read_to_string(d.join("nginx.repo")).unwrap(), r.text);
+        // a package owns the repo file's path: it comes back at landing, so wend writes none
+        let p = landing_preview(&a, "alma10", &t, &|c| {
+            !c.starts_with("rpm -qf") || c.ends_with("/nginx.repo")
+        });
+        assert!(
+            p[0]["none"]
+                .as_str()
+                .unwrap()
+                .contains("belongs to an installed package"),
+            "{p:?}"
+        );
+        let p = landing_preview(&a, "alma10", &t, &|c| !c.starts_with("rpm -qf"));
+        assert_eq!(
+            p[0],
+            json!({"addon": "nginx", "url": "https://nginx.org/packages/rhel/10/x86_64/"})
+        );
+        let _ = std::fs::remove_dir_all(&t);
+    }
 
     #[test]
     fn kernel_names_match_with_or_without_the_arch() {

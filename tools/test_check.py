@@ -1,6 +1,7 @@
 """The gate must say no. Each case is a broken fix the schema check has to refuse.  python3 tools/test_check.py"""
 import copy
 import os
+import subprocess
 import sys
 import tempfile
 
@@ -220,6 +221,14 @@ for fam, a in adapters.items():
     errs = check.check_adapter(a, f"adapters/{fam}.toml")
     print(("passed  " if not errs else "WRONG   ") + f"adapters/{fam}.toml" + (f" ({errs})" if errs else ""))
     bad += bool(errs)
+# the hop's command lists run one command per item: a string would run as one command per character
+for k in ("kernel_before", "kernel_after", "before_transaction"):
+    loose = copy.deepcopy(adapters["el"])
+    loose["hop"][k] = "true"
+    errs = check.check_adapter(loose, "adapters/el.toml")
+    print(("refused " if errs else "MISSED  ") + f"hop.{k} as a string, not a list" +
+          (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
+    bad += not errs
 # rpm names carry capitals: installing NetworkManager and enabling its unit must pass, a capitalized name with shell in
 # it must not
 nm = {**el_good, "when": {"installed": "initscripts"}, "adds": ["NetworkManager"], "post": [
@@ -622,7 +631,10 @@ for fam, hop in (("el", "centos6"), ("debian", "squeeze")):
     up = [_walk.fill(c, w_.vars) for c in (rel["upgrade"] if isinstance(rel, dict) and "upgrade" in rel
                                             else h_["upgrade"])]
     if fam == "el":  # kernel_before before the pre steps: rpm.transit (a pre step) needs the kernel records gone
-        ok = bool(kb) and bool(ka) and first[2:2 + len(kb)] == kb and "vsftpd" in first[2 + len(kb)] and \
+        # (and before_transaction right after it: wend#158)
+        bt = [_walk.fill(c, w_.vars) for c in h_.get("before_transaction", [])]
+        ok = bool(kb) and bool(ka) and bool(bt) and first[2:2 + len(kb)] == kb and \
+            first[2 + len(kb):2 + len(kb) + len(bt)] == bt and "vsftpd" in first[2 + len(kb) + len(bt)] and \
             first[-len(ka):] == ka and first[-len(ka) - len(up):-len(ka)] == up
     else:  # Debian's packages carry its kernels; the harness only keeps GRUB 2 installed, after the transaction
         ok = not kb and bool(ka) and first[-len(ka):] == ka and first[-len(ka) - len(up):-len(ka)] == up
@@ -734,6 +746,65 @@ for name, fails, reboots, resets, silent, want_back, want_forced, want_notes in 
         all("rc=255" in n and "Connection reset" in n for n in g_.reboot_notes[:min(fails, 5)])
     print(("passed  " if ok else "WRONG   ") + f"vm reboot: {name}  ({back}, {forced}, {g_.reboot_notes[-1:]})")
     bad += not ok
+
+
+class _HopGuest:  # a hop's guest: ssh answers until `stops` s into the hop, then (if `back`) again from `back` on;
+    console = "/x/hop.console.log"  # `broken`: from `stops` on, sshd answers but every shell command fails
+
+    def __init__(self, clock, stops, back=None, done_at=None, broken=False):
+        self.clock, self.stops, self.back, self.done_at, self.t0 = clock, stops, back, done_at, clock.now
+        self.broken = broken
+
+    def ssh(self, cmd, timeout=600, stdin=None):
+        at = self.clock.now - self.t0
+        if at >= self.stops and (self.back is None or at < self.back):
+            if self.broken:
+                return 1, "sh: /dev/null: Permission denied"
+            self.clock.now += timeout
+            return 255, "TIMEOUT"
+        if "/root/wend-hop/DONE" in cmd:
+            return 0, ("0\n" if self.done_at is not None and at >= self.done_at else "running\n")
+        return 0, ""
+
+    def running(self):
+        return True
+
+
+for name, stops, back, done_at, broken, want in (
+        ("a hop whose sshd is gone a minute while it's replaced finishes", 120, 200, 600, False, True),
+        ("a hop whose guest stops answering ssh fails in half an hour, not four hours", 120, None, None, False, False),
+        ("a hop whose guest's shell fails every command fails in half an hour, not four hours", 120, None, None, True,
+         False)):
+    _vm.time = _Clock()
+    try:
+        g_ = _HopGuest(_vm.time, stops, back, done_at, broken)
+        t_ = _vm.time.now
+        ok_, out_ = _vm.run_hop(g_, ["true"], [])
+        took = _vm.time.now - t_
+    finally:
+        _vm.time = _real_time
+    good = ok_ is want and (want or ("stopped answering ssh" in out_ and g_.console in out_ and took < 2 * 3600))
+    print(("passed  " if good else "WRONG   ") + f"vm run_hop: {name}  ({ok_}, {round(took)}s)")
+    bad += not good
+
+
+# hop.after is told whether the hop failed: by a command on this run, or by the caller for an earlier part (wend#158)
+for name, mains, env, want in (
+        ("a hop whose commands passed tells hop.after so", ["true", "true"], "", "0"),
+        ("a hop whose transaction failed tells hop.after so", ["true", "false", "true"], "", "1"),
+        ("hop.after run alone for a part that failed is told so", [], "WEND_HOP_FAILED=1", "1"),
+        ("hop.after run alone for a part that passed is told so", [], "WEND_HOP_FAILED=0", "0")):
+    with tempfile.TemporaryDirectory() as d_:
+        for i, c in enumerate(mains):
+            open(os.path.join(d_, f"main-{i:02d}.sh"), "w").write(c + "\n")
+        open(os.path.join(d_, "after-00.sh"), "w").write("echo \"$WEND_HOP_FAILED\"\n")
+        subprocess.run(["sh", "-c", f"{env} sh -s"], input=_vm.RUNNER.replace("/root/wend-hop", d_), text=True,
+                       capture_output=True)
+        got = open(os.path.join(d_, "after-00.sh.out")).read().strip()
+        done = open(os.path.join(d_, "DONE")).read().strip()
+    good = got == want and done == ("1" if "false" in mains else "0")
+    print(("passed  " if good else "WRONG   ") + f"vm run_hop: {name}  ({got}, DONE {done})")
+    bad += not good
 
 
 # the VM tier's network comparison drops the shelter's own bridge, as podman reports it, and nothing else
