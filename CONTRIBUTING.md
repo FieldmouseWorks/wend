@@ -187,6 +187,10 @@ The schema check runs `gh attestation verify` on every run file the PR adds or c
 didn't attest. A run file that only changes runs/ needs no new replay. Runs filed before this rule (their `runner` is
 `local`) are left as they are; new CI runs of the same routes replace them as evidence.
 
+File runs from a gate run under two weeks old. The gate keeps a replay's `fetched-N` capture (docs/archive.md) for 14
+days, and the archive takes it only once the run lands on main: an older run's capture is gone, and its live-repo pins
+with it.
+
 ## What a good fix looks like
 
 - **Small.** One problem per fix. If you remove packages and then repair, keep both. The repair can be load-bearing.

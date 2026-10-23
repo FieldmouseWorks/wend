@@ -119,8 +119,8 @@ small. A blob a later run no longer references can be swept once there are numbe
   pinned exists at that moment. So the harness writes a download list (every file the hop fetched: origin URL, sha256,
   size, as the mirror shim logged what it served), and the replay job uploads it as an artifact together with the
   metadata bytes it read (tens of MB). Packages stay out, since they don't rot that fast, except live EPEL's, which
-  do. remi downloads the artifacts of every gate run whose run files land on main, well inside GitHub's 90-day
-  retention.
+  do. remi downloads the artifacts of every gate run whose run files land on main, well inside the 14 days the
+  gate keeps them.
 - **The mirror shim stops forgetting.** Today it overwrites a live repo's `repomd.xml` in place. It keeps every
   version under its digest instead, which is what lets remi's own runs feed the archive the same way.
 - **R2 is the public copy.** No egress fees, so CI and users can read as much as they like. If remi dies, the archive
@@ -219,7 +219,7 @@ reachable. So the archive is kept current on a timer, and checked from outside.
   otherwise ingests, verifies the store (signatures aside: the push signs) and runs remi's push wrapper (`sudo -n
   /data/wend-lab/scripts/r2push-run.sh`: sign, then `r2push.py`, from that same worktree). It pushes what it stored
   even when the ingest missed something, then exits 1, and keeps retrying each hour until a cycle finds everything.
-  After a good cycle it deletes artifacts unpacked over 30 days ago.
+  After a good cycle it deletes artifacts unpacked over 7 days ago (`--keep-days 7`): their pins are in the store.
 - **What a live walk reads.** A replay asks only for what its package manager needed, but a live walk of the same
   run on a real machine can ask for more (filelists for a file dependency, updateinfo), and a live repo deletes them
   with their repomd.xml: #163's rehearsal was refused on EPEL 8's. So capture also fetches, as the run is saved,

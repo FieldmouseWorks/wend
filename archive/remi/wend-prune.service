@@ -1,0 +1,21 @@
+# remi's daily disk prune (docs/remi.md, "Disk"): tools/lab_prune.py --apply from a root-owned clone of GitHub's main,
+# updated first, so main's copy decides what goes. Not wend-runner: dev can write that checkout, and this runs as root.
+# Installed by hand on remi, with wend-prune.timer:
+#   sudo git clone -q --no-checkout https://github.com/FieldmouseWorks/wend /var/lib/wend/prune-main
+#   sudo install -m 644 archive/remi/wend-prune.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now wend-prune.timer
+# Root: rehearse and upgrade run directories have root-only work/ and copy/, and vmwork-root is root's.
+[Unit]
+Description=wend lab: strip old VM run disks and delete boxes no head can reuse
+
+[Service]
+Type=oneshot
+User=root
+Nice=19
+IOSchedulingClass=idle
+Environment=GIT_OPTIONAL_LOCKS=0
+WorkingDirectory=/var/lib/wend/prune-main
+ExecStartPre=/usr/bin/git fetch -q origin main
+ExecStartPre=/usr/bin/git checkout -q --detach --force FETCH_HEAD
+ExecStart=/usr/bin/python3 -P -u tools/lab_prune.py --apply
+TimeoutStartSec=2h

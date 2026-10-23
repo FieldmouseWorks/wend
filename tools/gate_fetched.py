@@ -4,7 +4,7 @@ remi. Standard library only.
   python3 tools/gate_fetched.py DIR [--token-file FILE] [--runs DIR [--have INDEX] [--lost FILE]] [--dry-run]
 
 Each gate replay uploads what it downloaded as an artifact named fetched-N: its download list and the metadata's bytes,
-which live repos replace within days. GitHub keeps them 90 days. This unpacks each artifact not yet seen into
+which live repos replace within days. GitHub keeps them 14 days (gate.yml). This unpacks each artifact not yet seen into
 DIR/<artifact id>/, recording it in DIR/.done. Then:
 
   python3 tools/archive.py ingest STORE --fetched DIR
