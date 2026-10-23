@@ -119,7 +119,7 @@ client/              the Rust client (client/README.md): reads, checks and compi
                      runtime preflight. Fetching by digest is the current slice. It doesn't walk the running
                      system yet: that needs a snapshot backend. No AI.
 .github/
-  workflows/gate.yml the PR gate: dco, schema, plan, replay, decoys, claude-review
+  workflows/gate.yml the PR gate: dco, schema, plan, replay, decoys
   workflows/client.yml the Rust client: build, test, parity with tools/
   workflows/gaps.yml the gap loop: dedupe reports, triaged gap -> wanted.toml PR, ping the reporter on close
   workflows/release.yml on a version tag: the static client and the atlas it reads, as a release download
