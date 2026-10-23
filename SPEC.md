@@ -65,7 +65,8 @@ For each hop on a route, the harness (not the fix) does:
 
 1. set the release (adapter `hop.set_release`; harness-owned files are rewritten),
 2. refresh the indexes (`hop.refresh`), then the kernel handover's first half (`hop.kernel_before`, see "Kernels
-   and the bootloader"),
+   and the bootloader"), then `hop.before_transaction` (EL: an enforcing machine runs the hop permissive, its config
+   too, wend#158),
 3. the `pre` steps of every fix whose `when` held, in route order,
 4. the upgrade transaction: the arriving release's own `upgrade` list if the adapter gives one, else `hop.upgrade`
    (Debian: `dist-upgrade`, then `autoremove --purge`; EL: from `yum upgrade` on EL6 to
@@ -75,7 +76,11 @@ For each hop on a route, the harness (not the fix) does:
    `/var/lib/wend/added-families` (see "restores and adds"),
 6. remove the drop-ins of any `pm-option` used on this hop,
 7. `hop.verify` if the adapter has one (EL: the release file names the new major),
-8. `hop.after`, whatever happened above (cleanup: package caches, the rpm database),
+8. `hop.after`, whatever happened above, with `WEND_HOP_FAILED=1` in its environment if a command in 1 to 7 failed
+   (cleanup: package caches, the rpm database; EL: the config enforcing again if step 2 set permissive and nothing
+   failed, the policy first rebuilt from the arriving package's modules and the files relabelled where the running
+   kernel can load the arriving policy; enforcing itself comes with the next boot, since what this boot labelled
+   under the old policy is unlabelled under the new one),
 9. all health checks. Any command that fails in 1 to 7, or any check that passed before the hop and fails now,
    rolls the whole hop back.
 
@@ -976,7 +981,7 @@ with `*` not crossing a `/`. LIST is `writable`, `managed` or `kv` (the paths of
 | `[releases]` | where packages come from. apt: `archive`, `current`, `current_from` (releases from `current_from` on use `current`; each an http(s) URL, or host/path through the `[mirror]` shim), and optional `releases.<id>.upgrade` like rpm's. rpm: `releases.<id>` with `major`, `pm` (`yum`/`dnf`), `repos` (name = host/path, through the shim), optional `upgrade`, `bootstrap`, `transit`, `install` (the VM tier's installer), `reboot` (`before-post`, see "Kernels and the bootloader"), `joins` (a start release off the ladder: the ladder release with the same major whose routes its boxes take; see Route). apt: a start release may have `releases.<id>.install` too, and any release `signed` (see "Signed packages") |
 | `[addons.<name>]` | rpm: `marker`, `vendor`, `repos` (see "Add-on repositories") |
 | `[mirror]` | `shim` (the mirror shim's base URL) and `probe` (a path that must be fetchable before a run starts): every rpm repo, and an apt mirror given as host/path |
-| `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), `autoremove`, `obsolete`, `installed_list`, `kernel_newest` (the VM tier's newest-kernel query); apt also `apt_conf`, the harness's apt config, and `apt_unsigned`, the lines added on hops into unsigned releases |
+| `[hop]` | `set_release`, `refresh`, `upgrade` (list), optional `verify`, `after` (list), `kernel_before` and `kernel_after` (lists, see "Kernels and the bootloader"), optional `before_transaction` (list, see "How a hop runs"), `autoremove`, `obsolete`, `installed_list`, `kernel_newest` (the VM tier's newest-kernel query); apt also `apt_conf`, the harness's apt config, and `apt_unsigned`, the lines added on hops into unsigned releases |
 | `[predicates]` | `installed`, `file`, `file-contains`, `mysql-option` command templates |
 | `[pm_options.<name>]` | `path`, `content`. apt: only `overwrite-conflicting-files`; rpm: none |
 | `[ops."<name>"]` | `summary`, `args` (see Argument specs). Only ops the Op reference defines for this backend may appear. Whatever a `pattern`, `list` or `table` says, every value a fix passes through one must also match `[A-Za-z0-9_.:/+=@][A-Za-z0-9_.:/+=@-]*`: no quote, whitespace, backslash, glob character, `%`, any of `` $`;&|<>(){}~ ``, or leading `-` |
@@ -1929,7 +1934,8 @@ A hop ends the replay when its commands fail, when the guest doesn't come back, 
 start, when the newest installed kernel isn't the one running (or the query names none), when the guest no longer
 runs on the firmware the replay boots, when SELinux no longer runs in the mode the box started in (enforcing,
 permissive or disabled, read from selinuxfs after every reboot; no policy loaded counts as disabled, though EL4 to 6
-mount selinuxfs anyway), or when a check that passed before it fails after the
+mount selinuxfs anyway; an enforcing box may be permissive at a hop's middle reboot, since the hop runs permissive),
+or when a check that passed before it fails after the
 reboot. Its disk and serial console are kept.
 
 The VM box differs from the chroot box in ways a replay can show: it has what the installer adds (`@core`, a kernel, a
@@ -2020,7 +2026,8 @@ The rules:
 - SELinux: a VM box installs permissive. `replay --selinux MODE` (EL) starts from the box as an owner who set SELinux
   otherwise has it, made once per mode from a running copy of the installed box rather than a second install, as an
   admin turns it: `enforcing` installs the release's targeted policy if it's missing, sets `SELINUX=enforcing` and
-  relabels the whole filesystem (`/.autorelabel`), as a stock install runs; `none` removes the policy packages and
+  relabels the whole filesystem (`/.autorelabel`), as a stock install runs, and labels sshd's port `ssh_port_t` when the
+  box moved it (`semanage port`, EL5 on); `none` removes the policy packages and
   `/etc/selinux/config`, so no policy loads (CentOS 4 to 6 only: a CentOS 4 box without `selinux-policy-targeted` has
   no config at all, wend#158; EL7's systemd freezes rather than boot such a box). The disk is kept beside the box's
   and isn't part of its cache key; it's made only if the box comes up in that mode and still passes every check it

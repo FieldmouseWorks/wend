@@ -322,6 +322,13 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
             "{wh}: an adapter with addons must put {{addons}} in hop.set_release"
         ));
     }
+    for k in ["kernel_before", "kernel_after", "before_transaction"] {
+        if let Some(l) = get(a, "hop").and_then(|h| get(h, k)) {
+            if !l.as_array().is_some_and(|l| l.iter().all(Value::is_string)) {
+                errs.push(format!("{wh}: hop.{k} must be a list of commands"));
+            }
+        }
+    }
     if let Some(Value::Object(addons)) = get(a, "addons") {
         let rels = get(a, "releases");
         for (n, ad) in addons {
