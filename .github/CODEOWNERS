@@ -1,6 +1,3 @@
-# The maintainer is notified on every change. Merges happen after green checks and the Claude review (CONTRIBUTING.md).
-*               @TusanHomichi
-/tools/         @TusanHomichi
-/adapters/      @TusanHomichi
-/SPEC.md        @TusanHomichi
+# A human signs off only where a PR could loosen its own judge: the workflows that run the gate and this file.
+# Everything else merges itself once it's settled (CONTRIBUTING.md, layers 5 and 6).
 /.github/       @TusanHomichi
