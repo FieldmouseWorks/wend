@@ -1,3 +1,13 @@
 .wend/
 __pycache__/
 client/target/
+
+# editors
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Claude notes for this machine only
+CLAUDE.local.md
