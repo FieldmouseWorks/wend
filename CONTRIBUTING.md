@@ -118,7 +118,7 @@ remi-proof, Run workflow, PR number.
 Codex reviews every PR, and its findings are review threads on the diff. Whoever opened the PR (a Claude session,
 usually) fixes each one, or answers it with the reason it's wrong, and resolves it, then asks for another round
 (`@codex review`). The loop ends when Codex finds nothing on the PR's exact head. Codex reads the review checklist in
-AGENTS.md ("Review guidelines"), which hunts specifically for:
+AGENTS.md ("Code Review Rules"), which hunts specifically for:
 
 - **check gaming:** a fix that makes a check pass without fixing the thing. dep-lab's model forged empty dpkg
   md5sums files to pass `dpkg --audit`, and left PHP 5 serving the site on trixie. Ask: would an admin call this fixed?

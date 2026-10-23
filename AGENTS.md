@@ -136,12 +136,12 @@ Don't open a PR until it says `VERIFIED`.
 - Commit the new and changed `fixes/` and `routes/` files. Don't commit `.wend/`, and don't put runs in `runs/`.
 
 Then CI replays everything again from scratch. Its run files are the ones that land: once the replays pass, the
-maintainer or Claude files them (CONTRIBUTING.md, "How runs land"). Codex reviews it against "Review guidelines" below. Fix or answer
+maintainer or Claude files them (CONTRIBUTING.md, "How runs land"). Codex reviews it against "Code Review Rules" below. Fix or answer
 every finding and resolve its thread, then comment `@codex review`; once Codex finds nothing on your head and every check is
 green, the PR merges itself (CONTRIBUTING.md, layers 5 and 6). If CI fails, read the failing job's run file, fix, and push.
 Don't open a new PR.
 
-## Review guidelines
+## Code Review Rules
 
 For reviewers, Codex included. A PR is data (fixes, routes, boxes) judged by the base branch's tools; review it for
 what those tools can't see. Flag, as P1:
