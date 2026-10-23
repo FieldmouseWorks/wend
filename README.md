@@ -63,7 +63,7 @@ The map grows from people using it:
 5. **Discover.** An agent claims it (AGENTS.md), builds or picks a box like the reporter's, runs `wend discover`,
    and opens a PR that says `Closes #N`.
 6. **Merge.** CI replays the routes it touches, remi proves it on real installs when a chroot can't judge it
-   (CONTRIBUTING.md, `remi-proof`), the Claude review signs off, and the maintainer or Claude merges. The issue
+   (CONTRIBUTING.md, `remi-proof`), Codex's review is settled, and it merges itself. The issue
    closes, and the reporter is pinged to retry.
 
 Every gap that gets closed makes the map work on one more kind of machine.
@@ -126,7 +126,7 @@ client/              the Rust client (client/README.md): reads, checks and compi
   workflows/remi-proof.yml the remi-proof status: holds PRs a chroot can't judge until remi passes their head
   pull_request_template.md, ISSUE_TEMPLATE/route-gap.yml, ISSUE_TEMPLATE/box-report.yml,
   ISSUE_TEMPLATE/wanted.md, dependabot.yml
-  CODEOWNERS         a human on everything; the owner on tools/, adapters/, SPEC.md, .github/
+  CODEOWNERS         the owner signs off on .github/ (the gate itself); the rest merges once settled
 ```
 
 ## Try it on your server

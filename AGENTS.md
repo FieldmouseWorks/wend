@@ -136,5 +136,24 @@ Don't open a PR until it says `VERIFIED`.
 - Commit the new and changed `fixes/` and `routes/` files. Don't commit `.wend/`, and don't put runs in `runs/`.
 
 Then CI replays everything again from scratch. Its run files are the ones that land: once the replays pass, the
-maintainer or Claude files them (CONTRIBUTING.md, "How runs land"). A Claude reviewer reads it for check gaming and loose gates, and once
-every check is green and the review signs off, the maintainer or Claude merges. If CI fails, read the failing job's run file, fix, and push. Don't open a new PR.
+maintainer or Claude files them (CONTRIBUTING.md, "How runs land"). Codex reviews it against "Code Review Rules" below. Fix or answer
+every finding and resolve its thread, then comment `@codex review`; once Codex finds nothing on your head and every check is
+green, the PR merges itself (CONTRIBUTING.md, layers 5 and 6). If CI fails, read the failing job's run file, fix, and push.
+Don't open a new PR.
+
+## Code Review Rules
+
+For reviewers, Codex included. A PR is data (fixes, routes, boxes) judged by the base branch's tools; review it for
+what those tools can't see. Flag, as P1:
+
+- **Check gaming:** a fix that makes a check pass without fixing the thing (forged dpkg md5sums to pass
+  `dpkg --audit` while PHP 5 still serves the site). Would an admin call the box fixed?
+- **Gates too loose for their effect:** an `installed` gate on a package that's always present, a `file` gate on a file
+  another package also ships. The fix will fire on boxes it was never meant for.
+- **Drift beyond the fix:** a rewritten config that also changes behavior nobody asked for (`AllowOverride All` added
+  to a vhost that never had it). The site renders either way, so no check notices.
+- **Load-bearing cleanup:** a dropped `repair` or reordered step that looks like noise but isn't.
+- **Executable content in written files:** piped log targets (`CustomLog "|..."`), `!include` of writable paths,
+  anything that turns a written file into a command.
+- **Provenance claims** in the PR body or `meta` that the PR's runs don't back up.
+- **A PR loosening its own judge:** changes under `tools/`, `adapters/` or `.github/` that make a check easier to pass.

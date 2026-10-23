@@ -25,6 +25,6 @@ I deleted `apache24-site-conf` from the library and the route, then ran
   14 min ([run](discover-run-etch-web.json))
 
 Its precondition is *tighter* than the hand-curated one: apache2 installed AND the old file names this site AND no
-`.conf` exists yet. This is also exactly what the Claude review layer is for. The model added `AllowOverride All`
+`.conf` exists yet. This is also exactly what the review layer is for. The model added `AllowOverride All`
 and `Options FollowSymLinks`, which the old vhost didn't have. That's a behavior change no check notices (the site
 renders either way), and a reviewer should send it back.
