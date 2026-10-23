@@ -55,6 +55,14 @@ const NET: &str = "(ip -o -4 addr 2>/dev/null || /sbin/ip -o -4 addr) | awk '$2 
                    if grep -qx 'nameserver 127.0.0.53' /etc/resolv.conf; then grep '^nameserver' \
                    /run/systemd/resolve/resolv.conf; fi; } 2>/dev/null | sort -u";
 const FW_NOW: &str = "{ [ -d /sys/firmware/efi ] && echo uefi || echo bios; } 2>/dev/null";
+/// tools/vm.py's SELINUX_NOW: the running SELinux mode (Disabled when no policy is loaded, whatever selinuxfs says),
+/// then the config's SELINUX= ("none": no config). A machine lands in the mode it started in (wend#158)
+const SELINUX_NOW: &str = "( m=Disabled; for d in /sys/fs/selinux /selinux; do if [ -e $d/enforce ]; then \
+                           tr -d '\\0' < /proc/self/attr/current 2>/dev/null | grep -q : || break; \
+                           [ \"$(cat $d/enforce)\" = 1 ] && m=Enforcing || m=Permissive; break; fi; done; echo $m; \
+                           if [ -f /etc/selinux/config ]; then \
+                           v=$(sed -n 's/^SELINUX=//p' /etc/selinux/config | tail -1); \
+                           echo ${v:-unset}; else echo none; fi )";
 /// tools/vm.py's FORCED_RESET, from inside: when `reboot` did nothing (the first boot onto systemd, EL8 to EL9),
 /// stop every process but this one, sync, remount read-only and reset with sysrq
 const FORCED_RESET: &str = "sleep 2; kill -TERM -1; sleep 10; kill -KILL -1; sleep 3; sync; echo 1 > \
@@ -73,6 +81,15 @@ pub struct UpgradeOpts {
 fn log(msg: &str) {
     let t = sh("date '+%H:%M:%S'", 10).1;
     eprintln!("[wend upgrade {}] {msg}", t.trim());
+}
+
+/// SELinux's running mode (SELINUX_NOW's first word); "unread" when the read fails, which is no mode kept
+fn selinux_mode() -> String {
+    let (rc, out) = sh(SELINUX_NOW, 60);
+    match out.split_whitespace().next() {
+        Some(m @ ("Enforcing" | "Permissive" | "Disabled")) if rc == 0 => m.to_string(),
+        _ => "unread".to_string(),
+    }
 }
 
 /// A command on this machine, through sh with ENV, its output (both streams) and its exit status; 124 when it ran
@@ -1020,6 +1037,7 @@ impl Worker {
         self.s["start_net"] = json!(sh(NET, 60).1);
         self.s["start_firmware"] = json!(sh(FW_NOW, 30).1.trim());
         self.s["start_kernel"] = json!(sh("uname -r", 30).1.trim());
+        self.s["start_selinux"] = json!(selinux_mode());
         log(&format!(
             "start: {}/{} checks pass",
             passed(&results).len(),
@@ -1195,6 +1213,14 @@ impl Worker {
             if !ssh {
                 why.push("sshd doesn't answer a new connection".into());
             }
+            // a state written before start_selinux was has nothing to hold the mode to
+            if let Some(want) = self.s["start_selinux"].as_str() {
+                let mode = selinux_mode();
+                j.insert("selinux".into(), json!(mode));
+                if mode != want {
+                    why.push(format!("SELinux is {mode}, not {want} as the machine started"));
+                }
+            }
             let results = run_checks(&self.checks()?);
             let lost: Vec<String> = self.s["start_checks"]
                 .as_array()
@@ -1298,9 +1324,10 @@ impl Worker {
         Ok((p, a))
     }
 
-    /// Commands in order, stopping at the first that fails, then `after` whatever happened. Whether all of the first
-    /// list passed, and their records.
-    fn commands(&self, cmds: &[String], after: &[String]) -> (bool, Vec<Value>) {
+    /// Commands in order, stopping at the first that fails, then `after` whatever happened, told in WEND_HOP_FAILED
+    /// whether anything failed (`failed`: an earlier part of the same hop did; SPEC "How a hop runs" 8). Whether all
+    /// of the first list passed, and their records.
+    fn commands(&self, cmds: &[String], after: &[String], failed: bool) -> (bool, Vec<Value>) {
         let mut recs = vec![];
         let mut ok = true;
         for c in cmds {
@@ -1318,8 +1345,9 @@ impl Worker {
                 break;
             }
         }
+        let f = u8::from(failed || !ok);
         for c in after {
-            let (rc, out) = sh(c, 1800);
+            let (rc, out) = sh(&format!("WEND_HOP_FAILED={f}; export WEND_HOP_FAILED; {c}"), 1800);
             log(&format!("after: rc {rc}: {}\n{}", tail(c, 200), tail(&out, 1000)));
             recs.push(json!({"cmd": c, "rc": rc, "out": tail(&out, 2000), "after": true}));
         }
@@ -1408,10 +1436,10 @@ impl Worker {
         } else {
             (&plan.commands[..], plan.after.clone())
         };
-        let (ok, recs) = self.commands(first, &after);
+        let (ok, recs) = self.commands(first, &after, false);
         let (ok, recs) = if !ok && before_post {
             // hop.after runs whatever happened
-            let (_, more) = self.commands(&[], &plan.after);
+            let (_, more) = self.commands(&[], &plan.after, true);
             (false, recs.into_iter().chain(more).collect())
         } else {
             (ok, recs)
@@ -1464,7 +1492,7 @@ impl Worker {
             "hop to {hop}: the post steps, after the reboot into its kernel"
         ));
         self.set("hopping")?;
-        let (ok, recs) = self.commands(&plan.commands[plan.post_at..], &plan.after);
+        let (ok, recs) = self.commands(&plan.commands[plan.post_at..], &plan.after, false);
         drop(proxy);
         if let Some(c) = self.last_hop()["commands"].as_array_mut() {
             c.extend(recs.clone());
@@ -1692,7 +1720,7 @@ impl Worker {
                 &compile_with,
                 &to,
             )?;
-            let (ok, r) = self.commands(&[rm, str_of(&h, "autoremove")?.to_string()], &after);
+            let (ok, r) = self.commands(&[rm, str_of(&h, "autoremove")?.to_string()], &after, false);
             recs.extend(r);
             if !ok {
                 self.s["prune"] = json!(recs);
@@ -1715,7 +1743,7 @@ impl Worker {
         }
         if let Some(c) = get(&h, "land_repos").and_then(Value::as_str) {
             let c = fill(c, &vars);
-            let (ok, r) = self.commands(&[c], &[]);
+            let (ok, r) = self.commands(&[c], &[], false);
             self.s["land_repos"] = json!(r);
             if !ok {
                 return self.red("pointing the package manager at the landing release's repos failed");

@@ -36,6 +36,10 @@ id = "sha256:1af03c89988a5ecfbac56d4e3da28c4da034f132a2949a0111bf2376c308f7de"
 name = "el6-mysql-upgrade-data"
 
 [[fixes]]
+id = "sha256:35f9196dd4fc5ff0d5f3bb21f91ce1479cb079e48ee7e5402e492e5c7d9ded72"
+name = "el7-keep-selinux-disabled"
+
+[[fixes]]
 id = "sha256:65fa037cf383daaea92a5df836657d378a0563702358e04fb271dc50f0b47377"
 name = "el7-drop-hal-info"
 
