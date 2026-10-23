@@ -365,7 +365,7 @@ def main(argv):
     busy = busy_worktrees(src, js)
     freed, kept = 0, []
 
-    stripped = set()
+    old_runs = []
     for d in sorted(glob.glob(os.path.join(src, "*", ".wend", "vm", "*"))):
         wt = d.split("/.wend/vm/")[0]
         if not os.path.isdir(d) or not plain(src, d):
@@ -376,6 +376,19 @@ def main(argv):
                "written to recently" if newest(d) > cutoff else None)
         if why:
             kept.append((d, why))
+            continue
+        old_runs.append(d)
+
+    # A resumed replay's disks are overlays on an earlier run's hop disk (vm.replay's resume), and
+    # reading that disk doesn't touch its run's mtimes, so an old run a kept run backs onto keeps its disks.
+    needed = set()
+    for q in glob.glob(os.path.join(src, "*", ".wend", "vm", "*", "*.qcow2")):
+        if os.path.dirname(q) not in old_runs:
+            needed |= set(chain(q)[1:])
+    stripped = set()
+    for d in old_runs:
+        if under(needed, d):
+            kept.append((d, "a kept run's disk backs onto it"))
             continue
         n = strip_run(src, d, apply)
         stripped.add(d)

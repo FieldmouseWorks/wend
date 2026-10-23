@@ -113,7 +113,12 @@ old_run = run("wend-92", "20261014-el_centos7-lamp-bios-1", stale)
 new_run = run("wend-160", "20261021-el_centos5-web-bios-2", stale_backed)
 busy_run = run(f"wend-174-{HEAD[:12]}", "20261015-el_centos4-dns-bios-3", stale)
 held_run = run("wend-103", "20261015-el_centos7-lamp-bios-4", stale)
-for d in (old_run, busy_run, held_run, *made.values(), stale, stale_backed, stale_root):
+# an old run a recent resumed replay goes on from: the replay's disk is an overlay on its hop disk
+resumed_from = run("wend-120", "20261013-el_centos7-lamp-bios-5", stale)
+resumed = f"{src}/wend-121/.wend/vm/20261021-el_centos7-lamp-bios-6"
+os.makedirs(resumed)
+qcow2(f"{resumed}/alma8.qcow2", f"{resumed_from}/centos7.qcow2")
+for d in (old_run, busy_run, held_run, resumed_from, *made.values(), stale, stale_backed, stale_root):
     age(d)
 os.makedirs(f"{lab}/queue")
 json.dump({"id": "20261021-133308-replay-f707", "state": "running", "pr": 174, "sha": HEAD},
@@ -207,6 +212,8 @@ check(not any(os.path.exists(f"{old_run}/{p}") for p in ("centos7.qcow2", "alma8
 check(all(os.path.exists(f"{old_run}/{p}") for p in ("run.json", "centos7.steps.log", "plan/plan.json")),
       "and keeps its run.json, logs and plan")
 check(os.path.exists(f"{new_run}/alma8.qcow2"), "a run written to recently keeps its disks")
+check(os.path.exists(f"{resumed_from}/centos7.qcow2") and os.path.exists(f"{resumed}/alma8.qcow2"),
+      "an old run a kept resumed replay backs onto keeps its disks")
 check(os.path.exists(f"{busy_run}/alma8.qcow2"), "a queued or running job's worktree keeps its runs' disks")
 check(os.path.exists(f"{held_run}/alma8.qcow2"), "a run with a file held open keeps its disks")
 check(os.path.isdir(stale) and "a kept run's disk backs onto it" in out,
