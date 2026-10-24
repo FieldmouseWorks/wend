@@ -1,3 +1,0 @@
-# A human signs off only where a PR could loosen its own judge: the workflows that run the gate and this file.
-# Everything else merges itself once it's settled (CONTRIBUTING.md, layers 5 and 6).
-/.github/       @TusanHomichi

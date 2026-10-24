@@ -4,8 +4,8 @@
 # Trust model: the PR supplies DATA (fixes, routes, boxes). The tools that judge it (check.py, affected.py, the
 # replay harness, the op backends) and the adapters they read (allowlists, argument specs, force flags, the hop
 # commands) always come from the base branch, so a PR cannot loosen its own checks or change what runs as root. A
-# PR that edits tools/, adapters/ or SPEC.md is a spec change: CODEOWNERS makes a human review it, and it is judged
-# by the base branch's tools and adapters like everything else.
+# PR that edits tools/, adapters/ or SPEC.md is a spec change: Codex reviews it against AGENTS.md's Code Review Rules,
+# and it is judged by the base branch's tools and adapters like everything else.
 name: gate
 
 # Runs on every PR, not only ones touching fixes/routes/boxes: branch protection requires these checks, and a
@@ -178,6 +178,6 @@ jobs:
 #   and the remi-proof commit status (remi-proof.yml)
 #   (decoys fails if any replay failed; matrix replay names vary per route, so they aren't listed one by one);
 #   no required approvals. Review is the `baseline` ruleset from burrow's autoland steward: it requires the
-#   review-settled status (Codex clean on the exact head, every thread resolved) and CODEOWNERS sign-off, which
-#   covers .github/ only (CONTRIBUTING.md, layers 5 and 6). Admins can bypass, because PRs opened by the
-#   maintainer's own Claude sessions carry the maintainer's account and GitHub won't let you approve your own PR.
+#   review-settled status (Codex clean on the exact head, every thread resolved). There's no CODEOWNERS file: PRs
+#   opened by the maintainer's own Claude sessions carry the maintainer's account, and GitHub won't let you approve
+#   your own PR. Outside contributions to .github/ wait for the maintainer (CONTRIBUTING.md, layers 5 and 6).
