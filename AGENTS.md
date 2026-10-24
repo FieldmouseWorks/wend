@@ -185,6 +185,11 @@ CI is green, it marks the PR ready and merges it. Fix or answer every finding:
 push the fix and reply with the commit, or reply with why it's wrong, then
 resolve the thread. Don't merge or mark ready yourself.
 
+`.github/` has no code-owner sign-off. The steward still brings `.github/` PRs to
+the maintainer to merge instead of merging them itself, and a PR from outside
+(a fork, or anyone but the maintainer and their Claude sessions) never merges
+without the maintainer, so nobody outside can change the gate and get it merged.
+
 ## Code Review Rules
 
 For reviewers, Codex included. A PR is data (fixes, routes, boxes) judged by the base branch's tools; review it for

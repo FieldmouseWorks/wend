@@ -145,9 +145,10 @@ review, but `review-settled` waits for the maintainer.
 Once every required check is green, `review-settled` included, the steward marks the PR ready and turns on
 auto-merge; GitHub merges it and deletes the branch. Nobody, human or bot, can push to `main` directly.
 
-A PR that changes `.github/` (the workflows that are the gate, and CODEOWNERS) is the one exception: it can loosen its
-own judge, so CODEOWNERS makes the maintainer sign off. The steward settles it the same way, then tells the maintainer
-it's waiting for them.
+A PR that changes `.github/` (the workflows that are the gate) can loosen its own judge. There's no CODEOWNERS sign-off:
+the maintainer's own PRs settle and land like any other, and the steward lists `.github/` among the paths it brings to
+the maintainer to merge. An outside contributor can't change `.github/` and get it merged: their PRs never settle without
+the maintainer (layer 5), and the steward lists them for the maintainer.
 
 ## What a cloud Claude session can write on GitHub
 

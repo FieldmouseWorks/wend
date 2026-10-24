@@ -126,7 +126,6 @@ client/              the Rust client (client/README.md): reads, checks and compi
   workflows/remi-proof.yml the remi-proof status: holds PRs a chroot can't judge until remi passes their head
   pull_request_template.md, ISSUE_TEMPLATE/route-gap.yml, ISSUE_TEMPLATE/box-report.yml,
   ISSUE_TEMPLATE/wanted.md, dependabot.yml
-  CODEOWNERS         the owner signs off on .github/ (the gate itself); the rest merges once settled
 ```
 
 ## Try it on your server
