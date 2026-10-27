@@ -172,18 +172,18 @@ Don't open a PR until it says `VERIFIED`.
 - Commit the new and changed `fixes/` and `routes/` files. Don't commit `.wend/`, and don't put runs in `runs/`.
 
 Then CI replays everything again from scratch. Its run files are the ones that land: once the replays pass, the
-maintainer or Claude files them (CONTRIBUTING.md, "How runs land"). Codex reviews it against "Code Review Rules" below. Fix or answer
-every finding and resolve its thread, then comment `@codex review`; once Codex finds nothing on your head and every check is
-green, the PR merges itself (CONTRIBUTING.md, layers 5 and 6). If CI fails, read the failing job's run file, fix, and push.
-Don't open a new PR.
+maintainer or Claude files them (CONTRIBUTING.md, "How runs land"). Codex reviews it against "Code Review Rules" below.
+Fix or answer every finding and resolve its thread; Codex looks again once they are all resolved, and once it finds
+nothing on your head and every check is green, the PR merges itself (CONTRIBUTING.md, layers 5 and 6). If CI fails, read
+the failing job's run file, fix, and push. Don't open a new PR.
 
 ## Pull requests
 
-Open PRs as drafts and leave them to the steward: it asks Codex for a review,
-and once Codex finds nothing on your head, every review thread is resolved and
-CI is green, it marks the PR ready and merges it. Fix or answer every finding:
-push the fix and reply with the commit, or reply with why it's wrong, then
-resolve the thread. Don't merge or mark ready yourself.
+Open PRs ready for review, never as drafts, and leave them to the steward: it
+asks Codex for a review, and once Codex finds nothing on your head, every
+review thread is resolved and CI is green, it merges the PR. Fix or answer
+every finding: push the fix and reply with the commit, or reply with why it's
+wrong, then resolve the thread. Don't merge it yourself.
 
 `.github/` has no code-owner sign-off: the steward merges a settled `.github/`
 PR like any other. A PR from outside (a fork, or anyone but the maintainer and

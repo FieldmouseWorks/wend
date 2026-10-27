@@ -116,9 +116,9 @@ remi-proof, Run workflow, PR number.
 ### 5. Review until settled (automatic, minutes to hours)
 
 Codex reviews every PR, and its findings are review threads on the diff. Whoever opened the PR (a Claude session,
-usually) fixes each one, or answers it with the reason it's wrong, and resolves it, then asks for another round
-(`@codex review`). The loop ends when Codex finds nothing on the PR's exact head. Codex reads the review checklist in
-AGENTS.md ("Code Review Rules"), which hunts specifically for:
+usually) fixes each one, or answers it with the reason it's wrong, and resolves it; Codex looks again once they are all
+resolved. The loop ends when Codex finds nothing on the PR's exact head. Codex reads the review checklist in AGENTS.md
+("Code Review Rules"), which hunts specifically for:
 
 - **check gaming:** a fix that makes a check pass without fixing the thing. dep-lab's model forged empty dpkg
   md5sums files to pass `dpkg --audit`, and left PHP 5 serving the site on trixie. Ask: would an admin call this fixed?
@@ -142,8 +142,8 @@ review, but `review-settled` waits for the maintainer.
 
 ### 6. It merges itself
 
-Once every required check is green, `review-settled` included, the steward marks the PR ready and turns on
-auto-merge; GitHub merges it and deletes the branch. Nobody, human or bot, can push to `main` directly.
+Once every required check is green, `review-settled` included, the steward merges it and deletes the branch. Nobody,
+human or bot, can push to `main` directly.
 
 A PR that changes `.github/` (the workflows that are the gate) can loosen its own judge. There's no CODEOWNERS sign-off:
 the maintainer's own PRs settle and land like any other, `.github/` included, and the reviewers flag one that loosens
