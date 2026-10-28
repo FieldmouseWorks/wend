@@ -17,20 +17,24 @@ proven run (`--run`) fetches the exact bytes that run used, by sha256, from your
 archive (https://archive.fieldmouseworks.com, [docs/archive.md](docs/archive.md)) or your distro's mirrors, and
 refuses anything that doesn't match. A `--live` walk takes today's mirrors unverified, and its run says so.
 
-Five routes so far. Every box below passes its route's current version from scratch, with no model:
+Six routes so far. Every box below has passed its route from scratch, with no model. Runs says where each box's newest
+filed run came from, and "earlier version" marks a route that has changed since:
 
 | Route | Fixes | Boxes | Runs |
 |---|---|---|---|
 | Debian 4.0 etch (2007) to Debian 13 trixie | 14 | `etch-web` (PHP web server), `etch-db` (MySQL/BIND) | CI |
-| CentOS 5.11 (2014) to AlmaLinux 10 | 36 | `centos5-web` (web/MySQL), `centos5-dns` (DNS/FTP) | CI for `centos5-web`, local for `centos5-dns` |
-| CentOS 7.9 to AlmaLinux 10 | 24 | `centos7-lamp`, `centos7-pyapp` (a Python 2.7 app on MariaDB) | local |
-| CentOS 8.5 to AlmaLinux 10 | 20 | `centos8-lamp` | local |
+| CentOS 4.9 (2011) to AlmaLinux 10 | 39 | `centos4-dns` (DNS/FTP) | CI, earlier version |
+| CentOS 5.11 (2014) to AlmaLinux 10 | 38 | `centos5-web` (web/MySQL), `centos5-dns` (DNS/FTP) | CI, earlier version |
+| CentOS 7.9 to AlmaLinux 10 | 29 | `centos7-lamp`, `centos7-pyapp` (a Python 2.7 app on MariaDB), `centos7-junk` (nginx, Tomcat and a Python app on Redis), `sl7-lamp` (Scientific Linux 7) | CI |
+| CentOS 8.5 to AlmaLinux 10 | 20 | `centos8-lamp` | CI |
 | Ubuntu 14.04 trusty to 26.04 resolute | 8 | `trusty-web`, `trusty-web-updated`, `trusty-db` | local |
 
-CI runs are attested by the gate. Local runs were filed before that rule (CONTRIBUTING.md, "How runs land"), and CI
-replays of the same routes will replace them. The Debian route began as the dep-lab results. The CentOS 5 route
-crosses yum to dnf, the /usr merge, two package-manager bootstraps and a vendor switch; Opus 5.5 found the path in all
-5 of its dep-lab runs, and replays are free.
+CI runs are attested by the gate. The Ubuntu route's runs are local: they were filed before that rule
+(CONTRIBUTING.md, "How runs land"), and CI replays will replace them. The CentOS 4 and 5 routes gained
+`el7-keep-selinux-disabled` after their newest filed runs, and CI runs of their current versions will replace those.
+The Debian route began as the dep-lab results. The CentOS 5 route crosses yum to dnf, the /usr merge, two
+package-manager bootstraps and a vendor switch; the model that wrote it found the path in all 5 of its dep-lab runs,
+and replays are free.
 
 CI replays a route in a chroot whenever a change touches it, which proves the userland only. Kernels, bootloaders and
 the first real boot are tested by the VM tier (`tools/vm.py`, SPEC.md "VM tier"), which the maintainer runs: each box
@@ -85,8 +89,8 @@ adapters/
   el.toml                    Enterprise Linux: CentOS 5, 7 and 8 to AlmaLinux 10, the rpm backend, the mirror shim
   drivers/<family>/          each release's driver table (SPEC "Hardware preflight")
   leapp/el/                  AlmaLinux's leapp-data, vendored (SPEC "Package evolution data")
-fixes/<family>/<hop>/<name>.toml          14 debian, 46 el, 8 ubuntu
-routes/<family>/<from>-to-<to>.toml       the five routes above
+fixes/<family>/<hop>/<name>.toml          14 debian, 54 el, 8 ubuntu
+routes/<family>/<from>-to-<to>.toml       the six routes above
 boxes/<family>/<name>/box.toml            CI fixtures, trusted test code, never shipped
 runs/<family>/<route>/<box>/<stamp>.json  new runs land from CI only: the gate refuses a run it didn't attest
 archive/allowed_signers                   the archive's public signing key (docs/archive.md)
@@ -110,7 +114,7 @@ tools/
   tomlw.py           writes TOML (tomllib only reads)
   port_oldlinux.py   one-off import of the dep-lab Debian results, with a lossless round-trip proof
   test_*.py          the tools' own tests; test_check.py holds the broken fixes the gate must refuse
-docs/validation/     the first end-to-end test: verify on both boxes, and Opus refilling a deleted fix
+docs/validation/     the first end-to-end test: verify on both boxes, and a model refilling a deleted fix
 docs/try-it.md       for a machine's owner: get the client, run `wend share` (read-only), post the report
 docs/archive.md      design: the wend archive (wend#19), every byte proven routes reference, by sha256
 docs/rebuild-and-carry.md  design: moving a machine whose filesystem a later kernel can't mount (old-XFS CentOS 7)
