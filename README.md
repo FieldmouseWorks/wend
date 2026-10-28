@@ -17,21 +17,24 @@ proven run (`--run`) fetches the exact bytes that run used, by sha256, from your
 archive (https://archive.fieldmouseworks.com, [docs/archive.md](docs/archive.md)) or your distro's mirrors, and
 refuses anything that doesn't match. A `--live` walk takes today's mirrors unverified, and its run says so.
 
-Six routes so far. Every box below passes its route's current version from scratch, with no model:
+Six routes so far. Every box below has passed its route from scratch, with no model. Runs says where each box's newest
+filed run came from, and "earlier version" marks a route that has changed since:
 
 | Route | Fixes | Boxes | Runs |
 |---|---|---|---|
 | Debian 4.0 etch (2007) to Debian 13 trixie | 14 | `etch-web` (PHP web server), `etch-db` (MySQL/BIND) | CI |
-| CentOS 4.9 (2011) to AlmaLinux 10 | 39 | `centos4-dns` (DNS/FTP) | CI |
-| CentOS 5.11 (2014) to AlmaLinux 10 | 38 | `centos5-web` (web/MySQL), `centos5-dns` (DNS/FTP) | CI |
+| CentOS 4.9 (2011) to AlmaLinux 10 | 39 | `centos4-dns` (DNS/FTP) | CI, earlier version |
+| CentOS 5.11 (2014) to AlmaLinux 10 | 38 | `centos5-web` (web/MySQL), `centos5-dns` (DNS/FTP) | CI, earlier version |
 | CentOS 7.9 to AlmaLinux 10 | 29 | `centos7-lamp`, `centos7-pyapp` (a Python 2.7 app on MariaDB), `centos7-junk` (nginx, Tomcat and a Python app on Redis), `sl7-lamp` (Scientific Linux 7) | CI |
 | CentOS 8.5 to AlmaLinux 10 | 20 | `centos8-lamp` | CI |
 | Ubuntu 14.04 trusty to 26.04 resolute | 8 | `trusty-web`, `trusty-web-updated`, `trusty-db` | local |
 
 CI runs are attested by the gate. The Ubuntu route's runs are local: they were filed before that rule
-(CONTRIBUTING.md, "How runs land"), and CI replays will replace them. The Debian route began as the dep-lab results.
-The CentOS 5 route crosses yum to dnf, the /usr merge, two package-manager bootstraps and a vendor switch; the model
-that wrote it found the path in all 5 of its dep-lab runs, and replays are free.
+(CONTRIBUTING.md, "How runs land"), and CI replays will replace them. The CentOS 4 and 5 routes gained
+`el7-keep-selinux-disabled` after their newest filed runs, and CI runs of their current versions will replace those.
+The Debian route began as the dep-lab results. The CentOS 5 route crosses yum to dnf, the /usr merge, two
+package-manager bootstraps and a vendor switch; the model that wrote it found the path in all 5 of its dep-lab runs,
+and replays are free.
 
 CI replays a route in a chroot whenever a change touches it, which proves the userland only. Kernels, bootloaders and
 the first real boot are tested by the VM tier (`tools/vm.py`, SPEC.md "VM tier"), which the maintainer runs: each box
