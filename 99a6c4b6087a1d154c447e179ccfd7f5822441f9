@@ -1,0 +1,65 @@
+{
+  "conary": "note v1",
+  "change": "38046c56xh5q2mvts057v791a9",
+  "repo": {
+    "owner": "FieldmouseWorks",
+    "name": "wend"
+  },
+  "pr": 194,
+  "url": "https://github.com/FieldmouseWorks/wend/pull/194",
+  "summary": "docs: settled .github/ PRs merge like any other",
+  "task": null,
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01LUSpz65cwD3ABEEydMWsoV"
+  },
+  "landing": {
+    "revision": "a988c2fdf96671da13f37a39cfb67a95c736682e804d7094eea516b4e662d94e",
+    "before": "9683fdfb9ffb12fcf75baee790653915a180714b",
+    "after": "99a6c4b6087a1d154c447e179ccfd7f5822441f9",
+    "by": {
+      "kind": "status",
+      "login": "TusanHomichi"
+    },
+    "at": 1793142498219
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "decoys",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40134703126/job/120993729960"
+    },
+    {
+      "kind": "ci",
+      "check": "plan",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40134703126/job/120993697416"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40134703124/job/120993635401"
+    },
+    {
+      "kind": "ci",
+      "check": "schema",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40134703126/job/120993634066"
+    },
+    {
+      "kind": "ci",
+      "check": "dco",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40134703126/job/120993633866"
+    },
+    {
+      "kind": "ci",
+      "check": "remi-proof",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/blob/main/CONTRIBUTING.md#4-proof-on-remi"
+    }
+  ]
+}

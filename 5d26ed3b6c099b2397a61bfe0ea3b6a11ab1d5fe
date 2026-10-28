@@ -1,0 +1,71 @@
+{
+  "conary": "note v1",
+  "change": "5pq6zfdq11c0v4w3cr736jhfqr",
+  "repo": {
+    "owner": "FieldmouseWorks",
+    "name": "wend"
+  },
+  "pr": 190,
+  "url": "https://github.com/FieldmouseWorks/wend/pull/190",
+  "summary": "AGENTS.md: the house block, Pull requests and the shared review rules",
+  "task": null,
+  "author": {
+    "kind": "person",
+    "login": "TusanHomichi",
+    "session": null
+  },
+  "landing": {
+    "revision": "3b97235d9799528dce5a148d40dd7f49021cb78a66b643181caa3cba2a93077a",
+    "before": "89faaaf7b70225dec9d942c8b8396f299059c173",
+    "after": "5d26ed3b6c099b2397a61bfe0ea3b6a11ab1d5fe",
+    "by": {
+      "kind": "status",
+      "login": "TusanHomichi"
+    },
+    "at": 1793142484469
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "claude-review",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40035775542/job/120694950399"
+    },
+    {
+      "kind": "ci",
+      "check": "decoys",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40035775542/job/120694897298"
+    },
+    {
+      "kind": "ci",
+      "check": "plan",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40035775542/job/120694850116"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40035775481/job/120694741247"
+    },
+    {
+      "kind": "ci",
+      "check": "schema",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40035775542/job/120694737994"
+    },
+    {
+      "kind": "ci",
+      "check": "dco",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40035775542/job/120694737749"
+    },
+    {
+      "kind": "ci",
+      "check": "remi-proof",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/blob/main/CONTRIBUTING.md#4-proof-on-remi"
+    }
+  ]
+}

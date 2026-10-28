@@ -1,0 +1,77 @@
+{
+  "conary": "note v1",
+  "change": "1766pr2z3j8gcd1186xv7kjz90",
+  "repo": {
+    "owner": "FieldmouseWorks",
+    "name": "wend"
+  },
+  "pr": 191,
+  "url": "https://github.com/FieldmouseWorks/wend/pull/191",
+  "summary": "lab_prune: keep an old run a kept resumed replay backs onto",
+  "task": null,
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01LUSpz65cwD3ABEEydMWsoV"
+  },
+  "landing": {
+    "revision": "cd055b518f2b14e31ece3adb3cc8cff5b4c3c723bc7c5f0d3b924939527b5e76",
+    "before": "a4126e6495303028ccdb0a3eaedb1cc169c07a32",
+    "after": "2adb36951ad7b51dd08c2cdfbb6aafeafaa22046",
+    "by": {
+      "kind": "status",
+      "login": "TusanHomichi"
+    },
+    "at": 1793142491413
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "decoys",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40040952339/job/120711772735"
+    },
+    {
+      "kind": "ci",
+      "check": "plan",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40040952339/job/120711734351"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40040952450/job/120711650517"
+    },
+    {
+      "kind": "ci",
+      "check": "schema",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40040952339/job/120711649053"
+    },
+    {
+      "kind": "ci",
+      "check": "client",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40040952321/job/120711648978"
+    },
+    {
+      "kind": "ci",
+      "check": "dco",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40040952339/job/120711648812"
+    },
+    {
+      "kind": "ci",
+      "check": "msrv",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40040952321/job/120711648639"
+    },
+    {
+      "kind": "ci",
+      "check": "remi-proof",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/pull/191"
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "conary": "note v1",
+  "change": "2k176wgvdb3rjzpmaqd6fnr7s2",
+  "repo": {
+    "owner": "FieldmouseWorks",
+    "name": "wend"
+  },
+  "pr": 195,
+  "url": "https://github.com/FieldmouseWorks/wend/pull/195",
+  "summary": "agents: open PRs ready for review, never as drafts",
+  "task": null,
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01A8jL6BSB2M5KUufXQefcf9"
+  },
+  "landing": {
+    "revision": "2371ff0a2e1613581da42e3fe6f2fa8b5a8fc64d5dd5234984d7ab78b8ddf910",
+    "before": "99a6c4b6087a1d154c447e179ccfd7f5822441f9",
+    "after": "711bfe6ea44de1af65194fbcc3a8519379e5ab90",
+    "by": {
+      "kind": "status",
+      "login": "TusanHomichi"
+    },
+    "at": 1793142501852
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "decoys",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40447743483/job/122003071819"
+    },
+    {
+      "kind": "ci",
+      "check": "plan",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40447743483/job/122003031784"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40447743897/job/122002935679"
+    },
+    {
+      "kind": "ci",
+      "check": "dco",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40447743483/job/122002932974"
+    },
+    {
+      "kind": "ci",
+      "check": "schema",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/40447743483/job/122002932722"
+    },
+    {
+      "kind": "ci",
+      "check": "remi-proof",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/blob/main/CONTRIBUTING.md#4-proof-on-remi"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/pull/195#pullrequestreview-5662094736"
+    }
+  ]
+}
