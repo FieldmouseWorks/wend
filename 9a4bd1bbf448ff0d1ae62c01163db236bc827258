@@ -1,0 +1,71 @@
+{
+  "conary": "note v1",
+  "change": "76p3mp584ke6g333z4g1fvqkef",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "wend"
+  },
+  "pr": 198,
+  "url": "https://github.com/fieldmouseworks/wend/pull/198",
+  "summary": "dependabot: write subjects in the house style",
+  "task": "https://claude.ai/code/project/chan_01Ad4f4oDXfFTCEzLHzMTD8q?thread=cmsg_01Ad4f4oDXfFTCEzLHzMTD8qV7u73i8eiY9aLBLYzkuTuS",
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01BkHcyCpBPr6Z184ZrTFat9"
+  },
+  "landing": {
+    "revision": "7d4b24b25d205cb98546a4952e2b0b565b787608de99748e54cb4b66fdb7dcf9",
+    "before": "f89a21479423a4cea626c000e518c5208ea5a109",
+    "after": "9a4bd1bbf448ff0d1ae62c01163db236bc827258",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1793398106937
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "decoys",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41135448036/job/124336806324"
+    },
+    {
+      "kind": "ci",
+      "check": "plan",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41135448036/job/124336752430"
+    },
+    {
+      "kind": "ci",
+      "check": "dco",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41135448036/job/124336640962"
+    },
+    {
+      "kind": "ci",
+      "check": "schema",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41135448036/job/124336640759"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41135446332/job/124336639618"
+    },
+    {
+      "kind": "ci",
+      "check": "remi-proof",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/blob/main/CONTRIBUTING.md#4-proof-on-remi"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/pull/198#pullrequestreview-5719187249"
+    }
+  ]
+}
