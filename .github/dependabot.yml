@@ -3,22 +3,26 @@
 # (client/rust-toolchain.toml) is Dependabot's too. A new release waits 3 days first, since hijacked releases are
 # usually pulled by then; security updates don't wait. Minor and patch updates come grouped, one PR per ecosystem;
 # a major one comes on its own. Claude reviews these like any PR and flags anything that changes the MSRV, the static
-# musl build, or what gate.yml copies from the base branch.
+# musl build, or what gate.yml copies from the base branch. Subjects follow the house style's `area: plain sentence`
+# ("deps: bump libc ..."): each PR lands squashed under its title, and CI checks the title.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: daily }
     cooldown: { default-days: 3 }
+    commit-message: { prefix: ci }
     groups:
       actions: { patterns: ["*"], update-types: [minor, patch] }
   - package-ecosystem: cargo
     directory: /client
     schedule: { interval: daily }
     cooldown: { default-days: 3 }
+    commit-message: { prefix: deps }
     groups:
       cargo: { patterns: ["*"], update-types: [minor, patch] }
   - package-ecosystem: rust-toolchain
     directory: /client
     schedule: { interval: daily }
     cooldown: { default-days: 3 }
+    commit-message: { prefix: deps }
