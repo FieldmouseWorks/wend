@@ -1,0 +1,83 @@
+{
+  "conary": "note v1",
+  "change": "4ykgsj0j7px9rkqwcmbmb9ymjx",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "wend"
+  },
+  "pr": 199,
+  "url": "https://github.com/fieldmouseworks/wend/pull/199",
+  "summary": "client: keep the PR build's artifact 3 days, not 90",
+  "task": "https://claude.ai/code/project/chan_01Ad4f4oDXfFTCEzLHzMTD8q?thread=cmsg_01Ad4f4oDXfFTCEzLHzMTD8qWJ5H7Afa2xYNxcbPux5bTB",
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01BkHcyBkJTvHAHbf4nrFgTQ"
+  },
+  "landing": {
+    "revision": "4def2c2c272f80295a5a0a3f062af4e6c903e44343c7a9f141ce0af1cdae3c7c",
+    "before": "9a4bd1bbf448ff0d1ae62c01163db236bc827258",
+    "after": "b9208ab906900c6df7d5f6ae1d4638fb449cc526",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1793422630381
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "decoys",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41170416892/job/124447070885"
+    },
+    {
+      "kind": "ci",
+      "check": "plan",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41170416892/job/124447030266"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41170416933/job/124446974480"
+    },
+    {
+      "kind": "ci",
+      "check": "msrv",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41170416960/job/124446972883"
+    },
+    {
+      "kind": "ci",
+      "check": "schema",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41170416892/job/124446972810"
+    },
+    {
+      "kind": "ci",
+      "check": "dco",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41170416892/job/124446972689"
+    },
+    {
+      "kind": "ci",
+      "check": "remi-proof",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/blob/main/CONTRIBUTING.md#4-proof-on-remi"
+    },
+    {
+      "kind": "ci",
+      "check": "client",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41170416960/job/124446973101"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/pull/199#pullrequestreview-5721364676"
+    }
+  ]
+}
