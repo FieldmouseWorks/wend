@@ -108,7 +108,10 @@ jobs:
       - name: the atlas passes the client's own check
         working-directory: .
         run: client/target/x86_64-unknown-linux-musl/release/wend check
+      # A PR's build, for trying it by hand. Nothing downloads it (release.yml builds its own), so it keeps 3 days, not
+      # the default 90.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wend-x86_64-linux-musl
           path: client/target/x86_64-unknown-linux-musl/release/wend
+          retention-days: 3
