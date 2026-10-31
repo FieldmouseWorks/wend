@@ -1,0 +1,101 @@
+{
+  "conary": "note v1",
+  "change": "59a5bqzjggs9kbysgx3mn8fzp4",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "wend"
+  },
+  "pr": 200,
+  "url": "https://github.com/fieldmouseworks/wend/pull/200",
+  "summary": "ci: hold every PR to the house rules a machine can read",
+  "task": "https://claude.ai/code/project/chan_01Ad4f4oDXfFTCEzLHzMTD8q?thread=cmsg_01Ad4f4oDXfFTCEzLHzMTD8qV7u73i8eiY9aLBLYzkuTuS",
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01BkHcyCpBPr6Z184ZrTFat9"
+  },
+  "landing": {
+    "revision": "e721d2c54b56c9491bd0b1f679a463772f136190bdc165fcc0d3484916101cff",
+    "before": "b9208ab906900c6df7d5f6ae1d4638fb449cc526",
+    "after": "bf0bcbff9e9623920fea408fa3f61cbd071c49f0",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1793475511503
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "decoys",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41234527813/job/124635511372"
+    },
+    {
+      "kind": "ci",
+      "check": "plan",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41234527813/job/124635480958"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41234527783/job/124635411585"
+    },
+    {
+      "kind": "ci",
+      "check": "dco",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41234527813/job/124635410339"
+    },
+    {
+      "kind": "ci",
+      "check": "schema",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41234527813/job/124635410220"
+    },
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41234527860/job/124635410159"
+    },
+    {
+      "kind": "ci",
+      "check": "remi-proof",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/blob/main/CONTRIBUTING.md#4-proof-on-remi"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#200)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41234527860"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#200)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41234527860"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#200)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41234527860"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#200)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/41234527860"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/pull/200#pullrequestreview-5724583712"
+    }
+  ]
+}
