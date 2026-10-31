@@ -34,6 +34,10 @@ A PR merges only after all six layers pass, in this order.
 
 `tools/test_check.py` is the gate's own regression test: 14 broken fixes and one decoy hit that it must refuse.
 
+Beside it, `.github/workflows/house.yml` holds the PR to the house rules in AGENTS.md that a machine can read, its
+title and body included, through burrow's house action. Model names are left out: a fix records the model that
+wrote it.
+
 ### 2. Replay in CI (automatic, ~15 min per route per box)
 
 `tools/affected.py` works out what the PR touches. CI then replays each affected route, from scratch, on **every** box
