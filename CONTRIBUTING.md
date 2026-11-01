@@ -141,8 +141,9 @@ open (whoever opened it), nobody's review asks for changes, and every other chec
 starts over. Dependabot's non-major bumps skip the Codex round: CI is their review.
 After four Codex rounds that still find something, the steward stops and asks the maintainer.
 
-A PR from a fork, or from anyone but the maintainer, the maintainer's Claude sessions and Dependabot, gets the same
-review, but `review-settled` waits for the maintainer.
+A PR from a fork, or from anyone but the maintainer, the maintainer's Claude sessions, the maintainer's workers App
+(whose house-sync keeps AGENTS.md's house blocks current) and Dependabot, gets the same review, but `review-settled`
+waits for the maintainer.
 
 ### 6. It merges itself
 
@@ -219,5 +220,6 @@ once and amortized over free replays. A model-authored fix goes through exactly 
 
 Contributions are dual-licensed MIT OR Apache-2.0, the same as the repo. Every commit needs a
 [Developer Certificate of Origin](https://developercertificate.org/) sign-off (`git commit -s`), which adds
-`Signed-off-by: Name <email>`. CI rejects PRs with unsigned commits. A model-authored fix is signed off by the
-human who submits it, and that human vouches for it like any other contribution.
+`Signed-off-by: Name <email>`. CI rejects PRs with unsigned commits, except the commits GitHub verifies Dependabot
+or the maintainer's workers App made on a PR that bot opened: a bot can't sign off. A model-authored fix is signed
+off by the human who submits it, and that human vouches for it like any other contribution.

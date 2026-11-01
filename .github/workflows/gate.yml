@@ -24,21 +24,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0 }
       # The PR's own commits, merge commits included, not the synthetic merge commit Actions checks out by default.
-      # Dependabot can't sign off. On a PR GitHub says Dependabot opened (only Dependabot can), an unsigned commit passes
-      # only if GitHub itself made it for Dependabot: authored and committed as dependabot[bot] (or committed by GitHub's
+      # Two bots can't sign off: Dependabot, and the maintainer's own workers App, whose house-sync keeps AGENTS.md's
+      # house blocks as burrow has them. On a PR GitHub says one of them opened (only that bot can), an unsigned commit
+      # passes only if GitHub itself made it for that bot: authored and committed as it (or committed by GitHub's
       # web-flow), and carrying a signature GitHub verifies. Git's author and committer lines alone can be forged; a
       # verified signature for those identities can't, so a commit anyone else pushes to that PR still needs a sign-off.
       - env:
           GH_TOKEN: "${{ github.token }}"
           REPO: "${{ github.repository }}"
-          DEPENDABOT_PR: "${{ github.event.pull_request.user.login == 'dependabot[bot]' }}"
+          OPENER: "${{ github.event.pull_request.user.login }}"
         run: |
           unsigned=$(git log --format='%H %(trailers:key=Signed-off-by,valueonly,separator=;)' \
                      origin/${{ github.base_ref }}..${{ github.event.pull_request.head.sha }} | awk 'NF<2{print $1}')
-          bot='49699333+dependabot[bot]@users.noreply.github.com'
+          case "$OPENER" in
+            'dependabot[bot]') bot='49699333+dependabot[bot]@users.noreply.github.com' ;;
+            'fieldmouseworks-workers[bot]') bot='349565860+fieldmouseworks-workers[bot]@users.noreply.github.com' ;;
+            *) bot= ;;
+          esac
           bad=
           for c in $unsigned; do
-            if [ "$DEPENDABOT_PR" = true ] && [ "$(gh api "repos/$REPO/commits/$c" --jq \
+            if [ -n "$bot" ] && [ "$(gh api "repos/$REPO/commits/$c" --jq \
                  "(.commit.author.email == \"$bot\") and (.commit.committer.email == \"$bot\" or .commit.committer.email == \"noreply@github.com\") and .commit.verification.verified")" = true ]; then
               continue
             fi
