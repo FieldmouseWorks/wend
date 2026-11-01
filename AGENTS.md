@@ -213,7 +213,7 @@ one-way path (secrets, CODEOWNERS) gets a judgment first: it lands unless it
 can't be undone or is the owner's to decide.
 
 A red default branch (CI failed on its tip) is the steward's to fix too: a
-Claude job takes it as soon as the steward sees it, and its fix comes from a
+job takes it as soon as the steward sees it, and its fix comes from a
 branch named `autoland/red-` and the commit (`gh pr list --search
 head:autoland/red-`). Don't fix it yourself, in any repo: it needs one fix,
 not several racing each other. Only if the pipeline's stuck issue says the
