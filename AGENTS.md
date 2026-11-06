@@ -10,6 +10,13 @@ has a bug: say so in your PR.
 These hold in every repo. This file's own sections add to them and win where
 they say something more specific.
 
+- Design the class, not the instance. When a bug, finding or stall shares
+  its cause with others, fix that cause once, where it lives (one owning
+  path, a type, a check), so none of its cases can come back. Chasing cases
+  one at a time is how something else breaks later.
+- Do work once. Before starting, look for what's already open or built for
+  it. Extend the shared crate, client or job that does it rather than
+  writing another copy, and never run work twice that once would do.
 - Fix the whole cause. No workarounds, shims, fallbacks or half-migrations:
   when you replace something, delete the old path in the same change.
 - One fact, one home. Each rule or fact lives in one place; link to it instead
@@ -203,6 +210,14 @@ the failing job's run file, fix, and push. Don't open a new PR.
 
 <!-- house:prs v1 begin. Copied from FieldmouseWorks/burrow house/prs.md, verbatim. Change it there, not here: burrow's house sync rewrites everything between these markers. -->
 ## Pull requests
+
+One task, one PR. Finish everything the task set out to do, then open one
+PR for it, so the work goes through review and CI's gate once: no trickle
+of PRs per step or round, and no stack of PRs on each other's branches. A
+fix to the pipeline itself (the steward, CI, the machine the work runs on)
+lands as soon as it's ready, since everything else waits on it. So does a
+change to these rules that the work needs, in a PR of its own: reviewers
+read the default branch's rules, not the PR's.
 
 Open PRs ready for review, never as drafts, and leave them to the steward: it
 asks the review bot for a review, and once the bot finds nothing on your head,
