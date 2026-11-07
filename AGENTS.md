@@ -8,67 +8,60 @@ has a bug: say so in your PR.
 ## House rules
 
 These hold in every repo. This file's own sections add to them and win where
-they say something more specific.
+they're more specific.
 
-- Design the class, not the instance. When a bug, finding or stall shares
-  its cause with others, fix that cause once, where it lives (one owning
-  path, a type, a check), so none of its cases can come back. Chasing cases
-  one at a time is how something else breaks later.
-- Do work once. Before starting, look for what's already open or built for
-  it. Extend the shared crate, client or job that does it rather than
-  writing another copy, and never run work twice that once would do.
-- Fix the whole cause. No workarounds, shims, fallbacks or half-migrations:
-  when you replace something, delete the old path in the same change.
-- One fact, one home. Each rule or fact lives in one place; link to it instead
-  of restating it.
-- Before you edit, say what done looks like and how it will be checked. Simple
-  work gets a short plan, not a ceremony.
-- Report only the checks you actually ran, and what they said. Skipped,
-  unavailable or "should pass" is never a pass. Keep local and CI results
-  apart.
+- Design the class, not the instance. When a bug, finding or stall shares a
+  cause with others, fix the cause once, where it lives (one owning path, a
+  type, a check), so none of its cases come back.
+- Do work once. Look for what's already open or built first, extend the
+  shared crate, client or job that does it rather than write another copy,
+  and never run work twice that once would do.
+- Fix the whole cause: no workarounds, shims, fallbacks or half-migrations.
+  When you replace something, delete the old path in the same change.
+- One fact, one home. Each rule or fact lives in one place; link to it
+  instead of restating it.
+- Before you edit, say what done looks like and how it will be checked.
+- Report only the checks you ran and what they said. Skipped, unavailable
+  or "should pass" is never a pass. Keep local and CI results apart.
 - A new check comes with proof that it fails on the bug it's for.
-- Split a code file before it passes 1,000 lines. A PR that grows one past
-  that, or grows one already over it, splits it, or says why not on a line in
-  its body starting `Why not split:`.
-- Rust by default, shell included. New code that's meant to last starts in
-  Rust unless its platform picks the language, and anything else takes a
-  solid reason: a coin toss goes to Rust. New Python or shell says why it
-  isn't Rust, on a line in its PR body starting `Why not Rust:` (a PR that
-  adds Python, or grows Python and shell past a fix, needs one): a file a
-  tool generates, glue that only runs another program, a throwaway script,
-  or a tool still being tuned, ported once it settles. Port existing Python
-  and shell whenever Rust buys anything, system and pipeline code first, and
-  let the port redraw where the code lives and what owns it rather than copy
-  it.
-- Work starts from an event (a push, a webhook, a unit finishing), not a
-  clock. A PR that adds a timer or a cron schedule says why on a line in its
-  body starting `Why a timer:`.
-- The code is the memory. When something goes wrong, make the code, a type, a
-  test or a check stop it happening again; a new rule in AGENTS.md is the last
+- The code is the memory. When something goes wrong, make the code, a type,
+  a test or a check stop it happening again; a new rule here is the last
   resort. Say in the PR which one you did.
-- Keep going on work you were asked to do. Don't stop to ask again for what's
+- Keep going on work you were asked to do: don't ask again for what's
   already been asked for.
-- Never commit what the repo keeps private: secrets, tokens, personal data, and
-  anything listed under this file's "Private" section.
+- Never commit what the repo keeps private: secrets, tokens, personal data,
+  and anything under this file's "Private" section.
 - `Closes #N` only when the issue is fully done; otherwise `Refs #N`.
-- Tracked files never name a model. Which model does what is the machine's
-  business, and model names go stale in weeks. A line that has to (a recorded
-  screen in a test) gets a line in the PR body starting `Why a model name:`.
-- CI's house check holds every PR to the rules above that ask for a line in
-  its body, with a reason of four words or more after it, and to its title's
-  style. Editing the body or title runs it again.
+
+CI's house check holds every PR to its title's style and to the rules below,
+each of which a PR can pass with a line in its body starting as shown and a
+reason of four words or more. Editing the body or title runs it again.
+
+- Rust by default, shell included: new code meant to last starts in Rust
+  unless its platform picks the language, and a coin toss goes to Rust. A PR
+  that adds Python, or grows Python and shell past a fix, says `Why not
+  Rust:` (a file a tool generates, glue that only runs another program, a
+  throwaway script, a tool still being tuned). Port existing Python and
+  shell whenever Rust buys anything, system and pipeline code first.
+- Work starts from an event (a push, a webhook, a unit finishing), not a
+  clock. A PR that adds a timer or a cron schedule says `Why a timer:`.
+- Split a code file before it passes 1,000 lines, or say `Why not split:`.
+- AGENTS.md is a map: what the repo is, its own rules, and where things live
+  (a feature map, the doc that owns each subject). Detail goes in the doc
+  that owns it, linked from here. A PR that grows the repo's own part (the
+  lines outside these blocks) past 100 lines says `Why a longer guide:`.
+- Tracked files never name a model: which model does what is the machine's
+  business, and names go stale in weeks. A line that has to (a recorded
+  screen in a test) says `Why a model name:`.
 
 ### Commits
 
-Subjects are `area: plain sentence`, where the area is the module, directory or
-tool the change is about: `autoland: merge only the head that was checked`.
-Lowercase after the colon, no trailing period, no `feat:`/`fix:` prefixes. The
-body, when there is one, says why. A PR's title is the subject main gets when
-it lands, so it's written the same way.
-
-Keep the git identity your machine gives you. Where commits are signed, the key
-belongs to that identity: a signed commit under someone else's name and email
-shows as Unverified on GitHub, and CI fails it.
+Subjects are `area: plain sentence`, the area being the module, directory or
+tool the change is about (`autoland: merge only the head that was checked`):
+lowercase after the colon, no trailing period, no `feat:`/`fix:`. The body,
+if any, says why. A PR's title is the subject main gets, so it's written the
+same way. Keep the git identity your machine gives you: a commit signed with
+a key that isn't its author's shows as Unverified, and CI fails it.
 <!-- house:rules end -->
 
 **What you're making:** fixes, which are small, declarative changes in a fixed vocabulary, plus the route that pins
@@ -211,29 +204,24 @@ the failing job's run file, fix, and push. Don't open a new PR.
 <!-- house:prs v1 begin. Copied from FieldmouseWorks/burrow house/prs.md, verbatim. Change it there, not here: burrow's house sync rewrites everything between these markers. -->
 ## Pull requests
 
-One task, one PR. Finish everything the task set out to do, then open one
-PR for it, so the work goes through review and CI's gate once: no trickle
-of PRs per step or round, and no stack of PRs on each other's branches. A
-fix to the pipeline itself (the steward, CI, the machine the work runs on)
-lands as soon as it's ready, since everything else waits on it. So does a
-change to these rules that the work needs, in a PR of its own: reviewers
-read the default branch's rules, not the PR's.
+One task, one PR: finish what the task set out to do, then open one PR, so
+it goes through review and CI once. No PR per step or round, and no stacks.
+A fix to the pipeline (the steward, CI, the machine) lands as soon as it's
+ready, and so does a change to these rules that the work needs, in a PR of
+its own: reviewers read the default branch's rules, not the PR's.
 
-Open PRs ready for review, never as drafts, and leave them to the steward: it
-asks the review bot for a review, and once the bot finds nothing on your head,
-every review thread is resolved and CI is green, it merges the PR. Don't merge
-it yourself. Fix or answer every finding: push the fix and reply with the
-commit, or reply with why it's wrong, then resolve the thread. A PR touching a
-one-way path (secrets, CODEOWNERS) gets a judgment first: it lands unless it
-can't be undone or is the owner's to decide.
+Open PRs ready for review, never as drafts, and leave them to the steward:
+once the review bot finds nothing on your head, every thread is resolved and
+CI is green, it merges. Don't merge it yourself. Answer every finding: push
+the fix and reply with the commit, or reply with why it's wrong, then
+resolve the thread. A PR touching a one-way path (secrets, CODEOWNERS) gets
+a judgment first, and lands unless it can't be undone or is the owner's
+call.
 
-A red default branch (CI failed on its tip) is the steward's to fix too: a
-job takes it as soon as the steward sees it, and its fix comes from a
-branch named `autoland/red-` and the commit (`gh pr list --search
-head:autoland/red-`). Don't fix it yourself, in any repo: it needs one fix,
-not several racing each other. Only if the pipeline's stuck issue says the
-steward's jobs gave up on it, fix it, from a branch of that name, so the
-steward knows it for the fix.
+A red default branch is the steward's to fix, from a branch named
+`autoland/red-` and the commit. Don't fix it yourself, in any repo, unless
+the pipeline's stuck issue says the steward's jobs gave up; then fix it from
+a branch of that name.
 <!-- house:prs end -->
 
 `.github/` has no code-owner sign-off: the steward merges a settled `.github/`
