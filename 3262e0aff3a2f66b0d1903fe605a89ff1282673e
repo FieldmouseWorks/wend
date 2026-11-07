@@ -1,0 +1,96 @@
+{
+  "conary": "note v1",
+  "change": "75z815pbpdevkc5f9qq99mvjhq",
+  "repo": {
+    "owner": "FieldmouseWorks",
+    "name": "wend"
+  },
+  "pr": 206,
+  "url": "https://github.com/FieldmouseWorks/wend/pull/206",
+  "summary": "house: the house blocks, as burrow has them now",
+  "task": null,
+  "author": {
+    "kind": "bot",
+    "login": "fieldmouseworks-workers[bot]",
+    "session": null
+  },
+  "class": "R0",
+  "landing": {
+    "revision": "46d4990bdc2c7ae0dba9053546bc70a688e0e974124b276d1b4c17e81a3bf200",
+    "before": "482d8e186c9690f1d788c86e9d14aca412aa6f2f",
+    "after": "3262e0aff3a2f66b0d1903fe605a89ff1282673e",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1794089053854
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "decoys",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42417509970/job/128538776841"
+    },
+    {
+      "kind": "ci",
+      "check": "plan",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42417509970/job/128538740512"
+    },
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42417510144/job/128538681847"
+    },
+    {
+      "kind": "ci",
+      "check": "dco",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42417509970/job/128538681608"
+    },
+    {
+      "kind": "ci",
+      "check": "schema",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42417509970/job/128538681375"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42417508453/job/128538678221"
+    },
+    {
+      "kind": "ci",
+      "check": "remi-proof",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/blob/main/CONTRIBUTING.md#4-proof-on-remi"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#206)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42417510144"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#206)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42417510144"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#206)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42417510144"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#206)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42417510144"
+    }
+  ]
+}
