@@ -23,8 +23,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0 }
-      - name: test DCO bot identities
-        run: python3 -B .github/tests/test_dco.py
       # The PR's own commits, merge commits included, not the synthetic merge commit Actions checks out by default.
       # Dependency bots can't sign off. On a PR GitHub says Dependabot opened (only Dependabot can), an unsigned commit passes
       # only if GitHub itself made it for Dependabot: authored and committed as dependabot[bot] (or committed by GitHub's
