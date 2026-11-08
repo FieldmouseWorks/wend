@@ -6,10 +6,10 @@ name: client
 
 on:
   pull_request:
-    paths: ["client/**", "tools/**", "adapters/**", "fixes/**", "routes/**", "runs/**", ".github/workflows/client.yml"]
+    paths: ["client/**", "tools/**", "adapters/**", "fixes/**", "routes/**", "runs/**", ".github/workflows/client.yml", ".github/workflows/gate.yml"]
   push:
     branches: [main]
-    paths: ["client/**", "tools/**", "adapters/**", "fixes/**", "routes/**", "runs/**", ".github/workflows/client.yml"]
+    paths: ["client/**", "tools/**", "adapters/**", "fixes/**", "routes/**", "runs/**", ".github/workflows/client.yml", ".github/workflows/gate.yml"]
 
 permissions:
   contents: read
