@@ -6,9 +6,12 @@ Follows SPEC.md "Sandbox requirements": a private tmpfs /dev per box (never a bi
 a hostname of the box's own (never the host's), daemons never start, and nothing is deleted until every mount under
 it is gone.
 """
+import errno
 import fcntl
 import hashlib
 import os
+import re
+import stat
 import subprocess
 import sys
 import time
@@ -34,6 +37,51 @@ NAME_SELF = ("n=$(head -n 1 /etc/hostname 2>/dev/null | tr -d ' \\t\\r'); [ -n \
              f"case \"$n\" in ''|[!A-Za-z0-9]*|*[!A-Za-z0-9.-]*|*.|*..*) n={HOSTNAME};; esac; "
              f"printf '%s\\n' \"$n\" >/proc/sys/kernel/hostname 2>/dev/null || echo {HOSTNAME} >/proc/sys/kernel/hostname; "
              'exec /bin/sh -c "$1"')
+
+
+def work_dir(owner=0, path=None):
+    """Create a private work directory; refuse unsafe existing ones, like the client.
+
+    Chroot callers require root ownership; VM callers supply their own uid and parent path.
+    Validate before using cached roots too. Never chmod an existing path: it may belong to someone else.
+    """
+    global WORK
+    update_work = path is None
+    path = WORK if update_work else path
+    # These paths enter shell commands and /proc/mounts parsing. Refuse unsupported spellings
+    # before creating anything, and check again after resolving cwd and ancestor symlinks.
+    def plain(value):
+        if not re.fullmatch(r"[A-Za-z0-9_./+-]+", value) or ".." in value.split("/"):
+            raise RuntimeError(f"unsupported work directory path: {value!r}; use plain paths without parent components")
+    plain(path)
+    # Reject parent components rather than collapsing them across a symlink. Removing trailing
+    # separators and dots before lstat also prevents lstat("link/.") following a terminal link.
+    path = os.path.abspath(path)
+    plain(path)
+    path = os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path))
+    plain(path)
+    try:
+        os.makedirs(path, mode=0o700)
+    except FileExistsError:
+        pass
+    else:
+        os.chmod(path, 0o700)  # match the client even if the caller masks owner permissions
+    md = os.lstat(path)
+    unsafe = not stat.S_ISDIR(md.st_mode) or md.st_uid != owner or md.st_mode & 0o022
+    for name in ("system.posix_acl_access", "system.posix_acl_default"):
+        try:
+            os.getxattr(path, name, follow_symlinks=False)
+        except OSError as e:
+            if e.errno not in (errno.ENODATA, errno.EOPNOTSUPP):
+                unsafe = True  # can't tell: refuse
+        else:
+            unsafe = True
+    if unsafe:
+        raise RuntimeError(f"{path} must be a directory owned by uid {owner} that nobody else can write to "
+                           "(and without ACLs)")
+    if update_work:
+        WORK = path
+    return path
 
 
 def host(cmd, timeout=3600):
@@ -166,7 +214,7 @@ def ensure_mirror(adapter):
             return
         except Exception:
             if i == 0 and have is None:
-                os.makedirs(WORK, exist_ok=True)
+                work_dir(owner=os.geteuid())  # VM runs may be unprivileged; chroot builds validate as root separately
                 subprocess.Popen([sys.executable, "-B", mine, shim.rsplit(":", 1)[1], f"{WORK}/mirror"],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             time.sleep(2)
@@ -271,6 +319,7 @@ BUILD_VERSION = b"1"
 def build_box(box_id, box_doc, adapter, box_toml_bytes, adapter_bytes, log=print):
     """Build a box once and cache it, keyed by the box file, the adapter and BUILD_VERSION. Returns the cached
     (read-only) Box."""
+    work_dir()
     key = hashlib.sha256(box_toml_bytes + adapter_bytes + BUILD_VERSION).hexdigest()[:12]
     root = f"{WORK}/boxes/{box_id.replace('/', '_')}-{key}"
     if os.path.exists(f"{root}/.wend-ready"):

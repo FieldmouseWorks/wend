@@ -1,11 +1,18 @@
 """wend's root_umask() by behaviour: 022 inside, the caller's mask after, also when the walk raises (SPEC "How a hop
 runs"). It loads and runs the `wend` it sits next to, so the gate's schema job (which judges a PR with the base
 branch's tools and never runs the PR's code) doesn't run it: `wend check` and the client job do.
+Also checks the Python sandbox's private work directory and its rejection of unsafe existing paths.
 python3 tools/test_umask.py"""
 import importlib.machinery
 import importlib.util
 import os
 import sys
+import errno
+import hashlib
+import stat
+import tempfile
+import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 loader = importlib.machinery.SourceFileLoader(
@@ -29,4 +36,192 @@ finally:
 ok = seen == [0o022, 0o077, 0o022, 0o077]
 print(("passed  " if ok else f"WRONG   {[oct(m) for m in seen]} ") +
       "root_umask() is 022 inside, the caller's mask after (also on an exception)")
-sys.exit(0 if ok else 1)
+# These checks run without root: only the ownership field is substituted for the happy path.
+import sandbox
+
+
+class WorkDirTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="wend-work-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.work = os.path.join(self.temp.name, "work")
+        self.enterContext(patch.object(sandbox, "WORK", self.work))
+        real_lstat = os.lstat
+
+        def root_stat(path):
+            fields = list(real_lstat(path))
+            fields[4] = 0
+            return os.stat_result(fields)
+
+        self.enterContext(patch.object(sandbox.os, "lstat", side_effect=root_stat))
+
+    def test_private_creation_under_replay_umask(self):
+        with wend.root_umask():
+            sandbox.work_dir()
+        self.assertEqual(stat.S_IMODE(os.stat(self.work).st_mode), 0o700)
+
+    def test_creation_under_restrictive_umask(self):
+        saved = os.umask(0o777)
+        try:
+            sandbox.work_dir()
+        finally:
+            os.umask(saved)
+        self.assertEqual(stat.S_IMODE(os.stat(self.work).st_mode), 0o700)
+
+    def test_safe_existing_directory_is_unchanged(self):
+        os.mkdir(self.work, 0o755)
+        sandbox.work_dir()
+        self.assertEqual(stat.S_IMODE(os.stat(self.work).st_mode), 0o755)
+
+    def test_writable_directories_are_rejected_without_chmod(self):
+        os.mkdir(self.work)
+        for mode in (0o770, 0o707, 0o777):
+            os.chmod(self.work, mode)
+            with self.assertRaises(RuntimeError):
+                sandbox.work_dir()
+            self.assertEqual(stat.S_IMODE(os.stat(self.work).st_mode), mode)
+
+    def test_symlink_is_rejected(self):
+        os.symlink(self.temp.name, self.work)
+        for suffix in ("", "/", "/.", "/./"):
+            with self.subTest(suffix=suffix), patch.object(sandbox, "WORK", self.work + suffix):
+                with self.assertRaises(RuntimeError):
+                    sandbox.work_dir()
+                with self.assertRaises(RuntimeError):
+                    sandbox.build_box("debian/test", {}, {}, b"box", b"adapter")
+                with patch.object(sandbox.urllib.request, "urlopen", side_effect=OSError("not running")):
+                    with self.assertRaises(RuntimeError):
+                        sandbox.ensure_mirror({"mirror": {"shim": "http://localhost:1234", "probe": "test"}})
+
+    def test_file_is_rejected(self):
+        with open(self.work, "w"):
+            pass
+        with self.assertRaises(RuntimeError):
+            sandbox.work_dir()
+
+    def test_other_owner_is_rejected(self):
+        os.mkdir(self.work)
+        fields = list(os.stat(self.work))
+        fields[4] = 12345
+        with patch.object(sandbox.os, "lstat", return_value=os.stat_result(fields)):
+            with self.assertRaises(RuntimeError):
+                sandbox.work_dir()
+
+    def test_acls_and_unknown_errors_are_rejected(self):
+        os.mkdir(self.work)
+        for acl in ("system.posix_acl_access", "system.posix_acl_default"):
+            def getxattr(path, name, **kwargs):
+                if name == acl:
+                    return b"acl"
+                raise OSError(errno.ENODATA, "no ACL")
+            with patch.object(sandbox.os, "getxattr", side_effect=getxattr):
+                with self.assertRaises(RuntimeError):
+                    sandbox.work_dir()
+        with patch.object(sandbox.os, "getxattr", side_effect=OSError(errno.EACCES, "denied")):
+            with self.assertRaises(RuntimeError):
+                sandbox.work_dir()
+
+    def test_filesystem_without_acls_is_allowed(self):
+        with patch.object(sandbox.os, "getxattr", side_effect=OSError(errno.EOPNOTSUPP, "unsupported")):
+            sandbox.work_dir()
+
+    def test_cached_box_and_mirror_validate_before_use(self):
+        key = hashlib.sha256(b"box" + b"adapter" + sandbox.BUILD_VERSION).hexdigest()[:12]
+        root = os.path.join(self.work, "boxes", f"debian_test-{key}")
+        os.makedirs(root)
+        with open(os.path.join(root, ".wend-ready"), "w"):
+            pass
+        os.chmod(self.work, 0o777)
+        with self.assertRaises(RuntimeError):
+            sandbox.build_box("debian/test", {}, {}, b"box", b"adapter")
+
+    def test_no_mirror_does_not_require_work_directory(self):
+        with patch.object(sandbox, "work_dir", side_effect=AssertionError("unused work dir")):
+            sandbox.ensure_mirror({})
+
+    def test_unprivileged_mirror_start_uses_current_owner(self):
+        with patch.object(sandbox.os, "geteuid", return_value=12345), \
+                patch.object(sandbox, "work_dir", side_effect=RuntimeError("stop before spawn")) as validate, \
+                patch.object(sandbox.urllib.request, "urlopen", side_effect=OSError("not running")):
+            with self.assertRaisesRegex(RuntimeError, "stop before spawn"):
+                sandbox.ensure_mirror({"mirror": {"shim": "http://localhost:1234", "probe": "test"}})
+            validate.assert_called_once_with(owner=12345)
+
+    def test_validated_spelling_is_retained(self):
+        with patch.object(sandbox, "WORK", self.work + "/./"):
+            sandbox.work_dir()
+            self.assertEqual(sandbox.WORK, self.work)
+
+    def test_explicit_unprivileged_owner(self):
+        os.mkdir(self.work)
+        fields = list(os.stat(self.work))
+        fields[4] = 12345
+        with patch.object(sandbox.os, "lstat", return_value=os.stat_result(fields)):
+            sandbox.work_dir(owner=12345)
+            with self.assertRaises(RuntimeError):
+                sandbox.work_dir()
+
+    def test_unsafe_paths_are_rejected_before_creation(self):
+        for name in ("lab area", "lab\tarea", "lab\narea", "lab$HOME", "lab;echo", "lab`id`", "lab*", "lab\\area"):
+            path = os.path.join(self.temp.name, name, "work")
+            with self.subTest(path=path), patch.object(sandbox, "WORK", path):
+                with self.assertRaises(RuntimeError):
+                    sandbox.work_dir()
+                self.assertFalse(os.path.exists(os.path.dirname(path)))
+
+    def test_unsafe_cwd_and_resolved_ancestor_are_rejected(self):
+        unsafe = os.path.join(self.temp.name, "lab area")
+        os.mkdir(unsafe)
+        with patch.object(sandbox, "WORK", "work"), patch.object(sandbox.os, "getcwd", return_value=unsafe):
+            with self.assertRaises(RuntimeError):
+                sandbox.work_dir()
+        link = os.path.join(self.temp.name, "link")
+        os.symlink(unsafe, link)
+        with patch.object(sandbox, "WORK", os.path.join(link, "work")):
+            with self.assertRaises(RuntimeError):
+                sandbox.work_dir()
+        self.assertFalse(os.path.exists(os.path.join(unsafe, "work")))
+
+    def test_parent_components_are_rejected(self):
+        target = os.path.join(self.temp.name, "releases", "r1")
+        os.makedirs(target)
+        link = os.path.join(self.temp.name, "link")
+        os.symlink(target, link)
+        for path in (link + "/../work", "link/../work"):
+            with patch.object(sandbox, "WORK", path):
+                with self.assertRaises(RuntimeError):
+                    sandbox.work_dir()
+        self.assertFalse(os.path.exists(os.path.join(self.temp.name, "work")))
+        self.assertFalse(os.path.exists(os.path.dirname(target) + "/work"))
+
+
+class VMWorkDirTests(unittest.TestCase):
+    def test_build_initializes_private_storage_before_locking(self):
+        import vm
+        with tempfile.TemporaryDirectory(prefix="wend-vm-work-") as temp:
+            for mask in (0o002, 0o022, 0o077):
+                work = os.path.join(temp, str(mask))
+                vmwork = os.path.join(work, "vm")
+
+                def install(box_id, box_doc, path):
+                    self.assertEqual(stat.S_IMODE(os.stat(work).st_mode), 0o700)
+                    os.makedirs(path)
+                    with open(os.path.join(path, "base.qcow2"), "w"):
+                        pass
+
+                with patch.object(vm, "WORK", vmwork), patch.object(vm, "install", side_effect=install) as installer:
+                    saved = os.umask(mask)
+                    try:
+                        first = vm.build("debian/etch-web")
+                        self.assertEqual(vm.build("debian/etch-web"), first)
+                    finally:
+                        os.umask(saved)
+                    installer.assert_called_once()
+                    os.chmod(work, 0o775)
+                    with self.assertRaises(RuntimeError):
+                        vm.build("debian/etch-web")
+
+
+
+result = unittest.TextTestRunner().run(unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(c) for c in (WorkDirTests, VMWorkDirTests)))
+sys.exit(0 if ok and result.wasSuccessful() else 1)
