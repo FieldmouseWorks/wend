@@ -86,7 +86,9 @@ fn check(opener: &str, author: &str, committer: &str, verified: bool, log: &str,
 
 #[test]
 fn verified_workers() {
-    check("fieldmouseworks-workers[bot]", WORKERS, WORKERS, true, "bot", true);
+    for committer in [WORKERS, "noreply@github.com"] {
+        check("fieldmouseworks-workers[bot]", WORKERS, committer, true, "bot", true);
+    }
 }
 
 #[test]
@@ -95,7 +97,8 @@ fn workers_rejections() {
         ("someone", WORKERS, WORKERS, true),
         ("fieldmouseworks-workers[bot]", "someone", WORKERS, true),
         ("fieldmouseworks-workers[bot]", WORKERS, "someone", true),
-        ("fieldmouseworks-workers[bot]", WORKERS, "noreply@github.com", true),
+        ("fieldmouseworks-workers[bot]", WORKERS, "noreply@github.com", false),
+        ("someone", WORKERS, "noreply@github.com", true),
         ("fieldmouseworks-workers[bot]", WORKERS, WORKERS, false),
     ] {
         check(opener, author, committer, verified, "bot", false);

@@ -28,7 +28,7 @@ jobs:
       # only if GitHub itself made it for Dependabot: authored and committed as dependabot[bot] (or committed by GitHub's
       # web-flow), and carrying a signature GitHub verifies. Git's author and committer lines alone can be forged; a
       # verified signature for those identities can't, so a commit anyone else pushes to that PR still needs a sign-off.
-      # Workers PRs use the same verified-identity rule, with the workers bot as both author and committer.
+      # Workers PRs use the same verified-identity rule, with the workers bot as author and either the bot or GitHub web-flow as committer.
       - env:
           GH_TOKEN: "${{ github.token }}"
           REPO: "${{ github.repository }}"
@@ -40,7 +40,7 @@ jobs:
           webflow=false
           case "$PR_AUTHOR" in
             'dependabot[bot]') bot='49699333+dependabot[bot]@users.noreply.github.com'; webflow=true ;;
-            'fieldmouseworks-workers[bot]') bot='349565860+fieldmouseworks-workers[bot]@users.noreply.github.com' ;;
+            'fieldmouseworks-workers[bot]') bot='349565860+fieldmouseworks-workers[bot]@users.noreply.github.com'; webflow=true ;;
           esac
           bad=
           for c in $unsigned; do
