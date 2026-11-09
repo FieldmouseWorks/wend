@@ -826,6 +826,10 @@ def build(box_id):
     """Install BOX in a VM from its release's own installer (anaconda for EL, debian-installer for Debian and Ubuntu), then bring
     it to the release's last packages, as the chroot build does. Cached by box file and adapter, like
     sandbox.build_box."""
+    global WORK
+    # All VM build/replay/relocate/smoke paths pass here before locks or cache directories
+    # can recursively create WEND_WORK with the caller's (possibly 0002) umask.
+    WORK = os.path.join(sandbox.work_dir(owner=os.geteuid(), path=os.path.dirname(WORK)), "vm")
     box_doc = load(f"boxes/{box_id}/box.toml")
     fam = box_doc["family"]
     raw = open(os.path.join(ROOT, f"boxes/{box_id}/box.toml"), "rb").read() + \

@@ -10,6 +10,7 @@ import errno
 import fcntl
 import hashlib
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -38,16 +39,27 @@ NAME_SELF = ("n=$(head -n 1 /etc/hostname 2>/dev/null | tr -d ' \\t\\r'); [ -n \
              'exec /bin/sh -c "$1"')
 
 
-def work_dir(owner=0):
+def work_dir(owner=0, path=None):
     """Create a private work directory; refuse unsafe existing ones, like the client.
 
+    Chroot callers require root ownership; VM callers supply their own uid and parent path.
     Validate before using cached roots too. Never chmod an existing path: it may belong to someone else.
     """
     global WORK
-    # Strip directory suffixes before lstat: lstat("link/.") would follow the link.
-    # Keep the validated spelling for every subsequent box/mirror access.
-    path = os.path.abspath(WORK)
+    update_work = path is None
+    path = WORK if update_work else path
+    # These paths enter shell commands and /proc/mounts parsing. Refuse unsupported spellings
+    # before creating anything, and check again after resolving cwd and ancestor symlinks.
+    def plain(value):
+        if not re.fullmatch(r"[A-Za-z0-9_./+-]+", value) or ".." in value.split("/"):
+            raise RuntimeError(f"unsupported work directory path: {value!r}; use plain paths without parent components")
+    plain(path)
+    # Reject parent components rather than collapsing them across a symlink. Removing trailing
+    # separators and dots before lstat also prevents lstat("link/.") following a terminal link.
+    path = os.path.abspath(path)
+    plain(path)
     path = os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path))
+    plain(path)
     try:
         os.makedirs(path, mode=0o700)
     except FileExistsError:
@@ -67,7 +79,9 @@ def work_dir(owner=0):
     if unsafe:
         raise RuntimeError(f"{path} must be a directory owned by uid {owner} that nobody else can write to "
                            "(and without ACLs)")
-    WORK = path
+    if update_work:
+        WORK = path
+    return path
 
 
 def host(cmd, timeout=3600):

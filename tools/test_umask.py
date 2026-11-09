@@ -161,6 +161,67 @@ class WorkDirTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 sandbox.work_dir()
 
+    def test_unsafe_paths_are_rejected_before_creation(self):
+        for name in ("lab area", "lab\tarea", "lab\narea", "lab$HOME", "lab;echo", "lab`id`", "lab*", "lab\\area"):
+            path = os.path.join(self.temp.name, name, "work")
+            with self.subTest(path=path), patch.object(sandbox, "WORK", path):
+                with self.assertRaises(RuntimeError):
+                    sandbox.work_dir()
+                self.assertFalse(os.path.exists(os.path.dirname(path)))
 
-result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromTestCase(WorkDirTests))
+    def test_unsafe_cwd_and_resolved_ancestor_are_rejected(self):
+        unsafe = os.path.join(self.temp.name, "lab area")
+        os.mkdir(unsafe)
+        with patch.object(sandbox, "WORK", "work"), patch.object(sandbox.os, "getcwd", return_value=unsafe):
+            with self.assertRaises(RuntimeError):
+                sandbox.work_dir()
+        link = os.path.join(self.temp.name, "link")
+        os.symlink(unsafe, link)
+        with patch.object(sandbox, "WORK", os.path.join(link, "work")):
+            with self.assertRaises(RuntimeError):
+                sandbox.work_dir()
+        self.assertFalse(os.path.exists(os.path.join(unsafe, "work")))
+
+    def test_parent_components_are_rejected(self):
+        target = os.path.join(self.temp.name, "releases", "r1")
+        os.makedirs(target)
+        link = os.path.join(self.temp.name, "link")
+        os.symlink(target, link)
+        for path in (link + "/../work", "link/../work"):
+            with patch.object(sandbox, "WORK", path):
+                with self.assertRaises(RuntimeError):
+                    sandbox.work_dir()
+        self.assertFalse(os.path.exists(os.path.join(self.temp.name, "work")))
+        self.assertFalse(os.path.exists(os.path.dirname(target) + "/work"))
+
+
+class VMWorkDirTests(unittest.TestCase):
+    def test_build_initializes_private_storage_before_locking(self):
+        import vm
+        with tempfile.TemporaryDirectory(prefix="wend-vm-work-") as temp:
+            for mask in (0o002, 0o022, 0o077):
+                work = os.path.join(temp, str(mask))
+                vmwork = os.path.join(work, "vm")
+
+                def install(box_id, box_doc, path):
+                    self.assertEqual(stat.S_IMODE(os.stat(work).st_mode), 0o700)
+                    os.makedirs(path)
+                    with open(os.path.join(path, "base.qcow2"), "w"):
+                        pass
+
+                with patch.object(vm, "WORK", vmwork), patch.object(vm, "install", side_effect=install) as installer:
+                    saved = os.umask(mask)
+                    try:
+                        first = vm.build("debian/etch-web")
+                        self.assertEqual(vm.build("debian/etch-web"), first)
+                    finally:
+                        os.umask(saved)
+                    installer.assert_called_once()
+                    os.chmod(work, 0o775)
+                    with self.assertRaises(RuntimeError):
+                        vm.build("debian/etch-web")
+
+
+
+result = unittest.TextTestRunner().run(unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(c) for c in (WorkDirTests, VMWorkDirTests)))
 sys.exit(0 if ok and result.wasSuccessful() else 1)
