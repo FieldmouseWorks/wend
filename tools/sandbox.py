@@ -6,9 +6,11 @@ Follows SPEC.md "Sandbox requirements": a private tmpfs /dev per box (never a bi
 a hostname of the box's own (never the host's), daemons never start, and nothing is deleted until every mount under
 it is gone.
 """
+import errno
 import fcntl
 import hashlib
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -34,6 +36,32 @@ NAME_SELF = ("n=$(head -n 1 /etc/hostname 2>/dev/null | tr -d ' \\t\\r'); [ -n \
              f"case \"$n\" in ''|[!A-Za-z0-9]*|*[!A-Za-z0-9.-]*|*.|*..*) n={HOSTNAME};; esac; "
              f"printf '%s\\n' \"$n\" >/proc/sys/kernel/hostname 2>/dev/null || echo {HOSTNAME} >/proc/sys/kernel/hostname; "
              'exec /bin/sh -c "$1"')
+
+
+def work_dir():
+    """Create a private work directory; refuse unsafe existing ones, like the client.
+
+    Validate before using cached roots too. Never chmod an existing path: it may belong to someone else.
+    """
+    try:
+        os.makedirs(WORK, mode=0o700)
+    except FileExistsError:
+        pass
+    else:
+        os.chmod(WORK, 0o700)  # match the client even if the caller masks owner permissions
+    md = os.lstat(WORK)
+    unsafe = not stat.S_ISDIR(md.st_mode) or md.st_uid != 0 or md.st_mode & 0o022
+    for name in ("system.posix_acl_access", "system.posix_acl_default"):
+        try:
+            os.getxattr(WORK, name, follow_symlinks=False)
+        except OSError as e:
+            if e.errno not in (errno.ENODATA, errno.EOPNOTSUPP):
+                unsafe = True  # can't tell: refuse
+        else:
+            unsafe = True
+    if unsafe:
+        raise RuntimeError(f"{WORK} must be a directory owned by root that nobody else can write to "
+                           "(and without ACLs)")
 
 
 def host(cmd, timeout=3600):
@@ -141,6 +169,7 @@ def mirror(adapter, release):
 
 def ensure_mirror(adapter):
     """Adapters with a [mirror] shim (EL: CentOS 5's yum can't speak today's TLS) get tools/mirror.py on the host."""
+    work_dir()
     if "mirror" not in adapter:
         return
     shim = adapter["mirror"]["shim"]
@@ -166,7 +195,6 @@ def ensure_mirror(adapter):
             return
         except Exception:
             if i == 0 and have is None:
-                os.makedirs(WORK, exist_ok=True)
                 subprocess.Popen([sys.executable, "-B", mine, shim.rsplit(":", 1)[1], f"{WORK}/mirror"],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             time.sleep(2)
@@ -271,6 +299,7 @@ BUILD_VERSION = b"1"
 def build_box(box_id, box_doc, adapter, box_toml_bytes, adapter_bytes, log=print):
     """Build a box once and cache it, keyed by the box file, the adapter and BUILD_VERSION. Returns the cached
     (read-only) Box."""
+    work_dir()
     key = hashlib.sha256(box_toml_bytes + adapter_bytes + BUILD_VERSION).hexdigest()[:12]
     root = f"{WORK}/boxes/{box_id.replace('/', '_')}-{key}"
     if os.path.exists(f"{root}/.wend-ready"):
