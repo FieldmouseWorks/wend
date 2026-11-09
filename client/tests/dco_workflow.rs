@@ -90,12 +90,28 @@ fn verified_workers() {
 }
 
 #[test]
+fn signed_workers_webflow() {
+    for verified in [true, false] {
+        check(
+            "fieldmouseworks-workers[bot]",
+            WORKERS,
+            "noreply@github.com",
+            verified,
+            "bot Signed-off-by: Fixture",
+            true,
+        );
+    }
+}
+
+#[test]
 fn workers_rejections() {
     for (opener, author, committer, verified) in [
         ("someone", WORKERS, WORKERS, true),
         ("fieldmouseworks-workers[bot]", "someone", WORKERS, true),
         ("fieldmouseworks-workers[bot]", WORKERS, "someone", true),
         ("fieldmouseworks-workers[bot]", WORKERS, "noreply@github.com", true),
+        ("fieldmouseworks-workers[bot]", WORKERS, "noreply@github.com", false),
+        ("someone", WORKERS, "noreply@github.com", true),
         ("fieldmouseworks-workers[bot]", WORKERS, WORKERS, false),
     ] {
         check(opener, author, committer, verified, "bot", false);
@@ -119,7 +135,14 @@ fn dependabot_preserved() {
     for committer in [DEPENDABOT, "noreply@github.com"] {
         check("dependabot[bot]", DEPENDABOT, committer, true, "bot", true);
     }
-    check("dependabot[bot]", DEPENDABOT, DEPENDABOT, false, "bot", false);
+    for (author, committer, verified) in [
+        (DEPENDABOT, DEPENDABOT, false),
+        (DEPENDABOT, "noreply@github.com", false),
+        ("someone", DEPENDABOT, true),
+        (DEPENDABOT, "someone", true),
+    ] {
+        check("dependabot[bot]", author, committer, verified, "bot", false);
+    }
     check("someone", DEPENDABOT, DEPENDABOT, true, "bot", false);
 }
 
