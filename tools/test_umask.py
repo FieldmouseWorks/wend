@@ -83,8 +83,15 @@ class WorkDirTests(unittest.TestCase):
 
     def test_symlink_is_rejected(self):
         os.symlink(self.temp.name, self.work)
-        with self.assertRaises(RuntimeError):
-            sandbox.work_dir()
+        for suffix in ("", "/", "/.", "/./"):
+            with self.subTest(suffix=suffix), patch.object(sandbox, "WORK", self.work + suffix):
+                with self.assertRaises(RuntimeError):
+                    sandbox.work_dir()
+                with self.assertRaises(RuntimeError):
+                    sandbox.build_box("debian/test", {}, {}, b"box", b"adapter")
+                with patch.object(sandbox.urllib.request, "urlopen", side_effect=OSError("not running")):
+                    with self.assertRaises(RuntimeError):
+                        sandbox.ensure_mirror({"mirror": {"shim": "http://localhost:1234", "probe": "test"}})
 
     def test_file_is_rejected(self):
         with open(self.work, "w"):
@@ -125,10 +132,34 @@ class WorkDirTests(unittest.TestCase):
         with open(os.path.join(root, ".wend-ready"), "w"):
             pass
         os.chmod(self.work, 0o777)
-        for action in (lambda: sandbox.build_box("debian/test", {}, {}, b"box", b"adapter"),
-                       lambda: sandbox.ensure_mirror({})):
+        with self.assertRaises(RuntimeError):
+            sandbox.build_box("debian/test", {}, {}, b"box", b"adapter")
+
+    def test_no_mirror_does_not_require_work_directory(self):
+        with patch.object(sandbox, "work_dir", side_effect=AssertionError("unused work dir")):
+            sandbox.ensure_mirror({})
+
+    def test_unprivileged_mirror_start_uses_current_owner(self):
+        with patch.object(sandbox.os, "geteuid", return_value=12345), \
+                patch.object(sandbox, "work_dir", side_effect=RuntimeError("stop before spawn")) as validate, \
+                patch.object(sandbox.urllib.request, "urlopen", side_effect=OSError("not running")):
+            with self.assertRaisesRegex(RuntimeError, "stop before spawn"):
+                sandbox.ensure_mirror({"mirror": {"shim": "http://localhost:1234", "probe": "test"}})
+            validate.assert_called_once_with(owner=12345)
+
+    def test_validated_spelling_is_retained(self):
+        with patch.object(sandbox, "WORK", self.work + "/./"):
+            sandbox.work_dir()
+            self.assertEqual(sandbox.WORK, self.work)
+
+    def test_explicit_unprivileged_owner(self):
+        os.mkdir(self.work)
+        fields = list(os.stat(self.work))
+        fields[4] = 12345
+        with patch.object(sandbox.os, "lstat", return_value=os.stat_result(fields)):
+            sandbox.work_dir(owner=12345)
             with self.assertRaises(RuntimeError):
-                action()
+                sandbox.work_dir()
 
 
 result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromTestCase(WorkDirTests))

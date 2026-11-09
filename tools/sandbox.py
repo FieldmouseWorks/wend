@@ -38,30 +38,36 @@ NAME_SELF = ("n=$(head -n 1 /etc/hostname 2>/dev/null | tr -d ' \\t\\r'); [ -n \
              'exec /bin/sh -c "$1"')
 
 
-def work_dir():
+def work_dir(owner=0):
     """Create a private work directory; refuse unsafe existing ones, like the client.
 
     Validate before using cached roots too. Never chmod an existing path: it may belong to someone else.
     """
+    global WORK
+    # Strip directory suffixes before lstat: lstat("link/.") would follow the link.
+    # Keep the validated spelling for every subsequent box/mirror access.
+    path = os.path.abspath(WORK)
+    path = os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path))
     try:
-        os.makedirs(WORK, mode=0o700)
+        os.makedirs(path, mode=0o700)
     except FileExistsError:
         pass
     else:
-        os.chmod(WORK, 0o700)  # match the client even if the caller masks owner permissions
-    md = os.lstat(WORK)
-    unsafe = not stat.S_ISDIR(md.st_mode) or md.st_uid != 0 or md.st_mode & 0o022
+        os.chmod(path, 0o700)  # match the client even if the caller masks owner permissions
+    md = os.lstat(path)
+    unsafe = not stat.S_ISDIR(md.st_mode) or md.st_uid != owner or md.st_mode & 0o022
     for name in ("system.posix_acl_access", "system.posix_acl_default"):
         try:
-            os.getxattr(WORK, name, follow_symlinks=False)
+            os.getxattr(path, name, follow_symlinks=False)
         except OSError as e:
             if e.errno not in (errno.ENODATA, errno.EOPNOTSUPP):
                 unsafe = True  # can't tell: refuse
         else:
             unsafe = True
     if unsafe:
-        raise RuntimeError(f"{WORK} must be a directory owned by root that nobody else can write to "
+        raise RuntimeError(f"{path} must be a directory owned by uid {owner} that nobody else can write to "
                            "(and without ACLs)")
+    WORK = path
 
 
 def host(cmd, timeout=3600):
@@ -169,7 +175,6 @@ def mirror(adapter, release):
 
 def ensure_mirror(adapter):
     """Adapters with a [mirror] shim (EL: CentOS 5's yum can't speak today's TLS) get tools/mirror.py on the host."""
-    work_dir()
     if "mirror" not in adapter:
         return
     shim = adapter["mirror"]["shim"]
@@ -195,6 +200,7 @@ def ensure_mirror(adapter):
             return
         except Exception:
             if i == 0 and have is None:
+                work_dir(owner=os.geteuid())  # VM runs may be unprivileged; chroot builds validate as root separately
                 subprocess.Popen([sys.executable, "-B", mine, shim.rsplit(":", 1)[1], f"{WORK}/mirror"],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             time.sleep(2)
