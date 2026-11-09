@@ -1,0 +1,282 @@
+{
+  "conary": "note v1",
+  "change": "0877fewbabz7bamevpc9t0fm97",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "wend"
+  },
+  "pr": 210,
+  "url": "https://github.com/fieldmouseworks/wend/pull/210",
+  "summary": "ci: test that unsigned workers web-flow commits stay rejected",
+  "task": null,
+  "author": {
+    "kind": "bot",
+    "login": "fieldmouseworks-workers[bot]",
+    "session": null
+  },
+  "class": "R0",
+  "landing": {
+    "revision": "575ea3848dedf22bc69436b5ed2b0add4d8aa42ee037b9bb387b1f2c740977e6",
+    "before": "55b23d26c6f2cee3eb4b90a54d0dd7717f3bec91",
+    "after": "65cd35eb6cee13f1a21706d3f24fc6557d717bd0",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1794226415293
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "decoys",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42600631587/job/129104076182"
+    },
+    {
+      "kind": "ci",
+      "check": "plan",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42600631587/job/129104024089"
+    },
+    {
+      "kind": "ci",
+      "check": "dco",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42600631587/job/129103910200"
+    },
+    {
+      "kind": "ci",
+      "check": "msrv",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42600631570/job/129103910147"
+    },
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42600631656/job/129103910113"
+    },
+    {
+      "kind": "ci",
+      "check": "schema",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42600631587/job/129103909854"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42600628969/job/129103904409"
+    },
+    {
+      "kind": "ci",
+      "check": "remi-proof",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/blob/main/CONTRIBUTING.md#4-proof-on-remi"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#210)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42600631656"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#210)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42600631656"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#210)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42600631656"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#210)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42600631656"
+    },
+    {
+      "kind": "ci",
+      "check": "client",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42600631570/job/129103909953"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42601423065/job/129106564166"
+    },
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42601422753/job/129106561095"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#210)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42601422753"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#210)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42601422753"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#210)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42601422753"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#210)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42601422753"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42601923783/job/129108242103"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42603619381/job/129113820840"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/pull/210#pullrequestreview-5824753814"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42606707265/job/129124447416"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "error",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42606707116/job/129124438517"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42607539758/job/129127222987"
+    },
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42607539515/job/129127219810"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#210)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42607539515"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#210)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42607539515"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#210)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42607539515"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#210)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42607539515"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42608914288/job/129131898387"
+    },
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42608913597/job/129131893463"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#210)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42608913597"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#210)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42608913597"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#210)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42608913597"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#210)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42608913597"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42610312529/job/129136726622"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "error",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42610312404/job/129136719841"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/pull/210#pullrequestreview-5825397887"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42614991491/job/129152530392"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42614970155/job/129152465118"
+    },
+    {
+      "kind": "ci",
+      "check": "classify",
+      "result": "error",
+      "source": "https://github.com/FieldmouseWorks/wend/actions/runs/42614970104/job/129152456596"
+    }
+  ]
+}
