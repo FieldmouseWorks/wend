@@ -274,7 +274,7 @@ check(rc == 0 and json.load(open(f"{w}/lab/queue/{j9}.json"))["state"] == "cance
 check(verdict(j9)["result"] == "cancelled", "a job cancelled while queued still has a verdict to deliver")
 rc, out = remi("enqueue", "build", "el/c7", "--sha", main, "--by", "t", env=NOW)
 j10 = entry(out)
-subprocess.Popen([sys.executable, "-P", os.path.join(HERE, "remi.py"), "worker"], env=dict(ENV, FAKE_SLEEP="30"),
+cancel_worker = subprocess.Popen([sys.executable, "-P", os.path.join(HERE, "remi.py"), "worker"], env=dict(ENV, FAKE_SLEEP="30"),
                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 for _ in range(100):
     if json.load(open(f"{w}/lab/queue/{j10}.json"))["state"] == "running" and \
@@ -284,6 +284,10 @@ for _ in range(100):
 remi("cancel", j10)
 rc, out = remi("wait", j10)
 check("CANCELLED" in out and verdict(j10)["reasons"] == ["cancelled"], "cancel stops a running job, verdict cancelled")
+
+# A verdict is written before the worker releases its singleton lock. Join it before starting the next worker:
+# otherwise that worker can return immediately, leaving the smoke queued with no verdict yet.
+check(cancel_worker.wait(timeout=60) == 0, "the cancelled job's worker drains and exits")
 
 # a smoke builds the client static, as dev, and hands it to vm.py smoke after the box
 rc, out = remi("enqueue", "smoke", "el/c7", "--sha", main, "--by", "t", env=NOW)
