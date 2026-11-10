@@ -35,7 +35,7 @@ bad = 0
 if not step.startswith(GUARD):
     print("WRONG   the GRUB step doesn't start with the live-root guard")
     bad += 1
-for d, root, args in ((1, "(hd0,0)", "ro root=LABEL=/ quiet"), (0, "(hd1,0)", "ro root=/dev/sdb1")):
+for d, root, args in ((99, "(hd1,0)", "ro root=/dev/sdb1"), (1, "(hd0,0)", "ro root=LABEL=/ quiet"), (0, "(hd1,0)", "ro root=/dev/sdb1")):
     with tempfile.TemporaryDirectory() as t:
         os.makedirs(f"{t}/boot/grub")
         os.makedirs(f"{t}/bin")
@@ -55,6 +55,41 @@ for d, root, args in ((1, "(hd0,0)", "ro root=LABEL=/ quiet"), (0, "(hd1,0)", "r
         print(("passed  " if ok else f"WRONG   rc={p.returncode} {p.stdout}{p.stderr} {lines[:6]} ") +
               f"GRUB legacy, default={d}: the new entry takes the default entry's root {root} and arguments")
         bad += not ok
+
+# Invalid source entries must leave the original untouched, including fallback to the first entry.
+for default in (1, 99):
+    with tempfile.TemporaryDirectory() as t:
+        os.makedirs(f"{t}/boot/grub")
+        os.makedirs(f"{t}/bin")
+        conf = CONF.format(d=default)
+        conf = conf.replace("\troot (hd0,0)\n" if default == 1 else "\troot (hd1,0)\n", "")
+        g = f"{t}/boot/grub/grub.conf"
+        open(g, "w").write(conf)
+        open(f"{t}/boot/vmlinuz-{NEW}", "w").close()
+        rpm = f"{t}/bin/rpm"
+        open(rpm, "w").write(f"#!/bin/sh\necho '100 {NEW}'\n")
+        os.chmod(rpm, 0o755)
+        p = subprocess.run(["sh", "-c", step[len(GUARD):].replace("/boot/", f"{t}/boot/")],
+                           capture_output=True, env={**os.environ, "PATH": f"{t}/bin:{os.environ['PATH']}"})
+        ok = p.returncode != 0 and open(g).read() == conf
+        print(("passed  " if ok else "WRONG   ") + f"GRUB missing root, default={default}: unchanged")
+        bad += not ok
+
+# An already installed entry after another entry still becomes default when no default line existed.
+with tempfile.TemporaryDirectory() as t:
+    os.makedirs(f"{t}/boot/grub")
+    os.makedirs(f"{t}/bin")
+    g = f"{t}/boot/grub/grub.conf"
+    open(g, "w").write(CONF.format(d=0).replace("default=0\n", "").replace("2.6.18-419.el5", NEW))
+    for v in ("2.6.18-1.el5", NEW):
+        open(f"{t}/boot/vmlinuz-{v}", "w").close()
+    open(f"{t}/bin/rpm", "w").write(f"#!/bin/sh\necho '100 {NEW}'\n")
+    os.chmod(f"{t}/bin/rpm", 0o755)
+    p = subprocess.run(["sh", "-c", step[len(GUARD):].replace("/boot/", f"{t}/boot/")],
+                       capture_output=True, env={**os.environ, "PATH": f"{t}/bin:{os.environ['PATH']}"})
+    ok = p.returncode == 0 and "default=1" in open(g).read().splitlines()
+    print(("passed  " if ok else "WRONG   ") + "GRUB absent default: appended for existing second entry")
+    bad += not ok
 
 # The cleanup before the transaction (hop.kernel_before[1]): an old kernel no package owns goes with its BLS entry, which
 # EL8 wrote per kernel and GRUB would otherwise list, dead. The running kernel (whose record kernel_before[0] has

@@ -229,6 +229,29 @@ for k in ("kernel_before", "kernel_after", "before_transaction"):
     print(("refused " if errs else "MISSED  ") + f"hop.{k} as a string, not a list" +
           (f"  ({errs[0].split(': ', 1)[1]})" if errs else ""))
     bad += not errs
+# Kernel handover rules must reject each independent mutation.
+for label, mutate in [
+        ("bad reboot", lambda a: a["releases"]["centos6"].update(reboot="after-post")),
+        ("nonstring reboot", lambda a: a["releases"]["centos6"].update(reboot=True)),
+        *[(k + " mixed list", lambda a, k=k: a["hop"].update({k: [1]}))
+          for k in ("kernel_before", "kernel_after")],
+        *[(f"{k} guard {i}", lambda a, k=k, i=i: a["hop"][k].__setitem__(
+            i, a["hop"][k][i].replace("[ / -ef /proc/1/root ] || ", "", 1)))
+          for k in ("kernel_before", "kernel_after") for i in range(len(adapters["el"]["hop"][k]))]]:
+    a = copy.deepcopy(adapters["el"])
+    mutate(a)
+    errs = check.check_adapter(a, "adapters/el.toml")
+    print(("refused " if errs else "MISSED  ") + label)
+    bad += not errs
+for hop, ph, refused in (("lenny", "pre", True), ("lenny", "post", True), ("squeeze", "pre", True),
+                          ("squeeze", "post", False), ("wheezy", "pre", False)):
+    f = {"schema": "wend.fix/0", "family": "debian", "hop": hop,
+         "when": {"installed": "dpkg"}, ph: [{"op": "dpkg.reinstall", "packages": ["dpkg"]}],
+         "meta": {"name": "x"}}
+    errs = check.check_fix(f, adapters, f"fixes/debian/{hop}/x.toml")
+    ok = bool(errs) == refused
+    print(("passed  " if ok else "WRONG   ") + f"dpkg.reinstall {hop} {ph}")
+    bad += not ok
 # rpm names carry capitals: installing NetworkManager and enabling its unit must pass, a capitalized name with shell in
 # it must not
 nm = {**el_good, "when": {"installed": "initscripts"}, "adds": ["NetworkManager"], "post": [
