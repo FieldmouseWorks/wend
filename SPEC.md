@@ -924,12 +924,12 @@ The files are read as `KEY=VALUE` lines and never executed; a value that isn't o
   ignored. Loopback DNS addresses are refused: configure upstream DNS or migrate the local resolver first.
   The chroot tier borrows its host's resolv.conf, so it proves conversion of the visible file, not preservation
   of the box's original resolvers; a booted replay is needed for that;
-- DHCP profiles map `DHCP_HOSTNAME` to `ipv4.dhcp-hostname` and `DHCP_CLASSID` to
+- DHCP profiles map `DHCP_HOSTNAME` to `ipv4.dhcp-hostname` and `DHCP_VENDOR_CLASS_IDENTIFIER` to
   `ipv4.dhcp-vendor-class-identifier`; either key on a non-DHCP profile is refused;
 - `ONBOOT`, `IPV6INIT` (else `/etc/sysconfig/network`'s), `IPV6_AUTOCONF` (`no` is `link-local`), as NetworkManager's
   booleans (`yes`, `true`, `t`, `y`, `1` and their opposites);
 - `NM_CONTROLLED` (`no` fails: EL9's NetworkManager left that device unmanaged, which a keyfile can't say);
-- `DHCPCLASS`, `HOTPLUG` and `USERCTL` are inert (the plugin doesn't read them); wend still requires `USERCTL` to be a boolean;
+- `DHCPCLASS`, `DHCP_CLASSID`, `HOTPLUG` and `USERCTL` are inert (the plugin doesn't read them); wend still requires `USERCTL` to be a boolean;
 - what EL8's installer adds, writing through the plugin: `DEFROUTE=no` as `ipv4.never-default` (a set `GATEWAYDEV`
   overrides it either way), `IPV4_FAILURE_FATAL=yes` as `ipv4.may-fail no`, and, with IPv6 on, `IPV6_DEFROUTE=no` as
   `ipv6.never-default`, `IPV6_FAILURE_FATAL=yes` as `ipv6.may-fail no` and `IPV6_ADDR_GEN_MODE` (`stable-privacy`
@@ -952,7 +952,10 @@ else), unless it only pins one MAC to one name (`[Match] MACAddress=` and `[Link
 `<name>.link.d` drop-ins in any of those directories) and that is either this profile's MAC and name or another MAC
 and another name. A later plain pin with a conflicting MAC or name is refused too. A drop-in directory for
 our new pin is refused in any of those directories. Udev rules assigning `NAME` are conservatively refused unless explicitly restricted to a non-net
-subsystem; migrate those rules before conversion. The generated pin also matches
+subsystem; migrate those rules before conversion. The complete standard systemd `80-net-setup-link.rules`
+dispatcher is allowed: its `NAME` assignment applies the name selected by `.link`. `NAME==`/`NAME!=` comparisons
+are not assignments. Rules are read from `/etc`, `/run`, `/usr/local/lib`, `/usr/lib` and `/lib` under
+`udev/rules.d`, with earlier directories overriding equal basenames (including `/dev/null` masks). The generated pin also matches
 `Type=ether`. Leftover `.wend` temporary paths are refused, including dangling symlinks. Every profile is
 checked and serialized by `nmcli`, then every output is staged before the first final file is replaced.
 Validation, serialization and staging failures leave profiles and final files unchanged; filesystem failures during

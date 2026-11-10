@@ -27,7 +27,19 @@ L = "/etc/systemd/network"
 # systemd.link(5): the directories udevd reads .link files from (systemd's CONF_PATHS), and /lib, often /usr/lib
 LINK_DIRS = (L, "/run/systemd/network", "/usr/local/lib/systemd/network", "/usr/lib/systemd/network",
              "/lib/systemd/network")
-UDEV_DIRS = ("/etc/udev/rules.d", "/run/udev/rules.d", "/usr/lib/udev/rules.d")
+# Highest priority first; equal basenames shadow lower directories, including /dev/null masks.
+UDEV_DIRS = ("/etc/udev/rules.d", "/run/udev/rules.d", "/usr/local/lib/udev/rules.d",
+             "/usr/lib/udev/rules.d", "/lib/udev/rules.d")
+# systemd v252's dispatcher applies the name chosen by net_setup_link, including our .link pin.
+# Recognize the complete rule program, not its basename or an arbitrary NAME=$env assignment.
+LINK_DISPATCHER = [
+    'SUBSYSTEM!="net", GOTO="net_setup_link_end"',
+    'IMPORT{builtin}="path_id"',
+    'ACTION=="remove", GOTO="net_setup_link_end"',
+    'IMPORT{builtin}="net_setup_link"',
+    'NAME=="", ENV{ID_NET_NAME}!="", NAME="$env{ID_NET_NAME}"',
+    'LABEL="net_setup_link_end"',
+]
 SYS = "/sys/class/net"
 SAVED = "/var/lib/wend/saved"
 NETWORK = "/etc/sysconfig/network"
@@ -35,7 +47,7 @@ RESOLV = "/etc/resolv.conf"
 HOSTNAME = "/etc/hostname"
 KEYS = {"DEVICE", "HWADDR", "BOOTPROTO", "IPADDR", "NETMASK", "PREFIX", "BROADCAST", "NETWORK", "GATEWAY", "DNS1",
         "DNS2", "DOMAIN", "PEERDNS", "ONBOOT", "IPV6INIT", "IPV6_AUTOCONF", "TYPE", "NAME", "UUID", "NM_CONTROLLED",
-        "DHCPCLASS", "USERCTL", "HOTPLUG", "DHCP_HOSTNAME", "DHCP_CLASSID",
+        "DHCPCLASS", "USERCTL", "HOTPLUG", "DHCP_HOSTNAME", "DHCP_CLASSID", "DHCP_VENDOR_CLASS_IDENTIFIER",
         # what EL8's installer adds, writing the profile through NetworkManager's ifcfg-rh plugin
         "DEFROUTE", "IPV4_FAILURE_FATAL", "IPV6_DEFROUTE", "IPV6_FAILURE_FATAL", "IPV6_ADDR_GEN_MODE",
         "PROXY_METHOD", "BROWSER_ONLY",
@@ -128,20 +140,7 @@ def plan(path, net, resolv):
             fail(f"{path}: {target}.wend exists already; move the stale temporary file")
     if any(os.path.lexists(os.path.join(d, pin + ".d")) for d in LINK_DIRS):
         fail(f"{path}: {pin}.d drop-ins may override the pin; move them before converting")
-    for rules in UDEV_DIRS:
-        for n in os.listdir(rules) if os.path.isdir(rules) else []:
-            if not n.endswith(".rules"):
-                continue
-            try:
-                text = "".join(line for line in open(os.path.join(rules, n))
-                                 if not line.lstrip().startswith("#"))
-            except (OSError, UnicodeDecodeError) as e:
-                fail(f"{path}: cannot inspect {rules}/{n}: {e}")
-            # Join continued rules, and only exempt assignments explicitly restricted to a non-net subsystem.
-            for rule in text.replace("\\\n", "").splitlines():
-                subsystem = re.search(r'\bSUBSYSTEM\s*==\s*"([A-Za-z0-9_-]+)"', rule)
-                if re.search(r'\bNAME\s*[:+]?=', rule) and not (subsystem and subsystem[1] != "net"):
-                    fail(f"{path}: {rules}/{n} assigns an interface name; move or migrate the naming rule")
+    check_udev(path)
     for d in LINK_DIRS:  # systemd applies only the first .link (by file name, over all its directories) that matches
         for n in sorted(os.listdir(d)) if os.path.isdir(d) else []:
             if n.endswith(".link") and n > pin:
@@ -175,7 +174,7 @@ def plan(path, net, resolv):
             if key in v:
                 fail(f"{path}: {key} beside BOOTPROTO={proto} isn't converted")
         args += ["ipv4.method", "auto"]
-        for source, dest in (("DHCP_HOSTNAME", "ipv4.dhcp-hostname"), ("DHCP_CLASSID", "ipv4.dhcp-vendor-class-identifier")):
+        for source, dest in (("DHCP_HOSTNAME", "ipv4.dhcp-hostname"), ("DHCP_VENDOR_CLASS_IDENTIFIER", "ipv4.dhcp-vendor-class-identifier")):
             if source in v:
                 args += [dest, v[source]]
     elif "BOOTPROTO" not in v and "IPADDR" not in v:
@@ -206,7 +205,7 @@ def plan(path, net, resolv):
         args += ["ipv4.method", "manual", "ipv4.addresses", f"{ip}/{prefix}"]
     else:
         fail(f"{path}: BOOTPROTO={proto} isn't converted")
-    if proto not in ("dhcp", "bootp") and any(k in v for k in ("DHCP_HOSTNAME", "DHCP_CLASSID")):
+    if proto not in ("dhcp", "bootp") and any(k in v for k in ("DHCP_HOSTNAME", "DHCP_VENDOR_CLASS_IDENTIFIER")):
         fail(f"{path}: DHCP settings beside a non-DHCP profile")
     disabled = args[2 * args[::2].index("ipv4.method") + 1] == "disabled"
     gw = None if disabled else v.get("GATEWAY") or net.get("GATEWAY")
@@ -260,6 +259,28 @@ def plan(path, net, resolv):
         args += ["ipv6.addr-gen-mode", gen or "default-or-eui64"]
     args += ["connection.autoconnect", "yes" if boolean(path, v, "ONBOOT", "yes") else "no"]
     return c, dev, hw, args
+
+
+def check_udev(path):
+    seen = set()
+    for directory in UDEV_DIRS:
+        for name in sorted(os.listdir(directory)) if os.path.isdir(directory) else []:
+            if not name.endswith(".rules") or name in seen:
+                continue
+            seen.add(name)
+            rule_path = os.path.join(directory, name)
+            try:
+                text = "".join(line for line in open(rule_path) if not line.lstrip().startswith("#"))
+            except (OSError, UnicodeDecodeError) as e:
+                fail(f"{path}: cannot inspect {rule_path}: {e}")
+            rules = [line.strip() for line in text.replace("\\\n", "").splitlines() if line.strip()]
+            if rules == LINK_DISPATCHER:
+                continue
+            for rule in rules:
+                subsystem = re.search(r'\bSUBSYSTEM\s*==\s*"([A-Za-z0-9_-]+)"', rule)
+                # NAME== and NAME!= are comparisons. =, := and += assign names.
+                if re.search(r'\bNAME\s*[:+]?=(?!=)', rule) and not (subsystem and subsystem[1] != "net"):
+                    fail(f"{path}: {rule_path} assigns an interface name; move or migrate the naming rule")
 
 
 def own_name():
