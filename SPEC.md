@@ -1057,7 +1057,7 @@ harness, not to fixes, because the release's own tools can't carry them up the l
 - **GRUB legacy stays.** From EL8 on, kernels only get BLS entries, which GRUB legacy can't read, and GRUB2 can't be
   installed on the sector-63 partition layout of CentOS 5's installer (a 31 KB gap; EL9's smallest `core.img` is
   33.9 KB). When `/boot/grub/grub.conf` exists, `hop.kernel_after` gives the newest installed kernel an entry there,
-  using the first root line and kernel arguments of the current default entry, makes it the default, and drops the `vmlinuz`
+  using the root effective at the kernel command and its arguments in the current default entry, makes it the default, and drops the `vmlinuz`
   entries whose kernel file is gone (memtest, Xen and chainloader entries stay). It fails if the new entry isn't
   there afterwards. If the default is out of range or has no vmlinuz entry, the first vmlinuz entry is used;
   the step fails without changing grub.conf if that entry has no root line. Entries naming another disk
