@@ -170,6 +170,10 @@ def check_adapter(a, where):
     for k in ("kernel_before", "kernel_after", "before_transaction"):
         if k in a.get("hop", {}) and not (isinstance(a["hop"][k], list) and all(isinstance(c, str) for c in a["hop"][k])):
             errs.append(f"{where}: hop.{k} must be a list of commands")
+    for k in ("kernel_before", "kernel_after"):
+        for c in a.get("hop", {}).get(k, []) if isinstance(a.get("hop", {}).get(k, []), list) else []:
+            if isinstance(c, str) and not c.startswith("[ / -ef /proc/1/root ] || "):
+                errs.append(f"{where}: hop.{k} commands must start with the live-root guard")
     errs += check_keys(a, where)
     errs += check_signed(a, where)
     errs += check_relocate(a, where)
@@ -572,6 +576,9 @@ def check_fix(doc, adapters, where):
     for ph in ("pre", "post"):
         for i, s in enumerate(doc.get(ph, [])):
             check_step(s, a, f"{where}.{ph}[{i}]", errs)
+            if s.get("op") == "dpkg.reinstall" and a["family"] == "debian" and (
+                    doc.get("hop") in ("lenny",) or ph == "pre" and doc.get("hop") == "squeeze"):
+                errs.append(f"{where}.{ph}[{i}]: dpkg.reinstall needs squeeze's apt or later")
             if ph == "post" and s.get("op") == "service.record":
                 # after the upgrade the SysV links are already gone, and the first record is the one that is kept
                 errs.append(f"{where}.post[{i}]: service.record must run before the upgrade (pre)")

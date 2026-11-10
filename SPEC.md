@@ -625,7 +625,8 @@ whose .deb ships none, unpacked by squeeze's dpkg during the wheezy transaction)
 writes them. A package apt doesn't know fails the step. One the release no longer ships can't be reinstalled: apt
 says so and carries on, so the step passes and the hop's `pkgdb` check is what fails; a fix purges such a package
 instead. A package that isn't installed is skipped, never installed (`--only-upgrade`, apt 0.8 and later: squeeze
-on). Reference: `apt-get install --reinstall --only-upgrade {packages}`.
+on; both checkers refuse lenny post steps and lenny or squeeze pre steps).
+Reference: `apt-get install --reinstall --only-upgrade {packages}`.
 
 **`apt.drop-esm-pins`** `release` (`[a-z]+`; Ubuntu). Removes the apt pins ubuntu-advantage-tools wrote for
 `release`, for a box leaving it. u-a-t 19.7ubuntu0.2 (trusty-updates) writes
@@ -1050,16 +1051,18 @@ harness, not to fixes, because the release's own tools can't carry them up the l
   EL does when none exists. None of the kernel steps acts unless the machine is booted from this root (`/` is PID 1's
   root): in a chroot of someone's disk the records, files and boot entries are left as they are, since `uname -r` there
   is the host's kernel, not the box's. The fallback the running kernel's entry gives is a manual one: GRUB legacy has no
-  `fallback=` set, so a hop that fails between the two halves leaves the default on the running kernel's entry, which
-  still boots.
+  `fallback=` set, so between the two halves the default stays where it was and its kernel files are kept.
 - **The release's kernel is installed after the transaction** (`hop.kernel_after`), since the transaction itself only
   syncs what the database lists.
 - **GRUB legacy stays.** From EL8 on, kernels only get BLS entries, which GRUB legacy can't read, and GRUB2 can't be
   installed on the sector-63 partition layout of CentOS 5's installer (a 31 KB gap; EL9's smallest `core.img` is
   33.9 KB). When `/boot/grub/grub.conf` exists, `hop.kernel_after` gives the newest installed kernel an entry there,
-  using the root and kernel arguments of the current default entry, makes it the default, and drops the `vmlinuz`
+  using the root effective at the kernel command and its arguments in the current default entry, makes it the default, and drops the `vmlinuz`
   entries whose kernel file is gone (memtest, Xen and chainloader entries stay). It fails if the new entry isn't
-  there afterwards. EL6 and EL7 grubby still write their own entries. After every reboot the VM tier checks that the
+  there afterwards. If the default is out of range or has no vmlinuz entry, the first vmlinuz entry is used;
+  the step fails without changing grub.conf if that entry has no root line. Entries naming another disk
+  (such as `kernel (hd1,0)/boot/vmlinuz-…`) are checked against local `/boot` and pruned when absent there.
+  EL6 and EL7 grubby still write their own entries. After every reboot the VM tier checks that the
   release's newest kernel is the one running.
 - **Debian keeps GRUB 2 installed** (`hop.kernel_after`). Debian's own packages carry its kernels and their boot
   entries up the ladder; its bootloader they don't. On squeeze `grub` becomes grub-pc, which leaves GRUB legacy in the
@@ -1093,7 +1096,10 @@ harness, not to fixes, because the release's own tools can't carry them up the l
 
 The VM tier proves these steps (it reboots where `reboot` says, and after every hop). A client running a route on a
 real machine must reboot at the same points; the client doesn't walk a live root yet, so it doesn't split a hop.
-The checker holds `reboot` to `"before-post"` and the kernel steps to lists of commands.
+A container whose PID 1 shares its root (for example nspawn) can pass the live-root guard even though
+`uname -r` names the host kernel. Such containers are not a supported kernel handover path.
+Both checkers require every kernel command to start with the live-root guard, hold `reboot` to
+`"before-post"`, and hold the kernel steps to lists of commands.
 
 ## Hardware preflight
 

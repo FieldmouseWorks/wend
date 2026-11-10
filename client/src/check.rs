@@ -329,6 +329,15 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
             }
         }
     }
+    for k in ["kernel_before", "kernel_after"] {
+        if let Some(l) = get(a, "hop").and_then(|h| get(h, k)).and_then(Value::as_array) {
+            for c in l.iter().filter_map(Value::as_str) {
+                if !c.starts_with("[ / -ef /proc/1/root ] || ") {
+                    errs.push(format!("{wh}: hop.{k} commands must start with the live-root guard"));
+                }
+            }
+        }
+    }
     if let Some(Value::Object(addons)) = get(a, "addons") {
         let rels = get(a, "releases");
         for (n, ad) in addons {
@@ -439,6 +448,9 @@ pub fn check_adapter(a: &Doc, wh: &str) -> Vec<String> {
     }
     // SPEC "Hardware preflight": the kernel a transit leaves in /boot
     for (r, rel) in get(a, "releases").and_then(Value::as_object).into_iter().flatten() {
+        if get(rel, "reboot").is_some_and(|v| v.as_str() != Some("before-post")) {
+            errs.push(format!("{wh}: releases.{r}.reboot can only be \"before-post\""));
+        }
         if let Some(t) = get(rel, "transit") {
             if !get(t, "boot_mib").and_then(Value::as_u64).is_some_and(|m| m > 0) {
                 errs.push(format!(
@@ -1214,6 +1226,13 @@ pub fn check_fix(doc: &Doc, adapters: &BTreeMap<String, Doc>, wh: &str) -> Vec<S
     for ph in ["pre", "post"] {
         for (i, s) in phase(ph).iter().enumerate() {
             check_step(s, a, &format!("{wh}.{ph}[{i}]"), &mut errs);
+            if get(s, "op").and_then(Value::as_str) == Some("dpkg.reinstall")
+                && get(a, "family").and_then(Value::as_str) == Some("debian")
+                && (get(doc, "hop").and_then(Value::as_str) == Some("lenny")
+                    || ph == "pre" && get(doc, "hop").and_then(Value::as_str) == Some("squeeze"))
+            {
+                errs.push(format!("{wh}.{ph}[{i}]: dpkg.reinstall needs squeeze's apt or later"));
+            }
             if ph == "post" && get(s, "op").and_then(Value::as_str) == Some("service.record") {
                 // after the upgrade the SysV links are already gone, and the first record is the one that is kept
                 errs.push(format!(

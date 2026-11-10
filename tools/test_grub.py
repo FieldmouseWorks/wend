@@ -35,14 +35,14 @@ bad = 0
 if not step.startswith(GUARD):
     print("WRONG   the GRUB step doesn't start with the live-root guard")
     bad += 1
-for d, root, args in ((1, "(hd0,0)", "ro root=LABEL=/ quiet"), (0, "(hd1,0)", "ro root=/dev/sdb1")):
+for d, root, args in ((99, "(hd1,0)", "ro root=/dev/sdb1"), (1, "(hd0,0)", "ro root=LABEL=/ quiet"), (0, "(hd1,0)", "ro root=/dev/sdb1")):
     with tempfile.TemporaryDirectory() as t:
         os.makedirs(f"{t}/boot/grub")
         os.makedirs(f"{t}/bin")
         for f in (f"vmlinuz-{NEW}", f"initramfs-{NEW}.img", "vmlinuz-2.6.18-1.el5", "vmlinuz-2.6.18-419.el5"):
             open(f"{t}/boot/{f}", "w").close()
         with open(f"{t}/boot/grub/grub.conf", "w") as out:
-            out.write(CONF.format(d=d))
+            out.write(CONF.format(d=d).replace("\troot ", "\troot (hd9,9)\n\troot "))
         with open(f"{t}/bin/rpm", "w") as out:  # rpm -q --qf '%{INSTALLTIME} %{VERSION}-%{RELEASE}.%{ARCH}\n' kernel
             out.write(f"#!/bin/sh\necho '100 {NEW}'\n")
         os.chmod(f"{t}/bin/rpm", 0o755)
@@ -51,10 +51,62 @@ for d, root, args in ((1, "(hd0,0)", "ro root=LABEL=/ quiet"), (0, "(hd1,0)", "r
         lines = open(f"{t}/boot/grub/grub.conf").read().splitlines()
         want = ["default=0", "timeout=5", f"title {NEW}", f"\troot {root}", f"\tkernel /vmlinuz-{NEW} {args} ",
                 f"\tinitrd /initramfs-{NEW}.img"]
-        ok = p.returncode == 0 and lines[:6] == want and len(lines) == 14
+        ok = p.returncode == 0 and lines[:6] == want and len(lines) == 16
         print(("passed  " if ok else f"WRONG   rc={p.returncode} {p.stdout}{p.stderr} {lines[:6]} ") +
               f"GRUB legacy, default={d}: the new entry takes the default entry's root {root} and arguments")
         bad += not ok
+
+# Invalid source entries must leave the original untouched, including fallback to the first entry.
+for default in (1, 99):
+    with tempfile.TemporaryDirectory() as t:
+        os.makedirs(f"{t}/boot/grub")
+        os.makedirs(f"{t}/bin")
+        conf = CONF.format(d=default)
+        conf = conf.replace("\troot (hd0,0)\n" if default == 1 else "\troot (hd1,0)\n", "")
+        g = f"{t}/boot/grub/grub.conf"
+        open(g, "w").write(conf)
+        open(f"{t}/boot/vmlinuz-{NEW}", "w").close()
+        rpm = f"{t}/bin/rpm"
+        open(rpm, "w").write(f"#!/bin/sh\necho '100 {NEW}'\n")
+        os.chmod(rpm, 0o755)
+        p = subprocess.run(["sh", "-c", step[len(GUARD):].replace("/boot/", f"{t}/boot/")],
+                           capture_output=True, env={**os.environ, "PATH": f"{t}/bin:{os.environ['PATH']}"})
+        ok = p.returncode != 0 and open(g).read() == conf
+        print(("passed  " if ok else "WRONG   ") + f"GRUB missing root, default={default}: unchanged")
+        bad += not ok
+
+# Default is a global directive, before the first title. Repeat after a later kernel install and pruning.
+for existing in (False, True):
+    with tempfile.TemporaryDirectory() as t:
+        os.makedirs(f"{t}/boot/grub")
+        os.makedirs(f"{t}/bin")
+        g = f"{t}/boot/grub/grub.conf"
+        conf = CONF.format(d=0).replace("default=0\n", "")
+        if existing:
+            conf = conf.replace("2.6.18-419.el5", NEW)
+        open(g, "w").write(conf)
+        for v in ("2.6.18-1.el5", "2.6.18-419.el5", NEW):
+            open(f"{t}/boot/vmlinuz-{v}", "w").close()
+        for hop in range(2):
+            version = NEW if hop == 0 else "3.10.0-1160.el7.x86_64"
+            open(f"{t}/boot/vmlinuz-{version}", "w").close()
+            if hop:
+                os.remove(f"{t}/boot/vmlinuz-2.6.18-1.el5")
+            open(f"{t}/bin/rpm", "w").write(f"#!/bin/sh\necho '100 {version}'\n")
+            os.chmod(f"{t}/bin/rpm", 0o755)
+            p = subprocess.run(["sh", "-c", step[len(GUARD):].replace("/boot/", f"{t}/boot/")],
+                               capture_output=True, env={**os.environ, "PATH": f"{t}/bin:{os.environ['PATH']}"})
+            lines = open(g).read().splitlines()
+            first_title = next(i for i, line in enumerate(lines) if line.startswith("title "))
+            defaults = [line for line in lines[:first_title] if line.startswith("default=")]
+            entries = "\n".join(lines[first_title:]).split("title ")[1:]
+            index = int(defaults[0].split("=")[1]) if len(defaults) == 1 else -1
+            ok = (p.returncode == 0 and 0 <= index < len(entries)
+                  and f"kernel /vmlinuz-{version} " in entries[index]
+                  and sum(line.startswith("default=") for line in lines) == 1)
+            print(("passed  " if ok else "WRONG   ") +
+                  f"GRUB global default: existing={existing}, hop={hop}, selects installed kernel")
+            bad += not ok
 
 # The cleanup before the transaction (hop.kernel_before[1]): an old kernel no package owns goes with its BLS entry, which
 # EL8 wrote per kernel and GRUB would otherwise list, dead. The running kernel (whose record kernel_before[0] has
