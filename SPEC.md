@@ -891,7 +891,8 @@ ones EL9's NetworkManager loads: every `ifcfg-*` except `ifcfg-lo` and the names
 in any case, `.bak`, `~`, `.orig`, `.rej`, `.rpmnew`, `.augnew`, `.augtmp`, or an rpm temp suffix `;` and 8 hex
 digits). Effect, for each:
 - the profile becomes a NetworkManager keyfile in `/etc/NetworkManager/system-connections/`, mode 0600, written by
-  NetworkManager's own serializer (`nmcli --offline connection add`, which needs no daemon);
+  NetworkManager's own serializer (`nmcli --offline connection add`, which needs no daemon; NetworkManager 1.40+
+  for `--offline`, 1.42+ to set a UUID on add);
 - `/etc/systemd/network/10-wend-<DEVICE>.link` pins the interface name to the profile's `HWADDR`. Once the ifcfg
   file is gone, nothing else keeps an `eth0` from becoming `ens3`, and the keyfile is bound to the old name and the
   MAC. A profile with no `HWADDR` (EL7's installer writes one only when told the NIC by MAC: `network --bindto=mac`
@@ -908,20 +909,27 @@ digits). Effect, for each:
 
 The files are read as `KEY=VALUE` lines and never executed; a value that isn't one word, or holds `$`, a backquote or
 `#`, fails, and an empty value is an unset key. Each key has the meaning the ifcfg-rh plugin gives it:
-- `DEVICE` (required) and `HWADDR` (else the running NIC's, above), `TYPE` (`Ethernet` only), `NAME` (the profile's name, else `System <name>`),
+- `DEVICE` (required) and `HWADDR` (else the running NIC's, above), `TYPE` (`Ethernet`, case insensitive; required for devices other than `eth<digits>`), `NAME` (the profile's name, else `System <name>`),
   `UUID` (the profile's uuid);
 - `BOOTPROTO`: `static`, `none` or empty with `IPADDR` and `PREFIX` or `NETMASK` (a real netmask), plus `GATEWAY` (or
-  `/etc/sysconfig/network`'s); `dhcp` or `bootp` (read as `dhcp`) with none of those;
+  `/etc/sysconfig/network`'s); `dhcp` or `bootp` (read as `dhcp`) with none of those. No `BOOTPROTO` and no `IPADDR` means
+  `ipv4.method=disabled`, without inherited gateway or resolver settings;
 - `BROADCAST` and `NETWORK`, which the installer writes and NetworkManager derives: accepted only when they match the
   address;
 - `GATEWAYDEV` in `/etc/sysconfig/network`: every other device's profile gets `ipv4.never-default`;
 - `DNS1`, `DNS2` (only after `DNS1`), `DOMAIN`, with any method, and `PEERDNS=no` as `ipv4.ignore-auto-dns`. A static
   profile with no `DNS1`/`DNS2` takes the resolvers, and the search list (or `domain`; `.` is none) unless `DOMAIN` is
-  set, from `/etc/resolv.conf`, which is where CentOS 5's installer put them;
+  set, from `/etc/resolv.conf`, which is where CentOS 5's installer put them. A `.` entry is the root and is
+  dropped; a single trailing dot is removed from domains, including `DOMAIN`. Bare `search`/`domain` lines are
+  ignored. Loopback DNS addresses are refused: configure upstream DNS or migrate the local resolver first.
+  The chroot tier borrows its host's resolv.conf, so it proves conversion of the visible file, not preservation
+  of the box's original resolvers; a booted replay is needed for that;
+- DHCP profiles map `DHCP_HOSTNAME` to `ipv4.dhcp-hostname` and `DHCP_CLASSID` to
+  `ipv4.dhcp-vendor-class-identifier`; either key on a non-DHCP profile is refused;
 - `ONBOOT`, `IPV6INIT` (else `/etc/sysconfig/network`'s), `IPV6_AUTOCONF` (`no` is `link-local`), as NetworkManager's
   booleans (`yes`, `true`, `t`, `y`, `1` and their opposites);
 - `NM_CONTROLLED` (`no` fails: EL9's NetworkManager left that device unmanaged, which a keyfile can't say);
-- `DHCPCLASS` and `USERCTL` are inert (the plugin doesn't read them); wend still requires `USERCTL` to be a boolean;
+- `DHCPCLASS`, `HOTPLUG` and `USERCTL` are inert (the plugin doesn't read them); wend still requires `USERCTL` to be a boolean;
 - what EL8's installer adds, writing through the plugin: `DEFROUTE=no` as `ipv4.never-default` (a set `GATEWAYDEV`
   overrides it either way), `IPV4_FAILURE_FATAL=yes` as `ipv4.may-fail no`, and, with IPv6 on, `IPV6_DEFROUTE=no` as
   `ipv6.never-default`, `IPV6_FAILURE_FATAL=yes` as `ipv6.may-fail no` and `IPV6_ADDR_GEN_MODE` (`stable-privacy`
@@ -936,15 +944,19 @@ In `/etc/sysconfig/network`, `GATEWAY`, `GATEWAYDEV` and `IPV6INIT` are read as 
 
 Any other setting in either file (bridges, VLANs, bonds, aliases, IPv6 addresses, `RES_OPTIONS`), a keyfile of the
 same name or a `10-wend-<DEVICE>.link` already there, two profiles that pin one name to different MACs or one MAC to
-different names, a `route-`, `route6-`, `rule-`, `rule6-` or `keys-` file beside a profile, or a value that isn't an
+different names or share a UUID, a `route-`, `route6-`, `rule-`, `rule6-` or `keys-` file beside a profile, or a value that isn't an
 address, MAC, boolean or plain name fails the step. So does any `.link` in `/etc/systemd/network`,
 `/run/systemd/network`, `/usr/local/lib/systemd/network`, `/usr/lib/systemd/network` or `/lib/systemd/network` whose
 name sorts before the pin's (systemd applies only the first `.link` that matches, so it could name the NIC something
 else), unless it only pins one MAC to one name (`[Match] MACAddress=` and `[Link] Name=`, nothing else, and no
 `<name>.link.d` drop-ins in any of those directories) and that is either this profile's MAC and name or another MAC
-and another name. Every profile is
-checked and serialized by `nmcli` before the first file is written, so a failure, including `nmcli` missing or
-refusing a profile, changes nothing. Reference: `python3 -` with the source in `tools/net_ifcfg_to_keyfile.py`, sent
+and another name. A later plain pin with a conflicting MAC or name is refused too. A drop-in directory for
+our new pin is refused in any of those directories. Udev rules assigning `NAME` are conservatively refused unless explicitly restricted to a non-net
+subsystem; migrate those rules before conversion. The generated pin also matches
+`Type=ether`. Leftover `.wend` temporary paths are refused, including dangling symlinks. Every profile is
+checked and serialized by `nmcli`, then every output is staged before the first final file is replaced.
+Validation, serialization and staging failures leave profiles and final files unchanged; filesystem failures during
+final replacement or archival still require recovery. Reference: `python3 -` with the source in `tools/net_ifcfg_to_keyfile.py`, sent
 as a here-document; `tools/test_net_ifcfg.py` runs it on fixture roots.
 
 ### Argument specs

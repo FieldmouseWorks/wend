@@ -27,6 +27,7 @@ L = "/etc/systemd/network"
 # systemd.link(5): the directories udevd reads .link files from (systemd's CONF_PATHS), and /lib, often /usr/lib
 LINK_DIRS = (L, "/run/systemd/network", "/usr/local/lib/systemd/network", "/usr/lib/systemd/network",
              "/lib/systemd/network")
+UDEV_DIRS = ("/etc/udev/rules.d", "/run/udev/rules.d", "/usr/lib/udev/rules.d")
 SYS = "/sys/class/net"
 SAVED = "/var/lib/wend/saved"
 NETWORK = "/etc/sysconfig/network"
@@ -34,7 +35,7 @@ RESOLV = "/etc/resolv.conf"
 HOSTNAME = "/etc/hostname"
 KEYS = {"DEVICE", "HWADDR", "BOOTPROTO", "IPADDR", "NETMASK", "PREFIX", "BROADCAST", "NETWORK", "GATEWAY", "DNS1",
         "DNS2", "DOMAIN", "PEERDNS", "ONBOOT", "IPV6INIT", "IPV6_AUTOCONF", "TYPE", "NAME", "UUID", "NM_CONTROLLED",
-        "DHCPCLASS", "USERCTL",
+        "DHCPCLASS", "USERCTL", "HOTPLUG", "DHCP_HOSTNAME", "DHCP_CLASSID",
         # what EL8's installer adds, writing the profile through NetworkManager's ifcfg-rh plugin
         "DEFROUTE", "IPV4_FAILURE_FATAL", "IPV6_DEFROUTE", "IPV6_FAILURE_FATAL", "IPV6_ADDR_GEN_MODE",
         "PROXY_METHOD", "BROWSER_ONLY",
@@ -101,9 +102,11 @@ def plan(path, net, resolv):
     if not re.fullmatch(NAME, c) or not re.fullmatch(NAME, dev) or len(dev) > 15:
         fail(f"{path}: not a plain interface or connection name")
     for side in SIDE:
-        if os.path.exists(os.path.join(D, side + c)):
+        if os.path.lexists(os.path.join(D, side + c)):
             fail(f"{path}: {side}{c} beside it isn't converted")
-    if v.get("TYPE", "Ethernet") != "Ethernet":
+    if "TYPE" not in v and not re.fullmatch(r"eth[0-9]+", dev):
+        fail(f"{path}: DEVICE={dev} needs TYPE=Ethernet")
+    if v.get("TYPE", "Ethernet").lower() != "ethernet":
         fail(f"{path}: TYPE={v['TYPE']}: only Ethernet profiles are converted")
     # the .link pin needs a MAC: without one EL10 may call eth0 ens3, and a keyfile for eth0 never comes up
     hw = v.get("HWADDR", "").lower() or running_mac(path, dev)
@@ -120,8 +123,31 @@ def plan(path, net, resolv):
     pin = f"10-wend-{dev}.link"
     if os.path.lexists(os.path.join(L, pin)):  # someone's pin for this name: never replaced
         fail(f"{path}: {L}/{pin} exists already")
+    for target in (os.path.join(K, f"{c}.nmconnection"), os.path.join(L, pin)):
+        if os.path.lexists(target + ".wend"):
+            fail(f"{path}: {target}.wend exists already; move the stale temporary file")
+    if any(os.path.lexists(os.path.join(d, pin + ".d")) for d in LINK_DIRS):
+        fail(f"{path}: {pin}.d drop-ins may override the pin; move them before converting")
+    for rules in UDEV_DIRS:
+        for n in os.listdir(rules) if os.path.isdir(rules) else []:
+            if not n.endswith(".rules"):
+                continue
+            try:
+                text = "\n".join(line for line in open(os.path.join(rules, n))
+                                 if not line.lstrip().startswith("#"))
+            except (OSError, UnicodeDecodeError) as e:
+                fail(f"{path}: cannot inspect {rules}/{n}: {e}")
+            # Join continued rules, and only exempt assignments explicitly restricted to a non-net subsystem.
+            for rule in text.replace("\\\n", "").splitlines():
+                subsystem = re.search(r'\bSUBSYSTEM\s*==\s*"([A-Za-z0-9_-]+)"', rule)
+                if re.search(r'\bNAME\s*[:+]?=', rule) and not (subsystem and subsystem[1] != "net"):
+                    fail(f"{path}: {rules}/{n} assigns an interface name; move or migrate the naming rule")
     for d in LINK_DIRS:  # systemd applies only the first .link (by file name, over all its directories) that matches
         for n in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+            if n.endswith(".link") and n > pin:
+                other = mac_pin(d, n)
+                if other is not None and other != (hw, dev) and (other[0] == hw or other[1] == dev):
+                    fail(f"{path}: {d}/{n} pins {other[0]} to {other[1]}, conflicting with {hw} to {dev}; move the stale pin")
             if n.endswith(".link") and n < pin:
                 other = mac_pin(d, n)
                 if other == (hw, dev):  # EL8's installer, booted with ifname=eth0:<mac>, writes this one: it does what
@@ -149,6 +175,13 @@ def plan(path, net, resolv):
             if key in v:
                 fail(f"{path}: {key} beside BOOTPROTO={proto} isn't converted")
         args += ["ipv4.method", "auto"]
+        for source, dest in (("DHCP_HOSTNAME", "ipv4.dhcp-hostname"), ("DHCP_CLASSID", "ipv4.dhcp-vendor-class-identifier")):
+            if source in v:
+                args += [dest, v[source]]
+    elif "BOOTPROTO" not in v and "IPADDR" not in v:
+        if any(k in v for k in ("PREFIX", "NETMASK", "GATEWAY", "BROADCAST", "NETWORK")):
+            fail(f"{path}: IPv4 settings beside a disabled profile")
+        args += ["ipv4.method", "disabled"]
     elif proto in ("static", "none", ""):
         if "IPADDR" not in v:
             fail(f"{path}: BOOTPROTO={proto} with no IPADDR")
@@ -173,7 +206,10 @@ def plan(path, net, resolv):
         args += ["ipv4.method", "manual", "ipv4.addresses", f"{ip}/{prefix}"]
     else:
         fail(f"{path}: BOOTPROTO={proto} isn't converted")
-    gw = v.get("GATEWAY") or net.get("GATEWAY")
+    if proto not in ("dhcp", "bootp") and any(k in v for k in ("DHCP_HOSTNAME", "DHCP_CLASSID")):
+        fail(f"{path}: DHCP settings beside a non-DHCP profile")
+    disabled = args[args.index("ipv4.method") + 1] == "disabled"
+    gw = None if disabled else v.get("GATEWAY") or net.get("GATEWAY")
     if gw and proto not in ("dhcp", "bootp"):
         args += ["ipv4.gateway", str(addr(path, "GATEWAY", gw))]
     # the plugin: DEFROUTE=no keeps the default route off this profile, but a GATEWAYDEV overrides it either way
@@ -192,11 +228,14 @@ def plan(path, net, resolv):
         fail(f"{path}: DNS2 with no DNS1")
     dns = [v[k] for k in ("DNS1", "DNS2") if k in v]
     search = v.get("DOMAIN", "").split()
-    if proto not in ("dhcp", "bootp") and not dns:  # CentOS 5's installer put a static box's resolvers only here
+    if not disabled and proto not in ("dhcp", "bootp") and not dns:  # CentOS 5's installer put a static box's resolvers only here
         dns, search = resolv["nameserver"], search or resolv["search"]
-    if dns:
+    if dns and not disabled:
+        if any(addr(path, "DNS", d).is_loopback for d in dns):
+            fail(f"{path}: loopback DNS needs a surviving local resolver; configure upstream DNS before converting")
         args += ["ipv4.dns", ",".join(str(addr(path, "DNS", d)) for d in dns)]
-    if search:
+    search = [(s[:-1] if s.endswith(".") else s) for s in search if s != "."]
+    if search and not disabled:
         if not all(re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*",
                                 s) for s in search):
             fail(f"{path}: a search domain isn't a plain name")
@@ -285,8 +324,10 @@ def mac_pin(d, n):
         if at is None or not m or m.group(1) in at:
             return None
         at[m.group(1)] = m.group(2)
-    if sections.keys() != {"Match", "Link"} or sections["Match"].keys() != {"MACAddress"} or \
+    if sections.keys() != {"Match", "Link"} or sections["Match"].keys() not in ({"MACAddress"}, {"MACAddress", "Type"}) or \
             sections["Link"].keys() != {"Name"}:
+        return None
+    if sections["Match"].get("Type", "ether") != "ether":
         return None
     mac, name = sections["Match"]["MACAddress"].lower(), sections["Link"]["Name"]
     if not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", mac) or not re.fullmatch(NAME, name):
@@ -311,14 +352,20 @@ def main():
             w = line.split()
             if len(w) >= 2 and w[0] == "nameserver" and len(resolv["nameserver"]) < 3:
                 resolv["nameserver"].append(w[1])
-            elif w and w[0] in ("search", "domain"):  # resolv.conf(5): the last of the two wins; "." is the root,
+            elif len(w) >= 2 and w[0] in ("search", "domain"):  # resolv.conf(5): the last of the two wins; "." is the root,
                 resolv["search"] = [d for d in (w[1:2] if w[0] == "domain" else w[1:]) if d != "."]  # no domain
     plans = [plan(f, net, resolv) for f in files]
     pins = {}
+    uuids = {}
     for (c, dev, hw, args), f in zip(plans, files):  # one pin per name and per MAC (two profiles of one NIC agree)
+        if "connection.uuid" in args:
+            uid = args[args.index("connection.uuid") + 1]
+            if uid in uuids:
+                fail(f"{f} and {uuids[uid]} share UUID={uid}; move the stale profile")
+            uuids[uid] = f
         for key, other in ((("dev", dev), hw), (("hw", hw), dev)):
             if pins.setdefault(key, (other, f))[0] != other:
-                fail(f"{f} and {pins[key][1]} pin {key[1]} differently")
+                fail(f"{f} and {pins[key][1]} pin {key[1]} differently: {other} versus {pins[key][0]}; move the stale profile")
     keyfiles = []
     for (c, dev, hw, args), f in zip(plans, files):  # every keyfile serialized before anything is written
         try:
@@ -331,10 +378,25 @@ def main():
     os.makedirs(K, exist_ok=True)
     os.makedirs(L, exist_ok=True)
     os.makedirs(SAVED + D, exist_ok=True)
+    staged = {}
+    created = []
+    try:
+        for (c, dev, hw, args), text in zip(plans, keyfiles):
+            staged[os.path.join(K, f"{c}.nmconnection")] = (text, 0o600)
+            staged[os.path.join(L, f"10-wend-{dev}.link")] = (
+                f"[Match]\nMACAddress={hw}\nType=ether\n\n[Link]\nName={dev}\n", 0o644)
+        for target, (text, mode) in staged.items():
+            write(target, text, mode)
+            created.append(target)
+    except OSError as e:
+        for target in created:
+            if os.path.isfile(target + ".wend") and not os.path.islink(target + ".wend"):
+                os.remove(target + ".wend")
+        fail(f"cannot stage network files: {e}")
+    for target in staged:
+        os.replace(target + ".wend", target)
     for (c, dev, hw, args), f, text in zip(plans, files, keyfiles):
         kf = os.path.join(K, f"{c}.nmconnection")
-        write(kf, text, 0o600)
-        write(os.path.join(L, f"10-wend-{dev}.link"), f"[Match]\nMACAddress={hw}\n\n[Link]\nName={dev}\n", 0o644)
         if os.path.exists(SAVED + f):  # SAVED keeps the owner's original, whatever later hops do (SPEC)
             os.remove(f)
         else:
@@ -343,11 +405,14 @@ def main():
 
 
 def write(path, text, mode):
-    fd = os.open(path + ".wend", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
-    with os.fdopen(fd, "w") as out:
-        out.write(text)
-    os.chmod(path + ".wend", mode)
-    os.replace(path + ".wend", path)
+    fd = os.open(path + ".wend", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    try:
+        with os.fdopen(fd, "w") as out:
+            out.write(text)
+        os.chmod(path + ".wend", mode)
+    except OSError:
+        os.remove(path + ".wend")
+        raise
 
 
 if __name__ == "__main__":

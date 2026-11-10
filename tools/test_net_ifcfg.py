@@ -37,7 +37,7 @@ ON_NIC = "2: eth0    inet 10.0.2.20/24 brd 10.0.2.255 scope global noprefixroute
 
 
 def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=(), link_dirs=None, nics=None,
-        addrs=None, hostname=None):
+        addrs=None, hostname=None, symlinks=(), udev=None, write_error=False):
     """Run the converter on a fresh root; return (exit message or None, {keyfile: nmcli args}, files left, printed).
     nics: {name: sysfs attributes} of the running NICs (a "device" link unless physical=False); addrs: {name: what
     `ip -o -4 addr show dev <name>` prints}."""
@@ -48,6 +48,7 @@ def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=()
         for k in ("D", "K", "L", "SAVED", "NETWORK", "RESOLV", "SYS", "HOSTNAME"):
             setattr(m, k, t + getattr(m, k))
         m.LINK_DIRS = tuple(t + d for d in m.LINK_DIRS)
+        m.UDEV_DIRS = tuple(t + d for d in m.UDEV_DIRS)
         os.makedirs(m.D)
         for d, names in [(m.K, keyfiles), (m.L, links), (t + "/usr/lib/systemd/network", vendor_links)] + [
                 (t + d, names) for d, names in (link_dirs or {}).items()]:
@@ -86,6 +87,21 @@ def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=()
                 if a != "physical":
                     with open(os.path.join(m.SYS, n, a), "w") as out:
                         out.write(x + "\n")
+        for relative in symlinks:
+            target = t + relative
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            os.symlink("/missing-wend-fixture", target)
+        for name, text in (udev or {}).items():
+            os.makedirs(m.UDEV_DIRS[0], exist_ok=True)
+            with open(os.path.join(m.UDEV_DIRS[0], name), "w") as out:
+                out.write(text)
+        if write_error:
+            real_write = m.write
+            def broken_write(path, text, mode):
+                if path.endswith(".link"):
+                    raise OSError(28, "No space left on device")
+                real_write(path, text, mode)
+            m.write = broken_write
         path, msg, printed = os.environ["PATH"], None, io.StringIO()
         os.environ["PATH"] = f"{t}/bin:{path}"
         try:
@@ -101,12 +117,14 @@ def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=()
         if os.path.isdir(m.L):
             for n in sorted(os.listdir(m.L)):
                 f = os.path.join(m.L, n)
-                if os.path.isdir(f):  # a drop-in dir
+                if os.path.isdir(f) or os.path.islink(f):  # a drop-in dir or dangling link
                     continue
                 links[n] = (oct(os.stat(f).st_mode & 0o777), open(f).read())
         if os.path.isdir(m.K):
             for n in sorted(os.listdir(m.K)):
                 f = os.path.join(m.K, n)
+                if os.path.islink(f):
+                    continue
                 keyfiles[n] = (oct(os.stat(f).st_mode & 0o777), open(f).read().splitlines()[4:])  # after "[connection]", "--offline connection add"
         left = sorted(os.path.relpath(os.path.join(r, n), t).replace(t.lstrip("/") + "/", "")  # SAVED keeps the path
                       for r, _, ns in os.walk(t) for n in ns if not r.startswith((f"{t}/bin", f"{t}/sys")))
@@ -137,7 +155,7 @@ msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-lo": "DEVICE=lo\nIPADDR=127.0
 case("a kickstart static profile becomes the exact keyfile, pinned by MAC, the ifcfg saved",
      msg is None and kf == {"eth0.nmconnection": ("0o600", STATIC + ["ipv6.method", "ignore",
                                                                      "connection.autoconnect", "yes"])}
-     and run.links == {"10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\n\n[Link]\nName=eth0\n")}
+     and run.links == {"10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\nType=ether\n\n[Link]\nName=eth0\n")}
      and "var/lib/wend/saved/etc/sysconfig/network-scripts/ifcfg-eth0" in left
      and "etc/sysconfig/network-scripts/ifcfg-eth0" not in left and "etc/sysconfig/network-scripts/ifcfg-lo" in left)
 msg, kf, left, out = run({"ifcfg-eth0": GUI})
@@ -229,7 +247,7 @@ msg, kf, left, out = run({"ifcfg-eth0": STOCK}, nics={"eth0": NIC}, addrs={"eth0
 case("no HWADDR: the NIC named eth0 that has the static address now is pinned by its own MAC",
      msg is None and kf == {"eth0.nmconnection": ("0o600", STATIC + ["ipv6.method", "ignore",
                                                                      "connection.autoconnect", "yes"])}
-     and run.links == {"10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\n\n[Link]\nName=eth0\n")})
+     and run.links == {"10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\nType=ether\n\n[Link]\nName=eth0\n")})
 msg, kf, left, out = run({"ifcfg-eth0": STOCK}, nics={"eth0": {**NIC, "address": "52:54:00:AB:CD:EF"}},
                          addrs={"eth0": ON_NIC})
 case("no HWADDR: the running NIC's MAC is lower-cased",
@@ -270,7 +288,7 @@ case("two names pinned to one MAC are refused", refused(msg, "pin 52:54:00:12:34
 msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-eth0-dhcp": "DEVICE=eth0\nHWADDR=52:54:00:12:34:56\nBOOTPROTO=dhcp\n"
                           "ONBOOT=no\n"})
 case("two profiles for one NIC share its pin", msg is None and len(kf) == 2 and run.links == {
-    "10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\n\n[Link]\nName=eth0\n")})
+    "10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\nType=ether\n\n[Link]\nName=eth0\n")})
 msg, kf, left, out = run({"ifcfg-a": KS, "ifcfg-b": KS.replace("DEVICE=eth0", "DEVICE=eth1").replace("12:34:56", "12:34:57"),
                           "ifcfg-c": OLD_NIC})
 case("a conflict between profiles that aren't next to each other is refused",
@@ -283,7 +301,7 @@ msg, kf, left, out = run({"ifcfg-eth0": KS}, links={"10-anaconda-ifname-eth0.lin
 case("EL8's installer pin of the same MAC to the same name stands, and ours is written beside it",
      msg is None and list(kf) == ["eth0.nmconnection"] and run.links == {
          "10-anaconda-ifname-eth0.link": ("0o644", ANACONDA),
-         "10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\n\n[Link]\nName=eth0\n")})
+         "10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\nType=ether\n\n[Link]\nName=eth0\n")})
 for d in ("/etc/systemd/network", "/usr/lib/systemd/network"):
     msg, kf, left, out = run({"ifcfg-eth0": KS}, links={"10-anaconda-ifname-eth0.link": ANACONDA},
                              link_dirs={d: {"10-anaconda-ifname-eth0.link.d/name.conf": "[Link]\nName=lan0\n"}})
@@ -314,8 +332,8 @@ case("an earlier .link in /usr/lib/systemd/network is refused too", refused(msg,
 for d in ("/run/systemd/network", "/usr/local/lib/systemd/network", "/lib/systemd/network"):
     msg, kf, left, out = run({"ifcfg-eth0": KS}, link_dirs={d: ["05-admin.link"]})
     case(f"an earlier .link in {d} is refused", refused(msg, f"{d}/05-admin.link comes before") and not kf)
-msg, kf, left, out = run({"ifcfg-eth0": KS}, vendor_links=["10-wend-eth0.link", "05-foo.network"])
-case("the pin's own name in /usr/lib (overridden by /etc's) and an earlier .network don't stand in the way",
+msg, kf, left, out = run({"ifcfg-eth0": KS}, vendor_links=["10-wend-eth0.link"])
+case("the pin's own name in /usr/lib is overridden by /etc's",
      msg is None and list(kf) == ["eth0.nmconnection"])
 msg, kf, left, out = run({"ifcfg-eth0": KS}, links=["70-later.link"], vendor_links=["99-default.link"])
 case("later .link files (99-default) don't stand in the way", msg is None and list(kf) == ["eth0.nmconnection"])
@@ -388,4 +406,61 @@ for name, text, why in (("a HOSTNAME that isn't the machine's", EL6.replace('"ol
     case(f"EL6: {name} is refused before anything changes", refused(msg, why) and not kf)
 msg, kf, left, out = run({})
 case("no profiles: nothing to convert", msg is None and not kf and out.startswith("no ifcfg profiles"))
+msg, kf, left, out = run({"ifcfg-eth0": KS}, vendor_links=["05-foo.network"])
+case("an earlier non-link suffix is ignored", msg is None and list(kf) == ["eth0.nmconnection"])
+msg, kf, left, out = run({"ifcfg-eth0": KS}, links={"70-owner.link": ANACONDA.replace("Name=eth0", "Name=lan0")})
+case("later owner pin conflicts are refused", refused(msg, "move the stale pin") and not kf)
+# Follow-ups in #34: each refusal must preserve the input and avoid archiving it.
+def untouched(msg, kf, left):
+    return msg is not None and not kf and "etc/sysconfig/network-scripts/ifcfg-eth0" in left and not any(
+        n.startswith("var/lib/wend/saved/") for n in left)
+
+for relative in ("/etc/NetworkManager/system-connections/eth0.nmconnection",
+                 "/etc/systemd/network/10-wend-eth0.link",
+                 "/etc/NetworkManager/system-connections/eth0.nmconnection.wend",
+                 "/etc/systemd/network/10-wend-eth0.link.wend",
+                 "/etc/sysconfig/network-scripts/route-eth0"):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, symlinks=[relative])
+    case(f"dangling {relative} is refused and kept", untouched(msg, kf, left) and relative.lstrip("/") in left)
+msg, kf, left, out = run({"ifcfg-eth0": KS}, write_error=True)
+case("staging ENOSPC leaves every original and no installed files", untouched(msg, kf, left) and not run.links
+     and not any(n.endswith(".wend") for n in left) and refused(msg, "cannot stage"))
+msg, kf, left, out = run({"ifcfg-eth0": KS}, link_dirs={"/etc/systemd/network": {
+    "10-wend-eth0.link.d/x.conf": "[Link]\nName=lan0\n"}})
+case("drop-ins for the new pin are refused", untouched(msg, kf, left) and refused(msg, ".link.d drop-ins"))
+msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={"70-persistent-net.rules":
+    'SUBSYSTEM=="net", ATTR{address}=="52:54:00:12:34:56", NAME="lan0"\n'})
+case("udev naming rules cannot silently override the pin", untouched(msg, kf, left) and refused(msg, "naming rule"))
+msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-eth1":
+    "DEVICE=eth1\nHWADDR=52:54:00:12:34:57\nONBOOT=no\nHOTPLUG=no\n"})
+case("Anaconda's unconfigured second NIC is disabled", msg is None and
+     arg(kf, "eth1.nmconnection", "ipv4.method") == "disabled" and
+     arg(kf, "eth1.nmconnection", "ipv4.gateway") is None and arg(kf, "eth1.nmconnection", "ipv4.dns") is None)
+msg, kf, left, out = run({"ifcfg-eth0": KS + "TYPE=eThErNeT\n"})
+case("TYPE is case insensitive", msg is None)
+msg, kf, left, out = run({"ifcfg-eth0": KS.replace("eth0", "lan0")})
+case("non eth device needs an explicit TYPE", refused(msg, "needs TYPE=Ethernet") and not kf)
+msg, kf, left, out = run({"ifcfg-eth0": "DEVICE=eth0\nHWADDR=52:54:00:12:34:56\nBOOTPROTO=dhcp\n"
+    "DHCP_HOSTNAME=oldbox\nDHCP_CLASSID=kickstart\n"})
+case("DHCP kickstart options survive", msg is None and arg(kf, "eth0.nmconnection", "ipv4.dhcp-hostname") == "oldbox"
+     and arg(kf, "eth0.nmconnection", "ipv4.dhcp-vendor-class-identifier") == "kickstart")
+uid = "UUID=5fb06bd0-0bb0-7ffb-45f1-d6edd65f3e03\n"
+msg, kf, left, out = run({"ifcfg-eth0": KS + uid, "ifcfg-old": KS + uid})
+case("duplicate UUIDs are refused", untouched(msg, kf, left) and refused(msg, "share UUID="))
+for text, want in (("domain .\n", None), ("search example.org\nsearch\ndomain\n", "example.org"),
+                   ("domain example.org.\n", "example.org")):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, resolv="nameserver 10.0.2.3\n" + text)
+    case(f"resolver search semantics: {text!r}", msg is None and arg(kf, "eth0.nmconnection", "ipv4.dns-search") == want)
+msg, kf, left, out = run({"ifcfg-eth0": KS}, resolv="nameserver 127.0.0.53\n")
+case("loopback fallback needs an explicit resolver migration", untouched(msg, kf, left) and refused(msg, "loopback DNS"))
+for domain, want in ((".", None), ("example.org.", "example.org")):
+    msg, kf, left, out = run({"ifcfg-eth0": KS + f"DOMAIN={domain}\n"})
+    case(f"DOMAIN={domain} normalizes without taking the fallback search list", msg is None and
+         arg(kf, "eth0.nmconnection", "ipv4.dns-search") == want)
+for rule, allowed in (('NAME="lan0"\n', False),
+                      ('SUBSYSTEM=="net", \\\nNAME="lan0"\n', False),
+                      ('SUBSYSTEM=="block", NAME="disk0"\n', True)):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={"70-owner.rules": rule})
+    case(f"udev assignment scope: {rule!r}", (msg is None and bool(kf)) if allowed else
+         untouched(msg, kf, left) and refused(msg, "naming rule"))
 sys.exit(0 if all(cases) else 1)
