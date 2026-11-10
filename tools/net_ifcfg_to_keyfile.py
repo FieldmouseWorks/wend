@@ -133,7 +133,7 @@ def plan(path, net, resolv):
             if not n.endswith(".rules"):
                 continue
             try:
-                text = "\n".join(line for line in open(os.path.join(rules, n))
+                text = "".join(line for line in open(os.path.join(rules, n))
                                  if not line.lstrip().startswith("#"))
             except (OSError, UnicodeDecodeError) as e:
                 fail(f"{path}: cannot inspect {rules}/{n}: {e}")
@@ -208,7 +208,7 @@ def plan(path, net, resolv):
         fail(f"{path}: BOOTPROTO={proto} isn't converted")
     if proto not in ("dhcp", "bootp") and any(k in v for k in ("DHCP_HOSTNAME", "DHCP_CLASSID")):
         fail(f"{path}: DHCP settings beside a non-DHCP profile")
-    disabled = args[args.index("ipv4.method") + 1] == "disabled"
+    disabled = args[2 * args[::2].index("ipv4.method") + 1] == "disabled"
     gw = None if disabled else v.get("GATEWAY") or net.get("GATEWAY")
     if gw and proto not in ("dhcp", "bootp"):
         args += ["ipv4.gateway", str(addr(path, "GATEWAY", gw))]
@@ -358,8 +358,8 @@ def main():
     pins = {}
     uuids = {}
     for (c, dev, hw, args), f in zip(plans, files):  # one pin per name and per MAC (two profiles of one NIC agree)
-        if "connection.uuid" in args:
-            uid = args[args.index("connection.uuid") + 1]
+        if "connection.uuid" in args[::2]:
+            uid = args[2 * args[::2].index("connection.uuid") + 1]
             if uid in uuids:
                 fail(f"{f} and {uuids[uid]} share UUID={uid}; move the stale profile")
             uuids[uid] = f
