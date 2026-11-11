@@ -19,7 +19,10 @@ scope, compound commands, quoting and here-documents. Its source is pinned to
 upstream revision `751dae803c4a493fc2fb1b74cefd94ebcd4b7de0`, which includes the
 empty-heredoc tokenizer fix discussed in upstream issue #1692 and the tokenizer
 based substitution-boundary parser. The walker carries the surrounding quoting
-context through nested parameter operands. Literal heredocs remain data;
+context through nested default/alternative/assignment/error operands. Parameter
+patterns, replacement words and array keys retain their own quoting rules;
+arithmetic operands use arithmetic expansion rules. Exhaustive Rust enum
+matches select the operand rules and recurse into nested parameters. Literal heredocs remain data;
 expanding heredocs use heredoc expansion rules, where quote characters are data.
 
 `python3 tools/test_check.py` runs both-table syntax regressions and the build

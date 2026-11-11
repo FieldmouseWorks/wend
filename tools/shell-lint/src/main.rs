@@ -67,7 +67,7 @@ fn pieces(parts: Vec<word::WordPieceWithSource>, quoted: bool) -> Result<bool> {
                 pieces(parts, true)?
             }
             ArithmeticExpression(expr) => expansions(&expr.value, true)?,
-            ParameterExpansion(expr) => parameter_values(&serde_json::to_value(expr)?, quoted)?,
+            ParameterExpansion(expr) => parameter(&expr, quoted)?,
             _ => false,
         };
         if found {
@@ -77,29 +77,97 @@ fn pieces(parts: Vec<word::WordPieceWithSource>, quoted: bool) -> Result<bool> {
     Ok(false)
 }
 
-// Parameter operands inherit the surrounding expansion context. In double
-// quotes and expanding heredocs a single quote in an operand is literal data,
-// whereas in an unquoted operand it can protect a substitution from execution.
-fn parameter_values(v: &Value, quoted: bool) -> Result<bool> {
-    match v {
-        Value::String(s) => expansions(s, quoted),
-        Value::Array(a) => {
-            for c in a {
-                if parameter_values(c, quoted)? {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
+// Operand syntax is selected by its role, not just by the enclosing quotes.
+// Defaults inherit double-quote/heredoc context; patterns, replacement words
+// and array indices retain their own literal quotes. Arithmetic operands expand
+// substitutions before arithmetic evaluation even when quote characters occur.
+fn optional(s: &Option<String>, quoted: bool) -> Result<bool> {
+    s.as_deref().map_or(Ok(false), |s| expansions(s, quoted))
+}
+
+fn parameter(expr: &word::ParameterExpr, quoted: bool) -> Result<bool> {
+    use word::ParameterExpr::*;
+    let (parameter, found) = match expr {
+        Parameter { parameter, .. }
+        | ParameterLength { parameter, .. }
+        | Transform { parameter, .. } => (parameter, false),
+        UseDefaultValues {
+            parameter,
+            default_value,
+            ..
         }
-        Value::Object(o) => {
-            for c in o.values() {
-                if parameter_values(c, quoted)? {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
+        | AssignDefaultValues {
+            parameter,
+            default_value,
+            ..
+        } => (parameter, optional(default_value, quoted)?),
+        UseAlternativeValue {
+            parameter,
+            alternative_value,
+            ..
+        } => (parameter, optional(alternative_value, quoted)?),
+        IndicateErrorIfNullOrUnset {
+            parameter,
+            error_message,
+            ..
+        } => (parameter, optional(error_message, quoted)?),
+        RemoveSmallestSuffixPattern {
+            parameter, pattern, ..
         }
-        _ => Ok(false),
+        | RemoveLargestSuffixPattern {
+            parameter, pattern, ..
+        }
+        | RemoveSmallestPrefixPattern {
+            parameter, pattern, ..
+        }
+        | RemoveLargestPrefixPattern {
+            parameter, pattern, ..
+        }
+        | UppercaseFirstChar {
+            parameter, pattern, ..
+        }
+        | UppercasePattern {
+            parameter, pattern, ..
+        }
+        | LowercaseFirstChar {
+            parameter, pattern, ..
+        }
+        | LowercasePattern {
+            parameter, pattern, ..
+        } => (parameter, optional(pattern, false)?),
+        ReplaceSubstring {
+            parameter,
+            pattern,
+            replacement,
+            ..
+        } => (
+            parameter,
+            expansions(pattern, false)? || optional(replacement, false)?,
+        ),
+        Substring {
+            parameter,
+            offset,
+            length,
+            ..
+        } => (
+            parameter,
+            expansions(&offset.value, true)?
+                || match length {
+                    Some(expr) => expansions(&expr.value, true)?,
+                    None => false,
+                },
+        ),
+        VariableNames { .. } | MemberKeys { .. } => return Ok(false),
+    };
+    if found {
+        return Ok(true);
+    }
+    match parameter {
+        word::Parameter::NamedWithIndex { index, .. } => expansions(index, false),
+        word::Parameter::Positional(_)
+        | word::Parameter::Special(_)
+        | word::Parameter::Named(_)
+        | word::Parameter::NamedWithAllIndices { .. } => Ok(false),
     }
 }
 
