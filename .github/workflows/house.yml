@@ -15,7 +15,7 @@ jobs:
       pull-requests: read
       statuses: write
     steps:
-      - uses: FieldmouseWorks/burrow/.github/actions/house@1b7e71c3e0f409cabcfe2ec4190cb2440b8887f5 # main
+      - uses: FieldmouseWorks/burrow/.github/actions/house@c9b0c066c245a3f5276e2e7c66fd478d72d8d99e # main
         with:
           # wend's fixes record the model that wrote them (meta.author), and
           # its docs name models to run, so a PR naming one needs no reason.
