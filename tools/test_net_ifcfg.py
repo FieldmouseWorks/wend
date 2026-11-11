@@ -724,4 +724,26 @@ for persistent in (False, True):
     msg, kf, left, out = run({"ifcfg-eth0": KS}, udev=udev, cmdline="biosdevname=0 net.ifnames=0")
     case(f"complete AlmaLinux 9 vendor rules accepted {persistent}",
          msg is None and bool(kf) and "10-wend-eth0.link" in run.links)
+prefix_rule = stock["/usr/lib/udev/rules.d/71-prefixdevname.rules"]
+for persistent in (False, True):
+    for cmdline in ("net.ifnames.prefix=net", "net.ifnames.prefix=", "net.ifnames.prefix",
+                    "net.ifnames.prefix= net.ifnames.prefix=net", '"net.ifnames.prefix=net"',
+                    'net.ifnames.prefix="net"', 'other="net.ifnames.prefix=net"',
+                    "net.ifnames.prefix=" + chr(92) + "net", "other='unterminated"):
+        udev = {"/usr/lib/udev/rules.d/71-prefixdevname.rules": prefix_rule}
+        if persistent:
+            udev["/run/udev/rules.d/71-prefixdevname.rules"] = None
+        msg, kf, left, out = run({"ifcfg-eth0": KS}, udev=udev, cmdline=cmdline)
+        case(f"prefixdevname enabled or ambiguous refuses {persistent} {cmdline!r}",
+             untouched(msg, kf, left) and refused(msg, "net.ifnames.prefix") and not run.links)
+    for bad in (prefix_rule.replace('GOTO=', 'GO TO='),
+                prefix_rule.replace('ENV{net.ifnames.prefix}!=', 'ENV{net.ifnames.prefix}=='),
+                prefix_rule.replace('/usr/lib/udev/prefixdevname', '/usr/local/bin/rename'),
+                prefix_rule + 'NAME="lan0"\n', prefix_rule.rstrip() + chr(92) + "\n# tail\n"):
+        udev = {"/usr/lib/udev/rules.d/71-prefixdevname.rules": bad}
+        if persistent:
+            udev["/run/udev/rules.d/71-prefixdevname.rules"] = None
+        msg, kf, left, out = run({"ifcfg-eth0": KS}, udev=udev)
+        case(f"modified prefixdevname refuses {persistent} {bad!r}",
+             untouched(msg, kf, left) and not run.links)
 sys.exit(0 if all(cases) else 1)

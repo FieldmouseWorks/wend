@@ -60,6 +60,16 @@ LABEL="netdevicename_start"
 SUBSYSTEMS=="pci", PROGRAM="/sbin/biosdevname --smbios 2.6 --nopirq --policy physical -i %k", NAME="%c"  OPTIONS+="string_escape=replace"
 LABEL="netdevicename_end"
 '''.strip().splitlines()
+# prefixdevname-0.1.0-8.el9; accepted only without a prefix kernel argument.
+PREFIX_RULES = '''
+SUBSYSTEM!="net", GOTO="net_ifnames_prefix_end"
+ACTION!="add",    GOTO="net_ifnames_prefix_end"
+ATTR{type}!="1",  GOTO="net_ifnames_prefix_end"
+IMPORT{cmdline}="net.ifnames.prefix"
+ENV{net.ifnames.prefix}!="?*", GOTO="net_ifnames_prefix_end"
+PROGRAM="/usr/lib/udev/prefixdevname", RESULT=="?*", NAME="$result"
+LABEL="net_ifnames_prefix_end"
+'''.strip().splitlines()
 SYS = "/sys/class/net"
 SAVED = "/var/lib/wend/saved"
 NETWORK = "/etc/sysconfig/network"
@@ -344,6 +354,14 @@ def check_udev(path):
                     options = [w for w in cmdline.split() if w.split("=", 1)[0] == "biosdevname"]
                     if options != ["biosdevname=0"]:
                         fail(f"{path}: {rule_path} needs an unambiguous biosdevname=0 kernel argument")
+                    continue
+                if name == "71-prefixdevname.rules" and rules:
+                    if rules != PREFIX_RULES:
+                        fail(f"{path}: {rule_path} is not the recognized stock prefixdevname rule")
+                    cmdline = naming_text(CMDLINE)
+                    if any(c in cmdline for c in ("'", '"', chr(92))) or any(
+                            w.split("=", 1)[0] == "net.ifnames.prefix" for w in cmdline.split()):
+                        fail(f"{path}: {rule_path} needs an unambiguous absent net.ifnames.prefix kernel argument")
                     continue
                 if rules == LINK_DISPATCHER:
                     continue

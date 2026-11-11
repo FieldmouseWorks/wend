@@ -4,4 +4,5 @@ device-mapper-1.02.207-4.el9_8.1
 initscripts-rename-device-10.11.8-4.el9
 kpartx-0.8.7-45.el9
 systemd-udev-252-67.el9_8.6.alma.1
+prefixdevname-0.1.0-8.el9
 Source: https://repo.almalinux.org/almalinux/9/BaseOS/x86_64/os/Packages/
