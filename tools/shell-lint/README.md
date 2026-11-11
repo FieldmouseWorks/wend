@@ -21,7 +21,10 @@ empty-heredoc tokenizer fix discussed in upstream issue #1692 and the tokenizer
 based substitution-boundary parser. The walker carries the surrounding quoting
 context through nested default/alternative/assignment/error operands. Parameter
 patterns, replacement words and array keys retain their own quoting rules;
-arithmetic operands use arithmetic expansion rules. Exhaustive Rust enum
+arithmetic operands preserve quoted array keys while continuing to inspect
+substitutions in standalone arithmetic text. The arithmetic walker uses parsed
+word pieces so bracket-looking characters in quotes and nested expansions do
+not change subscript scope. Exhaustive Rust enum
 matches select the operand rules and recurse into nested parameters. Literal heredocs remain data;
 expanding heredocs use heredoc expansion rules, where quote characters are data.
 

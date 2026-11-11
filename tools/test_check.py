@@ -991,6 +991,6 @@ for _n, _what in (("json.py", "a json.py at the repo root"), ("tomllib/__init__.
 # These subprocess-boundary regressions belong to the checker gate too.
 import unittest
 _result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromNames(
-    ["test_shell_lint", "test_shell_parameters"]))
+    ["test_shell_lint", "test_shell_parameters", "test_shell_arithmetic"]))
 bad += not _result.wasSuccessful()
 sys.exit(1 if bad else 0)

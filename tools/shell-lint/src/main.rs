@@ -31,7 +31,11 @@ fn syntax(v: &Value) -> Result<bool> {
         if let Some(s) = o.get("value").and_then(Value::as_str) {
             // Word has loc; an arithmetic expression has only value. Neither
             // expression operators nor literal text are shell pipelines.
-            return expansions(s, !o.contains_key("loc"));
+            return if o.contains_key("loc") {
+                expansions(s, false)
+            } else {
+                arithmetic(s)
+            };
         }
         for child in o.values() {
             if syntax(child)? {
@@ -58,6 +62,41 @@ fn expansions(s: &str, heredoc: bool) -> Result<bool> {
     pieces(parts, heredoc)
 }
 
+// Arithmetic expansion does not treat a standalone single quote as shell
+// quoting. Array subscripts do have word quoting, however. Let the word parser
+// isolate quoted pieces and substitutions, and track brackets only in unquoted
+// text: brackets inside quotes or nested expansions belong to those contexts.
+fn arithmetic(s: &str) -> Result<bool> {
+    let parts = word::parse(s, &ParserOptions::default())?;
+    let mut brackets = 0usize;
+    for part in parts {
+        use word::WordPiece::*;
+        match &part.piece {
+            Text(text) => {
+                for c in text.chars() {
+                    match c {
+                        '[' => brackets += 1,
+                        ']' => brackets = brackets.saturating_sub(1),
+                        _ => (),
+                    }
+                }
+            }
+            SingleQuotedText(_) | AnsiCQuotedText(_) if brackets > 0 => (),
+            SingleQuotedText(text) | AnsiCQuotedText(text) => {
+                if expansions(text, true)? {
+                    return Ok(true);
+                }
+            }
+            _ => {
+                if pieces(vec![part], true)? {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 fn pieces(parts: Vec<word::WordPieceWithSource>, quoted: bool) -> Result<bool> {
     for part in parts {
         use word::WordPiece::*;
@@ -66,7 +105,7 @@ fn pieces(parts: Vec<word::WordPieceWithSource>, quoted: bool) -> Result<bool> {
             DoubleQuotedSequence(parts) | GettextDoubleQuotedSequence(parts) => {
                 pieces(parts, true)?
             }
-            ArithmeticExpression(expr) => expansions(&expr.value, true)?,
+            ArithmeticExpression(expr) => arithmetic(&expr.value)?,
             ParameterExpansion(expr) => parameter(&expr, quoted)?,
             _ => false,
         };
@@ -151,9 +190,9 @@ fn parameter(expr: &word::ParameterExpr, quoted: bool) -> Result<bool> {
             ..
         } => (
             parameter,
-            expansions(&offset.value, true)?
+            arithmetic(&offset.value)?
                 || match length {
-                    Some(expr) => expansions(&expr.value, true)?,
+                    Some(expr) => arithmetic(&expr.value)?,
                     None => false,
                 },
         ),
