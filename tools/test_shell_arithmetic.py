@@ -1,6 +1,10 @@
 """Arithmetic subscript quoting is distinct from standalone quote characters."""
+import os
+import sys
 import unittest
-import check
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import check  # noqa: E402
 
 
 class ArithmeticTests(unittest.TestCase):

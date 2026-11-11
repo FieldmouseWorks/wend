@@ -7,7 +7,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import shell_lint
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import shell_lint  # noqa: E402
 
 
 class ShellLintTests(unittest.TestCase):
