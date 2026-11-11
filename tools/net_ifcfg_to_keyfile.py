@@ -280,12 +280,6 @@ def plan(path, net, resolv):
     return c, dev, hw, args
 
 
-def rule_tokens(lines):
-    # Ignore formatting outside quoted values, preserving program arguments and matching strings exactly.
-    return ["".join(token if token.startswith('"') else re.sub(r"\s+", "", token)
-                    for token in re.findall(r'"[^"\n]*"|[^"\n]+', line)) for line in lines]
-
-
 def check_udev(path):
     helper = False
     # /run overrides disappear at reboot. Both the live and persistent rule sets must be safe.
@@ -302,8 +296,17 @@ def check_udev(path):
                 except (OSError, UnicodeDecodeError) as e:
                     fail(f"{path}: cannot inspect {rule_path}: {e}")
                 rules = [line.strip() for line in text.replace("\\\n", "").splitlines() if line.strip()]
-                if name == "71-biosdevname.rules" and rule_tokens(rules) == rule_tokens(BIOS_RULES):
-                    options = [w for w in open(CMDLINE).read().split() if w.startswith("biosdevname=")]
+                if name == "71-biosdevname.rules" and rules:
+                    # Exact observed forms preserve token boundaries and every control-flow guard.
+                    # Do not normalize malformed keywords, operators, quotes or attributes into stock rules.
+                    if rules != BIOS_RULES:
+                        fail(f"{path}: {rule_path} is not the recognized stock biosdevname rule")
+                    cmdline = open(CMDLINE).read()
+                    # systemd's cmdline lexer is not shell syntax. Until we implement that lexer,
+                    # refuse quoting/escaping anywhere rather than overlook a hidden enabling argument.
+                    if any(c in cmdline for c in ("'", '"', chr(92))):
+                        fail(f"{path}: {rule_path} needs an unambiguous biosdevname=0 kernel argument")
+                    options = [w for w in cmdline.split() if w.split("=", 1)[0] == "biosdevname"]
                     if options != ["biosdevname=0"]:
                         fail(f"{path}: {rule_path} needs an unambiguous biosdevname=0 kernel argument")
                     continue

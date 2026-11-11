@@ -960,8 +960,10 @@ Before conversion, its kernel `ifname=` arguments and all readable ifcfg inputs 
 case-sensitive backup suffix exclusions) are checked against the proposed pins. Conflicts or unfamiliar inputs
 are refused. Thus retained keyfiles and interfaces without converted profiles keep their existing helper naming.
 The complete stock `71-biosdevname.rules` program is allowed only with exactly one `biosdevname=0` argument in
-`/proc/cmdline`; enabled, absent or ambiguous settings refuse conversion. Formatting outside quoted values is
-ignored when recognizing that rule; changed conditions, programs or extra assignments are refused.
+`/proc/cmdline`; enabled, absent, bare or duplicate settings refuse conversion. Command lines containing
+quotes or backslashes are conservatively refused, including those in unrelated parameters. Only the observed
+stock rule forms are recognized (ignoring leading/trailing line whitespace, blank lines and full-line comments);
+changed token boundaries, quotes, conditions, programs or extra assignments are refused.
 Modified helper rules or an owner's copy in `/etc`, `/run` or `/usr/local/lib` are refused. Rules are read from `/etc`, `/run`, `/usr/local/lib`, `/usr/lib` and `/lib` under
 `udev/rules.d`, with earlier directories overriding equal basenames (including `/dev/null` masks). Both the live and persistent rule sets are validated: `/run` overrides cannot
 hide assignments that reappear after reboot. The generated pin also matches

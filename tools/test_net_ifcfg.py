@@ -589,4 +589,36 @@ msg, kf, left, out = run({"ifcfg-eth0": KS}, cmdline="biosdevname=1", udev={
     "/run/udev/rules.d/71-biosdevname.rules": None,
     "/usr/lib/udev/rules.d/71-biosdevname.rules": BIOS})
 case("runtime mask cannot hide enabled persistent biosdevname", untouched(msg, kf, left))
+
+# Unsupported cmdline syntax is refused conservatively, even when biosdevname-like text
+# occurs only inside an unrelated quoted value. Exercise live and reboot-persistent checks.
+cmdlines = [
+    'biosdevname=0 "biosdevname=1"', '"biosdevname=0"', 'biosdevname="0"',
+    "biosdevname='0'", 'biosdevname=0 biosdevname', 'biosdevname biosdevname=0',
+    'biosdevname=0 biosdevname=0', 'biosdevname=0 note="biosdevname=1"',
+    'note="biosdevname=0"', 'biosdevname=0 note="unterminated',
+    'biosdevname=0 note=escaped' + chr(92) + ' value',
+]
+mutations = [
+    BIOS.replace('GOTO=', 'GO TO='),
+    BIOS.replace('ENV{UDEV_BIOSDEVNAME}=="0", GOTO=', 'ENV{UDEV_BIOSDEVNAME}=="0", GO TO='),
+    BIOS.replace('ENV{UDEV_BIOSDEVNAME}', 'ENV{UDEV_ BIOSDEVNAME}'),
+    BIOS.replace('=="0"', '= ="0"'),
+    BIOS.replace('=="0"', '=="0'),
+    BIOS.replace('=="0"', '=="' + chr(92) + '0"'),
+    BIOS.replace('ACTION!="add"', 'ACTION=="add"'),
+    BIOS.replace('/sbin/biosdevname', '/opt/biosdevname'),
+    BIOS + 'NAME="lan0"\n',
+    BIOS.replace('LABEL="netdevicename_end"', 'LA BEL="netdevicename_end"'),
+    BIOS.replace('IMPORT{cmdline}', 'IM PORT{cmdline}'),
+]
+for persistent in (False, True):
+    for cmdline, rules in ([(c, BIOS) for c in cmdlines] +
+                           [('biosdevname=0', r) for r in mutations]):
+        udev = {"/usr/lib/udev/rules.d/71-biosdevname.rules": rules}
+        if persistent:
+            udev["/run/udev/rules.d/71-biosdevname.rules"] = None
+        msg, kf, left, out = run({"ifcfg-eth0": KS}, cmdline=cmdline, udev=udev)
+        case(f"biosdevname refusal preserves files (persistent={persistent}, {cmdline!r}, {rules!r})",
+             untouched(msg, kf, left) and refused(msg, "biosdevname") and not run.links)
 sys.exit(0 if all(cases) else 1)
