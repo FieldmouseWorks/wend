@@ -237,6 +237,55 @@ class ResolverTests(unittest.TestCase):
         self.assertNotIn(walk.check.compile_step(steps[0], adapter, "alma10"), downloads)
         self.assertIn(walk.check.compile_step(steps[1], adapter, "alma10"), downloads)
 
+    def test_download_classification_matches_default_and_override_hops(self):
+        import copy
+        import tomllib
+        import walk
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(repo + "/adapters/debian.toml", "rb") as f:
+            adapter = tomllib.load(f)
+        for entry in (None, "default", {}, {"upgrade": ["echo override"]}):
+            with self.subTest(entry=entry):
+                w = walk.Walk.__new__(walk.Walk)
+                w.adapter = copy.deepcopy(adapter)
+                if entry is None:
+                    w.adapter["releases"].pop("lenny", None)
+                else:
+                    w.adapter["releases"]["lenny"] = entry
+                commands = w.hop_cmds("lenny", [])
+                downloads = w.download_commands("lenny", [])
+                expected = entry["upgrade"] if isinstance(entry, dict) and "upgrade" in entry else adapter["hop"]["upgrade"]
+                variables = walk.backends.of(w.adapter).hop_vars(w.adapter, "lenny")
+                for c in expected:
+                    compiled = walk.fill(c, variables)
+                    self.assertIn(compiled, commands)
+                    self.assertIn(compiled, downloads)
+
+    def test_symlinks_and_command_replacements_allow_later_commands(self):
+        with tempfile.TemporaryDirectory() as root:
+            os.mkdir(root + "/etc")
+            path = root + "/etc/resolv.conf"
+            box = sandbox.Box(root)
+            for target in ("../run/resolv.conf", "/run/resolv.conf", "missing"):
+                for created_by_command in (False, True):
+                    with self.subTest(target=target, created=created_by_command):
+                        if os.path.lexists(path):
+                            os.unlink(path)
+                        if created_by_command:
+                            with open(path, "wb") as f:
+                                f.write(sandbox.RESOLV_CONF)
+                            with box.resolver(downloads=True):
+                                os.unlink(path)
+                                os.symlink(target, path)
+                        else:
+                            os.symlink(target, path)
+                        with patch.object(sandbox.Path, "read_bytes", side_effect=AssertionError("resolver read")), \
+                                patch.object(box, "_run", return_value=(0, "ran")) as run:
+                            self.assertEqual(box.run("check"), (0, "ran"))
+                            self.assertEqual(box.run("packages", downloads=True), (0, "ran"))
+                            self.assertEqual(run.call_count, 2)
+                        self.assertEqual(os.readlink(path), target)
+
     def test_only_downloads_borrow_host_dns_and_restore_on_failure(self):
         with tempfile.TemporaryDirectory() as root:
             os.mkdir(root + "/etc")
@@ -274,9 +323,9 @@ class ResolverTests(unittest.TestCase):
             self.assertEqual(open(path, "rb").read(), b"nameserver 10.0.0.53\n")
             os.unlink(path)
             os.symlink("/etc/resolv.conf", path)
-            with self.assertRaises(RuntimeError):
+            with patch.object(sandbox.Path, "read_bytes", side_effect=AssertionError("read through symlink")):
                 with box.resolver(downloads=True):
-                    self.fail("followed symlink")
+                    self.assertTrue(os.path.islink(path))
 
 
 result = unittest.TextTestRunner().run(unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(c) for c in (WorkDirTests, VMWorkDirTests, ResolverTests)))

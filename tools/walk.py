@@ -100,7 +100,7 @@ class Walk:
 
     def download_commands(self, hop, fixes):
         h, v = self.adapter["hop"], backends.of(self.adapter).hop_vars(self.adapter, hop)
-        rel = self.adapter["releases"][hop]
+        rel = self.adapter["releases"].get(hop)
         upgrade = rel.get("upgrade", h["upgrade"]) if isinstance(rel, dict) else h["upgrade"]
         commands = [h["refresh"], *upgrade, *h.get("kernel_after", [])]
         out = {fill(c, v) for c in commands}

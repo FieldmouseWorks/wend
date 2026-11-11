@@ -147,12 +147,18 @@ class Box:
 
     @contextmanager
     def resolver(self, downloads=False):
-        # Never follow a box symlink into the host. Only package commands borrow DNS.
+        # Ordinary commands use the root's resolver without host-side inspection.
+        if not downloads:
+            yield
+            return
+        # Never follow a box symlink into the host. Leave guest-managed resolvers alone.
         path = os.path.join(self.root, "etc", "resolv.conf")
         if os.path.realpath(os.path.dirname(path)) != os.path.dirname(path):
-            raise RuntimeError("box etc must be a plain directory")
+            yield
+            return
         if os.path.lexists(path) and not stat.S_ISREG(os.lstat(path).st_mode):
-            raise RuntimeError("box resolv.conf must be a plain file")
+            yield
+            return
         before = Path(path).read_bytes() if os.path.exists(path) else None
         data = Path("/etc/resolv.conf").read_bytes() if downloads else None
         if data is not None:
