@@ -4,10 +4,11 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -63,6 +64,34 @@ fn word<'a>(v: &'a toml::Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| format!("missing {key}").into())
 }
 
+/// As tools/shelter.py keeps_runtimes_on: the last release the route boots into
+/// that still ships a Python 2.
+fn keeps_runtimes_on<'a>(adapter: &toml::Value, hops: &'a [String], from: &'a str) -> &'a str {
+    let skip: Vec<&str> = adapter
+        .get("may_skip")
+        .and_then(toml::Value::as_array)
+        .map(|a| a.iter().filter_map(toml::Value::as_str).collect())
+        .unwrap_or_default();
+    let mut keeps = from;
+    for h in hops {
+        if skip.contains(&h.as_str()) {
+            continue;
+        }
+        let py2 = adapter
+            .get("runtimes")
+            .and_then(|r| r.get(h))
+            .and_then(|r| r.get("python2"))
+            .and_then(toml::Value::as_array)
+            .is_some_and(|v| !v.is_empty());
+        if py2 {
+            keeps = h;
+        } else {
+            break;
+        }
+    }
+    keeps
+}
+
 fn plan(root: &Path) -> Result<Vec<Replay>> {
     let routes = docs(root, "routes", false)?;
     let boxes = docs(root, "boxes", true)?;
@@ -106,6 +135,32 @@ fn plan(root: &Path) -> Result<Vec<Replay>> {
                 all_hops.iter().position(|h| h == start).map(|i| &all_hops[i + 1..])
             };
             if let Some(remaining) = remaining.filter(|h| !h.is_empty()) {
+                // tools/vm.py builds a box's shelter only on the route's own
+                // start release, and refuses any other box that would reach the
+                // hop dropping Python 2. Such pairings cannot run, so they are
+                // not part of the suite (the box still counts toward the routes
+                // it can start).
+                if box_doc
+                    .get("shelter")
+                    .and_then(toml::Value::as_table)
+                    .is_some_and(|t| !t.is_empty())
+                {
+                    let from = word(&route, "from")?;
+                    let keeps = keeps_runtimes_on(&adapter, &all_hops, from);
+                    let drop = if keeps == word(&route, "to")? {
+                        None
+                    } else if keeps == from {
+                        all_hops.first()
+                    } else {
+                        all_hops
+                            .iter()
+                            .position(|h| h == keeps)
+                            .and_then(|i| all_hops.get(i + 1))
+                    };
+                    if drop.is_some_and(|d| remaining.contains(d)) && (keeps != from || start != from) {
+                        continue;
+                    }
+                }
                 matched = true;
                 let uefi = adapter
                     .get("releases")
@@ -207,6 +262,64 @@ impl Lab {
         }
         Ok(String::from_utf8(output.stdout)?)
     }
+    /// Lock for one replay identity, in the lab's queue directory.
+    fn claim(&self, owner: &str) -> Result<fs::File> {
+        let lab = std::env::var("WEND_LAB").unwrap_or_else(|_| "/data/wend-lab".into());
+        let dir = Path::new(&lab).join("queue");
+        fs::create_dir_all(&dir)?;
+        let name: String = Sha256::digest(owner.as_bytes())
+            .iter()
+            .take(12)
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join(format!(".proof-claim-{name}")))?;
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        Ok(file)
+    }
+    /// Like call, but the child keeps `claim` held until it exits.
+    fn call_holding(&self, args: &[&str], claim: &fs::File) -> Result<String> {
+        use std::os::unix::process::CommandExt;
+        let fd = claim.as_raw_fd();
+        let mut command = Command::new("python3");
+        command.arg("-P").arg(&self.runner).args(args);
+        unsafe {
+            command.pre_exec(move || {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let output = command.output()?;
+        if !output.status.success() {
+            return Err(format!(
+                "lab {}: {}{}",
+                args[0],
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .into());
+        }
+        Ok(String::from_utf8(output.stdout)?)
+    }
+    /// Ask the queue for a worker, detached so it outlives this adapter. The
+    /// worker exits at once when one already holds its lock.
+    fn wake(&self) {
+        let _ = Command::new("setsid")
+            .args(["--fork", "python3", "-P"])
+            .arg(&self.runner)
+            .arg("worker")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
     fn entries(&self) -> Result<Vec<Value>> {
         Ok(serde_json::from_str(&self.call(&["queue", "--json"])?)?)
     }
@@ -220,39 +333,67 @@ impl Lab {
             replay.box_id,
             replay.flags.join(" ")
         );
-        let mut entries = self.entries()?;
-        if !entries
-            .iter()
-            .any(|e| e["by"] == owner && ["queued", "running", "done"].iter().any(|s| e["state"] == *s))
-        {
-            if STOP.load(Ordering::Relaxed) {
-                return Err("proof stopped before enqueue".into());
+        // One claim per replay identity: the lock is held from the lookup
+        // through the enqueue child's exit (the child inherits it, so it
+        // outlives this process), so concurrent or replacement adapters see
+        // the entry the child persists instead of enqueuing a twin.
+        let claim = self.claim(&owner)?;
+        let adoptable = |entries: &[Value]| {
+            entries
+                .iter()
+                .find(|e| e["by"] == owner && ["queued", "running", "done"].iter().any(|s| e["state"] == *s))
+                .and_then(|e| e["id"].as_str().map(str::to_owned))
+        };
+        let id = match adoptable(&self.entries()?) {
+            Some(id) => id,
+            None => {
+                if STOP.load(Ordering::Relaxed) {
+                    return Err("proof stopped before enqueue".into());
+                }
+                let known: BTreeSet<String> = self
+                    .entries()?
+                    .iter()
+                    .filter_map(|e| e["id"].as_str().map(str::to_owned))
+                    .collect();
+                let mut args = vec![
+                    "enqueue",
+                    "replay",
+                    &replay.route,
+                    &replay.box_id,
+                    "--sha",
+                    head,
+                    "--pr",
+                    number,
+                    "--by",
+                    &owner,
+                ];
+                let flags = replay.flags.join(" ");
+                if !flags.is_empty() {
+                    args.extend(["--vm-flags", &flags]);
+                }
+                let output = self.call_holding(&args, &claim)?;
+                println!("{output}");
+                // Follow exactly the job this attempt created, whatever state
+                // it already reached; the queue line names it.
+                let named = output
+                    .split_whitespace()
+                    .find_map(|w| w.strip_suffix(':').filter(|id| id.matches('-').count() >= 3))
+                    .map(str::to_owned);
+                let fresh: Vec<String> = self
+                    .entries()?
+                    .iter()
+                    .filter(|e| e["by"] == owner)
+                    .filter_map(|e| e["id"].as_str().map(str::to_owned))
+                    .filter(|id| !known.contains(id))
+                    .collect();
+                named
+                    .filter(|id| fresh.contains(id))
+                    .or_else(|| fresh.first().cloned())
+                    .ok_or("enqueued job is absent")?
             }
-            let mut args = vec![
-                "enqueue",
-                "replay",
-                &replay.route,
-                &replay.box_id,
-                "--sha",
-                head,
-                "--pr",
-                number,
-                "--by",
-                &owner,
-            ];
-            let flags = replay.flags.join(" ");
-            if !flags.is_empty() {
-                args.extend(["--vm-flags", &flags]);
-            }
-            let output = self.call(&args)?;
-            println!("{output}");
-            entries = self.entries()?;
-        }
-        let entry = entries
-            .iter()
-            .find(|e| e["by"] == owner && ["queued", "running", "done"].iter().any(|s| e["state"] == *s))
-            .ok_or("enqueued job is absent")?;
-        let id = entry["id"].as_str().ok_or("lab entry has no id")?.to_owned();
+        };
+        drop(claim);
+        let mut woken: Option<Instant> = None;
         loop {
             let entries = self.entries()?;
             let entry = entries.iter().find(|e| e["id"] == id).ok_or("lab job disappeared")?;
@@ -260,6 +401,14 @@ impl Lab {
             if !["queued", "running"].contains(&state) {
                 let file = entry["verdict"].as_str().ok_or("job ended without a verdict file")?;
                 return Ok((serde_json::from_str(&fs::read_to_string(file)?)?, file.to_owned()));
+            }
+            // The queue persists a job before it starts a worker, and workers
+            // die with their host: have one look at the queue now and then.
+            // It takes the queue's worker lock itself, so a live worker makes
+            // this a no-op and slot ownership stays with the queue.
+            if woken.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) && !STOP.load(Ordering::Relaxed) {
+                self.wake();
+                woken = Some(Instant::now());
             }
             if STOP.load(Ordering::Relaxed) {
                 let _ = self.call(&["cancel", &id]);

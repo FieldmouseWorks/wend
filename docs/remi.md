@@ -112,14 +112,14 @@ cargo build --release --locked --manifest-path "$trusted/client/Cargo.toml" --bi
 The trusted binary enumerates the atlas at the requested head: every route on every same-family box that starts
 at its `from` or joins at an intermediate hop, using the adapter's `joins` mapping. It runs each pair on BIOS and,
 when that release's installer has `uefi = true`, on UEFI. An empty suite or a route with no compatible box refuses
-the proof. `wend-lab-proof --plan ATLAS` prints the complete serial suite without starting anything. Other modes
+the proof. A box with a `[shelter]` plan is left out of every pairing `tools/vm.py` refuses (it builds a shelter only on the route's own start release, and only where that release keeps the runtimes), so those boxes join no intermediate route that reaches the Python 2 drop. `wend-lab-proof --plan ATLAS` prints the complete serial suite without starting anything. Other modes
 (relocation, alternate layouts, SELinux and client rehearsals) remain additional explicitly requested lab jobs.
 
 Each replay goes through `remi.py enqueue` and the existing slots, shim coordination, origin check and per-replay
 eight-hour deadline. The adapter stays in the foreground until the queue entry ends. Its stable owner field names
 the PR, head, route, box and flags, so a replacement adapter adopts the same queued/running/completed proof rather
 than enqueueing it again. SIGTERM asks the queue to cancel its active entry and waits for it to end. A cancelled or
-refused queue entry is not adopted by the next invocation. The machine's `proofTimeoutMinutes` for this repo must
+refused queue entry is not adopted by the next invocation. A per-identity lock in the queue directory, which the enqueue child inherits, makes claiming an existing entry or creating one atomic, and the adapter follows the exact job it created in whatever state it reaches. While it waits it starts the queue's worker (a no-op when one holds the worker lock) about once a minute, so an adopted entry the worker never started still runs. The machine's `proofTimeoutMinutes` for this repo must
 cover the serial suite (eight hours per entry at the queue's worst case), plus time waiting for other lab work;
 that limit does not extend the steward's repair and judge jobs.
 

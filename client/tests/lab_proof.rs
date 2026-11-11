@@ -56,15 +56,25 @@ impl Fixture {
         fs::write(
             dir.join("remi.py"),
             r#"
-import json, pathlib, sys
+import json, pathlib, sys, time
 root = pathlib.Path(__file__).parent
 entries = json.loads((root/'queue.json').read_text())
 control = json.loads((root/'control.json').read_text())
 a = sys.argv[1:]
 if a[0] == 'queue':
     print(json.dumps(entries))
+elif a[0] == 'worker':
+    with open(root/'wakes', 'a') as w: w.write('x')
+    if control.get('worker_runs'):
+        for e in entries:
+            if e['state'] == 'queued': e['state'] = 'done'
+        (root/'queue.json').write_text(json.dumps(entries))
 elif a[0] == 'enqueue':
     def opt(k): return a[a.index(k)+1]
+    with open(root/'enqueues', 'a') as w: w.write('x')
+    if control.get('slow'):
+        time.sleep(1.5)
+    entries = json.loads((root/'queue.json').read_text())
     i = str(len(entries)+1)
     sha, route, box = opt('--sha'), a[2], a[3]
     bad = control.get('bad')
@@ -79,9 +89,11 @@ elif a[0] == 'enqueue':
     if bad == 'fail': verdict['result'] = 'fail'; verdict['commands'][0]['rc'] = 1
     path = root/('verdict-'+i+'.json')
     path.write_text(json.dumps(verdict))
-    entries.append({'id':i,'by':opt('--by'),'state':'queued' if control.get('hold') else 'done','verdict':str(path)})
+    jid = '20260101-000000-replay-%04x' % int(i)
+    state = 'queued' if control.get('hold') else control.get('end', 'done')
+    entries.append({'id':jid,'by':opt('--by'),'state':state,'verdict':str(path)})
     (root/'queue.json').write_text(json.dumps(entries))
-    print('queued '+i)
+    print('queued '+jid+': replay x')
 elif a[0] == 'cancel':
     entry = next(e for e in entries if e['id'] == a[1])
     entry['state'] = 'cancelled'
@@ -101,6 +113,7 @@ else: raise SystemExit(2)
             .arg(self.dir.join("head"))
             .env("PROOF_HEAD", &self.head)
             .env("PROOF_NUMBER", "5")
+            .env("WEND_LAB", self.dir.join("lab"))
             .env("PROOF_SUMMARY", self.dir.join("summary.md"))
             .output()
             .unwrap()
@@ -167,6 +180,7 @@ fn stopping_cancels_the_queue_entry_and_a_retry_does_not_adopt_it() {
         .arg(f.dir.join("head"))
         .env("PROOF_HEAD", &f.head)
         .env("PROOF_NUMBER", "5")
+        .env("WEND_LAB", f.dir.join("lab"))
         .env("PROOF_SUMMARY", f.dir.join("summary.md"))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -211,4 +225,158 @@ fn stopping_cancels_the_queue_entry_and_a_retry_does_not_adopt_it() {
         4,
         "retry enqueues a replacement and the remaining two suite entries"
     );
+}
+
+fn spawn(f: &Fixture) -> std::process::Child {
+    use std::process::Stdio;
+    Command::new(env!("CARGO_BIN_EXE_wend-lab-proof"))
+        .arg(f.dir.join("remi.py"))
+        .arg(f.dir.join("head"))
+        .env("PROOF_HEAD", &f.head)
+        .env("PROOF_NUMBER", "5")
+        .env("WEND_LAB", f.dir.join("lab"))
+        .env("PROOF_SUMMARY", f.dir.join("summary.md"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap()
+}
+
+fn wait_for(path: PathBuf) {
+    for _ in 0..200 {
+        if path.exists() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("{} never appeared", path.display());
+}
+
+#[test]
+fn concurrent_invocations_share_one_job_per_replay() {
+    let f = Fixture::new();
+    fs::write(f.dir.join("control.json"), json!({"slow":true}).to_string()).unwrap();
+    let mut a = spawn(&f);
+    let mut b = spawn(&f);
+    assert!(a.wait().unwrap().success());
+    assert!(b.wait().unwrap().success());
+    assert_eq!(f.queue().len(), 3, "each of the three replays is enqueued once");
+    assert_eq!(fs::read_to_string(f.dir.join("enqueues")).unwrap().len(), 3);
+}
+
+#[test]
+fn a_replacement_waits_for_the_enqueue_child_of_a_dead_adapter() {
+    let f = Fixture::new();
+    fs::write(f.dir.join("control.json"), json!({"slow":true}).to_string()).unwrap();
+    let mut a = spawn(&f);
+    wait_for(f.dir.join("enqueues"));
+    a.kill().unwrap();
+    a.wait().unwrap();
+    assert!(f.invoke().status.success());
+    assert_eq!(f.queue().len(), 3, "the child's entry was adopted, not duplicated");
+    assert_eq!(fs::read_to_string(f.dir.join("enqueues")).unwrap().len(), 3);
+}
+
+#[test]
+fn adopting_an_unstarted_entry_wakes_the_queue_worker() {
+    let f = Fixture::new();
+    fs::write(f.dir.join("control.json"), json!({"hold":true}).to_string()).unwrap();
+    let mut a = spawn(&f);
+    wait_for(f.dir.join("queue.json").with_file_name("wakes"));
+    a.kill().unwrap();
+    a.wait().unwrap();
+    assert_eq!(f.queue().len(), 1);
+    assert_eq!(f.queue()[0]["state"], "queued");
+    fs::remove_file(f.dir.join("wakes")).unwrap();
+    // The first worker never ran it (interrupted enqueue, crashed worker):
+    // the replacement adopts the entry and must get a worker started.
+    fs::write(f.dir.join("control.json"), json!({"worker_runs":true}).to_string()).unwrap();
+    let out = f.invoke();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(f.dir.join("wakes").exists(), "adoption woke the worker");
+    assert_eq!(f.queue().iter().filter(|e| e["id"] == f.queue()[0]["id"]).count(), 1);
+    assert_eq!(f.queue().len(), 3);
+}
+
+#[test]
+fn a_job_that_ends_at_once_keeps_its_verdict_in_the_summary() {
+    for end in ["refused", "error", "cancelled"] {
+        let f = Fixture::new();
+        fs::write(f.dir.join("control.json"), json!({"end":end,"bad":"fail"}).to_string()).unwrap();
+        let out = f.invoke();
+        assert_eq!(out.status.code(), Some(1), "{end}");
+        let summary = fs::read_to_string(f.dir.join("summary.md")).unwrap();
+        assert!(!summary.contains("absent"), "{end}: {summary}");
+        assert!(
+            summary.contains("verdict-1.json") && summary.contains("FAILED"),
+            "{end}: {summary}"
+        );
+        assert_eq!(f.queue().len(), 1);
+    }
+}
+
+#[test]
+fn a_fresh_attempt_follows_its_own_job_not_an_older_terminal_one() {
+    let f = Fixture::new();
+    fs::write(
+        f.dir.join("control.json"),
+        json!({"end":"error","bad":"fail"}).to_string(),
+    )
+    .unwrap();
+    assert!(!f.invoke().status.success());
+    fs::write(f.dir.join("control.json"), "{}").unwrap();
+    assert!(f.invoke().status.success());
+    let q = f.queue();
+    assert_eq!(q.len(), 4, "the errored entry is not adopted; a new one is made");
+    assert_eq!(q[0]["state"], "error");
+}
+
+#[test]
+fn shelter_boxes_only_start_where_the_runner_can_build_them() {
+    let f = Fixture::new();
+    let root = f.dir.join("head");
+    fs::create_dir_all(root.join("boxes/f/s")).unwrap();
+    fs::write(
+        root.join("boxes/f/s/box.toml"),
+        "family='f'\nrelease='joined'\n[shelter.app]\nx=1\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("routes/f/from.toml"),
+        "family='f'\nfrom='old'\nto='new'\nhops=['mid','new']\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("adapters/f.toml"),
+        "[runtimes.mid]\npython2=[\"2.7\"]\n[runtimes.new]\npython2=[]\n[releases.old.install]\nuefi=true\n[releases.joined]\njoins='mid'\n",
+    )
+    .unwrap();
+    let plan = |dir: &PathBuf| {
+        let o = Command::new(env!("CARGO_BIN_EXE_wend-lab-proof"))
+            .arg("--plan")
+            .arg(dir)
+            .output()
+            .unwrap();
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let listed = plan(&root);
+    assert!(listed.contains("f/a") && listed.contains("f/b"), "{listed}");
+    assert!(
+        !listed.contains("f/s"),
+        "a shelter box joined mid-route cannot run: {listed}"
+    );
+    // A shelter box on the route's own start is runnable.
+    fs::write(
+        root.join("boxes/f/s/box.toml"),
+        "family='f'\nrelease='old'\n[shelter.app]\nx=1\n",
+    )
+    .unwrap();
+    // ... unless the route's own start already keeps a Python 2 the shelter replaces.
+    assert!(!plan(&root).contains("f/s"), "the route keeps Python 2 past its start");
+    fs::write(
+        root.join("adapters/f.toml"),
+        "[runtimes.mid]\npython2=[]\n[runtimes.new]\npython2=[]\n[releases.old.install]\nuefi=true\n[releases.joined]\njoins='mid'\n",
+    )
+    .unwrap();
+    assert!(plan(&root).contains("f/s"));
 }
