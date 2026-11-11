@@ -73,8 +73,10 @@ don't widen `fires_on`.
 
 The gate judges a PR with the base branch's tools and adapters, so a PR that changes them is never exercised by CI.
 remi, the maintainer's lab machine, is where they get tested: VM replays on real installs with real reboots
-(`tools/vm.py`, SPEC.md "VM tier"), or whatever else the change needs. remi only runs what a maintainer starts. It is
-never a CI runner, and nothing a PR does can reach it.
+(`tools/vm.py`, SPEC.md "VM tier"), or whatever else the change needs. remi only runs maintainer-authorized lab work.
+It is never a GitHub Actions runner for this repository. The steward may start the configured command proof after
+its trusted-author and review gates; the proof command and runner are built/read from the default branch, never
+from the PR's tools. See [the serial proof command](docs/remi.md#serial-command-proofs).
 
 The `remi-proof` commit status carries the verdict to GitHub (`.github/workflows/remi-proof.yml`). Most fix and route
 PRs pass at once: the gate's replays are their proof. A PR stays pending until someone with push access records remi's
@@ -89,6 +91,14 @@ verdict on its exact head commit when it:
 - or is labeled `needs-remi`, which a maintainer adds to any other PR that needs a real boot.
 
 Statuses belong to a commit, so every push is judged again from scratch.
+
+The steward's `proofRuns.remi-proof` uses `wend-lab-proof`: every route on every compatible box, including boxes
+joining partway along the route, on BIOS and on UEFI where the starting installer supports it. The lab queue still
+owns VM ordering. The command refuses empty, dirty, wrong-head, partial or failed evidence and writes a summary;
+burrow-proof posts the summary and the status on `PROOF_HEAD`. A failed command goes to the usual red-check repair
+job, which reads the proof log. There is no model session watching the replays. The automatic suite does not claim
+to prove other VM modes such as relocation, SELinux or an upgrade rehearsal; those remain additional lab jobs when
+the change needs them.
 
 To record a verdict, check that the run's `run.json` `head` is the PR's current head and not dirty, then run the
 `remi-verdict` workflow (Actions, remi-verdict, Run workflow). It needs write access, refuses a commit that isn't the

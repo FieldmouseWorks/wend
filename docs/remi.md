@@ -97,6 +97,39 @@ isn't the whole review: read the generated checks in the verdict, because a chec
 
 Archiving isn't a job. The hourly archive cycle on remi (docs/archive.md, "Keeping it current") owns it.
 
+## Serial command proofs
+
+`client/src/bin/wend-lab-proof.rs` adapts the existing lab queue to a command proof. Build the binary and read
+`tools/remi.py` from a clean checkout of the trusted default branch. Pass the runner's path and the clean head
+worktree as its two arguments. `PROOF_HEAD`, `PROOF_NUMBER` and `PROOF_SUMMARY` are the burrow-proof contract;
+the command reads no token and never posts a GitHub verdict itself. For example, with those variables already set:
+
+```
+cargo build --release --locked --manifest-path "$trusted/client/Cargo.toml" --bin wend-lab-proof
+"$trusted/client/target/release/wend-lab-proof" "$trusted/tools/remi.py" "$head_worktree"
+```
+
+The trusted binary enumerates the atlas at the requested head: every route on every same-family box that starts
+at its `from` or joins at an intermediate hop, using the adapter's `joins` mapping. It runs each pair on BIOS and,
+when that release's installer has `uefi = true`, on UEFI. An empty suite or a route with no compatible box refuses
+the proof. `wend-lab-proof --plan ATLAS` prints the complete serial suite without starting anything. Other modes
+(relocation, alternate layouts, SELinux and client rehearsals) remain additional explicitly requested lab jobs.
+
+Each replay goes through `remi.py enqueue` and the existing slots, shim coordination, origin check and per-replay
+eight-hour deadline. The adapter stays in the foreground until the queue entry ends. Its stable owner field names
+the PR, head, route, box and flags, so a replacement adapter adopts the same queued/running/completed proof rather
+than enqueueing it again. SIGTERM asks the queue to cancel its active entry and waits for it to end. A cancelled or
+refused queue entry is not adopted by the next invocation. The machine's `proofTimeoutMinutes` for this repo must
+cover the serial suite (eight hours per entry at the queue's worst case), plus time waiting for other lab work;
+that limit does not extend the steward's repair and judge jobs.
+
+A pass requires all command exits to be zero, every run to say `pass`, its head to equal `PROOF_HEAD` with
+`dirty = false`, its box and firmware to match, and all expected hops (and a requested final prune) to be present
+and successful. Resumed and partial runs never pass. A failure stops the suite. The summary names every completed
+replay and its verdict file, command logs and run directories; full verdict JSON also stays in the command log.
+Exit 0 is a pass, 1 a failed proof, and 126 an interrupted adapter. The steward posts the summary and exact-head
+status through burrow-proof, and a red proof gets the same repair job as any red CI check.
+
 ## Disk
 
 VM runs fill remi's disk fast (about 200 GB a day in October 2026): every run directory keeps its hop disks, and every
