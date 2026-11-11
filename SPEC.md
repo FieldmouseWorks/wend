@@ -959,7 +959,10 @@ is recognized by its complete contents and kept enabled, preserving helper-manag
 Before conversion, its kernel `ifname=` arguments and all readable ifcfg inputs (using the helper's own
 case-sensitive backup suffix exclusions) are checked against the proposed pins. Conflicts or unfamiliar inputs
 are refused. Thus retained keyfiles and interfaces without converted profiles keep their existing helper naming.
-Modified rules or an owner's copy in `/etc`, `/run` or `/usr/local/lib` are refused. Rules are read from `/etc`, `/run`, `/usr/local/lib`, `/usr/lib` and `/lib` under
+The complete stock `71-biosdevname.rules` program is allowed only with exactly one `biosdevname=0` argument in
+`/proc/cmdline`; enabled, absent or ambiguous settings refuse conversion. Formatting outside quoted values is
+ignored when recognizing that rule; changed conditions, programs or extra assignments are refused.
+Modified helper rules or an owner's copy in `/etc`, `/run` or `/usr/local/lib` are refused. Rules are read from `/etc`, `/run`, `/usr/local/lib`, `/usr/lib` and `/lib` under
 `udev/rules.d`, with earlier directories overriding equal basenames (including `/dev/null` masks). Both the live and persistent rule sets are validated: `/run` overrides cannot
 hide assignments that reappear after reboot. The generated pin also matches
 `Type=ether`. Leftover `.wend` temporary paths are refused, including dangling symlinks. Every profile is

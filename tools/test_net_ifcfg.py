@@ -557,4 +557,36 @@ for retained, allowed in ((KS.replace("eth0", "uplink").replace("12:34:56", "aa:
         udev={"/usr/lib/udev/rules.d/60-net.rules": RENAMER})
     case(f"retained helper input allowed={allowed}", (msg is None and bool(kf) and
          "etc/sysconfig/network-scripts/ifcfg-old.BAK" in left) if allowed else untouched(msg, kf, left))
+# Stock biosdevname-0.7.3-10.el9 from the failing booted proof.
+BIOS = '''
+SUBSYSTEM!="net", GOTO="netdevicename_end"
+ACTION!="add",    GOTO="netdevicename_end"
+NAME=="?*",       GOTO="netdevicename_end"
+ATTR{type}!="1",  GOTO="netdevicename_end"
+ENV{DEVTYPE}=="?*", GOTO="netdevicename_end"
+IMPORT{cmdline}="biosdevname"
+ENV{biosdevname}=="?*", ENV{UDEV_BIOSDEVNAME}="$env{biosdevname}"
+ENV{UDEV_BIOSDEVNAME}=="0", GOTO="netdevicename_end"
+ENV{UDEV_BIOSDEVNAME}=="1", GOTO="netdevicename_start"
+GOTO="netdevicename_end"
+LABEL="netdevicename_start"
+SUBSYSTEMS=="pci", PROGRAM="/sbin/biosdevname --smbios 2.6 --nopirq --policy physical -i %k", NAME="%c"  OPTIONS+="string_escape=replace"
+LABEL="netdevicename_end"
+'''
+for cmdline, allowed in (("biosdevname=0 net.ifnames=0", True), ("biosdevname=1", False), ("", False),
+                         ("biosdevname=0 biosdevname=1", False)):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, cmdline=cmdline, udev={
+        "/usr/lib/udev/rules.d/60-net.rules": RENAMER,
+        "/usr/lib/udev/rules.d/71-biosdevname.rules": BIOS,
+        "/usr/lib/udev/rules.d/80-net-setup-link.rules": DISPATCHER})
+    case(f"stock naming stack with cmdline {cmdline!r}", (msg is None and bool(kf)) if allowed else
+         untouched(msg, kf, left) and refused(msg, "biosdevname=0"))
+for changed in (BIOS + 'NAME="lan0"\n', BIOS.replace('ENV{UDEV_BIOSDEVNAME}=="0"', 'ENV{UDEV_BIOSDEVNAME}=="9"')):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, cmdline="biosdevname=0",
+        udev={"/usr/lib/udev/rules.d/71-biosdevname.rules": changed})
+    case("modified biosdevname rules are refused even with biosdevname=0", untouched(msg, kf, left))
+msg, kf, left, out = run({"ifcfg-eth0": KS}, cmdline="biosdevname=1", udev={
+    "/run/udev/rules.d/71-biosdevname.rules": None,
+    "/usr/lib/udev/rules.d/71-biosdevname.rules": BIOS})
+case("runtime mask cannot hide enabled persistent biosdevname", untouched(msg, kf, left))
 sys.exit(0 if all(cases) else 1)

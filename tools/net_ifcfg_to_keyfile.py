@@ -44,6 +44,22 @@ LINK_DISPATCHER = [
     'NAME=="", ENV{ID_NET_NAME}!="", NAME="$env{ID_NET_NAME}"',
     'LABEL="net_setup_link_end"',
 ]
+# biosdevname-0.7.3-10.el9, complete uncommented rule program observed in the booted proof.
+BIOS_RULES = '''
+SUBSYSTEM!="net", GOTO="netdevicename_end"
+ACTION!="add",    GOTO="netdevicename_end"
+NAME=="?*",       GOTO="netdevicename_end"
+ATTR{type}!="1",  GOTO="netdevicename_end"
+ENV{DEVTYPE}=="?*", GOTO="netdevicename_end"
+IMPORT{cmdline}="biosdevname"
+ENV{biosdevname}=="?*", ENV{UDEV_BIOSDEVNAME}="$env{biosdevname}"
+ENV{UDEV_BIOSDEVNAME}=="0", GOTO="netdevicename_end"
+ENV{UDEV_BIOSDEVNAME}=="1", GOTO="netdevicename_start"
+GOTO="netdevicename_end"
+LABEL="netdevicename_start"
+SUBSYSTEMS=="pci", PROGRAM="/sbin/biosdevname --smbios 2.6 --nopirq --policy physical -i %k", NAME="%c"  OPTIONS+="string_escape=replace"
+LABEL="netdevicename_end"
+'''.strip().splitlines()
 SYS = "/sys/class/net"
 SAVED = "/var/lib/wend/saved"
 NETWORK = "/etc/sysconfig/network"
@@ -264,6 +280,12 @@ def plan(path, net, resolv):
     return c, dev, hw, args
 
 
+def rule_tokens(lines):
+    # Ignore formatting outside quoted values, preserving program arguments and matching strings exactly.
+    return ["".join(token if token.startswith('"') else re.sub(r"\s+", "", token)
+                    for token in re.findall(r'"[^"\n]*"|[^"\n]+', line)) for line in lines]
+
+
 def check_udev(path):
     helper = False
     # /run overrides disappear at reboot. Both the live and persistent rule sets must be safe.
@@ -280,6 +302,11 @@ def check_udev(path):
                 except (OSError, UnicodeDecodeError) as e:
                     fail(f"{path}: cannot inspect {rule_path}: {e}")
                 rules = [line.strip() for line in text.replace("\\\n", "").splitlines() if line.strip()]
+                if name == "71-biosdevname.rules" and rule_tokens(rules) == rule_tokens(BIOS_RULES):
+                    options = [w for w in open(CMDLINE).read().split() if w.startswith("biosdevname=")]
+                    if options != ["biosdevname=0"]:
+                        fail(f"{path}: {rule_path} needs an unambiguous biosdevname=0 kernel argument")
+                    continue
                 if rules == LINK_DISPATCHER:
                     continue
                 if name == "60-net.rules" and rules == [IFCFG_RENAMER] and directory in UDEV_DIRS[3:]:
