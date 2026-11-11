@@ -379,5 +379,13 @@ check(rc == 0 and "--user" in units and f"{w}/src/wend-runner/tools/remi.py -P" 
 rc, out = remi("wake", env=dict(UNIT, FAKE_UNIT_FAIL="1"))
 check(rc != 0 and "cannot start the queue worker unit" in out and "no bus" in out, "a unit that will not start is reported")
 
+rc, out = remi("wake", env=dict(UNIT, WEND_LAB_WORKER_RUNNER=f"{w}/nowhere/remi.py"))
+check(rc != 0 and "no stable queue worker" in out, "a configured worker file that is missing is refused before any unit starts")
+os.remove(f"{w}/src/wend-runner/tools/remi.py")
+before = open(f"{w}/units").read()
+rc, out = remi("wake", env=UNIT)
+check(rc != 0 and "no stable queue worker" in out and open(f"{w}/units").read() == before,
+      "with no stable checkout a caller's own copy never becomes the worker")
+
 print(f"{sum(results)}/{len(results)} passed")
 sys.exit(0 if all(results) else 1)

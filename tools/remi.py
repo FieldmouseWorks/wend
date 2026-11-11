@@ -322,10 +322,11 @@ def start_worker():
     when it ends, and that must never kill the worker or a guest of another job. A live worker holds worker.lock, which
     the worker itself takes, so a second start is a no-op; the unit runs the stable runner checkout, not the caller's."""
     os.makedirs(QUEUE, exist_ok=True)
-    runner = os.environ.get("WEND_LAB_WORKER_RUNNER")
-    if not runner:
-        stable = os.path.join(SRC, "wend-runner", "tools", "remi.py")
-        runner = stable if os.path.isfile(stable) else os.path.abspath(__file__)
+    runner = os.environ.get("WEND_LAB_WORKER_RUNNER") or os.path.join(SRC, "wend-runner", "tools", "remi.py")
+    if TEST and not os.environ.get("WEND_LAB_WORKER_RUNNER"):
+        runner = os.path.abspath(__file__)
+    elif not os.path.isfile(runner):  # never fall back to this file: a proof's tools checkout goes away with it
+        raise Refused(f"no stable queue worker at {runner}: refusing to start one from a transient checkout")
     if TEST:
         with open(os.path.join(QUEUE, "worker.log"), "a") as log:
             subprocess.Popen([sys.executable, "-P", "-u", runner, "worker"], stdin=subprocess.DEVNULL,
