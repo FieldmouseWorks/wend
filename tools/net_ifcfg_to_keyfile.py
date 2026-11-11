@@ -301,7 +301,12 @@ def check_udev(path):
                 seen.add(name)
                 rule_path = os.path.join(directory, name)
                 try:
-                    text = "\n".join(line for line in naming_text(rule_path).split("\n") if not line.lstrip().startswith("#"))
+                    raw = naming_text(rule_path)
+                    # Refuse continuations before comments or blank lines can hide fragments
+                    # or a pending EOF line. udev does not simply delete backslash-newline.
+                    if chr(92) in raw:
+                        fail(f"{rule_path}: unsupported continuation or escape in naming rule")
+                    text = "\n".join(line for line in raw.split("\n") if not line.lstrip().startswith("#"))
                 except (OSError, UnicodeDecodeError) as e:
                     fail(f"{path}: cannot inspect {rule_path}: {e}")
                 rules = [line.strip() for line in text.replace("\\\n", "").splitlines() if line.strip()]
@@ -421,7 +426,7 @@ def mac_pin(d, n):
         return None
     sections, at = {}, None
     try:
-        lines = open(os.path.join(d, n)).read().splitlines()
+        lines = naming_text(os.path.join(d, n)).split("\n")
     except (OSError, UnicodeDecodeError):
         return None
     for line in lines:

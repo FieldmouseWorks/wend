@@ -654,4 +654,40 @@ for ws in ("\u00a0", "\u2003", "\u2028", "\u2029", "\x85", "\v", "\f", "\r"):
                         udev=udev)
                     case(f"unsupported helper whitespace {ws!r} {key} retained={bool(suffix)} persistent={persistent}",
                          untouched(msg, kf, left) and not run.links)
+# udev trims continuation fragments and drops pending EOF lines: do not approximate it.
+bs = chr(92)
+continued = [
+    'NA' + bs + '\n  ME="lan0"\n',
+    'NAME' + bs + '\n  ="lan0"\n',
+    'SUBSYSTEM' + bs + '\n  =="net", NAME="lan0"\n',
+    'NA' + bs + '\n# comment\n  ME="lan0"\n',
+    'NA' + bs + '\n\n  ME="lan0"\n',
+    BIOS.rstrip() + bs + '\n',
+    BIOS.rstrip() + bs + '\n# trailing comment\n',
+    BIOS.rstrip() + bs,
+]
+for persistent in (False, True):
+    for rules in continued:
+        udev = {"/usr/lib/udev/rules.d/71-biosdevname.rules": rules}
+        if persistent:
+            udev["/run/udev/rules.d/71-biosdevname.rules"] = None
+        msg, kf, left, out = run({"ifcfg-eth0": KS}, cmdline="biosdevname=0", udev=udev)
+        case(f"rule continuation refused {persistent} {rules!r}",
+             untouched(msg, kf, left) and refused(msg, "unsupported continuation") and not run.links)
+
+for directory in ("/etc/systemd/network", "/run/systemd/network", "/usr/local/lib/systemd/network",
+                  "/usr/lib/systemd/network", "/lib/systemd/network"):
+    for match_type in ("", "Type=ether\n"):
+        for mac in ("52:54:00:12:34:56", "52:54:00:aa:bb:cc"):
+            pin = "[Match]\nMACAddress=" + mac + "\n" + match_type + "[Link]\nName=eth0\n"
+            for ws in ("\u00a0", "\u2003", "\u2028", "\u2029", "\x85", "\v", "\f", "\r"):
+                for bad in (ws + pin, pin.replace("Name=eth0", "Name=eth0" + ws),
+                            pin.replace("MACAddress=", "MACAddress" + ws + "="),
+                            pin.replace("\n", ws), pin + "# comment" + ws + "\n",
+                            pin + ws + "; comment\n", pin + ws + "\n"):
+                    msg, kf, left, out = run({"ifcfg-eth0": KS},
+                        link_dirs={directory: {"05-owner.link": bad}})
+                    case(f"unsafe pin bytes refused {directory} {match_type!r} {mac} {ws!r}",
+                         untouched(msg, kf, left) and refused(msg, "unsupported character")
+                         and not any(n.startswith("10-wend-") for n in run.links))
 sys.exit(0 if all(cases) else 1)
