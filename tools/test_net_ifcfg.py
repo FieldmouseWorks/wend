@@ -37,7 +37,7 @@ ON_NIC = "2: eth0    inet 10.0.2.20/24 brd 10.0.2.255 scope global noprefixroute
 
 
 def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=(), link_dirs=None, nics=None,
-        addrs=None, hostname=None):
+        addrs=None, hostname=None, symlinks=(), udev=None, write_error=False, cmdline=""):
     """Run the converter on a fresh root; return (exit message or None, {keyfile: nmcli args}, files left, printed).
     nics: {name: sysfs attributes} of the running NICs (a "device" link unless physical=False); addrs: {name: what
     `ip -o -4 addr show dev <name>` prints}."""
@@ -45,9 +45,13 @@ def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=()
     m = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
     loader.exec_module(m)
     with tempfile.TemporaryDirectory() as t:
-        for k in ("D", "K", "L", "SAVED", "NETWORK", "RESOLV", "SYS", "HOSTNAME"):
+        for k in ("D", "K", "L", "SAVED", "NETWORK", "RESOLV", "SYS", "HOSTNAME", "CMDLINE"):
             setattr(m, k, t + getattr(m, k))
         m.LINK_DIRS = tuple(t + d for d in m.LINK_DIRS)
+        m.UDEV_DIRS = tuple(t + d for d in m.UDEV_DIRS)
+        os.makedirs(os.path.dirname(m.CMDLINE), exist_ok=True)
+        with open(m.CMDLINE, "w") as out:
+            out.write(cmdline)
         os.makedirs(m.D)
         for d, names in [(m.K, keyfiles), (m.L, links), (t + "/usr/lib/systemd/network", vendor_links)] + [
                 (t + d, names) for d, names in (link_dirs or {}).items()]:
@@ -86,6 +90,25 @@ def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=()
                 if a != "physical":
                     with open(os.path.join(m.SYS, n, a), "w") as out:
                         out.write(x + "\n")
+        for relative in symlinks:
+            target = t + relative
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            os.symlink("/missing-wend-fixture", target)
+        for name, text in (udev or {}).items():
+            target = t + name if name.startswith("/") else os.path.join(m.UDEV_DIRS[0], name)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            if text is None:
+                os.symlink("/dev/null", target)
+                continue
+            with open(target, "w") as out:
+                out.write(text)
+        if write_error:
+            real_write = m.write
+            def broken_write(path, text, mode):
+                if path.endswith(".link"):
+                    raise OSError(28, "No space left on device")
+                real_write(path, text, mode)
+            m.write = broken_write
         path, msg, printed = os.environ["PATH"], None, io.StringIO()
         os.environ["PATH"] = f"{t}/bin:{path}"
         try:
@@ -101,15 +124,21 @@ def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=()
         if os.path.isdir(m.L):
             for n in sorted(os.listdir(m.L)):
                 f = os.path.join(m.L, n)
-                if os.path.isdir(f):  # a drop-in dir
+                if os.path.isdir(f) or os.path.islink(f):  # a drop-in dir or dangling link
                     continue
                 links[n] = (oct(os.stat(f).st_mode & 0o777), open(f).read())
         if os.path.isdir(m.K):
             for n in sorted(os.listdir(m.K)):
                 f = os.path.join(m.K, n)
+                if os.path.islink(f):
+                    continue
                 keyfiles[n] = (oct(os.stat(f).st_mode & 0o777), open(f).read().splitlines()[4:])  # after "[connection]", "--offline connection add"
         left = sorted(os.path.relpath(os.path.join(r, n), t).replace(t.lstrip("/") + "/", "")  # SAVED keeps the path
-                      for r, _, ns in os.walk(t) for n in ns if not r.startswith((f"{t}/bin", f"{t}/sys")))
+                      for r, _, ns in os.walk(t) for n in ns if not r.startswith((f"{t}/bin", f"{t}/sys", f"{t}/proc")))
+        run.udev = {os.path.relpath(os.path.join(d, n), t):
+                    (oct(os.stat(os.path.join(d, n)).st_mode & 0o777), open(os.path.join(d, n)).read())
+                    for d in m.UDEV_DIRS if os.path.isdir(d) for n in os.listdir(d)
+                    if os.path.isfile(os.path.join(d, n)) and not os.path.islink(os.path.join(d, n))}
         run.links = links
         return msg, keyfiles, left, printed.getvalue()
 
@@ -137,7 +166,7 @@ msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-lo": "DEVICE=lo\nIPADDR=127.0
 case("a kickstart static profile becomes the exact keyfile, pinned by MAC, the ifcfg saved",
      msg is None and kf == {"eth0.nmconnection": ("0o600", STATIC + ["ipv6.method", "ignore",
                                                                      "connection.autoconnect", "yes"])}
-     and run.links == {"10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\n\n[Link]\nName=eth0\n")}
+     and run.links == {"10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\nType=ether\n\n[Link]\nName=eth0\n")}
      and "var/lib/wend/saved/etc/sysconfig/network-scripts/ifcfg-eth0" in left
      and "etc/sysconfig/network-scripts/ifcfg-eth0" not in left and "etc/sysconfig/network-scripts/ifcfg-lo" in left)
 msg, kf, left, out = run({"ifcfg-eth0": GUI})
@@ -229,7 +258,7 @@ msg, kf, left, out = run({"ifcfg-eth0": STOCK}, nics={"eth0": NIC}, addrs={"eth0
 case("no HWADDR: the NIC named eth0 that has the static address now is pinned by its own MAC",
      msg is None and kf == {"eth0.nmconnection": ("0o600", STATIC + ["ipv6.method", "ignore",
                                                                      "connection.autoconnect", "yes"])}
-     and run.links == {"10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\n\n[Link]\nName=eth0\n")})
+     and run.links == {"10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\nType=ether\n\n[Link]\nName=eth0\n")})
 msg, kf, left, out = run({"ifcfg-eth0": STOCK}, nics={"eth0": {**NIC, "address": "52:54:00:AB:CD:EF"}},
                          addrs={"eth0": ON_NIC})
 case("no HWADDR: the running NIC's MAC is lower-cased",
@@ -270,7 +299,7 @@ case("two names pinned to one MAC are refused", refused(msg, "pin 52:54:00:12:34
 msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-eth0-dhcp": "DEVICE=eth0\nHWADDR=52:54:00:12:34:56\nBOOTPROTO=dhcp\n"
                           "ONBOOT=no\n"})
 case("two profiles for one NIC share its pin", msg is None and len(kf) == 2 and run.links == {
-    "10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\n\n[Link]\nName=eth0\n")})
+    "10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\nType=ether\n\n[Link]\nName=eth0\n")})
 msg, kf, left, out = run({"ifcfg-a": KS, "ifcfg-b": KS.replace("DEVICE=eth0", "DEVICE=eth1").replace("12:34:56", "12:34:57"),
                           "ifcfg-c": OLD_NIC})
 case("a conflict between profiles that aren't next to each other is refused",
@@ -283,7 +312,7 @@ msg, kf, left, out = run({"ifcfg-eth0": KS}, links={"10-anaconda-ifname-eth0.lin
 case("EL8's installer pin of the same MAC to the same name stands, and ours is written beside it",
      msg is None and list(kf) == ["eth0.nmconnection"] and run.links == {
          "10-anaconda-ifname-eth0.link": ("0o644", ANACONDA),
-         "10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\n\n[Link]\nName=eth0\n")})
+         "10-wend-eth0.link": ("0o644", "[Match]\nMACAddress=52:54:00:12:34:56\nType=ether\n\n[Link]\nName=eth0\n")})
 for d in ("/etc/systemd/network", "/usr/lib/systemd/network"):
     msg, kf, left, out = run({"ifcfg-eth0": KS}, links={"10-anaconda-ifname-eth0.link": ANACONDA},
                              link_dirs={d: {"10-anaconda-ifname-eth0.link.d/name.conf": "[Link]\nName=lan0\n"}})
@@ -314,8 +343,8 @@ case("an earlier .link in /usr/lib/systemd/network is refused too", refused(msg,
 for d in ("/run/systemd/network", "/usr/local/lib/systemd/network", "/lib/systemd/network"):
     msg, kf, left, out = run({"ifcfg-eth0": KS}, link_dirs={d: ["05-admin.link"]})
     case(f"an earlier .link in {d} is refused", refused(msg, f"{d}/05-admin.link comes before") and not kf)
-msg, kf, left, out = run({"ifcfg-eth0": KS}, vendor_links=["10-wend-eth0.link", "05-foo.network"])
-case("the pin's own name in /usr/lib (overridden by /etc's) and an earlier .network don't stand in the way",
+msg, kf, left, out = run({"ifcfg-eth0": KS}, vendor_links=["10-wend-eth0.link"])
+case("the pin's own name in /usr/lib is overridden by /etc's",
      msg is None and list(kf) == ["eth0.nmconnection"])
 msg, kf, left, out = run({"ifcfg-eth0": KS}, links=["70-later.link"], vendor_links=["99-default.link"])
 case("later .link files (99-default) don't stand in the way", msg is None and list(kf) == ["eth0.nmconnection"])
@@ -388,4 +417,333 @@ for name, text, why in (("a HOSTNAME that isn't the machine's", EL6.replace('"ol
     case(f"EL6: {name} is refused before anything changes", refused(msg, why) and not kf)
 msg, kf, left, out = run({})
 case("no profiles: nothing to convert", msg is None and not kf and out.startswith("no ifcfg profiles"))
+msg, kf, left, out = run({"ifcfg-eth0": KS}, vendor_links=["05-foo.network"])
+case("an earlier non-link suffix is ignored", msg is None and list(kf) == ["eth0.nmconnection"])
+msg, kf, left, out = run({"ifcfg-eth0": KS}, links={"70-owner.link": ANACONDA.replace("Name=eth0", "Name=lan0")})
+case("later owner pin conflicts are refused", refused(msg, "move the stale pin") and not kf)
+# Follow-ups in #34: each refusal must preserve the input and avoid archiving it.
+def untouched(msg, kf, left):
+    return msg is not None and not kf and "etc/sysconfig/network-scripts/ifcfg-eth0" in left and not any(
+        n.startswith("var/lib/wend/saved/") for n in left)
+
+for relative in ("/etc/NetworkManager/system-connections/eth0.nmconnection",
+                 "/etc/systemd/network/10-wend-eth0.link",
+                 "/etc/NetworkManager/system-connections/eth0.nmconnection.wend",
+                 "/etc/systemd/network/10-wend-eth0.link.wend",
+                 "/etc/sysconfig/network-scripts/route-eth0"):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, symlinks=[relative])
+    case(f"dangling {relative} is refused and kept", untouched(msg, kf, left) and relative.lstrip("/") in left)
+msg, kf, left, out = run({"ifcfg-eth0": KS}, write_error=True)
+case("staging ENOSPC leaves every original and no installed files", untouched(msg, kf, left) and not run.links
+     and not any(n.endswith(".wend") for n in left) and refused(msg, "cannot stage"))
+msg, kf, left, out = run({"ifcfg-eth0": KS}, link_dirs={"/etc/systemd/network": {
+    "10-wend-eth0.link.d/x.conf": "[Link]\nName=lan0\n"}})
+case("drop-ins for the new pin are refused", untouched(msg, kf, left) and refused(msg, ".link.d drop-ins"))
+msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={"70-persistent-net.rules":
+    'SUBSYSTEM=="net", ATTR{address}=="52:54:00:12:34:56", NAME="lan0"\n'})
+case("udev naming rules cannot silently override the pin", untouched(msg, kf, left) and refused(msg, "naming rule"))
+msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-eth1":
+    "DEVICE=eth1\nHWADDR=52:54:00:12:34:57\nONBOOT=no\nHOTPLUG=no\n"})
+case("Anaconda's unconfigured second NIC is disabled", msg is None and
+     arg(kf, "eth1.nmconnection", "ipv4.method") == "disabled" and
+     arg(kf, "eth1.nmconnection", "ipv4.gateway") is None and arg(kf, "eth1.nmconnection", "ipv4.dns") is None)
+msg, kf, left, out = run({"ifcfg-eth0": KS + "TYPE=eThErNeT\n"})
+case("TYPE is case insensitive", msg is None)
+msg, kf, left, out = run({"ifcfg-eth0": KS.replace("eth0", "lan0")})
+case("non eth device needs an explicit TYPE", refused(msg, "needs TYPE=Ethernet") and not kf)
+msg, kf, left, out = run({"ifcfg-eth0": "DEVICE=eth0\nHWADDR=52:54:00:12:34:56\nBOOTPROTO=dhcp\n"
+    "DHCP_HOSTNAME=oldbox\nDHCP_CLASSID=ignored\nDHCP_VENDOR_CLASS_IDENTIFIER=kickstart\n"})
+case("DHCP kickstart options survive", msg is None and arg(kf, "eth0.nmconnection", "ipv4.dhcp-hostname") == "oldbox"
+     and arg(kf, "eth0.nmconnection", "ipv4.dhcp-vendor-class-identifier") == "kickstart")
+uid = "UUID=5fb06bd0-0bb0-7ffb-45f1-d6edd65f3e03\n"
+msg, kf, left, out = run({"ifcfg-eth0": KS + uid, "ifcfg-old": KS + uid})
+case("duplicate UUIDs are refused", untouched(msg, kf, left) and refused(msg, "share UUID="))
+for text, want in (("domain .\n", None), ("search example.org\nsearch\ndomain\n", "example.org"),
+                   ("domain example.org.\n", "example.org")):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, resolv="nameserver 10.0.2.3\n" + text)
+    case(f"resolver search semantics: {text!r}", msg is None and arg(kf, "eth0.nmconnection", "ipv4.dns-search") == want)
+msg, kf, left, out = run({"ifcfg-eth0": KS}, resolv="nameserver 127.0.0.53\n")
+case("loopback fallback needs an explicit resolver migration", untouched(msg, kf, left) and refused(msg, "loopback DNS"))
+for domain, want in ((".", None), ("example.org.", "example.org")):
+    msg, kf, left, out = run({"ifcfg-eth0": KS + f"DOMAIN={domain}\n"})
+    case(f"DOMAIN={domain} normalizes without taking the fallback search list", msg is None and
+         arg(kf, "eth0.nmconnection", "ipv4.dns-search") == want)
+for rule, allowed in (('NAME="lan0"\n', False),
+                      ('SUBSYSTEM=="net", \\\nNAME="lan0"\n', False),
+                      ('SUBSYSTEM=="block", NAME="disk0"\n', True)):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={"70-owner.rules": rule})
+    case(f"udev assignment scope: {rule!r}", (msg is None and bool(kf)) if allowed else
+         untouched(msg, kf, left) and refused(msg, "naming rule"))
+# systemd v252 rules.d/80-net-setup-link.rules, including the NAME== guard and dispatcher assignment.
+DISPATCHER = '''# do not edit this file, it will be overwritten on update
+
+SUBSYSTEM!="net", GOTO="net_setup_link_end"
+IMPORT{builtin}="path_id"
+ACTION=="remove", GOTO="net_setup_link_end"
+IMPORT{builtin}="net_setup_link"
+NAME=="", ENV{ID_NET_NAME}!="", NAME="$env{ID_NET_NAME}"
+LABEL="net_setup_link_end"
+'''
+msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={"80-net-setup-link.rules": DISPATCHER})
+case("systemd's distribution dispatcher leaves the .link name effective", msg is None and bool(kf) and
+     "Name=eth0" in run.links["10-wend-eth0.link"][1])
+for rule in ('NAME=="eth0", ENV{SEEN}="yes"', 'NAME!="", GOTO="done"'):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={"70-test.rules": rule})
+    case(f"NAME comparison is not an assignment: {rule}", msg is None and bool(kf))
+for directory in ("/etc", "/run", "/usr/local/lib", "/usr/lib", "/lib"):
+    name = directory + "/udev/rules.d/90-owner.rules"
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={name: 'SUBSYSTEM=="net", NAME="lan0"'})
+    case(f"naming assignment in {directory} refuses before archival", untouched(msg, kf, left) and
+         refused(msg, "naming rule"))
+for override in ("# no assignments here\n", None):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={
+        "/etc/udev/rules.d/90-owner.rules": override,
+        "/usr/local/lib/udev/rules.d/90-owner.rules": 'NAME="lan0"'})
+    case(f"higher-priority override or mask hides vendor assignment: {override!r}", msg is None and bool(kf))
+msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={"80-net-setup-link.rules": DISPATCHER + 'NAME="lan0"\n'})
+case("custom assignments added to dispatcher are still refused", untouched(msg, kf, left))
+for proto in ("dhcp", "bootp"):
+    profile = f"DEVICE=eth0\nHWADDR=52:54:00:12:34:56\nBOOTPROTO={proto}\nDHCP_CLASSID=ignored\n"
+    msg, kf, left, out = run({"ifcfg-eth0": profile})
+    case(f"{proto}: old kickstart DHCP_CLASSID stays inert", msg is None and
+         arg(kf, "eth0.nmconnection", "ipv4.dhcp-vendor-class-identifier") is None)
+    msg, kf, left, out = run({"ifcfg-eth0": profile + "DHCP_VENDOR_CLASS_IDENTIFIER=effective\n"})
+    case(f"{proto}: NetworkManager vendor class survives", msg is None and
+         arg(kf, "eth0.nmconnection", "ipv4.dhcp-vendor-class-identifier") == "effective")
+# Stock AlmaLinux 9 initscripts-rename-device-10.11.8-4.el9, observed by the booted remi proof.
+RENAMER = ('ACTION=="add", SUBSYSTEM=="net", DRIVERS=="?*", ATTR{type}=="1", '
+           'PROGRAM="/lib/udev/rename_device", RESULT=="?*", NAME="$result"\n')
+for vendor in ("/usr/lib", "/lib"):
+    source = vendor + "/udev/rules.d/60-net.rules"
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={source: RENAMER,
+        "/usr/lib/udev/rules.d/80-net-setup-link.rules": DISPATCHER})
+    case(f"stock {vendor} ifcfg renamer stays enabled while .link takes over", msg is None and bool(kf)
+         and "etc/udev/rules.d/60-net.rules" not in run.udev
+         and run.udev[source.lstrip("/")][1] == RENAMER
+         and "Name=eth0" in run.links["10-wend-eth0.link"][1]
+         and "etc/sysconfig/network-scripts/ifcfg-eth0" not in left)
+for custom in (RENAMER + 'NAME="lan0"\n', RENAMER.replace('/lib/udev/rename_device', '/opt/rename')):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={"/usr/lib/udev/rules.d/60-net.rules": custom})
+    case("modified renamer is refused without a mask", untouched(msg, kf, left) and
+         "etc/udev/rules.d/60-net.rules" not in run.udev)
+msg, kf, left, out = run({"ifcfg-eth0": KS}, write_error=True,
+    udev={"/usr/lib/udev/rules.d/60-net.rules": RENAMER})
+case("staging failure installs no renamer mask", untouched(msg, kf, left) and
+     "etc/udev/rules.d/60-net.rules" not in run.udev)
+for runtime in ("# harmless runtime replacement\n", None, 'NAME=="", ENV{OK}="yes"\n'):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={
+        "/run/udev/rules.d/90-owner.rules": runtime,
+        "/usr/lib/udev/rules.d/90-owner.rules": 'NAME="lan0"'})
+    case(f"persistent conflict behind runtime override {runtime!r} is refused", untouched(msg, kf, left))
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={
+        "/run/udev/rules.d/60-net.rules": runtime,
+        "/usr/lib/udev/rules.d/60-net.rules": RENAMER}, cmdline="ifname=lan0:52:54:00:12:34:56")
+    case(f"helper behind runtime override {runtime!r} still validates its bindings", untouched(msg, kf, left)
+         and refused(msg, "helper binding"))
+for cmdline, allowed in (("ifname=uplink:52:54:00:aa:bb:cc", True),
+                         ("ifname=lan0:52:54:00:12:34:56", False),
+                         ("ifname=eth0:52:54:00:aa:bb:cc", False),
+                         ("ifname=eth0:52:54:00:12:34:56", True)):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, keyfiles=["uplink.nmconnection"], cmdline=cmdline,
+        udev={"/usr/lib/udev/rules.d/60-net.rules": RENAMER})
+    case(f"kernel helper binding: {cmdline}", (msg is None and "eth0.nmconnection" in kf and
+         "etc/udev/rules.d/60-net.rules" not in run.udev) if allowed else
+         refused(msg, "helper binding") and "eth0.nmconnection" not in kf and
+         "etc/sysconfig/network-scripts/ifcfg-eth0" in left)
+# .BAK is ignored by NetworkManager but not by rename_device's case-sensitive suffix test.
+for retained, allowed in ((KS.replace("eth0", "uplink").replace("12:34:56", "aa:bb:cc"), True),
+                          (KS.replace("eth0", "lan0"), False)):
+    msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-old.BAK": retained},
+        udev={"/usr/lib/udev/rules.d/60-net.rules": RENAMER})
+    case(f"retained helper input allowed={allowed}", (msg is None and bool(kf) and
+         "etc/sysconfig/network-scripts/ifcfg-old.BAK" in left) if allowed else untouched(msg, kf, left))
+# Stock biosdevname-0.7.3-10.el9 from the failing booted proof.
+BIOS = '''
+SUBSYSTEM!="net", GOTO="netdevicename_end"
+ACTION!="add",    GOTO="netdevicename_end"
+NAME=="?*",       GOTO="netdevicename_end"
+ATTR{type}!="1",  GOTO="netdevicename_end"
+ENV{DEVTYPE}=="?*", GOTO="netdevicename_end"
+IMPORT{cmdline}="biosdevname"
+ENV{biosdevname}=="?*", ENV{UDEV_BIOSDEVNAME}="$env{biosdevname}"
+ENV{UDEV_BIOSDEVNAME}=="0", GOTO="netdevicename_end"
+ENV{UDEV_BIOSDEVNAME}=="1", GOTO="netdevicename_start"
+GOTO="netdevicename_end"
+LABEL="netdevicename_start"
+SUBSYSTEMS=="pci", PROGRAM="/sbin/biosdevname --smbios 2.6 --nopirq --policy physical -i %k", NAME="%c"  OPTIONS+="string_escape=replace"
+LABEL="netdevicename_end"
+'''
+for cmdline, allowed in (("biosdevname=0 net.ifnames=0", True), ("biosdevname=1", False), ("", False),
+                         ("biosdevname=0 biosdevname=1", False)):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, cmdline=cmdline, udev={
+        "/usr/lib/udev/rules.d/60-net.rules": RENAMER,
+        "/usr/lib/udev/rules.d/71-biosdevname.rules": BIOS,
+        "/usr/lib/udev/rules.d/80-net-setup-link.rules": DISPATCHER})
+    case(f"stock naming stack with cmdline {cmdline!r}", (msg is None and bool(kf)) if allowed else
+         untouched(msg, kf, left) and refused(msg, "biosdevname=0"))
+for changed in (BIOS + 'NAME="lan0"\n', BIOS.replace('ENV{UDEV_BIOSDEVNAME}=="0"', 'ENV{UDEV_BIOSDEVNAME}=="9"')):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, cmdline="biosdevname=0",
+        udev={"/usr/lib/udev/rules.d/71-biosdevname.rules": changed})
+    case("modified biosdevname rules are refused even with biosdevname=0", untouched(msg, kf, left))
+msg, kf, left, out = run({"ifcfg-eth0": KS}, cmdline="biosdevname=1", udev={
+    "/run/udev/rules.d/71-biosdevname.rules": None,
+    "/usr/lib/udev/rules.d/71-biosdevname.rules": BIOS})
+case("runtime mask cannot hide enabled persistent biosdevname", untouched(msg, kf, left))
+
+# Unsupported cmdline syntax is refused conservatively, even when biosdevname-like text
+# occurs only inside an unrelated quoted value. Exercise live and reboot-persistent checks.
+cmdlines = [
+    'biosdevname=0 "biosdevname=1"', '"biosdevname=0"', 'biosdevname="0"',
+    "biosdevname='0'", 'biosdevname=0 biosdevname', 'biosdevname biosdevname=0',
+    'biosdevname=0 biosdevname=0', 'biosdevname=0 note="biosdevname=1"',
+    'note="biosdevname=0"', 'biosdevname=0 note="unterminated',
+    'biosdevname=0 note=escaped' + chr(92) + ' value',
+]
+mutations = [
+    BIOS.replace('GOTO=', 'GO TO='),
+    BIOS.replace('ENV{UDEV_BIOSDEVNAME}=="0", GOTO=', 'ENV{UDEV_BIOSDEVNAME}=="0", GO TO='),
+    BIOS.replace('ENV{UDEV_BIOSDEVNAME}', 'ENV{UDEV_ BIOSDEVNAME}'),
+    BIOS.replace('=="0"', '= ="0"'),
+    BIOS.replace('=="0"', '=="0'),
+    BIOS.replace('=="0"', '=="' + chr(92) + '0"'),
+    BIOS.replace('ACTION!="add"', 'ACTION=="add"'),
+    BIOS.replace('/sbin/biosdevname', '/opt/biosdevname'),
+    BIOS + 'NAME="lan0"\n',
+    BIOS.replace('LABEL="netdevicename_end"', 'LA BEL="netdevicename_end"'),
+    BIOS.replace('IMPORT{cmdline}', 'IM PORT{cmdline}'),
+]
+for persistent in (False, True):
+    for cmdline, rules in ([(c, BIOS) for c in cmdlines] +
+                           [('biosdevname=0', r) for r in mutations]):
+        udev = {"/usr/lib/udev/rules.d/71-biosdevname.rules": rules}
+        if persistent:
+            udev["/run/udev/rules.d/71-biosdevname.rules"] = None
+        msg, kf, left, out = run({"ifcfg-eth0": KS}, cmdline=cmdline, udev=udev)
+        case(f"biosdevname refusal preserves files (persistent={persistent}, {cmdline!r}, {rules!r})",
+             untouched(msg, kf, left) and refused(msg, "biosdevname") and not run.links)
+
+# Reject bytes consumers do not share BEFORE comments, blank lines or token boundaries
+# can erase them. Include retained helper inputs that NetworkManager ignores.
+for ws in ("\u00a0", "\u2003", "\u2028", "\u2029", "\x85", "\v", "\f", "\r"):
+    bad_rules = [
+        BIOS.replace('GOTO="netdevicename_end"', ws + 'GOTO="netdevicename_end"'),
+        BIOS.replace('ENV{UDEV_BIOSDEVNAME}=="0"', ws + 'ENV{UDEV_BIOSDEVNAME}=="0"'),
+        BIOS.replace('\n', ws),
+        BIOS + ws + '# hidden comment\n',
+        BIOS + '# comment' + ws + '\n',
+        BIOS + ws + '\n',
+    ]
+    for persistent in (False, True):
+        for rules in bad_rules:
+            udev = {"/usr/lib/udev/rules.d/71-biosdevname.rules": rules}
+            if persistent:
+                udev["/run/udev/rules.d/71-biosdevname.rules"] = None
+            msg, kf, left, out = run({"ifcfg-eth0": KS}, cmdline="biosdevname=0", udev=udev)
+            case(f"unsupported rule whitespace {ws!r}, persistent={persistent}",
+                 untouched(msg, kf, left) and refused(msg, "unsupported character") and not run.links)
+    for persistent in (False, True):
+        for suffix in ("", ".BAK"):
+            for key, value in (("DEVICE", "eth0"), ("HWADDR", "52:54:00:12:34:56")):
+                for decorated in (ws + value, value + ws, value + ws + "# comment"):
+                    profile = "DEVICE=eth0\nHWADDR=52:54:00:12:34:56\n"
+                    profile = profile.replace(key + "=" + value, key + "=" + decorated)
+                    udev = {"/usr/lib/udev/rules.d/60-net.rules": RENAMER}
+                    if persistent:
+                        udev["/run/udev/rules.d/60-net.rules"] = None
+                    msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-extra" + suffix: profile},
+                        udev=udev)
+                    case(f"unsupported helper whitespace {ws!r} {key} retained={bool(suffix)} persistent={persistent}",
+                         untouched(msg, kf, left) and not run.links)
+# udev trims continuation fragments and drops pending EOF lines: do not approximate it.
+bs = chr(92)
+continued = [
+    'NA' + bs + '\n  ME="lan0"\n',
+    'NAME' + bs + '\n  ="lan0"\n',
+    'SUBSYSTEM' + bs + '\n  =="net", NAME="lan0"\n',
+    'NA' + bs + '\n# comment\n  ME="lan0"\n',
+    'NA' + bs + '\n\n  ME="lan0"\n',
+    BIOS.rstrip() + bs + '\n',
+    BIOS.rstrip() + bs + '\n# trailing comment\n',
+    BIOS.rstrip() + bs,
+]
+for persistent in (False, True):
+    for filename in ("71-biosdevname.rules", "90-owner.rules"):
+        for rules in continued:
+            rule_path = "/usr/lib/udev/rules.d/" + filename
+            udev = {rule_path: rules}
+            if persistent:
+                udev["/run/udev/rules.d/" + filename] = None
+            msg, kf, left, out = run({"ifcfg-eth0": KS}, cmdline="biosdevname=0", udev=udev)
+            if filename == "90-owner.rules" and rules == continued[4]:
+                # A blank physical line completes NA; the following ME is not NAME.
+                case(f"blank ends continuation {persistent}", msg is None and bool(kf))
+            else:
+                case(f"rule continuation refused {persistent} {filename} {rules!r}",
+                     untouched(msg, kf, left) and not run.links)
+
+# Stock storage-style rules use continuations and backslashes in comments.
+for persistent in (False, True):
+    for rules in (
+        "#   " + bs + "_ dev already active\n",
+        'SUBSYSTEM!="block", GOTO="storage_end"\nENV{DM_UDEV_DISABLE_OTHER_RULES_FLAG}=="1", ' + bs + '\n  GOTO="storage_end"\nLABEL="storage_end"\n',
+        'SUBSYSTEM=="block", ' + bs + '\n# comment with ' + bs + '\n  ENV{STORAGE}="yes"\n',
+        'ENV{STORAGE}="a' + bs + 'x20b"\n',
+    ):
+        udev = {"/usr/lib/udev/rules.d/10-dm.rules": rules}
+        if persistent:
+            udev["/run/udev/rules.d/10-dm.rules"] = None
+        msg, kf, left, out = run({"ifcfg-eth0": KS}, udev=udev)
+        case(f"storage continuations and comment escapes accepted {persistent} {rules!r}",
+             msg is None and bool(kf) and "10-wend-eth0.link" in run.links)
+
+for directory in ("/etc/systemd/network", "/run/systemd/network", "/usr/local/lib/systemd/network",
+                  "/usr/lib/systemd/network", "/lib/systemd/network"):
+    for match_type in ("", "Type=ether\n"):
+        for mac, name in (("52:54:00:12:34:56", "eth0"), ("52:54:00:aa:bb:cc", "uplink")):
+            pin = "[Match]\nMACAddress=" + mac + "\n" + match_type + "[Link]\nName=" + name + "\n"
+            for ws in ("\u00a0", "\u2003", "\u2028", "\u2029", "\x85", "\v", "\f", "\r"):
+                for bad in (ws + pin, pin.replace("Name=" + name, "Name=" + name + ws),
+                            pin.replace("MACAddress=", "MACAddress" + ws + "="),
+                            pin.replace("[Link]", "[Link" + ws + "]"),
+                            pin.replace("Name=", "Name=" + ws),
+                            pin.replace("\n", ws), pin + "# comment" + ws + "\n",
+                            pin + ws + "; comment\n", pin + ws + "\n"):
+                    msg, kf, left, out = run({"ifcfg-eth0": KS},
+                        link_dirs={directory: {"05-owner.link": bad}})
+                    case(f"unsafe pin bytes refused {directory} {match_type!r} {mac} {ws!r}",
+                         untouched(msg, kf, left) and refused(msg, "unsupported character")
+                         and not any(n.startswith("10-wend-") for n in run.links))
+# Full shipped rule set, including storage continuations and comment diagrams.
+fixture_dir = os.path.join(os.path.dirname(SRC), "fixtures", "udev-alma9")
+stock = {"/usr/lib/udev/rules.d/" + n: open(os.path.join(fixture_dir, n)).read()
+         for n in os.listdir(fixture_dir) if n.endswith(".rules")}
+for persistent in (False, True):
+    udev = dict(stock)
+    if persistent:
+        udev.update({p.replace("/usr/lib/", "/run/"): None for p in stock})
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, udev=udev, cmdline="biosdevname=0 net.ifnames=0")
+    case(f"complete AlmaLinux 9 vendor rules accepted {persistent}",
+         msg is None and bool(kf) and "10-wend-eth0.link" in run.links)
+prefix_rule = stock["/usr/lib/udev/rules.d/71-prefixdevname.rules"]
+for persistent in (False, True):
+    for cmdline in ("net.ifnames.prefix=net", "net.ifnames.prefix=", "net.ifnames.prefix",
+                    "net.ifnames.prefix= net.ifnames.prefix=net", '"net.ifnames.prefix=net"',
+                    'net.ifnames.prefix="net"', 'other="net.ifnames.prefix=net"',
+                    "net.ifnames.prefix=" + chr(92) + "net", "other='unterminated"):
+        udev = {"/usr/lib/udev/rules.d/71-prefixdevname.rules": prefix_rule}
+        if persistent:
+            udev["/run/udev/rules.d/71-prefixdevname.rules"] = None
+        msg, kf, left, out = run({"ifcfg-eth0": KS}, udev=udev, cmdline=cmdline)
+        case(f"prefixdevname enabled or ambiguous refuses {persistent} {cmdline!r}",
+             untouched(msg, kf, left) and refused(msg, "net.ifnames.prefix") and not run.links)
+    for bad in (prefix_rule.replace('GOTO=', 'GO TO='),
+                prefix_rule.replace('ENV{net.ifnames.prefix}!=', 'ENV{net.ifnames.prefix}=='),
+                prefix_rule.replace('/usr/lib/udev/prefixdevname', '/usr/local/bin/rename'),
+                prefix_rule + 'NAME="lan0"\n', prefix_rule.rstrip() + chr(92) + "\n# tail\n"):
+        udev = {"/usr/lib/udev/rules.d/71-prefixdevname.rules": bad}
+        if persistent:
+            udev["/run/udev/rules.d/71-prefixdevname.rules"] = None
+        msg, kf, left, out = run({"ifcfg-eth0": KS}, udev=udev)
+        case(f"modified prefixdevname refuses {persistent} {bad!r}",
+             untouched(msg, kf, left) and not run.links)
 sys.exit(0 if all(cases) else 1)

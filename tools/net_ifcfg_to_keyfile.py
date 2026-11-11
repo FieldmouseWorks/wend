@@ -27,6 +27,49 @@ L = "/etc/systemd/network"
 # systemd.link(5): the directories udevd reads .link files from (systemd's CONF_PATHS), and /lib, often /usr/lib
 LINK_DIRS = (L, "/run/systemd/network", "/usr/local/lib/systemd/network", "/usr/lib/systemd/network",
              "/lib/systemd/network")
+# Highest priority first; equal basenames shadow lower directories, including /dev/null masks.
+UDEV_DIRS = ("/etc/udev/rules.d", "/run/udev/rules.d", "/usr/local/lib/udev/rules.d",
+             "/usr/lib/udev/rules.d", "/lib/udev/rules.d")
+# systemd v252's dispatcher applies the name chosen by net_setup_link, including our .link pin.
+# Recognize the complete rule program, not its basename or an arbitrary NAME=$env assignment.
+# initscripts-rename-device on AlmaLinux 9; its other naming inputs are checked against our pins.
+IFCFG_RENAMER = ('ACTION=="add", SUBSYSTEM=="net", DRIVERS=="?*", ATTR{type}=="1", '
+                 'PROGRAM="/lib/udev/rename_device", RESULT=="?*", NAME="$result"')
+CMDLINE = "/proc/cmdline"
+LINK_DISPATCHER = [
+    'SUBSYSTEM!="net", GOTO="net_setup_link_end"',
+    'IMPORT{builtin}="path_id"',
+    'ACTION=="remove", GOTO="net_setup_link_end"',
+    'IMPORT{builtin}="net_setup_link"',
+    'NAME=="", ENV{ID_NET_NAME}!="", NAME="$env{ID_NET_NAME}"',
+    'LABEL="net_setup_link_end"',
+]
+# biosdevname-0.7.3-10.el9, complete uncommented rule program observed in the booted proof.
+BIOS_RULES = '''
+SUBSYSTEM!="net", GOTO="netdevicename_end"
+ACTION!="add",    GOTO="netdevicename_end"
+NAME=="?*",       GOTO="netdevicename_end"
+ATTR{type}!="1",  GOTO="netdevicename_end"
+ENV{DEVTYPE}=="?*", GOTO="netdevicename_end"
+IMPORT{cmdline}="biosdevname"
+ENV{biosdevname}=="?*", ENV{UDEV_BIOSDEVNAME}="$env{biosdevname}"
+ENV{UDEV_BIOSDEVNAME}=="0", GOTO="netdevicename_end"
+ENV{UDEV_BIOSDEVNAME}=="1", GOTO="netdevicename_start"
+GOTO="netdevicename_end"
+LABEL="netdevicename_start"
+SUBSYSTEMS=="pci", PROGRAM="/sbin/biosdevname --smbios 2.6 --nopirq --policy physical -i %k", NAME="%c"  OPTIONS+="string_escape=replace"
+LABEL="netdevicename_end"
+'''.strip().splitlines()
+# prefixdevname-0.1.0-8.el9; accepted only without a prefix kernel argument.
+PREFIX_RULES = '''
+SUBSYSTEM!="net", GOTO="net_ifnames_prefix_end"
+ACTION!="add",    GOTO="net_ifnames_prefix_end"
+ATTR{type}!="1",  GOTO="net_ifnames_prefix_end"
+IMPORT{cmdline}="net.ifnames.prefix"
+ENV{net.ifnames.prefix}!="?*", GOTO="net_ifnames_prefix_end"
+PROGRAM="/usr/lib/udev/prefixdevname", RESULT=="?*", NAME="$result"
+LABEL="net_ifnames_prefix_end"
+'''.strip().splitlines()
 SYS = "/sys/class/net"
 SAVED = "/var/lib/wend/saved"
 NETWORK = "/etc/sysconfig/network"
@@ -34,7 +77,7 @@ RESOLV = "/etc/resolv.conf"
 HOSTNAME = "/etc/hostname"
 KEYS = {"DEVICE", "HWADDR", "BOOTPROTO", "IPADDR", "NETMASK", "PREFIX", "BROADCAST", "NETWORK", "GATEWAY", "DNS1",
         "DNS2", "DOMAIN", "PEERDNS", "ONBOOT", "IPV6INIT", "IPV6_AUTOCONF", "TYPE", "NAME", "UUID", "NM_CONTROLLED",
-        "DHCPCLASS", "USERCTL",
+        "DHCPCLASS", "USERCTL", "HOTPLUG", "DHCP_HOSTNAME", "DHCP_CLASSID", "DHCP_VENDOR_CLASS_IDENTIFIER",
         # what EL8's installer adds, writing the profile through NetworkManager's ifcfg-rh plugin
         "DEFROUTE", "IPV4_FAILURE_FATAL", "IPV6_DEFROUTE", "IPV6_FAILURE_FATAL", "IPV6_ADDR_GEN_MODE",
         "PROXY_METHOD", "BROWSER_ONLY",
@@ -101,9 +144,11 @@ def plan(path, net, resolv):
     if not re.fullmatch(NAME, c) or not re.fullmatch(NAME, dev) or len(dev) > 15:
         fail(f"{path}: not a plain interface or connection name")
     for side in SIDE:
-        if os.path.exists(os.path.join(D, side + c)):
+        if os.path.lexists(os.path.join(D, side + c)):
             fail(f"{path}: {side}{c} beside it isn't converted")
-    if v.get("TYPE", "Ethernet") != "Ethernet":
+    if "TYPE" not in v and not re.fullmatch(r"eth[0-9]+", dev):
+        fail(f"{path}: DEVICE={dev} needs TYPE=Ethernet")
+    if v.get("TYPE", "Ethernet").lower() != "ethernet":
         fail(f"{path}: TYPE={v['TYPE']}: only Ethernet profiles are converted")
     # the .link pin needs a MAC: without one EL10 may call eth0 ens3, and a keyfile for eth0 never comes up
     hw = v.get("HWADDR", "").lower() or running_mac(path, dev)
@@ -120,8 +165,17 @@ def plan(path, net, resolv):
     pin = f"10-wend-{dev}.link"
     if os.path.lexists(os.path.join(L, pin)):  # someone's pin for this name: never replaced
         fail(f"{path}: {L}/{pin} exists already")
+    for target in (os.path.join(K, f"{c}.nmconnection"), os.path.join(L, pin)):
+        if os.path.lexists(target + ".wend"):
+            fail(f"{path}: {target}.wend exists already; move the stale temporary file")
+    if any(os.path.lexists(os.path.join(d, pin + ".d")) for d in LINK_DIRS):
+        fail(f"{path}: {pin}.d drop-ins may override the pin; move them before converting")
     for d in LINK_DIRS:  # systemd applies only the first .link (by file name, over all its directories) that matches
         for n in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+            if n.endswith(".link") and n > pin:
+                other = mac_pin(d, n)
+                if other is not None and other != (hw, dev) and (other[0] == hw or other[1] == dev):
+                    fail(f"{path}: {d}/{n} pins {other[0]} to {other[1]}, conflicting with {hw} to {dev}; move the stale pin")
             if n.endswith(".link") and n < pin:
                 other = mac_pin(d, n)
                 if other == (hw, dev):  # EL8's installer, booted with ifname=eth0:<mac>, writes this one: it does what
@@ -149,6 +203,13 @@ def plan(path, net, resolv):
             if key in v:
                 fail(f"{path}: {key} beside BOOTPROTO={proto} isn't converted")
         args += ["ipv4.method", "auto"]
+        for source, dest in (("DHCP_HOSTNAME", "ipv4.dhcp-hostname"), ("DHCP_VENDOR_CLASS_IDENTIFIER", "ipv4.dhcp-vendor-class-identifier")):
+            if source in v:
+                args += [dest, v[source]]
+    elif "BOOTPROTO" not in v and "IPADDR" not in v:
+        if any(k in v for k in ("PREFIX", "NETMASK", "GATEWAY", "BROADCAST", "NETWORK")):
+            fail(f"{path}: IPv4 settings beside a disabled profile")
+        args += ["ipv4.method", "disabled"]
     elif proto in ("static", "none", ""):
         if "IPADDR" not in v:
             fail(f"{path}: BOOTPROTO={proto} with no IPADDR")
@@ -173,7 +234,10 @@ def plan(path, net, resolv):
         args += ["ipv4.method", "manual", "ipv4.addresses", f"{ip}/{prefix}"]
     else:
         fail(f"{path}: BOOTPROTO={proto} isn't converted")
-    gw = v.get("GATEWAY") or net.get("GATEWAY")
+    if proto not in ("dhcp", "bootp") and any(k in v for k in ("DHCP_HOSTNAME", "DHCP_VENDOR_CLASS_IDENTIFIER")):
+        fail(f"{path}: DHCP settings beside a non-DHCP profile")
+    disabled = args[2 * args[::2].index("ipv4.method") + 1] == "disabled"
+    gw = None if disabled else v.get("GATEWAY") or net.get("GATEWAY")
     if gw and proto not in ("dhcp", "bootp"):
         args += ["ipv4.gateway", str(addr(path, "GATEWAY", gw))]
     # the plugin: DEFROUTE=no keeps the default route off this profile, but a GATEWAYDEV overrides it either way
@@ -192,11 +256,14 @@ def plan(path, net, resolv):
         fail(f"{path}: DNS2 with no DNS1")
     dns = [v[k] for k in ("DNS1", "DNS2") if k in v]
     search = v.get("DOMAIN", "").split()
-    if proto not in ("dhcp", "bootp") and not dns:  # CentOS 5's installer put a static box's resolvers only here
+    if not disabled and proto not in ("dhcp", "bootp") and not dns:  # CentOS 5's installer put a static box's resolvers only here
         dns, search = resolv["nameserver"], search or resolv["search"]
-    if dns:
+    if dns and not disabled:
+        if any(addr(path, "DNS", d).is_loopback for d in dns):
+            fail(f"{path}: loopback DNS needs a surviving local resolver; configure upstream DNS before converting")
         args += ["ipv4.dns", ",".join(str(addr(path, "DNS", d)) for d in dns)]
-    if search:
+    search = [(s[:-1] if s.endswith(".") else s) for s in search if s != "."]
+    if search and not disabled:
         if not all(re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*",
                                 s) for s in search):
             fail(f"{path}: a search domain isn't a plain name")
@@ -221,6 +288,133 @@ def plan(path, net, resolv):
         args += ["ipv6.addr-gen-mode", gen or "default-or-eui64"]
     args += ["connection.autoconnect", "yes" if boolean(path, v, "ONBOOT", "yes") else "no"]
     return c, dev, hw, args
+
+
+def naming_text(path):
+    # Validate bytes before text decoding, universal-newline translation, comment filtering or
+    # whitespace normalization. Consumers disagree on other whitespace and line separators.
+    data = open(path, "rb").read()
+    if any(b not in (9, 10) and not 32 <= b <= 126 for b in data):
+        fail(f"{path}: unsupported character in naming input")
+    return data.decode("ascii")
+
+
+def udev_lines(raw, path):
+    # systemd v252 udev_rules_parse_file: trim leading whitespace, skip full-line
+    # comments even within continuations, concatenate without inserting spaces.
+    # A blank physical line completes a pending logical line. Do not invent an
+    # extra blank line for the terminating LF. Refuse pending EOF (udev drops it,
+    # which can remove a jump target) and oversized lines conservatively.
+    rules, pending, continuing = [], "", False
+    for line in raw.splitlines():
+        line = line.lstrip(" \t")
+        if line.startswith("#"):
+            continue
+        line = pending + line
+        if len(line) >= 4096:
+            fail(f"{path}: unsupported oversized udev logical line")
+        if line.endswith(chr(92)):
+            pending = line[:-1]
+            continuing = True
+            continue
+        pending, continuing = "", False
+        if line.strip():
+            rules.append(line.strip())
+    if continuing:
+        fail(f"{path}: unsupported continuation at EOF in naming rule")
+    return rules
+
+
+def check_udev(path):
+    helper = False
+    # /run overrides disappear at reboot. Both the live and persistent rule sets must be safe.
+    for directories in (UDEV_DIRS, tuple(d for d in UDEV_DIRS if d != UDEV_DIRS[1])):
+        seen = set()
+        for directory in directories:
+            for name in sorted(os.listdir(directory)) if os.path.isdir(directory) else []:
+                if not name.endswith(".rules") or name in seen:
+                    continue
+                seen.add(name)
+                rule_path = os.path.join(directory, name)
+                try:
+                    raw = naming_text(rule_path)
+                    rules = udev_lines(raw, rule_path)
+                except (OSError, UnicodeDecodeError) as e:
+                    fail(f"{path}: cannot inspect {rule_path}: {e}")
+                if name == "71-biosdevname.rules" and rules:
+                    # Exact observed forms preserve token boundaries and every control-flow guard.
+                    # Do not normalize malformed keywords, operators, quotes or attributes into stock rules.
+                    if rules != BIOS_RULES:
+                        fail(f"{path}: {rule_path} is not the recognized stock biosdevname rule")
+                    cmdline = naming_text(CMDLINE)
+                    # systemd's cmdline lexer is not shell syntax. Until we implement that lexer,
+                    # refuse quoting/escaping anywhere rather than overlook a hidden enabling argument.
+                    if any(c in cmdline for c in ("'", '"', chr(92))):
+                        fail(f"{path}: {rule_path} needs an unambiguous biosdevname=0 kernel argument")
+                    options = [w for w in cmdline.split() if w.split("=", 1)[0] == "biosdevname"]
+                    if options != ["biosdevname=0"]:
+                        fail(f"{path}: {rule_path} needs an unambiguous biosdevname=0 kernel argument")
+                    continue
+                if name == "71-prefixdevname.rules" and rules:
+                    if rules != PREFIX_RULES:
+                        fail(f"{path}: {rule_path} is not the recognized stock prefixdevname rule")
+                    cmdline = naming_text(CMDLINE)
+                    if any(c in cmdline for c in ("'", '"', chr(92))) or any(
+                            w.split("=", 1)[0] == "net.ifnames.prefix" for w in cmdline.split()):
+                        fail(f"{path}: {rule_path} needs an unambiguous absent net.ifnames.prefix kernel argument")
+                    continue
+                if rules == LINK_DISPATCHER:
+                    continue
+                if name == "60-net.rules" and rules == [IFCFG_RENAMER] and directory in UDEV_DIRS[3:]:
+                    helper = True
+                    continue
+                for rule in rules:
+                    subsystem = re.search(r'\bSUBSYSTEM\s*==\s*"([A-Za-z0-9_-]+)"', rule)
+                    # NAME== and NAME!= are comparisons. =, := and += assign names.
+                    if re.search(r'\bNAME\s*[:+]?=(?!=)', rule) and not (subsystem and subsystem[1] != "net"):
+                        fail(f"{path}: {rule_path} assigns an interface name; move or migrate the naming rule")
+    return helper
+
+
+def helper_bindings():
+    """rename_device's retained inputs, which remain active after the converted profiles are archived.
+    Reject unfamiliar retained files rather than attempting the helper's permissive parser on arbitrary text.
+    Kernel ifname= has priority over ifcfg; checking both is conservative and also guards later cmdline removal.
+    """
+    bindings = []
+    for word in naming_text(CMDLINE).split():
+        if not word.startswith("ifname="):
+            continue
+        parts = word[len("ifname="):].split(":", 1)
+        if len(parts) != 2 or not re.fullmatch(NAME, parts[0]) or not re.fullmatch(r"([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", parts[1]):
+            fail(f"{CMDLINE}: cannot interpret {word}")
+        bindings.append((parts[0], parts[1].lower(), CMDLINE))
+    # rename_device's isCfg compares these suffixes case-sensitively, unlike NetworkManager.
+    suffixes = (".rpmnew", ".rpmsave", ".rpmorig", ".orig", ".old", ".bak", "~")
+    for name in sorted(os.listdir(D)):
+        source = os.path.join(D, name)
+        if not name.startswith("ifcfg-") or name.endswith(suffixes) or not os.path.isfile(source):
+            continue
+        text = naming_text(source)
+        values = read(source, KEYS)
+        # The C helper only removes enclosing quotes; it does not implement shlex escaping/concatenation.
+        literal = {}
+        for line in text.split("\n"):
+            for key in ("DEVICE", "HWADDR"):
+                if line.startswith(key + "="):
+                    value = line[len(key) + 1:].rstrip()
+                    if len(value) >= 2 and value[0] in "\"'" and value[-1] == value[0]:
+                        value = value[1:-1]
+                    literal[key] = value.strip()
+        if any(literal.get(key) != values.get(key) for key in literal):
+            fail(f"{source}: helper and NetworkManager parse a naming value differently")
+        dev, hw = literal.get("DEVICE"), literal.get("HWADDR")
+        if not dev or not hw:
+            continue
+        if not re.fullmatch(NAME, dev) or not re.fullmatch(r"([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", hw):
+            fail(f"{source}: cannot interpret rename_device binding")
+        bindings.append((dev, hw.lower(), source))
+    return bindings
 
 
 def own_name():
@@ -271,7 +465,7 @@ def mac_pin(d, n):
         return None
     sections, at = {}, None
     try:
-        lines = open(os.path.join(d, n)).read().splitlines()
+        lines = naming_text(os.path.join(d, n)).split("\n")
     except (OSError, UnicodeDecodeError):
         return None
     for line in lines:
@@ -285,8 +479,10 @@ def mac_pin(d, n):
         if at is None or not m or m.group(1) in at:
             return None
         at[m.group(1)] = m.group(2)
-    if sections.keys() != {"Match", "Link"} or sections["Match"].keys() != {"MACAddress"} or \
+    if sections.keys() != {"Match", "Link"} or sections["Match"].keys() not in ({"MACAddress"}, {"MACAddress", "Type"}) or \
             sections["Link"].keys() != {"Name"}:
+        return None
+    if sections["Match"].get("Type", "ether") != "ether":
         return None
     mac, name = sections["Match"]["MACAddress"].lower(), sections["Link"]["Name"]
     if not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", mac) or not re.fullmatch(NAME, name):
@@ -311,14 +507,27 @@ def main():
             w = line.split()
             if len(w) >= 2 and w[0] == "nameserver" and len(resolv["nameserver"]) < 3:
                 resolv["nameserver"].append(w[1])
-            elif w and w[0] in ("search", "domain"):  # resolv.conf(5): the last of the two wins; "." is the root,
+            elif len(w) >= 2 and w[0] in ("search", "domain"):  # resolv.conf(5): the last of the two wins; "." is the root,
                 resolv["search"] = [d for d in (w[1:2] if w[0] == "domain" else w[1:]) if d != "."]  # no domain
+    helper = check_udev(files[0])
     plans = [plan(f, net, resolv) for f in files]
     pins = {}
+    uuids = {}
     for (c, dev, hw, args), f in zip(plans, files):  # one pin per name and per MAC (two profiles of one NIC agree)
+        if "connection.uuid" in args[::2]:
+            uid = args[2 * args[::2].index("connection.uuid") + 1]
+            if uid in uuids:
+                fail(f"{f} and {uuids[uid]} share UUID={uid}; move the stale profile")
+            uuids[uid] = f
         for key, other in ((("dev", dev), hw), (("hw", hw), dev)):
             if pins.setdefault(key, (other, f))[0] != other:
-                fail(f"{f} and {pins[key][1]} pin {key[1]} differently")
+                fail(f"{f} and {pins[key][1]} pin {key[1]} differently: {other} versus {pins[key][0]}; move the stale profile")
+    if helper:
+        for dev, hw, source in helper_bindings():
+            for key, other in ((("dev", dev), hw), (("hw", hw), dev)):
+                if key in pins and pins[key][0] != other:
+                    fail(f"{source}: helper binding {dev}/{hw} conflicts with {pins[key][1]}: "
+                         f"{key[1]} to {pins[key][0]}; move the stale input before converting")
     keyfiles = []
     for (c, dev, hw, args), f in zip(plans, files):  # every keyfile serialized before anything is written
         try:
@@ -331,10 +540,25 @@ def main():
     os.makedirs(K, exist_ok=True)
     os.makedirs(L, exist_ok=True)
     os.makedirs(SAVED + D, exist_ok=True)
+    staged = {}
+    created = []
+    try:
+        for (c, dev, hw, args), text in zip(plans, keyfiles):
+            staged[os.path.join(K, f"{c}.nmconnection")] = (text, 0o600)
+            staged[os.path.join(L, f"10-wend-{dev}.link")] = (
+                f"[Match]\nMACAddress={hw}\nType=ether\n\n[Link]\nName={dev}\n", 0o644)
+        for target, (text, mode) in staged.items():
+            write(target, text, mode)
+            created.append(target)
+    except OSError as e:
+        for target in created:
+            if os.path.isfile(target + ".wend") and not os.path.islink(target + ".wend"):
+                os.remove(target + ".wend")
+        fail(f"cannot stage network files: {e}")
+    for target in staged:
+        os.replace(target + ".wend", target)
     for (c, dev, hw, args), f, text in zip(plans, files, keyfiles):
         kf = os.path.join(K, f"{c}.nmconnection")
-        write(kf, text, 0o600)
-        write(os.path.join(L, f"10-wend-{dev}.link"), f"[Match]\nMACAddress={hw}\n\n[Link]\nName={dev}\n", 0o644)
         if os.path.exists(SAVED + f):  # SAVED keeps the owner's original, whatever later hops do (SPEC)
             os.remove(f)
         else:
@@ -343,11 +567,14 @@ def main():
 
 
 def write(path, text, mode):
-    fd = os.open(path + ".wend", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
-    with os.fdopen(fd, "w") as out:
-        out.write(text)
-    os.chmod(path + ".wend", mode)
-    os.replace(path + ".wend", path)
+    fd = os.open(path + ".wend", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    try:
+        with os.fdopen(fd, "w") as out:
+            out.write(text)
+        os.chmod(path + ".wend", mode)
+    except OSError:
+        os.remove(path + ".wend")
+        raise
 
 
 if __name__ == "__main__":
