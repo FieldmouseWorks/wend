@@ -1,0 +1,7 @@
+Unmodified /usr/lib/udev/rules.d/*.rules fixtures from AlmaLinux 9 BaseOS x86_64 RPMs:
+biosdevname-0.7.3-10.el9
+device-mapper-1.02.207-4.el9_8.1
+initscripts-rename-device-10.11.8-4.el9
+kpartx-0.8.7-45.el9
+systemd-udev-252-67.el9_8.6.alma.1
+Source: https://repo.almalinux.org/almalinux/9/BaseOS/x86_64/os/Packages/

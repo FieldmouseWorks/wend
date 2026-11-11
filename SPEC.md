@@ -962,8 +962,8 @@ are refused. Thus retained keyfiles and interfaces without converted profiles ke
 The complete stock `71-biosdevname.rules` program is allowed only with exactly one `biosdevname=0` argument in
 `/proc/cmdline`; enabled, absent, bare or duplicate settings refuse conversion. Command lines containing
 quotes or backslashes are conservatively refused, including those in unrelated parameters. Naming rules, existing `.link` pins, helper inputs and inspected kernel command lines containing bytes other than printable ASCII,
-tab and LF are refused before normalization or comment filtering. Backslashes in udev rules are refused before
-comment filtering, including continuations and pending EOF fragments. Only the observed
+tab and LF are refused before normalization or comment filtering. Udev logical lines skip full-line comments and join backslash continuations after removing
+fragment indentation, preserving token boundaries. Pending EOF fragments and logical lines of 4096 bytes or more are refused. Only the observed
 stock rule forms are recognized (ignoring leading/trailing line whitespace, blank lines and full-line comments);
 changed token boundaries, quotes, conditions, programs or extra assignments are refused.
 Modified helper rules or an owner's copy in `/etc`, `/run` or `/usr/local/lib` are refused. Rules are read from `/etc`, `/run`, `/usr/local/lib`, `/usr/lib` and `/lib` under

@@ -289,6 +289,32 @@ def naming_text(path):
     return data.decode("ascii")
 
 
+def udev_lines(raw, path):
+    # systemd v252 udev_rules_parse_file: trim leading whitespace, skip full-line
+    # comments even within continuations, concatenate without inserting spaces.
+    # A blank physical line completes a pending logical line. Do not invent an
+    # extra blank line for the terminating LF. Refuse pending EOF (udev drops it,
+    # which can remove a jump target) and oversized lines conservatively.
+    rules, pending, continuing = [], "", False
+    for line in raw.splitlines():
+        line = line.lstrip(" \t")
+        if line.startswith("#"):
+            continue
+        line = pending + line
+        if len(line) >= 4096:
+            fail(f"{path}: unsupported oversized udev logical line")
+        if line.endswith(chr(92)):
+            pending = line[:-1]
+            continuing = True
+            continue
+        pending, continuing = "", False
+        if line.strip():
+            rules.append(line.strip())
+    if continuing:
+        fail(f"{path}: unsupported continuation at EOF in naming rule")
+    return rules
+
+
 def check_udev(path):
     helper = False
     # /run overrides disappear at reboot. Both the live and persistent rule sets must be safe.
@@ -302,14 +328,9 @@ def check_udev(path):
                 rule_path = os.path.join(directory, name)
                 try:
                     raw = naming_text(rule_path)
-                    # Refuse continuations before comments or blank lines can hide fragments
-                    # or a pending EOF line. udev does not simply delete backslash-newline.
-                    if chr(92) in raw:
-                        fail(f"{rule_path}: unsupported continuation or escape in naming rule")
-                    text = "\n".join(line for line in raw.split("\n") if not line.lstrip().startswith("#"))
+                    rules = udev_lines(raw, rule_path)
                 except (OSError, UnicodeDecodeError) as e:
                     fail(f"{path}: cannot inspect {rule_path}: {e}")
-                rules = [line.strip() for line in text.replace("\\\n", "").splitlines() if line.strip()]
                 if name == "71-biosdevname.rules" and rules:
                     # Exact observed forms preserve token boundaries and every control-flow guard.
                     # Do not normalize malformed keywords, operators, quotes or attributes into stock rules.

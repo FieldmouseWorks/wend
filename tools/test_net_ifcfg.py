@@ -674,8 +674,27 @@ for persistent in (False, True):
             if persistent:
                 udev["/run/udev/rules.d/" + filename] = None
             msg, kf, left, out = run({"ifcfg-eth0": KS}, cmdline="biosdevname=0", udev=udev)
-            case(f"rule continuation refused {persistent} {filename} {rules!r}",
-                 untouched(msg, kf, left) and refused(msg, "unsupported continuation") and not run.links)
+            if filename == "90-owner.rules" and rules == continued[4]:
+                # A blank physical line completes NA; the following ME is not NAME.
+                case(f"blank ends continuation {persistent}", msg is None and bool(kf))
+            else:
+                case(f"rule continuation refused {persistent} {filename} {rules!r}",
+                     untouched(msg, kf, left) and not run.links)
+
+# Stock storage-style rules use continuations and backslashes in comments.
+for persistent in (False, True):
+    for rules in (
+        "#   " + bs + "_ dev already active\n",
+        'SUBSYSTEM!="block", GOTO="storage_end"\nENV{DM_UDEV_DISABLE_OTHER_RULES_FLAG}=="1", ' + bs + '\n  GOTO="storage_end"\nLABEL="storage_end"\n',
+        'SUBSYSTEM=="block", ' + bs + '\n# comment with ' + bs + '\n  ENV{STORAGE}="yes"\n',
+        'ENV{STORAGE}="a' + bs + 'x20b"\n',
+    ):
+        udev = {"/usr/lib/udev/rules.d/10-dm.rules": rules}
+        if persistent:
+            udev["/run/udev/rules.d/10-dm.rules"] = None
+        msg, kf, left, out = run({"ifcfg-eth0": KS}, udev=udev)
+        case(f"storage continuations and comment escapes accepted {persistent} {rules!r}",
+             msg is None and bool(kf) and "10-wend-eth0.link" in run.links)
 
 for directory in ("/etc/systemd/network", "/run/systemd/network", "/usr/local/lib/systemd/network",
                   "/usr/lib/systemd/network", "/lib/systemd/network"):
@@ -694,4 +713,15 @@ for directory in ("/etc/systemd/network", "/run/systemd/network", "/usr/local/li
                     case(f"unsafe pin bytes refused {directory} {match_type!r} {mac} {ws!r}",
                          untouched(msg, kf, left) and refused(msg, "unsupported character")
                          and not any(n.startswith("10-wend-") for n in run.links))
+# Full shipped rule set, including storage continuations and comment diagrams.
+fixture_dir = os.path.join(os.path.dirname(SRC), "fixtures", "udev-alma9")
+stock = {"/usr/lib/udev/rules.d/" + n: open(os.path.join(fixture_dir, n)).read()
+         for n in os.listdir(fixture_dir) if n.endswith(".rules")}
+for persistent in (False, True):
+    udev = dict(stock)
+    if persistent:
+        udev.update({p.replace("/usr/lib/", "/run/"): None for p in stock})
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, udev=udev, cmdline="biosdevname=0 net.ifnames=0")
+    case(f"complete AlmaLinux 9 vendor rules accepted {persistent}",
+         msg is None and bool(kf) and "10-wend-eth0.link" in run.links)
 sys.exit(0 if all(cases) else 1)
