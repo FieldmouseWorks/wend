@@ -55,15 +55,19 @@ fn expansions(s: &str, heredoc: bool) -> Result<bool> {
     } else {
         word::parse(s, &options)?
     };
+    pieces(parts, heredoc)
+}
+
+fn pieces(parts: Vec<word::WordPieceWithSource>, quoted: bool) -> Result<bool> {
     for part in parts {
         use word::WordPiece::*;
         let found = match part.piece {
             CommandSubstitution(s) | BackquotedCommandSubstitution(s) => program(&s)?,
             DoubleQuotedSequence(parts) | GettextDoubleQuotedSequence(parts) => {
-                expansion_values(&serde_json::to_value(parts)?)?
+                pieces(parts, true)?
             }
             ArithmeticExpression(expr) => expansions(&expr.value, true)?,
-            ParameterExpansion(expr) => parameter_values(&serde_json::to_value(expr)?)?,
+            ParameterExpansion(expr) => parameter_values(&serde_json::to_value(expr)?, quoted)?,
             _ => false,
         };
         if found {
@@ -73,49 +77,15 @@ fn expansions(s: &str, heredoc: bool) -> Result<bool> {
     Ok(false)
 }
 
-fn expansion_values(v: &Value) -> Result<bool> {
-    if let Some(o) = v.as_object() {
-        for (key, child) in o {
-            match key.as_str() {
-                "CommandSubstitution" | "BackquotedCommandSubstitution" => {
-                    if program(child.as_str().ok_or("missing substitution")?)? {
-                        return Ok(true);
-                    }
-                }
-                "Text" | "SingleQuotedText" | "AnsiCQuotedText" | "EscapeSequence" => (),
-                "ArithmeticExpression" => {
-                    if syntax(child)? {
-                        return Ok(true);
-                    }
-                }
-                "ParameterExpansion" => {
-                    if parameter_values(child)? {
-                        return Ok(true);
-                    }
-                }
-                _ => {
-                    if expansion_values(child)? {
-                        return Ok(true);
-                    }
-                }
-            }
-        }
-    } else if let Some(a) = v.as_array() {
-        for child in a {
-            if expansion_values(child)? {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
-}
-
-fn parameter_values(v: &Value) -> Result<bool> {
+// Parameter operands inherit the surrounding expansion context. In double
+// quotes and expanding heredocs a single quote in an operand is literal data,
+// whereas in an unquoted operand it can protect a substitution from execution.
+fn parameter_values(v: &Value, quoted: bool) -> Result<bool> {
     match v {
-        Value::String(s) => expansions(s, false),
+        Value::String(s) => expansions(s, quoted),
         Value::Array(a) => {
             for c in a {
-                if parameter_values(c)? {
+                if parameter_values(c, quoted)? {
                     return Ok(true);
                 }
             }
@@ -123,7 +93,7 @@ fn parameter_values(v: &Value) -> Result<bool> {
         }
         Value::Object(o) => {
             for c in o.values() {
-                if parameter_values(c)? {
+                if parameter_values(c, quoted)? {
                     return Ok(true);
                 }
             }

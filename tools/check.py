@@ -22,6 +22,7 @@ import tomllib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import backends  # noqa: E402
+from shell_lint import negated_pipeline, parser_limits, MAX_INPUT, TIMEOUT  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -686,19 +687,6 @@ def _table(x):
     return x if isinstance(x, dict) else {}  # a malformed one is check_box's error to report, not a crash here
 
 
-def negated_pipeline(s):
-    """Delegate executable shell structure to the Rust parser (never execute it)."""
-    if not hasattr(negated_pipeline, "binary"):
-        manifest = os.path.join(ROOT, "tools", "shell-lint", "Cargo.toml")
-        subprocess.run(["cargo", "build", "--quiet", "--locked", "--manifest-path", manifest,
-                        "--target-dir", os.path.join(ROOT, "tools", "shell-lint", "target")], check=True)
-        negated_pipeline.binary = os.path.join(ROOT, "tools", "shell-lint", "target", "debug", "wend-shell-lint")
-    result = subprocess.run([negated_pipeline.binary], input=s, capture_output=True, text=True)
-    if result.returncode:
-        raise ValueError(result.stderr.strip())
-    return result.stdout.strip() == "negated"
-
-
 def box_shell_errors(doc):
     vm = doc.get("vm", {}) if isinstance(doc.get("vm", {}), dict) else {}
     sh = ("bash", "dash") if doc.get("family") in ("debian", "ubuntu") else ("bash",)
@@ -713,16 +701,24 @@ def box_shell_errors(doc):
             try:
                 if negated_pipeline(s):
                     errs.append(f"{name}: negated pipelines can hide command failures; capture and check the producer first")
-            except (ValueError, OSError, subprocess.CalledProcessError) as e:
+            except (ValueError, OSError, subprocess.SubprocessError) as e:
                 errs.append(f"{name}: shell pipeline lint failed: {e}")
+        if len(s.encode()) > MAX_INPUT:
+            errs.append(f"{name}: shell check exceeds 256 KiB")
+            continue
         for x in shells:
             if not shutil.which(x):
                 if x != "dash":  # dash is no requirement (AGENTS.md 0); CI's runner has it, so the gate still holds there
                     errs.append(f"{name} can't be parsed: no {x} here (install the {x} package)")
                 continue
-            r = subprocess.run([x, "-n", "-c", s], capture_output=True, text=True)
+            try:
+                r = subprocess.run([x, "-n", "-c", s], capture_output=True, text=True,
+                                   timeout=TIMEOUT, preexec_fn=parser_limits)
+            except (OSError, subprocess.SubprocessError) as e:
+                errs.append(f"{name}: {x} syntax parser failed: {e}")
+                continue
             if r.returncode:
-                errs.append(f"{name} doesn't parse under {x}: {r.stderr.strip().splitlines()[0][:200]}")
+                errs.append(f"{name} doesn't parse under {x}: {(r.stderr.strip().splitlines() or ['resource limit or signal'])[0][:200]}")
     return errs
 
 

@@ -531,6 +531,36 @@ for name, doc, want in (("an Ubuntu role only bash parses", {**tweb, "roles": {*
     bad += bool(errs) != want
 # A failed producer must not become a passing health check through pipeline negation.
 for command, want in (
+        ('rc="${x:-\'$( ! missing | grep -q x )\'}"', True),
+        ("cat <<END\n${x:-'$( ! missing | grep -q x )'}\nEND", True),
+        ("rc=${x:-'$( ! missing | grep -q x )'}", False),
+        ('rc="${x:-${y:-\'$( ! missing | grep -q x )\'}}"', True),
+        ("cat <<END\n${x:-${y:-'$( ! missing | grep -q x )'}}\nEND", True),
+        ("rc=${x:-${y:-'$( ! missing | grep -q x )'}}", False),
+        ('rc="${x:+\'$( ! missing | grep -q x )\'}"', True),
+        ("cat <<END\n${x:+'$( ! missing | grep -q x )'}\nEND", True),
+        ("rc=${x:+'$( ! missing | grep -q x )'}", False),
+        ('rc="${x:+${y:-\'$( ! missing | grep -q x )\'}}"', True),
+        ("cat <<END\n${x:+${y:-'$( ! missing | grep -q x )'}}\nEND", True),
+        ("rc=${x:+${y:-'$( ! missing | grep -q x )'}}", False),
+        ('rc="${x:=\'$( ! missing | grep -q x )\'}"', True),
+        ("cat <<END\n${x:='$( ! missing | grep -q x )'}\nEND", True),
+        ("rc=${x:='$( ! missing | grep -q x )'}", False),
+        ('rc="${x:=${y:-\'$( ! missing | grep -q x )\'}}"', True),
+        ("cat <<END\n${x:=${y:-'$( ! missing | grep -q x )'}}\nEND", True),
+        ("rc=${x:=${y:-'$( ! missing | grep -q x )'}}", False),
+        ('rc="${x:?\'$( ! missing | grep -q x )\'}"', True),
+        ("cat <<END\n${x:?'$( ! missing | grep -q x )'}\nEND", True),
+        ("rc=${x:?'$( ! missing | grep -q x )'}", False),
+        ('rc="${x:?${y:-\'$( ! missing | grep -q x )\'}}"', True),
+        ("cat <<END\n${x:?${y:-'$( ! missing | grep -q x )'}}\nEND", True),
+        ("rc=${x:?${y:-'$( ! missing | grep -q x )'}}", False),
+        ('cat <<END\n$(# )\n! missing | grep -q x\n)\nEND', True),
+        ('rc="$(# )\n! missing | grep -q x\n)"', True),
+        ('rc="$(if true; then ( ! missing | cat ); fi)"', True),
+        ('cat <<END\n$(cat <<INNER\n)\nINNER\n! missing | cat\n)\nEND', True),
+        ('cat <<END\n$(cat <<INNER\n! missing | cat\nINNER\n)\nEND', False),
+        ('rc="$(cat <<INNER\n)\nINNER\n! missing | cat\n)"', True),
         ('if false; then true; else ! missing | grep -q x; fi', True),
         ('case x in x|y) ! missing | cat;; esac', True),
         ('f() { ! missing | cat; }; f', True),
@@ -958,4 +988,9 @@ for _n, _what in (("json.py", "a json.py at the repo root"), ("tomllib/__init__.
     print(("refused " if _e else "MISSED  ") + _what + (f"  ({_e[0]})" if _e else ""))
     bad += not _e
     _sh.rmtree(_t)
+# These subprocess-boundary regressions belong to the checker gate too.
+import unittest
+import test_shell_lint
+_result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromModule(test_shell_lint))
+bad += not _result.wasSuccessful()
 sys.exit(1 if bad else 0)
