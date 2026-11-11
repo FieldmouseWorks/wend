@@ -246,17 +246,17 @@ class ResolverTests(unittest.TestCase):
             box = sandbox.Box(root)
             for host in (b"nameserver ::1\n", b"nameserver 127.0.0.53\nsearch .\n"):
                 real_open = open
-                def opening(p, *args, **kwargs):
-                    if p == "/etc/resolv.conf":
-                        import io
-                        return io.BytesIO(host)
-                    return real_open(p, *args, **kwargs)
+                real_read_bytes = sandbox.Path.read_bytes
+                def read_bytes(p):
+                    if p == sandbox.Path("/etc/resolv.conf"):
+                        return host
+                    return real_read_bytes(p)
                 def command(*args):
                     self.assertEqual(real_open(path, "rb").read(), sandbox.RESOLV_CONF)
                     return 0, ""
-                with patch("builtins.open", side_effect=opening), patch.object(box, "_run", side_effect=command):
+                with patch.object(sandbox.Path, "read_bytes", autospec=True, side_effect=read_bytes), patch.object(box, "_run", side_effect=command):
                     box.run("network conversion")
-                with patch("builtins.open", side_effect=opening):
+                with patch.object(sandbox.Path, "read_bytes", autospec=True, side_effect=read_bytes):
                     with self.assertRaises(TimeoutError):
                         with box.resolver(downloads=True):
                             self.assertEqual(real_open(path, "rb").read(), host)
