@@ -667,22 +667,26 @@ continued = [
     BIOS.rstrip() + bs,
 ]
 for persistent in (False, True):
-    for rules in continued:
-        udev = {"/usr/lib/udev/rules.d/71-biosdevname.rules": rules}
-        if persistent:
-            udev["/run/udev/rules.d/71-biosdevname.rules"] = None
-        msg, kf, left, out = run({"ifcfg-eth0": KS}, cmdline="biosdevname=0", udev=udev)
-        case(f"rule continuation refused {persistent} {rules!r}",
-             untouched(msg, kf, left) and refused(msg, "unsupported continuation") and not run.links)
+    for filename in ("71-biosdevname.rules", "90-owner.rules"):
+        for rules in continued:
+            rule_path = "/usr/lib/udev/rules.d/" + filename
+            udev = {rule_path: rules}
+            if persistent:
+                udev["/run/udev/rules.d/" + filename] = None
+            msg, kf, left, out = run({"ifcfg-eth0": KS}, cmdline="biosdevname=0", udev=udev)
+            case(f"rule continuation refused {persistent} {filename} {rules!r}",
+                 untouched(msg, kf, left) and refused(msg, "unsupported continuation") and not run.links)
 
 for directory in ("/etc/systemd/network", "/run/systemd/network", "/usr/local/lib/systemd/network",
                   "/usr/lib/systemd/network", "/lib/systemd/network"):
     for match_type in ("", "Type=ether\n"):
-        for mac in ("52:54:00:12:34:56", "52:54:00:aa:bb:cc"):
-            pin = "[Match]\nMACAddress=" + mac + "\n" + match_type + "[Link]\nName=eth0\n"
+        for mac, name in (("52:54:00:12:34:56", "eth0"), ("52:54:00:aa:bb:cc", "uplink")):
+            pin = "[Match]\nMACAddress=" + mac + "\n" + match_type + "[Link]\nName=" + name + "\n"
             for ws in ("\u00a0", "\u2003", "\u2028", "\u2029", "\x85", "\v", "\f", "\r"):
-                for bad in (ws + pin, pin.replace("Name=eth0", "Name=eth0" + ws),
+                for bad in (ws + pin, pin.replace("Name=" + name, "Name=" + name + ws),
                             pin.replace("MACAddress=", "MACAddress" + ws + "="),
+                            pin.replace("[Link]", "[Link" + ws + "]"),
+                            pin.replace("Name=", "Name=" + ws),
                             pin.replace("\n", ws), pin + "# comment" + ws + "\n",
                             pin + ws + "; comment\n", pin + ws + "\n"):
                     msg, kf, left, out = run({"ifcfg-eth0": KS},
