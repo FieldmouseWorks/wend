@@ -308,17 +308,11 @@ impl Lab {
         }
         Ok(String::from_utf8(output.stdout)?)
     }
-    /// Ask the queue for a worker, detached so it outlives this adapter. The
-    /// worker exits at once when one already holds its lock.
-    fn wake(&self) {
-        let _ = Command::new("setsid")
-            .args(["--fork", "python3", "-P"])
-            .arg(&self.runner)
-            .arg("worker")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+    /// Ask the queue for a worker. remi.py starts it as an independent user
+    /// unit, outside this proof's cgroup, which burrow-proof empties when the
+    /// adapter returns; a live worker makes this a no-op.
+    fn wake(&self) -> Result<()> {
+        self.call(&["wake"]).map(|_| ())
     }
     fn entries(&self) -> Result<Vec<Value>> {
         Ok(serde_json::from_str(&self.call(&["queue", "--json"])?)?)
@@ -407,7 +401,7 @@ impl Lab {
             // It takes the queue's worker lock itself, so a live worker makes
             // this a no-op and slot ownership stays with the queue.
             if woken.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) && !STOP.load(Ordering::Relaxed) {
-                self.wake();
+                self.wake()?;
                 woken = Some(Instant::now());
             }
             if STOP.load(Ordering::Relaxed) {

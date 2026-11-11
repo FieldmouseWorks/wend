@@ -119,7 +119,7 @@ Each replay goes through `remi.py enqueue` and the existing slots, shim coordina
 eight-hour deadline. The adapter stays in the foreground until the queue entry ends. Its stable owner field names
 the PR, head, route, box and flags, so a replacement adapter adopts the same queued/running/completed proof rather
 than enqueueing it again. SIGTERM asks the queue to cancel its active entry and waits for it to end. A cancelled or
-refused queue entry is not adopted by the next invocation. A per-identity lock in the queue directory, which the enqueue child inherits, makes claiming an existing entry or creating one atomic, and the adapter follows the exact job it created in whatever state it reaches. While it waits it starts the queue's worker (a no-op when one holds the worker lock) about once a minute, so an adopted entry the worker never started still runs. The machine's `proofTimeoutMinutes` for this repo must
+refused queue entry is not adopted by the next invocation. A per-identity lock in the queue directory, which the enqueue child inherits, makes claiming an existing entry or creating one atomic, and the adapter follows the exact job it created in whatever state it reaches. While it waits it starts the queue's worker (as an independent user unit outside the proof's cgroup, so ending the proof never kills the worker or another job's guest; a no-op when one holds the worker lock; a failure to start it fails the proof) about once a minute, so an adopted entry the worker never started still runs. The machine's `proofTimeoutMinutes` for this repo must
 cover the serial suite (eight hours per entry at the queue's worst case), plus time waiting for other lab work;
 that limit does not extend the steward's repair and judge jobs.
 

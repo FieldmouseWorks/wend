@@ -63,7 +63,7 @@ control = json.loads((root/'control.json').read_text())
 a = sys.argv[1:]
 if a[0] == 'queue':
     print(json.dumps(entries))
-elif a[0] == 'worker':
+elif a[0] == 'wake':
     with open(root/'wakes', 'a') as w: w.write('x')
     if control.get('worker_runs'):
         for e in entries:

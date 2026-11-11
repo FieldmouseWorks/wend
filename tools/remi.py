@@ -3,6 +3,7 @@ slot at a time, ending in a full JSON verdict. Nobody types a VM command by hand
 
   python3 -P tools/remi.py enqueue JOB ARG... --sha SHA [--pr N] --by WHO [--reply-to SESSION] [--after ID]
                                                [--vm-flags "FLAGS"]
+  python3 -P tools/remi.py wake                start the queue's worker as an independent user unit (a no-op while one runs)
   python3 -P tools/remi.py queue [--json]      the queue: running, waiting (and on what), queued, then the last done
   python3 -P tools/remi.py order ID...         put these queued jobs first, in this order (the lab order)
   python3 -P tools/remi.py cancel ID           drop a queued job, or stop a running one (its verdict says cancelled)
@@ -317,10 +318,29 @@ def enqueue(args):
 
 
 def start_worker():
+    """Make sure the queue has a worker, as an independent user unit: the caller may be a proof whose cgroup is emptied
+    when it ends, and that must never kill the worker or a guest of another job. A live worker holds worker.lock, which
+    the worker itself takes, so a second start is a no-op; the unit runs the stable runner checkout, not the caller's."""
     os.makedirs(QUEUE, exist_ok=True)
-    with open(os.path.join(QUEUE, "worker.log"), "a") as log:
-        subprocess.Popen([sys.executable, "-P", "-u", os.path.abspath(__file__), "worker"], stdin=subprocess.DEVNULL,
-                         stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    runner = os.environ.get("WEND_LAB_WORKER_RUNNER")
+    if not runner:
+        stable = os.path.join(SRC, "wend-runner", "tools", "remi.py")
+        runner = stable if os.path.isfile(stable) else os.path.abspath(__file__)
+    if TEST:
+        with open(os.path.join(QUEUE, "worker.log"), "a") as log:
+            subprocess.Popen([sys.executable, "-P", "-u", runner, "worker"], stdin=subprocess.DEVNULL,
+                             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        return
+    log = os.path.join(QUEUE, "worker.log")
+    command = ["systemd-run", "--user", "--quiet", "--collect", f"--unit=wend-lab-worker-{secrets.token_hex(4)}",
+               "--property=Type=exec", f"--working-directory={os.path.dirname(os.path.dirname(runner))}",
+               f"--property=StandardOutput=append:{log}", f"--property=StandardError=append:{log}"]
+    for name in ("WEND_LAB", "WEND_LAB_SRC", "WEND_LAB_CARGO", "WEND_LAB_POLL"):
+        if name in os.environ:
+            command.append(f"--setenv={name}={os.environ[name]}")
+    p = subprocess.run([*command, "--", sys.executable, "-P", "-u", runner, "worker"], capture_output=True, text=True)
+    if p.returncode:
+        raise Refused(f"cannot start the queue worker unit: {(p.stdout + p.stderr).strip()[-300:]}")
 
 
 def mirror_hash(sha):
@@ -873,6 +893,9 @@ def main(args):
         return enqueue(rest)
     if cmd == "worker" and not rest:
         return worker()
+    if cmd == "wake" and not rest:
+        start_worker()
+        return 0
     if cmd == "run" and len(rest) == 1:
         return run(rest[0])
     if cmd == "queue":

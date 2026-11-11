@@ -362,5 +362,22 @@ for i in (1, 2):
     raw += p.stdout.split(b"\n", 1)[1]
 check(raw == b"a" * 47999 + "é".encode() + b"z" * 10, "file parts join back byte for byte across a split character")
 
+# the worker starts as its own user unit (never in the caller's cgroup), on the stable runner, and a failure is reported
+stub = f"{w}/stubbin"
+os.makedirs(stub)
+open(f"{stub}/systemd-run", "w").write(f'#!/bin/sh\necho "$@" >> {w}/units\n[ -z "$FAKE_UNIT_FAIL" ] || {{ echo no bus >&2; exit 1; }}\n')
+os.chmod(f"{stub}/systemd-run", 0o755)
+os.makedirs(f"{w}/src/wend-runner/tools", exist_ok=True)
+open(f"{w}/src/wend-runner/tools/remi.py", "w").write("")
+UNIT = {k: v for k, v in ENV.items() if k != "WEND_LAB_TEST"}
+UNIT["PATH"] = f"{stub}:{UNIT['PATH']}"
+rc, out = remi("wake", env=UNIT)
+units = open(f"{w}/units").read()
+check(rc == 0 and "--user" in units and f"{w}/src/wend-runner/tools/remi.py -P" not in units
+      and units.rstrip().endswith(f"{w}/src/wend-runner/tools/remi.py worker") and "--collect" in units,
+      "wake starts the worker as an independent user unit on the stable runner checkout")
+rc, out = remi("wake", env=dict(UNIT, FAKE_UNIT_FAIL="1"))
+check(rc != 0 and "cannot start the queue worker unit" in out and "no bus" in out, "a unit that will not start is reported")
+
 print(f"{sum(results)}/{len(results)} passed")
 sys.exit(0 if all(results) else 1)
