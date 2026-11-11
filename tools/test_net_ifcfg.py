@@ -641,13 +641,17 @@ for ws in ("\u00a0", "\u2003", "\u2028", "\u2029", "\x85", "\v", "\f", "\r"):
             msg, kf, left, out = run({"ifcfg-eth0": KS}, cmdline="biosdevname=0", udev=udev)
             case(f"unsupported rule whitespace {ws!r}, persistent={persistent}",
                  untouched(msg, kf, left) and refused(msg, "unsupported character") and not run.links)
-    for suffix in ("", ".BAK"):
-        for key, value in (("DEVICE", "eth0"), ("HWADDR", "52:54:00:12:34:56")):
-            for decorated in (ws + value, value + ws, value + ws + "# comment"):
-                profile = "DEVICE=eth0\nHWADDR=52:54:00:12:34:56\n"
-                profile = profile.replace(key + "=" + value, key + "=" + decorated)
-                msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-extra" + suffix: profile},
-                    udev={"/usr/lib/udev/rules.d/60-net.rules": RENAMER})
-                case(f"unsupported helper whitespace {ws!r} {key} retained={bool(suffix)}",
-                     untouched(msg, kf, left) and not run.links)
+    for persistent in (False, True):
+        for suffix in ("", ".BAK"):
+            for key, value in (("DEVICE", "eth0"), ("HWADDR", "52:54:00:12:34:56")):
+                for decorated in (ws + value, value + ws, value + ws + "# comment"):
+                    profile = "DEVICE=eth0\nHWADDR=52:54:00:12:34:56\n"
+                    profile = profile.replace(key + "=" + value, key + "=" + decorated)
+                    udev = {"/usr/lib/udev/rules.d/60-net.rules": RENAMER}
+                    if persistent:
+                        udev["/run/udev/rules.d/60-net.rules"] = None
+                    msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-extra" + suffix: profile},
+                        udev=udev)
+                    case(f"unsupported helper whitespace {ws!r} {key} retained={bool(suffix)} persistent={persistent}",
+                         untouched(msg, kf, left) and not run.links)
 sys.exit(0 if all(cases) else 1)
