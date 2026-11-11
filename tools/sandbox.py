@@ -6,10 +6,12 @@ Follows SPEC.md "Sandbox requirements": a private tmpfs /dev per box (never a bi
 a hostname of the box's own (never the host's), daemons never start, and nothing is deleted until every mount under
 it is gone.
 """
+from contextlib import contextmanager
 import errno
 import fcntl
 import hashlib
 import os
+from pathlib import Path
 import re
 import stat
 import subprocess
@@ -32,6 +34,9 @@ ENV = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "
 # it a box takes the host's name, and a build depends on where it runs: etch's postfix postinst turns a bare host name
 # plus resolv.conf's "search ." into "name..", which newaliases refuses (wend#26). Same string in client/src/sandbox.rs.
 HOSTNAME = "wend-box.example.org"
+# A documentation address: box operations never inherit the host stub, search list or IPv6 DNS.
+# Package operations explicitly borrow working host DNS; this value is configuration, not a public DNS service.
+RESOLV_CONF = b"nameserver 192.0.2.53\n"
 NAME_SELF = ("n=$(head -n 1 /etc/hostname 2>/dev/null | tr -d ' \\t\\r'); [ -n \"$n\" ] || "
              "n=$(sed -n 's/^HOSTNAME=//p' /etc/sysconfig/network 2>/dev/null | tail -n 1 | tr -d \"\\\"' \"); "
              f"case \"$n\" in ''|[!A-Za-z0-9]*|*[!A-Za-z0-9.-]*|*.|*..*) n={HOSTNAME};; esac; "
@@ -128,8 +133,7 @@ class Box:
              f"cd {r}/dev && mknod -m 666 null c 1 3 && mknod -m 666 zero c 1 5 && mknod -m 666 full c 1 7 && "
              f"mknod -m 666 random c 1 8 && mknod -m 666 urandom c 1 9 && mknod -m 666 tty c 5 0 && "
              f"mkdir pts shm && ln -s /proc/self/fd fd && ln -s fd/0 stdin && ln -s fd/1 stdout && ln -s fd/2 stderr; "
-             f"mount -t devpts -o newinstance,ptmxmode=0666 devpts {r}/dev/pts && ln -sf pts/ptmx {r}/dev/ptmx; "
-             f"cp /etc/resolv.conf {r}/etc/resolv.conf 2>/dev/null")
+             f"mount -t devpts -o newinstance,ptmxmode=0666 devpts {r}/dev/pts && ln -sf pts/ptmx {r}/dev/ptmx")
 
     def _umount(self):
         r = os.path.realpath(self.root)
@@ -141,7 +145,42 @@ class Box:
                 pass
         unmount_all(r)
 
-    def run(self, cmd, timeout=1800, isolated=False):
+    @contextmanager
+    def resolver(self, downloads=False):
+        # Ordinary commands use the root's resolver without host-side inspection.
+        if not downloads:
+            yield
+            return
+        # Never follow a box symlink into the host. Leave guest-managed resolvers alone.
+        path = os.path.join(self.root, "etc", "resolv.conf")
+        if os.path.realpath(os.path.dirname(path)) != os.path.dirname(path):
+            yield
+            return
+        if os.path.lexists(path) and not stat.S_ISREG(os.lstat(path).st_mode):
+            yield
+            return
+        before = Path(path).read_bytes() if os.path.exists(path) else None
+        data = Path("/etc/resolv.conf").read_bytes() if downloads else None
+        if data is not None:
+            with open(path, "wb") as f:
+                f.write(data)
+        try:
+            yield
+        finally:
+            if (data is not None and os.path.realpath(os.path.dirname(path)) == os.path.dirname(path)
+                    and os.path.isfile(path) and not os.path.islink(path)):
+                if Path(path).read_bytes() == data:
+                    if before is None:
+                        os.unlink(path)
+                    else:
+                        with open(path, "wb") as f:
+                            f.write(before)
+
+    def run(self, cmd, timeout=1800, isolated=False, downloads=False):
+        with self.resolver(downloads):
+            return self._run(cmd, timeout, isolated)
+
+    def _run(self, cmd, timeout=1800, isolated=False):
         """isolated: a network namespace of its own with only loopback, for checks that start daemons."""
         self._mount()
         argv = ["chroot", self.root, "/bin/sh", "-c", NAME_SELF, "x", cmd]
@@ -241,10 +280,12 @@ def build_debian(root, box_doc, adapter):
             f.write(f"127.0.0.1\tlocalhost\n127.0.1.1\t{HOSTNAME} {HOSTNAME.split('.')[0]}\n")
     with open(f"{root}/etc/apt/apt.conf.d/00wend", "w") as f:
         f.write(adapter["hop"]["apt_conf"])
+    with open(f"{root}/etc/resolv.conf", "wb") as f:
+        f.write(RESOLV_CONF)
     b = Box(root)
     rc, log = b.run(backends.fill(adapter["hop"]["set_release"], backends.Apt().hop_vars(adapter, rel)) + " && " +
                     "".join(f"echo '{d}' | debconf-set-selections && " for d in box_doc.get("debconf_selections", [])) +
-                    "apt-get update && apt-get install " + " ".join(box_doc["packages"]))
+                    "apt-get update && apt-get install " + " ".join(box_doc["packages"]), downloads=True)
     if rc:
         raise RuntimeError("package install failed:\n" + tail(log, 2000))
     rc, log = b.run(box_doc["customize"] + "\n" + box_doc.get("start_hook", ""))
@@ -298,13 +339,15 @@ def build_el(root, box_doc, adapter):
                    f"ln -sf /proc/mounts {root}/etc/mtab")
     if rc:
         raise RuntimeError("unpacking the seed packages failed:\n" + tail(log, 2000))
+    with open(f"{root}/etc/resolv.conf", "wb") as f:
+        f.write(RESOLV_CONF)
     b = Box(root)
     steps = [("rpm database", "rpm --initdb && rpm -i --nodeps --force /tmp/boot/*.rpm && rm -rf /tmp/boot"),
              ("package install", backends.fill(adapter["hop"]["set_release"], v) + " && yum -y install " +
               " ".join(box_doc["packages"]) + " && yum -y update && yum clean all"),
              ("customize", box_doc["customize"] + "\n" + box_doc.get("start_hook", ""))]
     for what, cmd in steps:
-        rc, log = b.run(cmd)
+        rc, log = b.run(cmd, downloads=what == "package install")
         if rc:
             raise RuntimeError(f"{what} failed:\n" + tail(log, 3000))
 
@@ -313,7 +356,7 @@ BUILDERS = {"debian": build_debian, "ubuntu": build_debian, "el": build_el}
 
 
 # Bump when what a build writes changes, so boxes cached before it rebuild. 1: the box's own /etc/hostname (wend#26).
-BUILD_VERSION = b"1"
+BUILD_VERSION = b"2"  # deterministic resolver (wend#36)
 
 
 def build_box(box_id, box_doc, adapter, box_toml_bytes, adapter_bytes, log=print):

@@ -162,14 +162,19 @@ impl<'a> Walk<'a> {
     }
 
     /// Run commands in order; keep the step only if all succeed and no passing check is lost, else roll back.
-    fn execute(&mut self, commands: &[String], why: &str) -> Result<bool, String> {
+    fn execute(
+        &mut self,
+        commands: &[String],
+        why: &str,
+        downloads: &std::collections::BTreeSet<String>,
+    ) -> Result<bool, String> {
         let t0 = Instant::now();
         self.root.copy_to(&self.snap)?;
         self.mid_step = true;
         let mut outs = vec![];
         let mut rc = 0;
         for c in commands {
-            let (r, out) = self.root.run(c, 1800, false);
+            let (r, out) = self.root.run_with_dns(c, 1800, false, downloads.contains(c));
             rc = r;
             outs.push(json!({"cmd": c, "rc": r, "out": tail(&out, 4000)}));
             if r != 0 {
@@ -230,7 +235,7 @@ impl<'a> Walk<'a> {
         let (mut ok, mut outs, mut stage) = (true, vec![], "ok".to_string());
         for c in &cmds {
             let c = fill(c, &self.vars);
-            let (rc, out) = self.root.run(&c, 1800, false);
+            let (rc, out) = self.root.run_with_dns(&c, 1800, false, true);
             self.log(&format!("kernel download: rc {rc}\n{}", tail(&out, 1500)));
             outs.push(json!({"cmd": c, "rc": rc, "out": tail(&out, 4000)}));
             if rc != 0 {
@@ -302,7 +307,9 @@ impl<'a> Walk<'a> {
     fn prune(&mut self) -> Result<Value, String> {
         let h = get(self.adapter, "hop").cloned().unwrap_or(Value::Null);
         let obsolete = |w: &Walk| -> Vec<String> {
-            let (rc, out) = w.root.run(str_of(&h, "obsolete").unwrap_or("false"), 1800, false);
+            let (rc, out) = w
+                .root
+                .run_with_dns(str_of(&h, "obsolete").unwrap_or("false"), 1800, false, true);
             if rc == 0 {
                 out.split_whitespace().map(String::from).collect()
             } else {
@@ -323,7 +330,11 @@ impl<'a> Walk<'a> {
                 str_of(self.route, "to")?,
             )?;
             let cmds = [rm, str_of(&h, "autoremove")?.to_string()];
-            let kept = self.execute(&cmds, &format!("prune {} obsolete packages", pkgs.len()))?;
+            let kept = self.execute(
+                &cmds,
+                &format!("prune {} obsolete packages", pkgs.len()),
+                &Default::default(),
+            )?;
             if kept {
                 self.pruned.push(pkgs.clone());
             } else if pkgs.len() > 1 {
@@ -387,7 +398,7 @@ impl<'a> Walk<'a> {
             let fixes: Vec<&Doc> = matched.iter().map(|(_, f)| *f).collect();
             let plan = hop_plan(self.adapter, hop, &fixes)?;
             self.vars = crate::backend::hop_vars(self.adapter, hop)?;
-            let ok = self.execute(&plan.commands, &format!("hop to {hop} with {names:?}"))?;
+            let ok = self.execute(&plan.commands, &format!("hop to {hop} with {names:?}"), &plan.downloads)?;
             let secs = self.steps.last().map(|s| s["seconds"].clone()).unwrap_or(json!(0));
             self.hops.push(
                 json!({"to": hop, "fired": matched.iter().map(|(i, _)| i).collect::<Vec<_>>(),

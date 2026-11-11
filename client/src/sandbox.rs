@@ -323,7 +323,11 @@ impl Root {
     /// Run a shell command inside the root. `isolated`: a network namespace of its own with only loopback, for
     /// checks that start daemons. Exit 124 on timeout, as in tools/sandbox.py.
     pub fn run(&self, cmd: &str, timeout: u64, isolated: bool) -> (i32, String) {
-        let lent = self.lend_resolver();
+        self.run_with_dns(cmd, timeout, isolated, false)
+    }
+
+    pub fn run_with_dns(&self, cmd: &str, timeout: u64, isolated: bool, downloads: bool) -> (i32, String) {
+        let lent = if downloads { self.lend_resolver() } else { None };
         if let Err(e) = self.mount() {
             let _ = self.umount();
             self.return_resolver(lent);
@@ -574,6 +578,31 @@ fn rehearsal_argv(root: &str, cmd: &str, isolated: bool) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resolver_is_only_lent_explicitly_and_preserves_box_changes() {
+        let (_, path) = super::tempfile().unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir_all(path.join("etc")).unwrap();
+        let root = super::Root { dir: path.clone() };
+        let resolver = path.join("etc/resolv.conf");
+        std::fs::write(&resolver, b"nameserver 192.0.2.53\n").unwrap();
+        let lent = root.lend_resolver();
+        assert_eq!(
+            std::fs::read(&resolver).unwrap(),
+            std::fs::read("/etc/resolv.conf").unwrap()
+        );
+        root.return_resolver(lent);
+        assert_eq!(std::fs::read(&resolver).unwrap(), b"nameserver 192.0.2.53\n");
+        let lent = root.lend_resolver();
+        std::fs::write(&resolver, b"nameserver 10.0.0.53\n").unwrap();
+        root.return_resolver(lent);
+        assert_eq!(std::fs::read(&resolver).unwrap(), b"nameserver 10.0.0.53\n");
+        std::fs::remove_file(&resolver).unwrap();
+        std::os::unix::fs::symlink("/etc/resolv.conf", &resolver).unwrap();
+        assert!(root.lend_resolver().is_none());
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
     #[test]
     fn rehearsal_argv_has_its_own_pids_and_proc() {
         let tail = ["chroot", "/r", "/bin/sh", "-c", super::NAME_SELF, "x", "echo hi"];

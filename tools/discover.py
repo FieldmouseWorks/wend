@@ -107,7 +107,8 @@ class Discoverer:
             if errs:
                 attempts.append({"fixes": ans["fixes"], "result": "refused before running: " + "; ".join(errs)})
                 continue
-            if walk.execute(walk.hop_cmds(hop, matched + new), f"hop to {hop} with model fixes"):
+            if walk.execute(walk.hop_cmds(hop, matched + new), f"hop to {hop} with model fixes",
+                            walk.download_commands(hop, matched + new)):
                 for d in new:
                     d["meta"]["reason"] = str(ans.get("reason", ""))
                 self.added += new

@@ -98,13 +98,25 @@ class Walk:
                 kernel("kernel_after"),
                 comp("post") + sh_post + declare + cleanup + verify)
 
-    def execute(self, commands, why):
+    def download_commands(self, hop, fixes):
+        h, v = self.adapter["hop"], backends.of(self.adapter).hop_vars(self.adapter, hop)
+        rel = self.adapter["releases"].get(hop)
+        upgrade = rel.get("upgrade", h["upgrade"]) if isinstance(rel, dict) else h["upgrade"]
+        commands = [h["refresh"], *upgrade, *h.get("kernel_after", [])]
+        out = {fill(c, v) for c in commands}
+        for f in fixes:
+            for s in f.get("pre", []) + f.get("post", []):
+                if s["op"] in ("install", "repair", "dpkg.reinstall", "rpm.swap-release", "rpm.bootstrap", "rpm.transit"):
+                    out.add(check.compile_step(s, self.adapter, hop))
+        return out
+
+    def execute(self, commands, why, downloads=()):
         """Run commands in order; keep the step only if all succeed and no passing check is lost."""
         t0 = time.time()
         self.box.copy_to(self.snap)
         outs, rc = [], 0
         for c in commands:
-            rc, out = self.box.run(c)
+            rc, out = self.box.run(c, downloads=c in downloads)
             outs.append({"cmd": c, "rc": rc, "out": tail(out, 4000)})
             if rc != 0:
                 break
@@ -127,7 +139,7 @@ class Walk:
     def prune(self):
         """No-model cleanup: purge packages the target no longer ships, bisecting whenever a check objects."""
         def obsolete():
-            rc, out = self.box.run(self.adapter["hop"]["obsolete"])
+            rc, out = self.box.run(self.adapter["hop"]["obsolete"], downloads=True)
             return out.split() if rc == 0 else []
 
         def go(pkgs):
@@ -151,7 +163,7 @@ class Walk:
                 break
             matched = [f for f in pinned if f["hop"] == hop and self.holds(f)]
             names = [f["meta"]["name"] for f in matched]
-            ok = self.execute(self.hop_cmds(hop, matched), f"hop to {hop} with {names}")
+            ok = self.execute(self.hop_cmds(hop, matched), f"hop to {hop} with {names}", self.download_commands(hop, matched))
             new = []
             if not ok and discoverer:
                 new = discoverer.fill(self, hop, matched)
