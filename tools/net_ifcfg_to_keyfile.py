@@ -32,6 +32,10 @@ UDEV_DIRS = ("/etc/udev/rules.d", "/run/udev/rules.d", "/usr/local/lib/udev/rule
              "/usr/lib/udev/rules.d", "/lib/udev/rules.d")
 # systemd v252's dispatcher applies the name chosen by net_setup_link, including our .link pin.
 # Recognize the complete rule program, not its basename or an arbitrary NAME=$env assignment.
+# initscripts-rename-device on AlmaLinux 9; superseded by our .link pins after archiving ifcfg files.
+IFCFG_RENAMER = ('ACTION=="add", SUBSYSTEM=="net", DRIVERS=="?*", ATTR{type}=="1", '
+                 'PROGRAM="/lib/udev/rename_device", RESULT=="?*", NAME="$result"')
+RENAME_MASK = "# wend: ifcfg naming retired; interface names are pinned by 10-wend-*.link\n"
 LINK_DISPATCHER = [
     'SUBSYSTEM!="net", GOTO="net_setup_link_end"',
     'IMPORT{builtin}="path_id"',
@@ -140,7 +144,6 @@ def plan(path, net, resolv):
             fail(f"{path}: {target}.wend exists already; move the stale temporary file")
     if any(os.path.lexists(os.path.join(d, pin + ".d")) for d in LINK_DIRS):
         fail(f"{path}: {pin}.d drop-ins may override the pin; move them before converting")
-    check_udev(path)
     for d in LINK_DIRS:  # systemd applies only the first .link (by file name, over all its directories) that matches
         for n in sorted(os.listdir(d)) if os.path.isdir(d) else []:
             if n.endswith(".link") and n > pin:
@@ -262,6 +265,7 @@ def plan(path, net, resolv):
 
 
 def check_udev(path):
+    masks = {}
     seen = set()
     for directory in UDEV_DIRS:
         for name in sorted(os.listdir(directory)) if os.path.isdir(directory) else []:
@@ -276,11 +280,19 @@ def check_udev(path):
             rules = [line.strip() for line in text.replace("\\\n", "").splitlines() if line.strip()]
             if rules == LINK_DISPATCHER:
                 continue
+            if name == "60-net.rules" and rules == [IFCFG_RENAMER] and directory in UDEV_DIRS[3:]:
+                target = os.path.join(UDEV_DIRS[0], name)
+                if os.path.lexists(target) or os.path.lexists(target + ".wend"):
+                    fail(f"{path}: {target} or its .wend temporary exists; move the stale file")
+                masks[target] = (RENAME_MASK, 0o644)
+                continue
             for rule in rules:
                 subsystem = re.search(r'\bSUBSYSTEM\s*==\s*"([A-Za-z0-9_-]+)"', rule)
                 # NAME== and NAME!= are comparisons. =, := and += assign names.
                 if re.search(r'\bNAME\s*[:+]?=(?!=)', rule) and not (subsystem and subsystem[1] != "net"):
                     fail(f"{path}: {rule_path} assigns an interface name; move or migrate the naming rule")
+
+    return masks
 
 
 def own_name():
@@ -375,6 +387,7 @@ def main():
                 resolv["nameserver"].append(w[1])
             elif len(w) >= 2 and w[0] in ("search", "domain"):  # resolv.conf(5): the last of the two wins; "." is the root,
                 resolv["search"] = [d for d in (w[1:2] if w[0] == "domain" else w[1:]) if d != "."]  # no domain
+    masks = check_udev(files[0])
     plans = [plan(f, net, resolv) for f in files]
     pins = {}
     uuids = {}
@@ -399,9 +412,11 @@ def main():
     os.makedirs(K, exist_ok=True)
     os.makedirs(L, exist_ok=True)
     os.makedirs(SAVED + D, exist_ok=True)
-    staged = {}
+    staged = dict(masks)
     created = []
     try:
+        for target in masks:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
         for (c, dev, hw, args), text in zip(plans, keyfiles):
             staged[os.path.join(K, f"{c}.nmconnection")] = (text, 0o600)
             staged[os.path.join(L, f"10-wend-{dev}.link")] = (

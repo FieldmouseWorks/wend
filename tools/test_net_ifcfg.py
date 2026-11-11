@@ -132,6 +132,10 @@ def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=()
                 keyfiles[n] = (oct(os.stat(f).st_mode & 0o777), open(f).read().splitlines()[4:])  # after "[connection]", "--offline connection add"
         left = sorted(os.path.relpath(os.path.join(r, n), t).replace(t.lstrip("/") + "/", "")  # SAVED keeps the path
                       for r, _, ns in os.walk(t) for n in ns if not r.startswith((f"{t}/bin", f"{t}/sys")))
+        run.udev = {os.path.relpath(os.path.join(d, n), t):
+                    (oct(os.stat(os.path.join(d, n)).st_mode & 0o777), open(os.path.join(d, n)).read())
+                    for d in m.UDEV_DIRS if os.path.isdir(d) for n in os.listdir(d)
+                    if os.path.isfile(os.path.join(d, n)) and not os.path.islink(os.path.join(d, n))}
         run.links = links
         return msg, keyfiles, left, printed.getvalue()
 
@@ -503,4 +507,29 @@ for proto in ("dhcp", "bootp"):
     msg, kf, left, out = run({"ifcfg-eth0": profile + "DHCP_VENDOR_CLASS_IDENTIFIER=effective\n"})
     case(f"{proto}: NetworkManager vendor class survives", msg is None and
          arg(kf, "eth0.nmconnection", "ipv4.dhcp-vendor-class-identifier") == "effective")
+# Stock AlmaLinux 9 initscripts-rename-device-10.11.8-4.el9, observed by the booted remi proof.
+RENAMER = ('ACTION=="add", SUBSYSTEM=="net", DRIVERS=="?*", ATTR{type}=="1", '
+           'PROGRAM="/lib/udev/rename_device", RESULT=="?*", NAME="$result"\n')
+MASK = "# wend: ifcfg naming retired; interface names are pinned by 10-wend-*.link\n"
+for vendor in ("/usr/lib", "/lib"):
+    source = vendor + "/udev/rules.d/60-net.rules"
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={source: RENAMER,
+        "/usr/lib/udev/rules.d/80-net-setup-link.rules": DISPATCHER})
+    case(f"stock {vendor} ifcfg renamer is masked while .link takes over", msg is None and bool(kf)
+         and run.udev["etc/udev/rules.d/60-net.rules"] == ("0o644", MASK)
+         and run.udev[source.lstrip("/")][1] == RENAMER
+         and "Name=eth0" in run.links["10-wend-eth0.link"][1]
+         and "etc/sysconfig/network-scripts/ifcfg-eth0" not in left)
+for custom in (RENAMER + 'NAME="lan0"\n', RENAMER.replace('/lib/udev/rename_device', '/opt/rename')):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={"/usr/lib/udev/rules.d/60-net.rules": custom})
+    case("modified renamer is refused without a mask", untouched(msg, kf, left) and
+         "etc/udev/rules.d/60-net.rules" not in run.udev)
+msg, kf, left, out = run({"ifcfg-eth0": KS}, write_error=True,
+    udev={"/usr/lib/udev/rules.d/60-net.rules": RENAMER})
+case("staging failure installs no renamer mask", untouched(msg, kf, left) and
+     "etc/udev/rules.d/60-net.rules" not in run.udev)
+msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={"/usr/lib/udev/rules.d/60-net.rules": RENAMER},
+    symlinks=["/etc/udev/rules.d/60-net.rules.wend"])
+case("dangling mask temporary is refused and kept", untouched(msg, kf, left) and
+     "etc/udev/rules.d/60-net.rules.wend" in left)
 sys.exit(0 if all(cases) else 1)

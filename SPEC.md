@@ -954,7 +954,11 @@ and another name. A later plain pin with a conflicting MAC or name is refused to
 our new pin is refused in any of those directories. Udev rules assigning `NAME` are conservatively refused unless explicitly restricted to a non-net
 subsystem; migrate those rules before conversion. The complete standard systemd `80-net-setup-link.rules`
 dispatcher is allowed: its `NAME` assignment applies the name selected by `.link`. `NAME==`/`NAME!=` comparisons
-are not assignments. Rules are read from `/etc`, `/run`, `/usr/local/lib`, `/usr/lib` and `/lib` under
+are not assignments. The stock vendor `60-net.rules` from AlmaLinux 9's `initscripts-rename-device`
+is recognized by its complete contents and masked with a mode-0644 comment-only `/etc/udev/rules.d/60-net.rules`.
+The vendor file stays untouched, and the mask is staged with the keyfiles and pins. This retires the helper that
+reads ifcfg files (and kernel `ifname=` arguments); `.link` becomes the authority for names. Modified rules or an
+owner's copy in `/etc`, `/run` or `/usr/local/lib` are refused. Rules are read from `/etc`, `/run`, `/usr/local/lib`, `/usr/lib` and `/lib` under
 `udev/rules.d`, with earlier directories overriding equal basenames (including `/dev/null` masks). The generated pin also matches
 `Type=ether`. Leftover `.wend` temporary paths are refused, including dangling symlinks. Every profile is
 checked and serialized by `nmcli`, then every output is staged before the first final file is replaced.
