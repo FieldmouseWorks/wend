@@ -32,10 +32,10 @@ UDEV_DIRS = ("/etc/udev/rules.d", "/run/udev/rules.d", "/usr/local/lib/udev/rule
              "/usr/lib/udev/rules.d", "/lib/udev/rules.d")
 # systemd v252's dispatcher applies the name chosen by net_setup_link, including our .link pin.
 # Recognize the complete rule program, not its basename or an arbitrary NAME=$env assignment.
-# initscripts-rename-device on AlmaLinux 9; superseded by our .link pins after archiving ifcfg files.
+# initscripts-rename-device on AlmaLinux 9; its other naming inputs are checked against our pins.
 IFCFG_RENAMER = ('ACTION=="add", SUBSYSTEM=="net", DRIVERS=="?*", ATTR{type}=="1", '
                  'PROGRAM="/lib/udev/rename_device", RESULT=="?*", NAME="$result"')
-RENAME_MASK = "# wend: ifcfg naming retired; interface names are pinned by 10-wend-*.link\n"
+CMDLINE = "/proc/cmdline"
 LINK_DISPATCHER = [
     'SUBSYSTEM!="net", GOTO="net_setup_link_end"',
     'IMPORT{builtin}="path_id"',
@@ -265,34 +265,72 @@ def plan(path, net, resolv):
 
 
 def check_udev(path):
-    masks = {}
-    seen = set()
-    for directory in UDEV_DIRS:
-        for name in sorted(os.listdir(directory)) if os.path.isdir(directory) else []:
-            if not name.endswith(".rules") or name in seen:
-                continue
-            seen.add(name)
-            rule_path = os.path.join(directory, name)
-            try:
-                text = "".join(line for line in open(rule_path) if not line.lstrip().startswith("#"))
-            except (OSError, UnicodeDecodeError) as e:
-                fail(f"{path}: cannot inspect {rule_path}: {e}")
-            rules = [line.strip() for line in text.replace("\\\n", "").splitlines() if line.strip()]
-            if rules == LINK_DISPATCHER:
-                continue
-            if name == "60-net.rules" and rules == [IFCFG_RENAMER] and directory in UDEV_DIRS[3:]:
-                target = os.path.join(UDEV_DIRS[0], name)
-                if os.path.lexists(target) or os.path.lexists(target + ".wend"):
-                    fail(f"{path}: {target} or its .wend temporary exists; move the stale file")
-                masks[target] = (RENAME_MASK, 0o644)
-                continue
-            for rule in rules:
-                subsystem = re.search(r'\bSUBSYSTEM\s*==\s*"([A-Za-z0-9_-]+)"', rule)
-                # NAME== and NAME!= are comparisons. =, := and += assign names.
-                if re.search(r'\bNAME\s*[:+]?=(?!=)', rule) and not (subsystem and subsystem[1] != "net"):
-                    fail(f"{path}: {rule_path} assigns an interface name; move or migrate the naming rule")
+    helper = False
+    # /run overrides disappear at reboot. Both the live and persistent rule sets must be safe.
+    for directories in (UDEV_DIRS, tuple(d for d in UDEV_DIRS if d != UDEV_DIRS[1])):
+        seen = set()
+        for directory in directories:
+            for name in sorted(os.listdir(directory)) if os.path.isdir(directory) else []:
+                if not name.endswith(".rules") or name in seen:
+                    continue
+                seen.add(name)
+                rule_path = os.path.join(directory, name)
+                try:
+                    text = "".join(line for line in open(rule_path) if not line.lstrip().startswith("#"))
+                except (OSError, UnicodeDecodeError) as e:
+                    fail(f"{path}: cannot inspect {rule_path}: {e}")
+                rules = [line.strip() for line in text.replace("\\\n", "").splitlines() if line.strip()]
+                if rules == LINK_DISPATCHER:
+                    continue
+                if name == "60-net.rules" and rules == [IFCFG_RENAMER] and directory in UDEV_DIRS[3:]:
+                    helper = True
+                    continue
+                for rule in rules:
+                    subsystem = re.search(r'\bSUBSYSTEM\s*==\s*"([A-Za-z0-9_-]+)"', rule)
+                    # NAME== and NAME!= are comparisons. =, := and += assign names.
+                    if re.search(r'\bNAME\s*[:+]?=(?!=)', rule) and not (subsystem and subsystem[1] != "net"):
+                        fail(f"{path}: {rule_path} assigns an interface name; move or migrate the naming rule")
+    return helper
 
-    return masks
+
+def helper_bindings():
+    """rename_device's retained inputs, which remain active after the converted profiles are archived.
+    Reject unfamiliar retained files rather than attempting the helper's permissive parser on arbitrary text.
+    Kernel ifname= has priority over ifcfg; checking both is conservative and also guards later cmdline removal.
+    """
+    bindings = []
+    for word in open(CMDLINE).read().split():
+        if not word.startswith("ifname="):
+            continue
+        parts = word[len("ifname="):].split(":", 1)
+        if len(parts) != 2 or not re.fullmatch(NAME, parts[0]) or not re.fullmatch(r"([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", parts[1]):
+            fail(f"{CMDLINE}: cannot interpret {word}")
+        bindings.append((parts[0], parts[1].lower(), CMDLINE))
+    # rename_device's isCfg compares these suffixes case-sensitively, unlike NetworkManager.
+    suffixes = (".rpmnew", ".rpmsave", ".rpmorig", ".orig", ".old", ".bak", "~")
+    for name in sorted(os.listdir(D)):
+        source = os.path.join(D, name)
+        if not name.startswith("ifcfg-") or name.endswith(suffixes) or not os.path.isfile(source):
+            continue
+        values = read(source, KEYS)
+        # The C helper only removes enclosing quotes; it does not implement shlex escaping/concatenation.
+        literal = {}
+        for line in open(source):
+            for key in ("DEVICE", "HWADDR"):
+                if line.startswith(key + "="):
+                    value = line[len(key) + 1:].rstrip()
+                    if len(value) >= 2 and value[0] in "\"'" and value[-1] == value[0]:
+                        value = value[1:-1]
+                    literal[key] = value.strip()
+        if any(literal.get(key) != values.get(key) for key in literal):
+            fail(f"{source}: helper and NetworkManager parse a naming value differently")
+        dev, hw = literal.get("DEVICE"), literal.get("HWADDR")
+        if not dev or not hw:
+            continue
+        if not re.fullmatch(NAME, dev) or not re.fullmatch(r"([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", hw):
+            fail(f"{source}: cannot interpret rename_device binding")
+        bindings.append((dev, hw.lower(), source))
+    return bindings
 
 
 def own_name():
@@ -387,7 +425,7 @@ def main():
                 resolv["nameserver"].append(w[1])
             elif len(w) >= 2 and w[0] in ("search", "domain"):  # resolv.conf(5): the last of the two wins; "." is the root,
                 resolv["search"] = [d for d in (w[1:2] if w[0] == "domain" else w[1:]) if d != "."]  # no domain
-    masks = check_udev(files[0])
+    helper = check_udev(files[0])
     plans = [plan(f, net, resolv) for f in files]
     pins = {}
     uuids = {}
@@ -400,6 +438,12 @@ def main():
         for key, other in ((("dev", dev), hw), (("hw", hw), dev)):
             if pins.setdefault(key, (other, f))[0] != other:
                 fail(f"{f} and {pins[key][1]} pin {key[1]} differently: {other} versus {pins[key][0]}; move the stale profile")
+    if helper:
+        for dev, hw, source in helper_bindings():
+            for key, other in ((("dev", dev), hw), (("hw", hw), dev)):
+                if key in pins and pins[key][0] != other:
+                    fail(f"{source}: helper binding {dev}/{hw} conflicts with {pins[key][1]}: "
+                         f"{key[1]} to {pins[key][0]}; move the stale input before converting")
     keyfiles = []
     for (c, dev, hw, args), f in zip(plans, files):  # every keyfile serialized before anything is written
         try:
@@ -412,11 +456,9 @@ def main():
     os.makedirs(K, exist_ok=True)
     os.makedirs(L, exist_ok=True)
     os.makedirs(SAVED + D, exist_ok=True)
-    staged = dict(masks)
+    staged = {}
     created = []
     try:
-        for target in masks:
-            os.makedirs(os.path.dirname(target), exist_ok=True)
         for (c, dev, hw, args), text in zip(plans, keyfiles):
             staged[os.path.join(K, f"{c}.nmconnection")] = (text, 0o600)
             staged[os.path.join(L, f"10-wend-{dev}.link")] = (

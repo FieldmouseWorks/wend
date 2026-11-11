@@ -955,11 +955,13 @@ our new pin is refused in any of those directories. Udev rules assigning `NAME` 
 subsystem; migrate those rules before conversion. The complete standard systemd `80-net-setup-link.rules`
 dispatcher is allowed: its `NAME` assignment applies the name selected by `.link`. `NAME==`/`NAME!=` comparisons
 are not assignments. The stock vendor `60-net.rules` from AlmaLinux 9's `initscripts-rename-device`
-is recognized by its complete contents and masked with a mode-0644 comment-only `/etc/udev/rules.d/60-net.rules`.
-The vendor file stays untouched, and the mask is staged with the keyfiles and pins. This retires the helper that
-reads ifcfg files (and kernel `ifname=` arguments); `.link` becomes the authority for names. Modified rules or an
-owner's copy in `/etc`, `/run` or `/usr/local/lib` are refused. Rules are read from `/etc`, `/run`, `/usr/local/lib`, `/usr/lib` and `/lib` under
-`udev/rules.d`, with earlier directories overriding equal basenames (including `/dev/null` masks). The generated pin also matches
+is recognized by its complete contents and kept enabled, preserving helper-managed names on other NICs.
+Before conversion, its kernel `ifname=` arguments and all readable ifcfg inputs (using the helper's own
+case-sensitive backup suffix exclusions) are checked against the proposed pins. Conflicts or unfamiliar inputs
+are refused. Thus retained keyfiles and interfaces without converted profiles keep their existing helper naming.
+Modified rules or an owner's copy in `/etc`, `/run` or `/usr/local/lib` are refused. Rules are read from `/etc`, `/run`, `/usr/local/lib`, `/usr/lib` and `/lib` under
+`udev/rules.d`, with earlier directories overriding equal basenames (including `/dev/null` masks). Both the live and persistent rule sets are validated: `/run` overrides cannot
+hide assignments that reappear after reboot. The generated pin also matches
 `Type=ether`. Leftover `.wend` temporary paths are refused, including dangling symlinks. Every profile is
 checked and serialized by `nmcli`, then every output is staged before the first final file is replaced.
 Validation, serialization and staging failures leave profiles and final files unchanged; filesystem failures during

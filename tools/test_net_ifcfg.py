@@ -37,7 +37,7 @@ ON_NIC = "2: eth0    inet 10.0.2.20/24 brd 10.0.2.255 scope global noprefixroute
 
 
 def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=(), link_dirs=None, nics=None,
-        addrs=None, hostname=None, symlinks=(), udev=None, write_error=False):
+        addrs=None, hostname=None, symlinks=(), udev=None, write_error=False, cmdline=""):
     """Run the converter on a fresh root; return (exit message or None, {keyfile: nmcli args}, files left, printed).
     nics: {name: sysfs attributes} of the running NICs (a "device" link unless physical=False); addrs: {name: what
     `ip -o -4 addr show dev <name>` prints}."""
@@ -45,10 +45,13 @@ def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=()
     m = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
     loader.exec_module(m)
     with tempfile.TemporaryDirectory() as t:
-        for k in ("D", "K", "L", "SAVED", "NETWORK", "RESOLV", "SYS", "HOSTNAME"):
+        for k in ("D", "K", "L", "SAVED", "NETWORK", "RESOLV", "SYS", "HOSTNAME", "CMDLINE"):
             setattr(m, k, t + getattr(m, k))
         m.LINK_DIRS = tuple(t + d for d in m.LINK_DIRS)
         m.UDEV_DIRS = tuple(t + d for d in m.UDEV_DIRS)
+        os.makedirs(os.path.dirname(m.CMDLINE), exist_ok=True)
+        with open(m.CMDLINE, "w") as out:
+            out.write(cmdline)
         os.makedirs(m.D)
         for d, names in [(m.K, keyfiles), (m.L, links), (t + "/usr/lib/systemd/network", vendor_links)] + [
                 (t + d, names) for d, names in (link_dirs or {}).items()]:
@@ -131,7 +134,7 @@ def run(profiles, net=NET, resolv=RESOLV, keyfiles=(), links=(), vendor_links=()
                     continue
                 keyfiles[n] = (oct(os.stat(f).st_mode & 0o777), open(f).read().splitlines()[4:])  # after "[connection]", "--offline connection add"
         left = sorted(os.path.relpath(os.path.join(r, n), t).replace(t.lstrip("/") + "/", "")  # SAVED keeps the path
-                      for r, _, ns in os.walk(t) for n in ns if not r.startswith((f"{t}/bin", f"{t}/sys")))
+                      for r, _, ns in os.walk(t) for n in ns if not r.startswith((f"{t}/bin", f"{t}/sys", f"{t}/proc")))
         run.udev = {os.path.relpath(os.path.join(d, n), t):
                     (oct(os.stat(os.path.join(d, n)).st_mode & 0o777), open(os.path.join(d, n)).read())
                     for d in m.UDEV_DIRS if os.path.isdir(d) for n in os.listdir(d)
@@ -510,13 +513,12 @@ for proto in ("dhcp", "bootp"):
 # Stock AlmaLinux 9 initscripts-rename-device-10.11.8-4.el9, observed by the booted remi proof.
 RENAMER = ('ACTION=="add", SUBSYSTEM=="net", DRIVERS=="?*", ATTR{type}=="1", '
            'PROGRAM="/lib/udev/rename_device", RESULT=="?*", NAME="$result"\n')
-MASK = "# wend: ifcfg naming retired; interface names are pinned by 10-wend-*.link\n"
 for vendor in ("/usr/lib", "/lib"):
     source = vendor + "/udev/rules.d/60-net.rules"
     msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={source: RENAMER,
         "/usr/lib/udev/rules.d/80-net-setup-link.rules": DISPATCHER})
-    case(f"stock {vendor} ifcfg renamer is masked while .link takes over", msg is None and bool(kf)
-         and run.udev["etc/udev/rules.d/60-net.rules"] == ("0o644", MASK)
+    case(f"stock {vendor} ifcfg renamer stays enabled while .link takes over", msg is None and bool(kf)
+         and "etc/udev/rules.d/60-net.rules" not in run.udev
          and run.udev[source.lstrip("/")][1] == RENAMER
          and "Name=eth0" in run.links["10-wend-eth0.link"][1]
          and "etc/sysconfig/network-scripts/ifcfg-eth0" not in left)
@@ -528,8 +530,31 @@ msg, kf, left, out = run({"ifcfg-eth0": KS}, write_error=True,
     udev={"/usr/lib/udev/rules.d/60-net.rules": RENAMER})
 case("staging failure installs no renamer mask", untouched(msg, kf, left) and
      "etc/udev/rules.d/60-net.rules" not in run.udev)
-msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={"/usr/lib/udev/rules.d/60-net.rules": RENAMER},
-    symlinks=["/etc/udev/rules.d/60-net.rules.wend"])
-case("dangling mask temporary is refused and kept", untouched(msg, kf, left) and
-     "etc/udev/rules.d/60-net.rules.wend" in left)
+for runtime in ("# harmless runtime replacement\n", None, 'NAME=="", ENV{OK}="yes"\n'):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={
+        "/run/udev/rules.d/90-owner.rules": runtime,
+        "/usr/lib/udev/rules.d/90-owner.rules": 'NAME="lan0"'})
+    case(f"persistent conflict behind runtime override {runtime!r} is refused", untouched(msg, kf, left))
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, udev={
+        "/run/udev/rules.d/60-net.rules": runtime,
+        "/usr/lib/udev/rules.d/60-net.rules": RENAMER}, cmdline="ifname=lan0:52:54:00:12:34:56")
+    case(f"helper behind runtime override {runtime!r} still validates its bindings", untouched(msg, kf, left)
+         and refused(msg, "helper binding"))
+for cmdline, allowed in (("ifname=uplink:52:54:00:aa:bb:cc", True),
+                         ("ifname=lan0:52:54:00:12:34:56", False),
+                         ("ifname=eth0:52:54:00:aa:bb:cc", False),
+                         ("ifname=eth0:52:54:00:12:34:56", True)):
+    msg, kf, left, out = run({"ifcfg-eth0": KS}, keyfiles=["uplink.nmconnection"], cmdline=cmdline,
+        udev={"/usr/lib/udev/rules.d/60-net.rules": RENAMER})
+    case(f"kernel helper binding: {cmdline}", (msg is None and "eth0.nmconnection" in kf and
+         "etc/udev/rules.d/60-net.rules" not in run.udev) if allowed else
+         refused(msg, "helper binding") and "eth0.nmconnection" not in kf and
+         "etc/sysconfig/network-scripts/ifcfg-eth0" in left)
+# .BAK is ignored by NetworkManager but not by rename_device's case-sensitive suffix test.
+for retained, allowed in ((KS.replace("eth0", "uplink").replace("12:34:56", "aa:bb:cc"), True),
+                          (KS.replace("eth0", "lan0"), False)):
+    msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-old.BAK": retained},
+        udev={"/usr/lib/udev/rules.d/60-net.rules": RENAMER})
+    case(f"retained helper input allowed={allowed}", (msg is None and bool(kf) and
+         "etc/sysconfig/network-scripts/ifcfg-old.BAK" in left) if allowed else untouched(msg, kf, left))
 sys.exit(0 if all(cases) else 1)
