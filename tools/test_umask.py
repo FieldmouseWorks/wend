@@ -223,5 +223,61 @@ class VMWorkDirTests(unittest.TestCase):
 
 
 
-result = unittest.TextTestRunner().run(unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(c) for c in (WorkDirTests, VMWorkDirTests)))
+class ResolverTests(unittest.TestCase):
+    def test_plan_lends_dns_to_packages_but_not_network_conversion(self):
+        import tomllib
+        import walk
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(repo + "/adapters/el.toml", "rb") as f:
+            adapter = tomllib.load(f)
+        w = walk.Walk.__new__(walk.Walk)
+        w.adapter = adapter
+        steps = [{"op": "net.ifcfg-to-keyfile"}, {"op": "install", "packages": ["NetworkManager"]}]
+        downloads = w.download_commands("alma10", [{"post": steps}])
+        self.assertNotIn(walk.check.compile_step(steps[0], adapter, "alma10"), downloads)
+        self.assertIn(walk.check.compile_step(steps[1], adapter, "alma10"), downloads)
+
+    def test_only_downloads_borrow_host_dns_and_restore_on_failure(self):
+        with tempfile.TemporaryDirectory() as root:
+            os.mkdir(root + "/etc")
+            path = root + "/etc/resolv.conf"
+            with open(path, "wb") as f:
+                f.write(sandbox.RESOLV_CONF)
+            box = sandbox.Box(root)
+            for host in (b"nameserver ::1\n", b"nameserver 127.0.0.53\nsearch .\n"):
+                real_open = open
+                def opening(p, *args, **kwargs):
+                    if p == "/etc/resolv.conf":
+                        import io
+                        return io.BytesIO(host)
+                    return real_open(p, *args, **kwargs)
+                def command(*args):
+                    self.assertEqual(real_open(path, "rb").read(), sandbox.RESOLV_CONF)
+                    return 0, ""
+                with patch("builtins.open", side_effect=opening), patch.object(box, "_run", side_effect=command):
+                    box.run("network conversion")
+                with patch("builtins.open", side_effect=opening):
+                    with self.assertRaises(TimeoutError):
+                        with box.resolver(downloads=True):
+                            self.assertEqual(real_open(path, "rb").read(), host)
+                            raise TimeoutError()
+                self.assertEqual(real_open(path, "rb").read(), sandbox.RESOLV_CONF)
+
+    def test_box_changes_and_symlinks_are_preserved(self):
+        with tempfile.TemporaryDirectory() as root:
+            os.mkdir(root + "/etc")
+            path = root + "/etc/resolv.conf"
+            box = sandbox.Box(root)
+            with box.resolver(downloads=True):
+                with open(path, "wb") as f:
+                    f.write(b"nameserver 10.0.0.53\n")
+            self.assertEqual(open(path, "rb").read(), b"nameserver 10.0.0.53\n")
+            os.unlink(path)
+            os.symlink("/etc/resolv.conf", path)
+            with self.assertRaises(RuntimeError):
+                with box.resolver(downloads=True):
+                    self.fail("followed symlink")
+
+
+result = unittest.TextTestRunner().run(unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(c) for c in (WorkDirTests, VMWorkDirTests, ResolverTests)))
 sys.exit(0 if ok and result.wasSuccessful() else 1)

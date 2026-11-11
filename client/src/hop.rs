@@ -13,6 +13,8 @@ pub struct HopPlan {
     /// steps 1 to 7: set the release, refresh, kernel_before, before_transaction, pre steps, the upgrade, kernel_after,
     /// post steps, pm-option cleanup, verify
     pub commands: Vec<String>,
+    /// Commands that may fetch packages and temporarily need the host resolver.
+    pub downloads: BTreeSet<String>,
     /// step 8: run whatever happened above
     pub after: Vec<String>,
     /// where the post steps start (tools/walk.py's hop_parts): a release marked `reboot = "before-post"` boots its
@@ -104,7 +106,22 @@ pub fn hop_plan(adapter: &Doc, hop: &str, fixes: &[&Doc]) -> Result<HopPlan, Str
         Some(_) => list_of(h, "after")?.iter().map(|c| fill(c, &v)).collect(),
         None => vec![],
     };
+    let mut downloads = BTreeSet::new();
+    downloads.insert(fill(str_of(h, "refresh")?, &v));
+    downloads.extend(upgrade.iter().map(|c| fill(c, &v)));
+    downloads.extend(kernel("kernel_after")?);
+    for f in fixes {
+        for s in phase(f, "pre").iter().chain(phase(f, "post").iter()) {
+            if matches!(
+                str_of(s, "op")?,
+                "install" | "repair" | "dpkg.reinstall" | "rpm.swap-release" | "rpm.bootstrap" | "rpm.transit"
+            ) {
+                downloads.insert(step(s, adapter, hop)?);
+            }
+        }
+    }
     Ok(HopPlan {
+        downloads,
         commands,
         after,
         post_at,
@@ -135,8 +152,17 @@ mod tests {
     use super::hop_plan;
     use crate::atlas::Doc;
 
-    /// The same string tools/test_check.py asserts for the Python engine: families sorted and deduplicated, one per
-    /// line, appended after the post steps.
+    #[test]
+    fn network_conversion_uses_the_roots_dns() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let a = crate::atlas::parse_toml(&std::fs::read_to_string(root.join("adapters/el.toml")).unwrap()).unwrap();
+        let f = crate::atlas::parse_toml("hop = \"alma10\"\n[[post]]\nop = \"net.ifcfg-to-keyfile\"\n").unwrap();
+        let p = hop_plan(&a, "alma10", &[&f]).unwrap();
+        let c = crate::backend::step(&serde_json::json!({"op": "net.ifcfg-to-keyfile"}), &a, "alma10").unwrap();
+        assert!(p.commands.contains(&c));
+        assert!(!p.downloads.contains(&c));
+    }
+
     #[test]
     fn records_the_fired_fixes_adds_after_their_post_steps() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
@@ -154,6 +180,14 @@ mod tests {
         let at = p.commands.iter().position(|c| c == want).expect("no adds step");
         let post = p.commands.iter().rposition(|c| c.contains("vsftpd")).unwrap();
         assert!(at > post);
+        for c in &p.commands {
+            if c.contains("vsftpd.conf") {
+                assert!(!p.downloads.contains(c));
+            }
+            if c.contains(" install ") {
+                assert!(p.downloads.contains(c));
+            }
+        }
         // a direct walk doesn't run the checker first: the compile refuses a non-family itself
         let evil = fix("\"x' ; reboot ; '\"");
         assert!(hop_plan(&a, "alma9", &[&evil]).is_err());
