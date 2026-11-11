@@ -63,6 +63,49 @@ fn word<'a>(v: &'a toml::Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| format!("missing {key}").into())
 }
 
+// Match vm.replay's shelter precondition: if this walk crosses the Python 2
+// drop, the shelter must be built on the route's own start release.
+fn shelter_supported(
+    adapter: &toml::Value,
+    route: &toml::Value,
+    start: &str,
+    all: &[String],
+    remaining: &[String],
+) -> Result<bool> {
+    let from = word(route, "from")?;
+    let mut keeps = from;
+    for hop in all {
+        if adapter
+            .get("may_skip")
+            .and_then(toml::Value::as_array)
+            .is_some_and(|skip| skip.iter().any(|v| v.as_str() == Some(hop)))
+        {
+            continue;
+        }
+        let python2 = adapter
+            .get("runtimes")
+            .and_then(|v| v.get(hop))
+            .and_then(|v| v.get("python2"))
+            .and_then(toml::Value::as_array)
+            .map(|versions| !versions.is_empty())
+            .ok_or("shelter route has no Python 2 runtime metadata")?;
+        if python2 {
+            keeps = hop;
+        } else {
+            break;
+        }
+    }
+    if keeps == word(route, "to")? {
+        return Ok(true);
+    }
+    let drop_at = if keeps == from {
+        0
+    } else {
+        all.iter().position(|h| h == keeps).ok_or("missing shelter drop")? + 1
+    };
+    Ok(!all.get(drop_at).is_some_and(|drop| remaining.contains(drop)) || (keeps == from && start == from))
+}
+
 fn plan(root: &Path) -> Result<Vec<Replay>> {
     let routes = docs(root, "routes", false)?;
     let boxes = docs(root, "boxes", true)?;
@@ -106,6 +149,14 @@ fn plan(root: &Path) -> Result<Vec<Replay>> {
                 all_hops.iter().position(|h| h == start).map(|i| &all_hops[i + 1..])
             };
             if let Some(remaining) = remaining.filter(|h| !h.is_empty()) {
+                if box_doc
+                    .get("shelter")
+                    .and_then(toml::Value::as_table)
+                    .is_some_and(|s| !s.is_empty())
+                    && !shelter_supported(&adapter, &route, start, &all_hops, remaining)?
+                {
+                    continue;
+                }
                 matched = true;
                 let uefi = adapter
                     .get("releases")
@@ -139,7 +190,7 @@ fn plan(root: &Path) -> Result<Vec<Replay>> {
             }
         }
         if !matched {
-            return Err(format!("{path} has no starting box; refusing an incomplete proof").into());
+            return Err(format!("{path} has no runnable box; refusing an incomplete proof").into());
         }
     }
     if plan.is_empty() {
@@ -188,12 +239,15 @@ fn evidence(v: &Value, replay: &Replay, head: &str) -> Result<()> {
 struct Lab {
     runner: PathBuf,
     identity: String,
+    worker_runner: PathBuf,
 }
 impl Lab {
     fn call(&self, args: &[&str]) -> Result<String> {
         let output = Command::new("python3")
             .arg("-P")
             .arg(&self.runner)
+            .env("WEND_LAB_WORKER_RUNNER", &self.worker_runner)
+            .env_remove("WEND_LAB_NO_WORKER")
             .args(args)
             .output()?;
         if !output.status.success() {
@@ -208,7 +262,7 @@ impl Lab {
         Ok(String::from_utf8(output.stdout)?)
     }
     fn entries(&self) -> Result<Vec<Value>> {
-        Ok(serde_json::from_str(&self.call(&["queue", "--json"])?)?)
+        Ok(serde_json::from_str(&self.call(&["queue", "--json", "--wake"])?)?)
     }
     fn replay(&self, replay: &Replay, head: &str, number: &str) -> Result<(Value, String)> {
         // Stable identity also lets a replacement proof unit adopt an existing
@@ -220,39 +274,31 @@ impl Lab {
             replay.box_id,
             replay.flags.join(" ")
         );
-        let mut entries = self.entries()?;
-        if !entries
-            .iter()
-            .any(|e| e["by"] == owner && ["queued", "running", "done"].iter().any(|s| e["state"] == *s))
-        {
-            if STOP.load(Ordering::Relaxed) {
-                return Err("proof stopped before enqueue".into());
-            }
-            let mut args = vec![
-                "enqueue",
-                "replay",
-                &replay.route,
-                &replay.box_id,
-                "--sha",
-                head,
-                "--pr",
-                number,
-                "--by",
-                &owner,
-            ];
-            let flags = replay.flags.join(" ");
-            if !flags.is_empty() {
-                args.extend(["--vm-flags", &flags]);
-            }
-            let output = self.call(&args)?;
-            println!("{output}");
-            entries = self.entries()?;
+        if STOP.load(Ordering::Relaxed) {
+            return Err("proof stopped before claim".into());
         }
-        let entry = entries
-            .iter()
-            .find(|e| e["by"] == owner && ["queued", "running", "done"].iter().any(|s| e["state"] == *s))
-            .ok_or("enqueued job is absent")?;
-        let id = entry["id"].as_str().ok_or("lab entry has no id")?.to_owned();
+        let mut args = vec![
+            "enqueue",
+            "replay",
+            &replay.route,
+            &replay.box_id,
+            "--sha",
+            head,
+            "--pr",
+            number,
+            "--by",
+            &owner,
+            "--claim",
+            &owner,
+        ];
+        let flags = replay.flags.join(" ");
+        if !flags.is_empty() {
+            args.extend(["--vm-flags", &flags]);
+        }
+        let response = self.call(&args)?;
+        let claim: Value = serde_json::from_str(&response)?;
+        let id = claim["id"].as_str().ok_or("claim returned no job id")?.to_owned();
+        println!("claimed {id}: {response}");
         loop {
             let entries = self.entries()?;
             let entry = entries.iter().find(|e| e["id"] == id).ok_or("lab job disappeared")?;
@@ -280,8 +326,8 @@ fn run(args: &[String]) -> Result<()> {
         println!("{} serial replays; queue limit 8 hours each", suite.len());
         return Ok(());
     }
-    if args.len() != 2 {
-        return Err("usage: wend-lab-proof TRUSTED_TOOLS/remi.py HEAD_WORKTREE".into());
+    if args.len() != 3 {
+        return Err("usage: wend-lab-proof TRUSTED_TOOLS/remi.py HEAD_WORKTREE STABLE_WORKER_TOOLS/remi.py".into());
     }
     let head = std::env::var("PROOF_HEAD")?;
     let number = std::env::var("PROOF_NUMBER")?;
@@ -310,12 +356,14 @@ fn run(args: &[String]) -> Result<()> {
     identity.update(include_bytes!("wend-lab-proof.rs"));
     identity.update(include_bytes!("../../Cargo.lock"));
     identity.update(fs::read(&runner)?);
+    identity.update(fs::read(&args[2])?);
     let lab = Lab {
         runner,
+        worker_runner: PathBuf::from(&args[2]),
         identity: identity.finalize().iter().map(|b| format!("{b:02x}")).collect(),
     };
     let mut note = format!(
-        "VM replay proof on `{head}`: {} serial route/box replays.\n\n",
+        "VM replay proof on `{head}`: {} serial route/box replays. Unsupported shelter combinations are excluded: the VM runner builds shelters only at a route start.\n\n",
         suite.len()
     );
     fs::write(&summary, &note)?;

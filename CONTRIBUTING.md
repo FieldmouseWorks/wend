@@ -92,8 +92,8 @@ verdict on its exact head commit when it:
 
 Statuses belong to a commit, so every push is judged again from scratch.
 
-The steward's `proofRuns.remi-proof` uses `wend-lab-proof`: every route on every compatible box, including boxes
-joining partway along the route, on BIOS and on UEFI where the starting installer supports it. The lab queue still
+The steward's `proofRuns.remi-proof` uses `wend-lab-proof`: every route on every compatible box, including supported boxes
+joining partway along the route (the runner's unsupported shelter joins are excluded), on BIOS and on UEFI where the starting installer supports it. The lab queue still
 owns VM ordering. The command refuses empty, dirty, wrong-head, partial or failed evidence and writes a summary;
 burrow-proof posts the summary and the status on `PROOF_HEAD`. A failed command goes to the usual red-check repair
 job, which reads the proof log. There is no model session watching the replays. The automatic suite does not claim

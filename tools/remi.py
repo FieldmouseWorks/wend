@@ -2,8 +2,8 @@
 slot at a time, ending in a full JSON verdict. Nobody types a VM command by hand, and nobody greps a log for a summary.
 
   python3 -P tools/remi.py enqueue JOB ARG... --sha SHA [--pr N] --by WHO [--reply-to SESSION] [--after ID]
-                                               [--vm-flags "FLAGS"]
-  python3 -P tools/remi.py queue [--json]      the queue: running, waiting (and on what), queued, then the last done
+                                               [--vm-flags "FLAGS"] [--claim KEY]
+  python3 -P tools/remi.py queue [--json] [--wake]      the queue: running, waiting (and on what), queued, then the last done
   python3 -P tools/remi.py order ID...         put these queued jobs first, in this order (the lab order)
   python3 -P tools/remi.py cancel ID           drop a queued job, or stop a running one (its verdict says cancelled)
   python3 -P tools/remi.py wait ID             block until the job ends; prints its result and verdict path
@@ -46,6 +46,10 @@ What it enforces, so nobody has to remember it:
   files' hashes, and for a rehearse the plan's checks.toml in full, the walk's hops and every failed step.
 - This runner runs only from a clean checkout whose HEAD is on origin (docs/remi.md: <src>/wend-runner, kept at
   origin/main by `update`), so what a job runs is decided by main's copy of this file, not by the commit under test.
+
+`enqueue --claim KEY` atomically adopts or creates one proof identity and returns JSON with id/adopted.
+`queue --wake` wakes an absent locked worker. Production workers run as independent user units; set
+WEND_LAB_WORKER_RUNNER to a stable runner when invoking a transient trusted tools checkout.
 
 Standard library only. It never prints, reads or copies anything under /root/.config/wend or the token files.
 """
@@ -267,7 +271,7 @@ def enqueue(args):
     opts, pos = {}, []
     while rest:
         a = rest.pop(0)
-        if a in ("--sha", "--pr", "--by", "--reply-to", "--after", "--vm-flags"):
+        if a in ("--sha", "--pr", "--by", "--reply-to", "--after", "--vm-flags", "--claim"):
             if not rest:
                 raise Refused(f"{a} needs a value")
             opts[a[2:]] = rest.pop(0)
@@ -297,30 +301,77 @@ def enqueue(args):
     if job != "upgrade" and any(f in flags for f in UPGRADE_FLAGS):
         raise Refused(f"{', '.join(UPGRADE_FLAGS)} go with an upgrade only")
     runner_check()
+    key = opts.get("claim")
+    identity = dict(job=job, args=pos, vm_flags=flags, sha=sha, pr=int(pr) if pr else None)
+
+    def claimed():  # queue lock held: one owner for lookup and creation
+        if key is None:
+            return None
+        if not key or len(key) > 2048:
+            raise Refused("--claim needs a nonempty key of at most 2048 characters")
+        matches = [x for x in entries() if x.get("claim") == key]
+        if any(any(x.get(k) != v for k, v in identity.items()) for x in matches):
+            raise Refused("claim key belongs to another job identity")
+        return next((x for x in matches if x["state"] in ("queued", "running", "done")), None)
+
+    def answer(e, adopted, ahead=()):
+        if e["state"] in ("queued", "running") and os.environ.get("WEND_LAB_NO_WORKER") != "1":
+            start_worker()  # adoption wakes the locked worker too
+        if key is not None:
+            print(json.dumps({"id": e["id"], "adopted": adopted}))
+        else:
+            print(f"queued {e['id']}: {job} {' '.join(pos)} at {sha[:12]} ({e['origin']['origin']}); {len(ahead)} job(s) ahead")
+        return 0
+
+    with QueueLock():
+        e = claimed()
+    if e is not None:
+        return answer(e, True)
     where = trusted(sha, pr)
     with QueueLock():
-        if opts.get("after"):
-            load(opts["after"])
-        jid = None
-        while jid is None or os.path.exists(entry_path(jid)):  # under the lock: a collision draws again
-            jid = f"{time.strftime('%Y%m%d-%H%M%S')}-{job}-{secrets.token_hex(2)}"
-        e = {"id": jid, "job": job, "args": pos, "vm_flags": flags, "sha": sha, "pr": int(pr) if pr else None,
-             "by": opts["by"], "reply_to": opts.get("reply-to"), "after": opts.get("after"), "rank": time.time(),
-             "state": "queued", "enqueued": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "origin": where,
-             "delivered": False}
-        save(e)
-        ahead = [x for x in entries() if x["state"] in ("queued", "running") and x["id"] != jid]
-    if os.environ.get("WEND_LAB_NO_WORKER") != "1":
-        start_worker()
-    print(f"queued {jid}: {job} {' '.join(pos)} at {sha[:12]} ({where['origin']}); {len(ahead)} job(s) ahead")
-    return 0
+        e = claimed()  # another caller may have claimed it during origin validation
+        if e is not None:
+            adopted, ahead = True, []
+        else:
+            if opts.get("after"):
+                load(opts["after"])
+            jid = None
+            while jid is None or os.path.exists(entry_path(jid)):
+                jid = f"{time.strftime('%Y%m%d-%H%M%S')}-{job}-{secrets.token_hex(2)}"
+            e = dict(identity, id=jid, by=opts["by"], reply_to=opts.get("reply-to"), after=opts.get("after"),
+                     rank=time.time(), state="queued", enqueued=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                     origin=where, delivered=False)
+            if key is not None:
+                e["claim"] = key
+            save(e)
+            adopted, ahead = False, [x for x in entries() if x["state"] in ("queued", "running") and x["id"] != jid]
+    return answer(e, adopted, ahead)
 
 
 def start_worker():
     os.makedirs(QUEUE, exist_ok=True)
-    with open(os.path.join(QUEUE, "worker.log"), "a") as log:
-        subprocess.Popen([sys.executable, "-P", "-u", os.path.abspath(__file__), "worker"], stdin=subprocess.DEVNULL,
-                         stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    with open(os.path.join(QUEUE, "worker.lock"), "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return  # the queue already has a worker
+    runner = os.environ.get("WEND_LAB_WORKER_RUNNER", os.path.abspath(__file__))
+    if TEST:
+        with open(os.path.join(QUEUE, "worker.log"), "a") as log:
+            subprocess.Popen([sys.executable, "-P", "-u", runner, "worker"], stdin=subprocess.DEVNULL,
+                             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        return
+    # The queue, not the caller's proof cgroup, owns this worker and all its
+    # guests. Its stable runner must remain available after that proof ends.
+    unit = f"wend-lab-worker-{os.getpid()}-{secrets.token_hex(4)}"
+    command = ["systemd-run", "--user", "--quiet", "--collect", f"--unit={unit}",
+               "--property=Type=exec", "--property=Restart=on-failure", "--property=RestartSec=5s",
+               f"--working-directory={os.path.dirname(os.path.dirname(runner))}",
+               f"--property=StandardOutput=append:{QUEUE}/worker.log", f"--property=StandardError=append:{QUEUE}/worker.log"]
+    for name in ("WEND_LAB", "WEND_LAB_SRC", "WEND_LAB_CARGO", "WEND_LAB_POLL"):
+        if name in os.environ:
+            command.append(f"--setenv={name}={os.environ[name]}")
+    subprocess.run([*command, "--", sys.executable, "-P", "-u", runner, "worker"], check=True)
 
 
 def mirror_hash(sha):
@@ -792,6 +843,8 @@ def file_(args):
 
 def queue(args):
     es = entries()
+    if "--wake" in args and any(e["state"] in ("queued", "running") for e in es):
+        start_worker()
     if "--json" in args:
         print(json.dumps(es, indent=1))
         return 0

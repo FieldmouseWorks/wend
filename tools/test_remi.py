@@ -362,5 +362,67 @@ for i in (1, 2):
     raw += p.stdout.split(b"\n", 1)[1]
 check(raw == b"a" * 47999 + "é".encode() + b"z" * 10, "file parts join back byte for byte across a split character")
 
+# A claim is one transaction, including callers whose origin checks overlap.
+claim_args = ["enqueue", "build", "el/c7", "--sha", main, "--by", "proof", "--claim", "atomic-proof"]
+callers = [subprocess.Popen([sys.executable, "-P", os.path.join(HERE, "remi.py"), *claim_args],
+                           env=NOW, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(6)]
+answers = []
+for caller in callers:
+    out, err = caller.communicate(timeout=60)
+    check(caller.returncode == 0, f"concurrent claim succeeds: {err}")
+    answers.append(json.loads(out))
+claimed_id = answers[0]["id"]
+check(len({a["id"] for a in answers}) == 1 and sum(not a["adopted"] for a in answers) == 1,
+      "concurrent claims persist exactly one new job")
+# It was persisted with no worker: adoption must wake the existing locked queue.
+rc, out = remi(*claim_args)
+check(rc == 0 and json.loads(out) == {"id": claimed_id, "adopted": True}, "adoption keeps the original id")
+remi("wait", claimed_id)
+check(verdict(claimed_id)["result"] == "pass", "adoption wakes a worker for an orphaned queued entry")
+rc, out = remi(*claim_args)
+check(json.loads(out)["id"] == claimed_id, "completed proof evidence is adopted without another replay")
+rc, out = remi(*["el/junk" if a == "el/c7" else a for a in claim_args], env=NOW)
+check(rc != 0 and "another job identity" in out, "a reused key cannot select another scenario")
+
+cancel_args = claim_args[:-1] + ["cancelled-claim"]
+rc, out = remi(*cancel_args, env=NOW)
+cancelled_id = json.loads(out)["id"]
+remi("cancel", cancelled_id)
+callers = [subprocess.Popen([sys.executable, "-P", os.path.join(HERE, "remi.py"), *cancel_args],
+                           env=NOW, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(4)]
+fresh = [json.loads(c.communicate(timeout=60)[0])["id"] for c in callers]
+check(len(set(fresh)) == 1 and fresh[0] != cancelled_id, "concurrent retries replace a cancelled claim exactly once")
+remi("queue", "--json", "--wake")
+remi("wait", fresh[0])
+check(verdict(fresh[0])["result"] == "pass", "an explicit queue wake recovers persisted work")
+
+# An adopted running entry with no live runner uses the worker's normal error path.
+dead_args = claim_args[:-1] + ["dead-running-claim"]
+rc, out = remi(*dead_args, env=NOW)
+dead_id = json.loads(out)["id"]
+p = f"{w}/lab/queue/{dead_id}.json"
+e = json.load(open(p)); e.update(state="running", pid=99999999, ready=True)
+json.dump(e, open(p, "w"))
+rc, out = remi(*dead_args)
+check(json.loads(out)["id"] == dead_id, "a dead running entry is followed, not duplicated")
+remi("wait", dead_id)
+check(verdict(dead_id)["result"] == "error", "the awakened worker records the dead runner's actual error")
+
+# Production workers belong to a user unit, independent of the caller cgroup,
+# and use a stable script after a transient proof's tools checkout goes away.
+import importlib.util  # noqa: E402
+from unittest.mock import patch  # noqa: E402
+spec = importlib.util.spec_from_file_location("lab_runner", os.path.join(HERE, "remi.py"))
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.TEST, module.QUEUE = False, f"{w}/startup-queue"
+with patch.dict(os.environ, WEND_LAB_WORKER_RUNNER="/stable/tools/remi.py", WEND_LAB=f"{w}/lab"), \
+        patch.object(module.subprocess, "run") as launch:
+    module.start_worker()
+    argv = launch.call_args.args[0]
+    check(argv[0] == "systemd-run" and "--user" in argv and "--property=Restart=on-failure" in argv and
+          "--working-directory=/stable" in argv and argv[-2:] == ["/stable/tools/remi.py", "worker"] and
+          f"--setenv=WEND_LAB={w}/lab" in argv, "worker startup uses an independent managed unit and stable runner")
+
 print(f"{sum(results)}/{len(results)} passed")
 sys.exit(0 if all(results) else 1)

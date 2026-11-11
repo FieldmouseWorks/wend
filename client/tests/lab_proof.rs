@@ -65,6 +65,10 @@ if a[0] == 'queue':
     print(json.dumps(entries))
 elif a[0] == 'enqueue':
     def opt(k): return a[a.index(k)+1]
+    key = opt('--claim')
+    existing = next((e for e in entries if e.get('claim') == key and e['state'] in ('queued','running','done')), None)
+    if existing:
+        print(json.dumps({'id':existing['id'],'adopted':True})); raise SystemExit(0)
     i = str(len(entries)+1)
     sha, route, box = opt('--sha'), a[2], a[3]
     bad = control.get('bad')
@@ -79,9 +83,13 @@ elif a[0] == 'enqueue':
     if bad == 'fail': verdict['result'] = 'fail'; verdict['commands'][0]['rc'] = 1
     path = root/('verdict-'+i+'.json')
     path.write_text(json.dumps(verdict))
-    entries.append({'id':i,'by':opt('--by'),'state':'queued' if control.get('hold') else 'done','verdict':str(path)})
+    entries.append({'id':i,'by':opt('--by'),'claim':key,'state':'queued' if control.get('hold') else 'done','verdict':str(path)})
     (root/'queue.json').write_text(json.dumps(entries))
-    print('queued '+i)
+    if control.get('terminal'):
+        entries[-1]['state'] = control['terminal']; verdict['result'] = control['terminal']
+        verdict['reasons'] = ['immediate '+control['terminal']]
+        path.write_text(json.dumps(verdict)); (root/'queue.json').write_text(json.dumps(entries))
+    print(json.dumps({'id':i,'adopted':False}))
 elif a[0] == 'cancel':
     entry = next(e for e in entries if e['id'] == a[1])
     entry['state'] = 'cancelled'
@@ -99,6 +107,7 @@ else: raise SystemExit(2)
         Command::new(env!("CARGO_BIN_EXE_wend-lab-proof"))
             .arg(self.dir.join("remi.py"))
             .arg(self.dir.join("head"))
+            .arg(self.dir.join("remi.py"))
             .env("PROOF_HEAD", &self.head)
             .env("PROOF_NUMBER", "5")
             .env("PROOF_SUMMARY", self.dir.join("summary.md"))
@@ -165,6 +174,7 @@ fn stopping_cancels_the_queue_entry_and_a_retry_does_not_adopt_it() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_wend-lab-proof"))
         .arg(f.dir.join("remi.py"))
         .arg(f.dir.join("head"))
+        .arg(f.dir.join("remi.py"))
         .env("PROOF_HEAD", &f.head)
         .env("PROOF_NUMBER", "5")
         .env("PROOF_SUMMARY", f.dir.join("summary.md"))
@@ -211,4 +221,80 @@ fn stopping_cancels_the_queue_entry_and_a_retry_does_not_adopt_it() {
         4,
         "retry enqueues a replacement and the remaining two suite entries"
     );
+}
+
+#[test]
+fn immediate_terminal_verdicts_preserve_their_actual_reasons() {
+    for terminal in ["refused", "error", "cancelled"] {
+        let f = Fixture::new();
+        fs::write(f.dir.join("control.json"), json!({"terminal":terminal}).to_string()).unwrap();
+        assert_eq!(f.invoke().status.code(), Some(1));
+        let note = fs::read_to_string(f.dir.join("summary.md")).unwrap();
+        assert!(note.contains(&format!("immediate {terminal}")), "{note}");
+        assert!(!note.contains("enqueued job is absent"));
+    }
+}
+
+#[test]
+fn joined_shelters_are_excluded_but_regular_and_mapped_joins_remain() {
+    let f = Fixture::new();
+    let root = f.dir.join("head");
+    for folder in [
+        "routes/el",
+        "boxes/el/junk",
+        "boxes/el/pyapp",
+        "boxes/el/plain6",
+        "boxes/el/sl7",
+    ] {
+        fs::create_dir_all(root.join(folder)).unwrap();
+    }
+    fs::write(
+        root.join("adapters/el.toml"),
+        "[releases.centos7.install]\nuefi=true\n[releases.sl7]\njoins='centos7'\n[runtimes.centos6]\npython2=['2.7']\n[runtimes.centos7]\npython2=['2.7']\n[runtimes.alma10]\npython2=[]\n",
+    )
+    .unwrap();
+    for start in ["centos4", "centos5", "centos7"] {
+        let hops = if start == "centos7" {
+            "['alma10']"
+        } else {
+            "['centos6','centos7','alma10']"
+        };
+        fs::write(
+            root.join(format!("routes/el/{start}.toml")),
+            format!("family='el'\nfrom='{start}'\nto='alma10'\nhops={hops}\n"),
+        )
+        .unwrap();
+    }
+    for name in ["junk", "pyapp"] {
+        fs::write(
+            root.join(format!("boxes/el/{name}/box.toml")),
+            "family='el'\nrelease='centos7'\n[shelter.app]\nruntime='python2'\n",
+        )
+        .unwrap();
+    }
+    for (name, release) in [("plain6", "centos6"), ("sl7", "sl7")] {
+        fs::write(
+            root.join(format!("boxes/el/{name}/box.toml")),
+            format!("family='el'\nrelease='{release}'\n"),
+        )
+        .unwrap();
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_wend-lab-proof"))
+        .arg("--plan")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = String::from_utf8(output.stdout).unwrap();
+    for start in ["centos4", "centos5"] {
+        for shelter in ["junk", "pyapp"] {
+            assert!(!text.contains(&format!("routes/el/{start}.toml el/{shelter}")));
+        }
+        for plain in ["plain6", "sl7"] {
+            assert!(text.contains(&format!("routes/el/{start}.toml el/{plain}")));
+        }
+    }
+    for shelter in ["junk", "pyapp"] {
+        assert!(text.contains(&format!("routes/el/centos7.toml el/{shelter} --uefi")));
+    }
 }
