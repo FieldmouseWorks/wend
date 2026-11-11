@@ -531,6 +531,35 @@ for name, doc, want in (("an Ubuntu role only bash parses", {**tweb, "roles": {*
     bad += bool(errs) != want
 # A failed producer must not become a passing health check through pipeline negation.
 for command, want in (
+        ('if false; then true; else ! missing | grep -q x; fi', True),
+        ('case x in x|y) ! missing | cat;; esac', True),
+        ('f() { ! missing | cat; }; f', True),
+        ('! { true; missing; } | cat', True),
+        ('! if true; then missing; fi | cat', True),
+        ('! (true; missing) 2>/dev/null | cat', True),
+        ('rc="$( ! missing | grep -q x )"', True),
+        ('rc=$( ! missing | cat )', True),
+        ('rc=`! missing | cat`', True),
+        ('time ! missing | cat', True),
+        ('! time missing | cat', True),
+        ('! { true && true; } 2>&1 | cat', True),
+        ('! missing \\\n | cat', True),
+        ('! missing \\\\\ntrue | cat', False),
+        ('! missing \\\\\n! missing | cat', True),
+        ('test $(( ! 0 | 0 )) -eq 1', False),
+        ('(( ! 0 | 0 ))', False),
+        ('! [[ x =~ a|b ]]', False),
+        ('case x in x|y) ! true;; esac', False),
+        ("cat <<'END'\n! health | data\n$( ! missing | cat )\nEND", False),
+        ('cat <<END\n! health | data\nEND', False),
+        ("cat <<END\n'$( ! missing | cat )'\nEND", True),
+        ('! echo `a | b`', False),
+        ('! echo "$(a | b)"', False),
+        ('! echo "$( ! a | b )"', True),
+        ('echo "${x:-$( ! a | b )}"', True),
+        ('echo "$(( $( ! a | b ) + 1 ))"', True),
+        ('! true; echo x | cat', False),
+        ('! { echo x | cat; }', False),
         ("! apt-mark showauto 2>/dev/null | grep -q x", True),
         ("true && ! missing 2>&1 | grep -q x", True),
         ("if ! missing | grep -q x; then true; fi", True),
@@ -548,6 +577,9 @@ for command, want in (
             "family": "debian", "vm": {"live": {"probe": command}}}
         errs = check.box_shell_errors(doc)
         got = any("negated pipelines" in e for e in errs)
+        if any("shell pipeline lint failed" in e for e in errs):
+            print(f"WRONG   parser failed for {command!r}: {errs}")
+            bad += 1
         print(("passed  " if got == want else "WRONG   ") + f"{table} pipeline lint: {command}")
         bad += got != want
 for name, roles in (("[roles] as a list", ["x"]), ("[roles] as a string", "x"), ("a role that isn't a string", {"x": 1}),

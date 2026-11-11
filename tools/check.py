@@ -6,7 +6,7 @@
   python3 tools/check.py --compile FILE  print the shell commands a fix compiles to on its family's adapter
   python3 tools/check.py --also-runs DIR  also hold the runs under DIR (./wend verify's local ones) to the decoy check
 
-Standard library only (Python 3.11+ for tomllib). Exit status 1 on any error. The rules live in SPEC.md; this file
+Python 3.11+ for tomllib; Rust/Cargo builds the shell syntax linter. Exit status 1 on any error. The rules live in SPEC.md; this file
 is the executable copy of them, and when the two disagree this file is the bug.
 """
 import fnmatch
@@ -687,34 +687,16 @@ def _table(x):
 
 
 def negated_pipeline(s):
-    """Lint shell operators, preserving quoted words so patterns like '[!|]' are data."""
-    s = s.replace("\\\n", "")  # shell line continuations do not end a pipeline
-    tokens = re.findall(r"""\#[^\n]*|[0-9]*[<>]&[0-9-]+|&&|\|\||\|&|[|;&()\n]|(?:[^\s|;&()'"\\]|\\.|'[^']*'|"(?:\\.|[^"\\])*")+""", s)
-    depth, negated, start = 0, set(), True
-    for token in tokens:
-        if token.startswith("#"):
-            continue
-        if token == "(":
-            depth += 1
-            start = True
-        elif token == ")":
-            negated.discard(depth)
-            depth -= 1
-            start = False
-        elif token in (";", "&&", "||", "&", "\n"):
-            negated.discard(depth)
-            start = True
-        elif token == "!" and start:
-            negated.add(depth)
-        elif token in ("|", "|&"):
-            if depth in negated:
-                return True
-            start = True
-        elif start and token in ("if", "then", "elif", "while", "until", "do", "{", "}"):
-            pass
-        else:
-            start = False
-    return False
+    """Delegate executable shell structure to the Rust parser (never execute it)."""
+    if not hasattr(negated_pipeline, "binary"):
+        manifest = os.path.join(ROOT, "tools", "shell-lint", "Cargo.toml")
+        subprocess.run(["cargo", "build", "--quiet", "--locked", "--manifest-path", manifest,
+                        "--target-dir", os.path.join(ROOT, "tools", "shell-lint", "target")], check=True)
+        negated_pipeline.binary = os.path.join(ROOT, "tools", "shell-lint", "target", "debug", "wend-shell-lint")
+    result = subprocess.run([negated_pipeline.binary], input=s, capture_output=True, text=True)
+    if result.returncode:
+        raise ValueError(result.stderr.strip())
+    return result.stdout.strip() == "negated"
 
 
 def box_shell_errors(doc):
@@ -727,8 +709,12 @@ def box_shell_errors(doc):
     for name, s, shells in named:
         if not isinstance(s, str):
             continue
-        if (name.startswith("role ") or name.startswith("[vm].live ")) and negated_pipeline(s):
-            errs.append(f"{name}: negated pipelines can hide command failures; capture and check the producer first")
+        if name.startswith("role ") or name.startswith("[vm].live "):
+            try:
+                if negated_pipeline(s):
+                    errs.append(f"{name}: negated pipelines can hide command failures; capture and check the producer first")
+            except (ValueError, OSError, subprocess.CalledProcessError) as e:
+                errs.append(f"{name}: shell pipeline lint failed: {e}")
         for x in shells:
             if not shutil.which(x):
                 if x != "dash":  # dash is no requirement (AGENTS.md 0); CI's runner has it, so the gate still holds there

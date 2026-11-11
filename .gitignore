@@ -11,3 +11,5 @@ client/target/
 
 # Claude notes for this machine only
 CLAUDE.local.md
+
+tools/shell-lint/target/
