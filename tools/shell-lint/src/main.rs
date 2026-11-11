@@ -88,7 +88,10 @@ fn arithmetic(s: &str) -> Result<bool> {
                 }
             }
             _ => {
-                if pieces(vec![part], true)? {
+                // Nested parameter operands inside a subscript keep word
+                // quoting. Double quotes and arithmetic pieces establish their
+                // own contexts in pieces(), rather than inheriting this flag.
+                if pieces(vec![part], brackets == 0)? {
                     return Ok(true);
                 }
             }

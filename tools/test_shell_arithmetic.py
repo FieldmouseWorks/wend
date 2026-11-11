@@ -17,6 +17,17 @@ class ArithmeticTests(unittest.TestCase):
                         ('a[' + literals[0] + '] + ' + executable, True),
                         ('a[b[' + literals[0] + ']]', False),
                         ('a[b[' + executable + ']]', True)]
+        # Subscript operands inherit word quoting recursively. Double quotes
+        # and nested arithmetic expansions establish their own contexts.
+        for op in ('-', ':-', '+', ':+', '=', ':=', '?', ':?'):
+            for operand in ("'" + executable + "'", "'`! missing | cat`'"):
+                nested = '${x' + op + operand + '}'
+                deep = '${y' + op + nested + '}'
+                expressions.extend((('a[' + nested + ']', False),
+                                    ('a[' + deep + ']', False),
+                                    ('a["' + nested + '"]', True),
+                                    ('a[$(( ' + nested + ' ))]', True)))
+            expressions.append(('a[${x' + op + executable + '}]', True))
         for expression, want in expressions:
             forms = (
                 '(( ' + expression + ' == 0 ))',
