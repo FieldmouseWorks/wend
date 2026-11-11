@@ -621,4 +621,33 @@ for persistent in (False, True):
         msg, kf, left, out = run({"ifcfg-eth0": KS}, cmdline=cmdline, udev=udev)
         case(f"biosdevname refusal preserves files (persistent={persistent}, {cmdline!r}, {rules!r})",
              untouched(msg, kf, left) and refused(msg, "biosdevname") and not run.links)
+
+# Reject bytes consumers do not share BEFORE comments, blank lines or token boundaries
+# can erase them. Include retained helper inputs that NetworkManager ignores.
+for ws in ("\u00a0", "\u2003", "\u2028", "\u2029", "\x85", "\v", "\f", "\r"):
+    bad_rules = [
+        BIOS.replace('GOTO="netdevicename_end"', ws + 'GOTO="netdevicename_end"'),
+        BIOS.replace('ENV{UDEV_BIOSDEVNAME}=="0"', ws + 'ENV{UDEV_BIOSDEVNAME}=="0"'),
+        BIOS.replace('\n', ws),
+        BIOS + ws + '# hidden comment\n',
+        BIOS + '# comment' + ws + '\n',
+        BIOS + ws + '\n',
+    ]
+    for persistent in (False, True):
+        for rules in bad_rules:
+            udev = {"/usr/lib/udev/rules.d/71-biosdevname.rules": rules}
+            if persistent:
+                udev["/run/udev/rules.d/71-biosdevname.rules"] = None
+            msg, kf, left, out = run({"ifcfg-eth0": KS}, cmdline="biosdevname=0", udev=udev)
+            case(f"unsupported rule whitespace {ws!r}, persistent={persistent}",
+                 untouched(msg, kf, left) and refused(msg, "unsupported character") and not run.links)
+    for suffix in ("", ".BAK"):
+        for key, value in (("DEVICE", "eth0"), ("HWADDR", "52:54:00:12:34:56")):
+            for decorated in (ws + value, value + ws, value + ws + "# comment"):
+                profile = "DEVICE=eth0\nHWADDR=52:54:00:12:34:56\n"
+                profile = profile.replace(key + "=" + value, key + "=" + decorated)
+                msg, kf, left, out = run({"ifcfg-eth0": KS, "ifcfg-extra" + suffix: profile},
+                    udev={"/usr/lib/udev/rules.d/60-net.rules": RENAMER})
+                case(f"unsupported helper whitespace {ws!r} {key} retained={bool(suffix)}",
+                     untouched(msg, kf, left) and not run.links)
 sys.exit(0 if all(cases) else 1)

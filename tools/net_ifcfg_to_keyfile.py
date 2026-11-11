@@ -280,6 +280,15 @@ def plan(path, net, resolv):
     return c, dev, hw, args
 
 
+def naming_text(path):
+    # Validate bytes before text decoding, universal-newline translation, comment filtering or
+    # whitespace normalization. Consumers disagree on other whitespace and line separators.
+    data = open(path, "rb").read()
+    if any(b not in (9, 10) and not 32 <= b <= 126 for b in data):
+        fail(f"{path}: unsupported character in naming input")
+    return data.decode("ascii")
+
+
 def check_udev(path):
     helper = False
     # /run overrides disappear at reboot. Both the live and persistent rule sets must be safe.
@@ -292,7 +301,7 @@ def check_udev(path):
                 seen.add(name)
                 rule_path = os.path.join(directory, name)
                 try:
-                    text = "".join(line for line in open(rule_path) if not line.lstrip().startswith("#"))
+                    text = "\n".join(line for line in naming_text(rule_path).split("\n") if not line.lstrip().startswith("#"))
                 except (OSError, UnicodeDecodeError) as e:
                     fail(f"{path}: cannot inspect {rule_path}: {e}")
                 rules = [line.strip() for line in text.replace("\\\n", "").splitlines() if line.strip()]
@@ -301,7 +310,7 @@ def check_udev(path):
                     # Do not normalize malformed keywords, operators, quotes or attributes into stock rules.
                     if rules != BIOS_RULES:
                         fail(f"{path}: {rule_path} is not the recognized stock biosdevname rule")
-                    cmdline = open(CMDLINE).read()
+                    cmdline = naming_text(CMDLINE)
                     # systemd's cmdline lexer is not shell syntax. Until we implement that lexer,
                     # refuse quoting/escaping anywhere rather than overlook a hidden enabling argument.
                     if any(c in cmdline for c in ("'", '"', chr(92))):
@@ -329,7 +338,7 @@ def helper_bindings():
     Kernel ifname= has priority over ifcfg; checking both is conservative and also guards later cmdline removal.
     """
     bindings = []
-    for word in open(CMDLINE).read().split():
+    for word in naming_text(CMDLINE).split():
         if not word.startswith("ifname="):
             continue
         parts = word[len("ifname="):].split(":", 1)
@@ -342,10 +351,11 @@ def helper_bindings():
         source = os.path.join(D, name)
         if not name.startswith("ifcfg-") or name.endswith(suffixes) or not os.path.isfile(source):
             continue
+        text = naming_text(source)
         values = read(source, KEYS)
         # The C helper only removes enclosing quotes; it does not implement shlex escaping/concatenation.
         literal = {}
-        for line in open(source):
+        for line in text.split("\n"):
             for key in ("DEVICE", "HWADDR"):
                 if line.startswith(key + "="):
                     value = line[len(key) + 1:].rstrip()
