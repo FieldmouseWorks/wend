@@ -138,7 +138,19 @@ jobs:
       # json.py) ahead of the standard library's, as root. tools/check.py also refuses one.
       - name: replay (no model, no network beyond the release mirrors)
         run: |
-          sudo -E python3 -P -B wend replay "${{ matrix.route }}" "${{ matrix.box }}" --out "$GITHUB_WORKSPACE/run.json"
+          sudo -E python3 -P -B wend replay "${{ matrix.route }}" "${{ matrix.box }}" --out "$GITHUB_WORKSPACE/run.json" --steps "$GITHUB_WORKSPACE/steps.json"
+      # Failed replays keep apt/service output in steps, not in the summary log.
+      # Keep diagnostics separate from the successful, attested run-* artifacts.
+      - name: failed replay diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: failed-replay-${{ strategy.job-index }}
+          path: |
+            run.json
+            steps.json
+          if-no-files-found: ignore
+          retention-days: 14
       # attestations need a public repo (or a paid plan); skipped while the repo is private
       - if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2

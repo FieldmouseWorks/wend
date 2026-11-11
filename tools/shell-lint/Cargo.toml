@@ -1,0 +1,12 @@
+[package]
+name = "wend-shell-lint"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+
+[dependencies]
+brush-parser = { git = "https://github.com/reubeno/brush", rev = "751dae803c4a493fc2fb1b74cefd94ebcd4b7de0", features = ["serde"] }
+serde_json = "1"
+
+[workspace]

@@ -307,15 +307,21 @@ for hops, want in ((["centos6", "centos7", "alma9", "alma10"], True), (["centos6
 
 # decoys: the MySQL fix firing on the web box must fail; the honest run must pass
 import json  # noqa: E402
-_, fixes_, routes_, _, runs_ = check.load_all()
+_, fixes_, routes_, _, _ = check.load_all()
 route = next(r for r in routes_.values() if r["family"] == "debian")
-rid, by_id = check.content_id(route), {check.content_id(d): d for d in fixes_.values()}
-path_, web_run = next((p, r) for p, r in runs_.items() if r["box"] == "debian/etch-web" and r["route"] == rid)
+# This unit fixture must not depend on CI having attested the current route id yet.
+decoy_fix = {"meta": {"name": "mysql-only", "fires_on": ["debian/etch-db"]}}
+fid = check.content_id(decoy_fix)
+decoy_route = {"fixes": [{"id": fid, "name": "mysql-only"}]}
+decoy_rid = check.content_id(decoy_route)
+path_ = "fixture-web-run.json"
+web_run = {"box": "debian/etch-web", "route": decoy_rid, "result": "pass",
+           "hops": [{"to": "squeeze", "fired": []}]}
 fake = json.loads(json.dumps(web_run))
-next(h for h in fake["hops"] if h["to"] == "squeeze")["fired"].append(check.content_id(good))
+fake["hops"][0]["fired"].append(fid)
 for name, run, want in (("decoy hit: the MySQL fix fired on the web box", fake, True),
                         ("honest web run has no decoy errors", web_run, False)):
-    got = bool(check.decoy_errors({path_: run}, {rid: route}, by_id))
+    got = bool(check.decoy_errors({path_: run}, {decoy_rid: decoy_route}, {fid: decoy_fix}))
     print(("refused " if got else "passed  ") + name if got == want else "WRONG   " + name)
     bad += got != want
 # pairing: CI replays a route only on boxes that start at its `from`, so neither a route nor a claim may go unreplayed
@@ -523,6 +529,89 @@ for name, doc, want in (("an Ubuntu role only bash parses", {**tweb, "roles": {*
     errs = check.box_shell_errors(doc)
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
+# A failed producer must not become a passing health check through pipeline negation.
+for command, want in (
+        ('rc="${x:-\'$( ! missing | grep -q x )\'}"', True),
+        ("cat <<END\n${x:-'$( ! missing | grep -q x )'}\nEND", True),
+        ("rc=${x:-'$( ! missing | grep -q x )'}", False),
+        ('rc="${x:-${y:-\'$( ! missing | grep -q x )\'}}"', True),
+        ("cat <<END\n${x:-${y:-'$( ! missing | grep -q x )'}}\nEND", True),
+        ("rc=${x:-${y:-'$( ! missing | grep -q x )'}}", False),
+        ('rc="${x:+\'$( ! missing | grep -q x )\'}"', True),
+        ("cat <<END\n${x:+'$( ! missing | grep -q x )'}\nEND", True),
+        ("rc=${x:+'$( ! missing | grep -q x )'}", False),
+        ('rc="${x:+${y:-\'$( ! missing | grep -q x )\'}}"', True),
+        ("cat <<END\n${x:+${y:-'$( ! missing | grep -q x )'}}\nEND", True),
+        ("rc=${x:+${y:-'$( ! missing | grep -q x )'}}", False),
+        ('rc="${x:=\'$( ! missing | grep -q x )\'}"', True),
+        ("cat <<END\n${x:='$( ! missing | grep -q x )'}\nEND", True),
+        ("rc=${x:='$( ! missing | grep -q x )'}", False),
+        ('rc="${x:=${y:-\'$( ! missing | grep -q x )\'}}"', True),
+        ("cat <<END\n${x:=${y:-'$( ! missing | grep -q x )'}}\nEND", True),
+        ("rc=${x:=${y:-'$( ! missing | grep -q x )'}}", False),
+        ('rc="${x:?\'$( ! missing | grep -q x )\'}"', True),
+        ("cat <<END\n${x:?'$( ! missing | grep -q x )'}\nEND", True),
+        ("rc=${x:?'$( ! missing | grep -q x )'}", False),
+        ('rc="${x:?${y:-\'$( ! missing | grep -q x )\'}}"', True),
+        ("cat <<END\n${x:?${y:-'$( ! missing | grep -q x )'}}\nEND", True),
+        ("rc=${x:?${y:-'$( ! missing | grep -q x )'}}", False),
+        ('cat <<END\n$(# )\n! missing | grep -q x\n)\nEND', True),
+        ('rc="$(# )\n! missing | grep -q x\n)"', True),
+        ('rc="$(if true; then ( ! missing | cat ); fi)"', True),
+        ('cat <<END\n$(cat <<INNER\n)\nINNER\n! missing | cat\n)\nEND', True),
+        ('cat <<END\n$(cat <<INNER\n! missing | cat\nINNER\n)\nEND', False),
+        ('rc="$(cat <<INNER\n)\nINNER\n! missing | cat\n)"', True),
+        ('if false; then true; else ! missing | grep -q x; fi', True),
+        ('case x in x|y) ! missing | cat;; esac', True),
+        ('f() { ! missing | cat; }; f', True),
+        ('! { true; missing; } | cat', True),
+        ('! if true; then missing; fi | cat', True),
+        ('! (true; missing) 2>/dev/null | cat', True),
+        ('rc="$( ! missing | grep -q x )"', True),
+        ('rc=$( ! missing | cat )', True),
+        ('rc=`! missing | cat`', True),
+        ('time ! missing | cat', True),
+        ('! time missing | cat', True),
+        ('! { true && true; } 2>&1 | cat', True),
+        ('! missing \\\n | cat', True),
+        ('! missing \\\\\ntrue | cat', False),
+        ('! missing \\\\\n! missing | cat', True),
+        ('test $(( ! 0 | 0 )) -eq 1', False),
+        ('(( ! 0 | 0 ))', False),
+        ('! [[ x =~ a|b ]]', False),
+        ('case x in x|y) ! true;; esac', False),
+        ("cat <<'END'\n! health | data\n$( ! missing | cat )\nEND", False),
+        ('cat <<END\n! health | data\nEND', False),
+        ("cat <<END\n'$( ! missing | cat )'\nEND", True),
+        ('! echo `a | b`', False),
+        ('! echo "$(a | b)"', False),
+        ('! echo "$( ! a | b )"', True),
+        ('echo "${x:-$( ! a | b )}"', True),
+        ('echo "$(( $( ! a | b ) + 1 ))"', True),
+        ('! true; echo x | cat', False),
+        ('! { echo x | cat; }', False),
+        ("! apt-mark showauto 2>/dev/null | grep -q x", True),
+        ("true && ! missing 2>&1 | grep -q x", True),
+        ("if ! missing | grep -q x; then true; fi", True),
+        ("(! missing | grep -q x)", True),
+        ("! (missing) | grep -q x", True),
+        ("! test -e /etc/x && printf x | grep x", False),
+        ("[ ! -e /etc/x ] | cat", False),
+        ("printf '%s' '! missing | grep x'", False),
+        ('printf "%s" "! missing | grep x"', False),
+        ("printf x | grep -vq x", False),
+        ("true # ! missing | grep x", False),
+        ('! missing \\\n | grep x', True)):
+    for table in ("roles", "live"):
+        doc = {"family": "debian", "roles": {"probe": command}} if table == "roles" else {
+            "family": "debian", "vm": {"live": {"probe": command}}}
+        errs = check.box_shell_errors(doc)
+        got = any("negated pipelines" in e for e in errs)
+        if any("shell pipeline lint failed" in e for e in errs):
+            print(f"WRONG   parser failed for {command!r}: {errs}")
+            bad += 1
+        print(("passed  " if got == want else "WRONG   ") + f"{table} pipeline lint: {command}")
+        bad += got != want
 for name, roles in (("[roles] as a list", ["x"]), ("[roles] as a string", "x"), ("a role that isn't a string", {"x": 1}),
                     ("an empty role", {"x": " "})):
     errs = check.check_box({**tweb, "roles": roles}, adapters, "boxes/ubuntu/trusty-web/box.toml")
@@ -899,4 +988,9 @@ for _n, _what in (("json.py", "a json.py at the repo root"), ("tomllib/__init__.
     print(("refused " if _e else "MISSED  ") + _what + (f"  ({_e[0]})" if _e else ""))
     bad += not _e
     _sh.rmtree(_t)
+# These subprocess-boundary regressions belong to the checker gate too.
+import unittest
+_result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromNames(
+    ["test_shell_lint", "test_shell_parameters", "test_shell_arithmetic"]))
+bad += not _result.wasSuccessful()
 sys.exit(1 if bad else 0)

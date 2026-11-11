@@ -6,7 +6,7 @@
   python3 tools/check.py --compile FILE  print the shell commands a fix compiles to on its family's adapter
   python3 tools/check.py --also-runs DIR  also hold the runs under DIR (./wend verify's local ones) to the decoy check
 
-Standard library only (Python 3.11+ for tomllib). Exit status 1 on any error. The rules live in SPEC.md; this file
+Python 3.11+ for tomllib; Rust/Cargo builds the shell syntax linter. Exit status 1 on any error. The rules live in SPEC.md; this file
 is the executable copy of them, and when the two disagree this file is the bug.
 """
 import fnmatch
@@ -22,6 +22,7 @@ import tomllib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import backends  # noqa: E402
+from shell_lint import negated_pipeline, parser_limits, MAX_INPUT, TIMEOUT  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -696,14 +697,28 @@ def box_shell_errors(doc):
     for name, s, shells in named:
         if not isinstance(s, str):
             continue
+        if name.startswith("role ") or name.startswith("[vm].live "):
+            try:
+                if negated_pipeline(s):
+                    errs.append(f"{name}: negated pipelines can hide command failures; capture and check the producer first")
+            except (ValueError, OSError, subprocess.SubprocessError) as e:
+                errs.append(f"{name}: shell pipeline lint failed: {e}")
+        if len(s.encode()) > MAX_INPUT:
+            errs.append(f"{name}: shell check exceeds 256 KiB")
+            continue
         for x in shells:
             if not shutil.which(x):
                 if x != "dash":  # dash is no requirement (AGENTS.md 0); CI's runner has it, so the gate still holds there
                     errs.append(f"{name} can't be parsed: no {x} here (install the {x} package)")
                 continue
-            r = subprocess.run([x, "-n", "-c", s], capture_output=True, text=True)
+            try:
+                r = subprocess.run([x, "-n", "-c", s], capture_output=True, text=True,
+                                   timeout=TIMEOUT, preexec_fn=parser_limits)
+            except (OSError, subprocess.SubprocessError) as e:
+                errs.append(f"{name}: {x} syntax parser failed: {e}")
+                continue
             if r.returncode:
-                errs.append(f"{name} doesn't parse under {x}: {r.stderr.strip().splitlines()[0][:200]}")
+                errs.append(f"{name} doesn't parse under {x}: {(r.stderr.strip().splitlines() or ['resource limit or signal'])[0][:200]}")
     return errs
 
 
