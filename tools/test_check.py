@@ -307,15 +307,21 @@ for hops, want in ((["centos6", "centos7", "alma9", "alma10"], True), (["centos6
 
 # decoys: the MySQL fix firing on the web box must fail; the honest run must pass
 import json  # noqa: E402
-_, fixes_, routes_, _, runs_ = check.load_all()
+_, fixes_, routes_, _, _ = check.load_all()
 route = next(r for r in routes_.values() if r["family"] == "debian")
-rid, by_id = check.content_id(route), {check.content_id(d): d for d in fixes_.values()}
-path_, web_run = next((p, r) for p, r in runs_.items() if r["box"] == "debian/etch-web" and r["route"] == rid)
+# This unit fixture must not depend on CI having attested the current route id yet.
+decoy_fix = {"meta": {"name": "mysql-only", "fires_on": ["debian/etch-db"]}}
+fid = check.content_id(decoy_fix)
+decoy_route = {"fixes": [{"id": fid, "name": "mysql-only"}]}
+decoy_rid = check.content_id(decoy_route)
+path_ = "fixture-web-run.json"
+web_run = {"box": "debian/etch-web", "route": decoy_rid, "result": "pass",
+           "hops": [{"to": "squeeze", "fired": []}]}
 fake = json.loads(json.dumps(web_run))
-next(h for h in fake["hops"] if h["to"] == "squeeze")["fired"].append(check.content_id(good))
+fake["hops"][0]["fired"].append(fid)
 for name, run, want in (("decoy hit: the MySQL fix fired on the web box", fake, True),
                         ("honest web run has no decoy errors", web_run, False)):
-    got = bool(check.decoy_errors({path_: run}, {rid: route}, by_id))
+    got = bool(check.decoy_errors({path_: run}, {decoy_rid: decoy_route}, {fid: decoy_fix}))
     print(("refused " if got else "passed  ") + name if got == want else "WRONG   " + name)
     bad += got != want
 # pairing: CI replays a route only on boxes that start at its `from`, so neither a route nor a claim may go unreplayed
@@ -523,6 +529,27 @@ for name, doc, want in (("an Ubuntu role only bash parses", {**tweb, "roles": {*
     errs = check.box_shell_errors(doc)
     print(("refused " if errs else "passed  ") + name if bool(errs) == want else f"WRONG   {name} {errs}")
     bad += bool(errs) != want
+# A failed producer must not become a passing health check through pipeline negation.
+for command, want in (
+        ("! apt-mark showauto 2>/dev/null | grep -q x", True),
+        ("true && ! missing 2>&1 | grep -q x", True),
+        ("if ! missing | grep -q x; then true; fi", True),
+        ("(! missing | grep -q x)", True),
+        ("! (missing) | grep -q x", True),
+        ("! test -e /etc/x && printf x | grep x", False),
+        ("[ ! -e /etc/x ] | cat", False),
+        ("printf '%s' '! missing | grep x'", False),
+        ('printf "%s" "! missing | grep x"', False),
+        ("printf x | grep -vq x", False),
+        ("true # ! missing | grep x", False),
+        ('! missing \\\n | grep x', True)):
+    for table in ("roles", "live"):
+        doc = {"family": "debian", "roles": {"probe": command}} if table == "roles" else {
+            "family": "debian", "vm": {"live": {"probe": command}}}
+        errs = check.box_shell_errors(doc)
+        got = any("negated pipelines" in e for e in errs)
+        print(("passed  " if got == want else "WRONG   ") + f"{table} pipeline lint: {command}")
+        bad += got != want
 for name, roles in (("[roles] as a list", ["x"]), ("[roles] as a string", "x"), ("a role that isn't a string", {"x": 1}),
                     ("an empty role", {"x": " "})):
     errs = check.check_box({**tweb, "roles": roles}, adapters, "boxes/ubuntu/trusty-web/box.toml")

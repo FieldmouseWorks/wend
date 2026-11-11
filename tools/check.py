@@ -686,6 +686,37 @@ def _table(x):
     return x if isinstance(x, dict) else {}  # a malformed one is check_box's error to report, not a crash here
 
 
+def negated_pipeline(s):
+    """Lint shell operators, preserving quoted words so patterns like '[!|]' are data."""
+    s = s.replace("\\\n", "")  # shell line continuations do not end a pipeline
+    tokens = re.findall(r"""\#[^\n]*|[0-9]*[<>]&[0-9-]+|&&|\|\||\|&|[|;&()\n]|(?:[^\s|;&()'"\\]|\\.|'[^']*'|"(?:\\.|[^"\\])*")+""", s)
+    depth, negated, start = 0, set(), True
+    for token in tokens:
+        if token.startswith("#"):
+            continue
+        if token == "(":
+            depth += 1
+            start = True
+        elif token == ")":
+            negated.discard(depth)
+            depth -= 1
+            start = False
+        elif token in (";", "&&", "||", "&", "\n"):
+            negated.discard(depth)
+            start = True
+        elif token == "!" and start:
+            negated.add(depth)
+        elif token in ("|", "|&"):
+            if depth in negated:
+                return True
+            start = True
+        elif start and token in ("if", "then", "elif", "while", "until", "do", "{", "}"):
+            pass
+        else:
+            start = False
+    return False
+
+
 def box_shell_errors(doc):
     vm = doc.get("vm", {}) if isinstance(doc.get("vm", {}), dict) else {}
     sh = ("bash", "dash") if doc.get("family") in ("debian", "ubuntu") else ("bash",)
@@ -696,6 +727,8 @@ def box_shell_errors(doc):
     for name, s, shells in named:
         if not isinstance(s, str):
             continue
+        if (name.startswith("role ") or name.startswith("[vm].live ")) and negated_pipeline(s):
+            errs.append(f"{name}: negated pipelines can hide command failures; capture and check the producer first")
         for x in shells:
             if not shutil.which(x):
                 if x != "dash":  # dash is no requirement (AGENTS.md 0); CI's runner has it, so the gate still holds there
