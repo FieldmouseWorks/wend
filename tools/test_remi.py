@@ -364,8 +364,8 @@ check(raw == b"a" * 47999 + "é".encode() + b"z" * 10, "file parts join back byt
 
 import hashlib
 me = hashlib.sha256(open(os.path.join(HERE, "remi.py"), "rb").read()).hexdigest()
-vv = verdict(j11)
-ee = json.load(open(f"{w}/lab/queue/{j11}.json"))
+vv = verdict(j1)
+ee = json.load(open(f"{w}/lab/queue/{j1}.json"))
 check(vv["runner_sha"] == me and vv["worker_sha"] == me and ee["worker_sha"] == me and ee["runner_sha"] == me,
       "the worker and the runner record the implementation that ran a job, in the entry and the verdict")
 
