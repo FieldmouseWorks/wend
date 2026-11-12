@@ -97,6 +97,39 @@ isn't the whole review: read the generated checks in the verdict, because a chec
 
 Archiving isn't a job. The hourly archive cycle on remi (docs/archive.md, "Keeping it current") owns it.
 
+## Serial command proofs
+
+`client/src/bin/wend-lab-proof.rs` adapts the existing lab queue to a command proof. Build the binary and read
+`tools/remi.py` from a clean checkout of the trusted default branch. Pass the runner's path and the clean head
+worktree as its two arguments. `PROOF_HEAD`, `PROOF_NUMBER` and `PROOF_SUMMARY` are the burrow-proof contract;
+the command reads no token and never posts a GitHub verdict itself. For example, with those variables already set:
+
+```
+cargo build --release --locked --manifest-path "$trusted/client/Cargo.toml" --bin wend-lab-proof
+"$trusted/client/target/release/wend-lab-proof" "$trusted/tools/remi.py" "$head_worktree"
+```
+
+The trusted binary enumerates the atlas at the requested head: every route on every same-family box that starts
+at its `from` or joins at an intermediate hop, using the adapter's `joins` mapping. It runs each pair on BIOS and,
+when that release's installer has `uefi = true`, on UEFI. An empty suite or a route with no compatible box refuses
+the proof. A box with a `[shelter]` plan is left out of every pairing `tools/vm.py` refuses (it builds a shelter only on the route's own start release, and only where that release keeps the runtimes), so those boxes join no intermediate route that reaches the Python 2 drop. `wend-lab-proof --plan ATLAS` prints the complete serial suite without starting anything. Other modes
+(relocation, alternate layouts, SELinux and client rehearsals) remain additional explicitly requested lab jobs.
+
+Each replay goes through `remi.py enqueue` and the existing slots, shim coordination, origin check and per-replay
+eight-hour deadline. The adapter stays in the foreground until the queue entry ends. Its stable owner field names
+the PR, head, route, box and flags, so a replacement adapter adopts the same queued/running/completed proof rather
+than enqueueing it again. SIGTERM asks the queue to cancel its active entry and waits for it to end. A cancelled or
+refused queue entry is not adopted by the next invocation. The adoption identity covers the adapter, its lockfile and the queue worker implementation (`WEND_LAB_WORKER_RUNNER`, else `<src>/wend-runner/tools/remi.py`); the adapter refuses to run unless that file is byte-identical to the trusted `remi.py` it was given, so verdicts are never attributed across runner versions (the worker and the runner each record the sha256 of the `remi.py` they loaded in the entry and the verdict, and the adapter accepts a verdict only when both equal the trusted file's, so a worker that started before its file advanced, or an entry from before this record, is refused rather than trusted. Rollout: land this, then run `remi.py update` on the idle queue to move the stable checkout, and let any older worker exit as the queue empties). Once a job is persisted, a helper failure, a failed worker start or a SIGTERM never abandons it: the adapter cancels it and keeps polling, without a bound, until the queue says it is over; a queue that stays unreadable holds the adapter until burrow-proof's own timeout ends it. A per-identity lock in the queue directory, which the enqueue child inherits, makes claiming an existing entry or creating one atomic, and the adapter follows the exact job it created in whatever state it reaches. While it waits it starts the queue's worker (as an independent user unit outside the proof's cgroup, so ending the proof never kills the worker or another job's guest; a no-op when one holds the worker lock; a failure to start it fails the proof) about once a minute, so an adopted entry the worker never started still runs. The machine's `proofTimeoutMinutes` for this repo must
+cover the serial suite (eight hours per entry at the queue's worst case), plus time waiting for other lab work;
+that limit does not extend the steward's repair and judge jobs.
+
+A pass requires all command exits to be zero, every run to say `pass`, its head to equal `PROOF_HEAD` with
+`dirty = false`, its box and firmware to match, and all expected hops (and a requested final prune) to be present
+and successful. Resumed and partial runs never pass. A failure stops the suite. The summary names every completed
+replay and its verdict file, command logs and run directories; full verdict JSON also stays in the command log.
+Exit 0 is a pass, 1 a failed proof, and 126 an interrupted adapter. The steward posts the summary and exact-head
+status through burrow-proof, and a red proof gets the same repair job as any red CI check.
+
 ## Disk
 
 VM runs fill remi's disk fast (about 200 GB a day in October 2026): every run directory keeps its hop disks, and every

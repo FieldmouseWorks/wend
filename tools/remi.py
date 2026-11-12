@@ -3,7 +3,8 @@ slot at a time, ending in a full JSON verdict. Nobody types a VM command by hand
 
   python3 -P tools/remi.py enqueue JOB ARG... --sha SHA [--pr N] --by WHO [--reply-to SESSION] [--after ID]
                                                [--vm-flags "FLAGS"]
-  python3 -P tools/remi.py queue [--json]      the queue: running, waiting (and on what), queued, then the last done
+  python3 -P tools/remi.py wake                start the queue's worker as an independent user unit (a no-op while one runs)
+  python3 -P tools/remi.py queue [--json] [--strict]      the queue: running, waiting (and on what), queued, then the last done
   python3 -P tools/remi.py order ID...         put these queued jobs first, in this order (the lab order)
   python3 -P tools/remi.py cancel ID           drop a queued job, or stop a running one (its verdict says cancelled)
   python3 -P tools/remi.py wait ID             block until the job ends; prints its result and verdict path
@@ -66,6 +67,16 @@ import urllib.error
 import urllib.request
 
 sys.dont_write_bytecode = True
+# the implementation this process loaded: workers and runners record it in the entries and verdicts they produce, so a
+# proof can tell which version of this file actually ran a job (a worker started before the file advanced says so)
+# Python compiled the script before this line ran, and a checkout update can replace the file in between: the bytes read
+# here must compile to exactly the code that is executing, or the hash would name a revision this process never ran.
+_me = sys._getframe().f_code
+_src = open(_me.co_filename, "rb").read()
+if compile(_src, _me.co_filename, "exec") != _me:
+    raise SystemExit("remi.py changed while it was starting: start it again")
+SELF_SHA = hashlib.sha256(_src).hexdigest()
+del _me, _src
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 RUNNER = os.path.dirname(TOOLS)
 LAB = os.environ.get("WEND_LAB", "/data/wend-lab")
@@ -215,14 +226,17 @@ def save(e):
     os.replace(p + ".tmp", p)
 
 
-def entries():
+def entries(strict=False):
+    """Every job entry. An unreadable or malformed file is skipped, unless strict: then the listing refuses to be
+    incomplete, because an omitted entry would read as a job that is gone."""
     out = []
     for f in sorted(os.listdir(QUEUE)) if os.path.isdir(QUEUE) else []:
         if f.endswith(".json"):
             try:
                 out.append(json.load(open(os.path.join(QUEUE, f))))
-            except (OSError, ValueError):
-                pass
+            except (OSError, ValueError) as x:
+                if strict:
+                    raise Refused(f"queue entry {f} is unreadable ({x}); the listing would be incomplete")
     return out
 
 
@@ -317,10 +331,30 @@ def enqueue(args):
 
 
 def start_worker():
+    """Make sure the queue has a worker, as an independent user unit: the caller may be a proof whose cgroup is emptied
+    when it ends, and that must never kill the worker or a guest of another job. A live worker holds worker.lock, which
+    the worker itself takes, so a second start is a no-op; the unit runs the stable runner checkout, not the caller's."""
     os.makedirs(QUEUE, exist_ok=True)
-    with open(os.path.join(QUEUE, "worker.log"), "a") as log:
-        subprocess.Popen([sys.executable, "-P", "-u", os.path.abspath(__file__), "worker"], stdin=subprocess.DEVNULL,
-                         stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    runner = os.environ.get("WEND_LAB_WORKER_RUNNER") or os.path.join(SRC, "wend-runner", "tools", "remi.py")
+    if TEST and not os.environ.get("WEND_LAB_WORKER_RUNNER"):
+        runner = os.path.abspath(__file__)
+    elif not os.path.isfile(runner):  # never fall back to this file: a proof's tools checkout goes away with it
+        raise Refused(f"no stable queue worker at {runner}: refusing to start one from a transient checkout")
+    if TEST:
+        with open(os.path.join(QUEUE, "worker.log"), "a") as log:
+            subprocess.Popen([sys.executable, "-P", "-u", runner, "worker"], stdin=subprocess.DEVNULL,
+                             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        return
+    log = os.path.join(QUEUE, "worker.log")
+    command = ["systemd-run", "--user", "--quiet", "--collect", f"--unit=wend-lab-worker-{secrets.token_hex(4)}",
+               "--property=Type=exec", f"--working-directory={os.path.dirname(os.path.dirname(runner))}",
+               f"--property=StandardOutput=append:{log}", f"--property=StandardError=append:{log}"]
+    for name in ("WEND_LAB", "WEND_LAB_SRC", "WEND_LAB_CARGO", "WEND_LAB_POLL"):
+        if name in os.environ:
+            command.append(f"--setenv={name}={os.environ[name]}")
+    p = subprocess.run([*command, "--", sys.executable, "-P", "-u", runner, "worker"], capture_output=True, text=True)
+    if p.returncode:
+        raise Refused(f"cannot start the queue worker unit: {(p.stdout + p.stderr).strip()[-300:]}")
 
 
 def mirror_hash(sha):
@@ -463,7 +497,7 @@ def worker():
                     k = subprocess.Popen([sys.executable, "-P", "-u", os.path.abspath(__file__), "run", e["id"]],
                                          stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
                 kids.append(k)
-                e.update(state="running", pid=k.pid, waiting=None, started=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+                e.update(state="running", worker_sha=SELF_SHA, pid=k.pid, waiting=None, started=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
                 save(e)
                 running.append(e)
                 ranked = [x for x in ranked if x is not e]
@@ -657,7 +691,8 @@ def run(jid):
     v = {"schema": "wend.remijob/0", **{k: e[k] for k in ("id", "job", "args", "vm_flags", "sha", "pr", "by",
                                                          "reply_to", "enqueued")},
          "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "host": os.uname().nodename, "log_dir": None,
-         "commands": [], "runs": [], "reasons": [], "result": None}
+         "commands": [], "runs": [], "reasons": [], "result": None, "runner_sha": SELF_SHA,
+         "worker_sha": e.get("worker_sha")}
     v["log_dir"] = os.path.dirname(verdict_path(e))
     os.makedirs(v["log_dir"], exist_ok=True)
     t0 = time.time()
@@ -670,7 +705,9 @@ def run(jid):
                 print(f"{jid} isn't recorded as run by pid {os.getpid()}; leaving it to the queue", flush=True)
                 return 0
             e["ready"] = True
+            e["runner_sha"] = SELF_SHA
             save(e)
+            v["worker_sha"] = e.get("worker_sha")  # published by the worker under this same lock, before we got it
         if e.get("cancel"):
             raise KeyboardInterrupt  # cancelled between the worker starting it and the handshake
         v["runner"] = runner_check()
@@ -791,7 +828,7 @@ def file_(args):
 
 
 def queue(args):
-    es = entries()
+    es = entries(strict="--strict" in args)
     if "--json" in args:
         print(json.dumps(es, indent=1))
         return 0
@@ -873,6 +910,9 @@ def main(args):
         return enqueue(rest)
     if cmd == "worker" and not rest:
         return worker()
+    if cmd == "wake" and not rest:
+        start_worker()
+        return 0
     if cmd == "run" and len(rest) == 1:
         return run(rest[0])
     if cmd == "queue":

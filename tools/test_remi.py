@@ -362,5 +362,56 @@ for i in (1, 2):
     raw += p.stdout.split(b"\n", 1)[1]
 check(raw == b"a" * 47999 + "é".encode() + b"z" * 10, "file parts join back byte for byte across a split character")
 
+import hashlib
+me = hashlib.sha256(open(os.path.join(HERE, "remi.py"), "rb").read()).hexdigest()
+vv = verdict(j1)
+ee = json.load(open(f"{w}/lab/queue/{j1}.json"))
+check(vv["runner_sha"] == me and vv["worker_sha"] == me and ee["worker_sha"] == me and ee["runner_sha"] == me,
+      "the worker and the runner record the implementation that ran a job, in the entry and the verdict")
+
+# a file replaced between compiling and hashing never gets its new bytes attributed to the old code
+copy = f"{w}/swap-remi.py"
+orig = open(os.path.join(HERE, "remi.py")).read()
+open(copy, "w").write(orig)
+swap = ("import sys; p=sys.argv[1]; src=open(p).read(); code=compile(src,p,'exec'); "
+        "open(p,'w').write(src.replace('MUSL = ','MUSL2 = ',1)); sys.argv=[p,'queue']; "
+        "exec(code,{'__file__':p,'__name__':'__main__'})")
+p = subprocess.run([sys.executable, "-P", "-c", swap, copy], capture_output=True, text=True, env=ENV)
+check(p.returncode != 0 and "changed while it was starting" in p.stderr,
+      "a file replaced after it was compiled is refused instead of attested")
+
+# a listing that would omit an unreadable entry refuses to be made when strict
+open(f"{w}/lab/queue/20260101-000000-tests-dead.json", "w").write("{not json")
+rc, out = remi("queue", "--json", "--strict")
+check(rc != 0 and "unreadable" in out, "a strict listing refuses to omit an unreadable entry")
+rc, out = remi("queue", "--json")
+check(rc == 0, "the plain listing still skips it")
+os.remove(f"{w}/lab/queue/20260101-000000-tests-dead.json")
+
+# the worker starts as its own user unit (never in the caller's cgroup), on the stable runner, and a failure is reported
+stub = f"{w}/stubbin"
+os.makedirs(stub)
+open(f"{stub}/systemd-run", "w").write(f'#!/bin/sh\necho "$@" >> {w}/units\n[ -z "$FAKE_UNIT_FAIL" ] || {{ echo no bus >&2; exit 1; }}\n')
+os.chmod(f"{stub}/systemd-run", 0o755)
+os.makedirs(f"{w}/src/wend-runner/tools", exist_ok=True)
+open(f"{w}/src/wend-runner/tools/remi.py", "w").write("")
+UNIT = {k: v for k, v in ENV.items() if k != "WEND_LAB_TEST"}
+UNIT["PATH"] = f"{stub}:{UNIT['PATH']}"
+rc, out = remi("wake", env=UNIT)
+units = open(f"{w}/units").read()
+check(rc == 0 and "--user" in units and f"{w}/src/wend-runner/tools/remi.py -P" not in units
+      and units.rstrip().endswith(f"{w}/src/wend-runner/tools/remi.py worker") and "--collect" in units,
+      "wake starts the worker as an independent user unit on the stable runner checkout")
+rc, out = remi("wake", env=dict(UNIT, FAKE_UNIT_FAIL="1"))
+check(rc != 0 and "cannot start the queue worker unit" in out and "no bus" in out, "a unit that will not start is reported")
+
+rc, out = remi("wake", env=dict(UNIT, WEND_LAB_WORKER_RUNNER=f"{w}/nowhere/remi.py"))
+check(rc != 0 and "no stable queue worker" in out, "a configured worker file that is missing is refused before any unit starts")
+os.remove(f"{w}/src/wend-runner/tools/remi.py")
+before = open(f"{w}/units").read()
+rc, out = remi("wake", env=UNIT)
+check(rc != 0 and "no stable queue worker" in out and open(f"{w}/units").read() == before,
+      "with no stable checkout a caller's own copy never becomes the worker")
+
 print(f"{sum(results)}/{len(results)} passed")
 sys.exit(0 if all(results) else 1)
