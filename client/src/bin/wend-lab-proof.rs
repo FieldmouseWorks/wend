@@ -315,7 +315,20 @@ impl Lab {
         self.call(&["wake"]).map(|_| ())
     }
     fn entries(&self) -> Result<Vec<Value>> {
-        Ok(serde_json::from_str(&self.call(&["queue", "--json"])?)?)
+        // A helper child can be killed or fail once (a signal to the proof's
+        // process group reaches it too): look again before giving up.
+        let mut last = None;
+        for _ in 0..3 {
+            match self
+                .call(&["queue", "--json"])
+                .and_then(|t| Ok(serde_json::from_str(&t)?))
+            {
+                Ok(entries) => return Ok(entries),
+                Err(e) => last = Some(e),
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        Err(last.unwrap())
     }
     fn replay(&self, replay: &Replay, head: &str, number: &str) -> Result<(Value, String)> {
         // Stable identity also lets a replacement proof unit adopt an existing
@@ -365,7 +378,13 @@ impl Lab {
                 if !flags.is_empty() {
                     args.extend(["--vm-flags", &flags]);
                 }
-                let output = self.call_holding(&args, &claim)?;
+                let (output, failure) = match self.call_holding(&args, &claim) {
+                    Ok(output) => (output, None),
+                    // The helper may die (a SIGTERM to the process group
+                    // reaches it too) after persisting the job: recover its
+                    // exact ID below rather than abandoning it.
+                    Err(e) => (String::new(), Some(e.to_string())),
+                };
                 println!("{output}");
                 // Follow exactly the job this attempt created, whatever state
                 // it already reached; the queue line names it.
@@ -380,19 +399,52 @@ impl Lab {
                     .filter_map(|e| e["id"].as_str().map(str::to_owned))
                     .filter(|id| !known.contains(id))
                     .collect();
-                named
-                    .filter(|id| fresh.contains(id))
-                    .or_else(|| fresh.first().cloned())
-                    .ok_or("enqueued job is absent")?
+                let id = named.filter(|id| fresh.contains(id)).or_else(|| fresh.first().cloned());
+                match (id, failure) {
+                    (Some(id), None) => id,
+                    (Some(id), Some(e)) => {
+                        // Persisted work is ours: drain it, then report.
+                        drop(claim);
+                        let _ = self.call(&["cancel", &id]);
+                        self.drain(&id);
+                        return Err(format!("enqueue failed after creating {id}: {e}").into());
+                    }
+                    (None, Some(e)) => return Err(e.into()),
+                    (None, None) => return Err("enqueued job is absent".into()),
+                }
             }
         };
         drop(claim);
         let mut woken: Option<Instant> = None;
+        let mut abort: Option<String> = None;
+        let mut failures = 0u32;
         loop {
-            let entries = self.entries()?;
+            // Helper failures never abandon the job: keep the foreground
+            // ownership, cancel once it is ours to stop, and keep asking until
+            // the queue itself says the job is over.
+            let entries = match self.entries() {
+                Ok(entries) => {
+                    failures = 0;
+                    entries
+                }
+                Err(e) => {
+                    failures += 1;
+                    if failures > 150 {
+                        return Err(format!("queue unreadable while {id} is active: {e}").into());
+                    }
+                    if STOP.load(Ordering::Relaxed) || abort.is_some() {
+                        let _ = self.call(&["cancel", &id]);
+                    }
+                    std::thread::sleep(Duration::from_secs(2));
+                    continue;
+                }
+            };
             let entry = entries.iter().find(|e| e["id"] == id).ok_or("lab job disappeared")?;
             let state = entry["state"].as_str().ok_or("lab job has no state")?;
             if !["queued", "running"].contains(&state) {
+                if let Some(e) = abort {
+                    return Err(e.into());
+                }
                 let file = entry["verdict"].as_str().ok_or("job ended without a verdict file")?;
                 return Ok((serde_json::from_str(&fs::read_to_string(file)?)?, file.to_owned()));
             }
@@ -400,17 +452,48 @@ impl Lab {
             // die with their host: have one look at the queue now and then.
             // It takes the queue's worker lock itself, so a live worker makes
             // this a no-op and slot ownership stays with the queue.
-            if woken.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) && !STOP.load(Ordering::Relaxed) {
-                self.wake()?;
+            if abort.is_none()
+                && woken.is_none_or(|t| t.elapsed() >= Duration::from_secs(60))
+                && !STOP.load(Ordering::Relaxed)
+            {
+                if let Err(e) = self.wake() {
+                    // Cancel and drain first; the failure is reported after.
+                    abort = Some(e.to_string());
+                }
                 woken = Some(Instant::now());
             }
-            if STOP.load(Ordering::Relaxed) {
+            if STOP.load(Ordering::Relaxed) || abort.is_some() {
                 let _ = self.call(&["cancel", &id]);
                 // Keep the foreground owner alive until the queue says its
                 // guest is over. Never abandon an active replay on SIGTERM.
             }
             std::thread::sleep(Duration::from_secs(2));
         }
+    }
+    /// Wait until the queue says job `id` is over (or stays unreadable).
+    fn drain(&self, id: &str) {
+        for _ in 0..150 {
+            if let Ok(entries) = self.entries() {
+                if entries
+                    .iter()
+                    .find(|e| e["id"] == id)
+                    .is_none_or(|e| !["queued", "running"].iter().any(|s| e["state"] == *s))
+                {
+                    return;
+                }
+                let _ = self.call(&["cancel", id]);
+            }
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
+}
+
+/// The runner remi.py starts workers from (tools/remi.py start_worker).
+fn worker_runner() -> PathBuf {
+    match std::env::var_os("WEND_LAB_WORKER_RUNNER") {
+        Some(p) if !p.is_empty() => PathBuf::from(p),
+        _ => Path::new(&std::env::var("WEND_LAB_SRC").unwrap_or_else(|_| "/data/dev/src".into()))
+            .join("wend-runner/tools/remi.py"),
     }
 }
 
@@ -453,6 +536,21 @@ fn run(args: &[String]) -> Result<()> {
     identity.update(include_bytes!("wend-lab-proof.rs"));
     identity.update(include_bytes!("../../Cargo.lock"));
     identity.update(fs::read(&runner)?);
+    // The queue executes and judges jobs with its own worker, not necessarily
+    // the runner on our command line: bind to that implementation, and refuse
+    // to run when it is not the trusted one we were given.
+    let worker = worker_runner();
+    let worker_bytes =
+        fs::read(&worker).map_err(|e| format!("no queue worker implementation at {}: {e}", worker.display()))?;
+    if worker_bytes != fs::read(&runner)? {
+        return Err(format!(
+            "the queue worker {} is not the trusted runner {}: refusing to attribute its verdicts to it",
+            worker.display(),
+            runner.display()
+        )
+        .into());
+    }
+    identity.update(&worker_bytes);
     let lab = Lab {
         runner,
         identity: identity.finalize().iter().map(|b| format!("{b:02x}")).collect(),

@@ -61,9 +61,13 @@ root = pathlib.Path(__file__).parent
 entries = json.loads((root/'queue.json').read_text())
 control = json.loads((root/'control.json').read_text())
 a = sys.argv[1:]
+if a[0] == 'queue' and control.get('flaky'):
+    with open(root/'queue-calls', 'a') as w: w.write('x')
+    if len((root/'queue-calls').read_text()) % 2: raise SystemExit(3)
 if a[0] == 'queue':
     print(json.dumps(entries))
 elif a[0] == 'wake':
+    if control.get('wake_fails'): raise SystemExit('no bus')
     with open(root/'wakes', 'a') as w: w.write('x')
     if control.get('worker_runs'):
         for e in entries:
@@ -94,6 +98,7 @@ elif a[0] == 'enqueue':
     entries.append({'id':jid,'by':opt('--by'),'state':state,'verdict':str(path)})
     (root/'queue.json').write_text(json.dumps(entries))
     print('queued '+jid+': replay x')
+    if control.get('enqueue_dies'): raise SystemExit(9)
 elif a[0] == 'cancel':
     entry = next(e for e in entries if e['id'] == a[1])
     entry['state'] = 'cancelled'
@@ -114,6 +119,7 @@ else: raise SystemExit(2)
             .env("PROOF_HEAD", &self.head)
             .env("PROOF_NUMBER", "5")
             .env("WEND_LAB", self.dir.join("lab"))
+            .env("WEND_LAB_WORKER_RUNNER", self.dir.join("remi.py"))
             .env("PROOF_SUMMARY", self.dir.join("summary.md"))
             .output()
             .unwrap()
@@ -181,6 +187,7 @@ fn stopping_cancels_the_queue_entry_and_a_retry_does_not_adopt_it() {
         .env("PROOF_HEAD", &f.head)
         .env("PROOF_NUMBER", "5")
         .env("WEND_LAB", f.dir.join("lab"))
+        .env("WEND_LAB_WORKER_RUNNER", f.dir.join("remi.py"))
         .env("PROOF_SUMMARY", f.dir.join("summary.md"))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -235,6 +242,7 @@ fn spawn(f: &Fixture) -> std::process::Child {
         .env("PROOF_HEAD", &f.head)
         .env("PROOF_NUMBER", "5")
         .env("WEND_LAB", f.dir.join("lab"))
+        .env("WEND_LAB_WORKER_RUNNER", f.dir.join("remi.py"))
         .env("PROOF_SUMMARY", f.dir.join("summary.md"))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -379,4 +387,77 @@ fn shelter_boxes_only_start_where_the_runner_can_build_them() {
     )
     .unwrap();
     assert!(plan(&root).contains("f/s"));
+}
+
+#[test]
+fn a_worker_that_is_not_the_trusted_runner_is_refused() {
+    let f = Fixture::new();
+    fs::write(f.dir.join("other.py"), "print('older')").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_wend-lab-proof"))
+        .arg(f.dir.join("remi.py"))
+        .arg(f.dir.join("head"))
+        .env("PROOF_HEAD", &f.head)
+        .env("PROOF_NUMBER", "5")
+        .env("WEND_LAB", f.dir.join("lab"))
+        .env("WEND_LAB_WORKER_RUNNER", f.dir.join("other.py"))
+        .env("PROOF_SUMMARY", f.dir.join("summary.md"))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not the trusted runner"));
+    assert!(f.queue().is_empty());
+    let missing = Command::new(env!("CARGO_BIN_EXE_wend-lab-proof"))
+        .arg(f.dir.join("remi.py"))
+        .arg(f.dir.join("head"))
+        .env("PROOF_HEAD", &f.head)
+        .env("PROOF_NUMBER", "5")
+        .env("WEND_LAB", f.dir.join("lab"))
+        .env("WEND_LAB_WORKER_RUNNER", f.dir.join("missing.py"))
+        .env("PROOF_SUMMARY", f.dir.join("summary.md"))
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(f.queue().is_empty());
+}
+
+#[test]
+fn a_helper_dying_after_it_persisted_the_job_still_drains_it() {
+    let f = Fixture::new();
+    fs::write(
+        f.dir.join("control.json"),
+        json!({"hold":true,"enqueue_dies":true}).to_string(),
+    )
+    .unwrap();
+    let out = f.invoke();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("enqueue failed after creating"));
+    assert_eq!(f.queue().len(), 1);
+    assert_eq!(
+        f.queue()[0]["state"],
+        "cancelled",
+        "the persisted job was cancelled, not abandoned"
+    );
+}
+
+#[test]
+fn a_failing_worker_wake_cancels_its_job_before_reporting() {
+    let f = Fixture::new();
+    fs::write(
+        f.dir.join("control.json"),
+        json!({"hold":true,"wake_fails":true}).to_string(),
+    )
+    .unwrap();
+    let out = f.invoke();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no bus"));
+    assert_eq!(f.queue()[0]["state"], "cancelled");
+}
+
+#[test]
+fn transient_queue_helper_failures_do_not_abandon_a_job() {
+    let f = Fixture::new();
+    fs::write(f.dir.join("control.json"), json!({"flaky":true}).to_string()).unwrap();
+    let out = f.invoke();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(f.queue().len(), 3);
 }
