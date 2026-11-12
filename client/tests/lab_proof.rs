@@ -66,6 +66,12 @@ if a[0] == 'queue' and control.get('blind_after_enqueue') and (root/'enqueues').
 if a[0] == 'queue' and control.get('flaky'):
     with open(root/'queue-calls', 'a') as w: w.write('x')
     if len((root/'queue-calls').read_text()) % 2: raise SystemExit(3)
+if a[0] == 'queue' and control.get('require_strict') and '--strict' not in a:
+    print('[]'); raise SystemExit(0)
+if a[0] == 'queue' and control.get('weird') and (root/'enqueues').exists():
+    with open(root/'weirds', 'a') as w: w.write('x')
+    if len((root/'weirds').read_text()) <= 4:
+        print(json.dumps([dict(e, state='mystery') for e in entries])); raise SystemExit(0)
 if a[0] == 'queue' and control.get('omit') and (root/'enqueues').exists():
     with open(root/'omitted', 'a') as w: w.write('x')
     if len((root/'omitted').read_text()) <= 4:
@@ -525,4 +531,20 @@ fn an_omitted_queue_entry_is_unknown_not_finished() {
         3,
         "nothing re-enqueued"
     );
+}
+
+#[test]
+fn every_ownership_read_is_strict_and_unknown_states_stay_owned() {
+    let f = Fixture::new();
+    assert!(f.invoke().status.success());
+    // A non-strict listing here would show nothing and duplicate the work.
+    fs::write(f.dir.join("control.json"), json!({"require_strict":true}).to_string()).unwrap();
+    assert!(f.invoke().status.success());
+    assert_eq!(f.queue().len(), 3, "adoption read the strict listing");
+    let g = Fixture::new();
+    fs::write(g.dir.join("control.json"), json!({"weird":true}).to_string()).unwrap();
+    let out = g.invoke();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(g.queue().len(), 3);
+    assert_eq!(fs::read_to_string(g.dir.join("enqueues")).unwrap().len(), 3);
 }

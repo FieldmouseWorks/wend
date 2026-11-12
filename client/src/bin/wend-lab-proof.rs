@@ -327,7 +327,7 @@ impl Lab {
         let mut last = None;
         for _ in 0..3 {
             match self
-                .call(&["queue", "--json"])
+                .call(&["queue", "--json", "--strict"])
                 .and_then(|t| Ok(serde_json::from_str(&t)?))
             {
                 Ok(entries) => return Ok(entries),
@@ -469,8 +469,9 @@ impl Lab {
                 std::thread::sleep(Duration::from_secs(2));
                 continue;
             };
-            let state = entry["state"].as_str().ok_or("lab job has no state")?;
-            if !["queued", "running"].contains(&state) {
+            let state = entry["state"].as_str().unwrap_or("");
+            let terminal = ["done", "refused", "error", "cancelled"].contains(&state);
+            if terminal {
                 if let Some(e) = abort {
                     return Err(e.into());
                 }
