@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+const KNOWN_STATES: [&str; 6] = ["queued", "running", "done", "refused", "error", "cancelled"];
 static STOP: AtomicBool = AtomicBool::new(false);
 extern "C" fn stop(_: libc::c_int) {
     STOP.store(true, Ordering::Relaxed);
@@ -322,6 +323,17 @@ impl Lab {
         self.call(&["wake"]).map(|_| ())
     }
     fn entries(&self) -> Result<Vec<Value>> {
+        let entries = self.listing()?;
+        // A listing is authoritative only if every entry can be attributed:
+        // one with a missing or mistyped id or owner could hide our work.
+        for e in &entries {
+            if !e["id"].is_string() || !e["by"].is_string() {
+                return Err(format!("queue entry without a usable id and owner: {e}").into());
+            }
+        }
+        Ok(entries)
+    }
+    fn listing(&self) -> Result<Vec<Value>> {
         // A helper child can be killed or fail once (a signal to the proof's
         // process group reaches it too): look again before giving up.
         let mut last = None;
@@ -358,7 +370,16 @@ impl Lab {
                 .find(|e| e["by"] == owner && ["queued", "running", "done"].iter().any(|s| e["state"] == *s))
                 .and_then(|e| e["id"].as_str().map(str::to_owned))
         };
-        let id = match adoptable(&self.entries()?) {
+        let listed = self.entries()?;
+        // An entry of ours in a state we do not know may still be running:
+        // it blocks a fresh enqueue until it is understood.
+        if let Some(e) = listed
+            .iter()
+            .find(|e| e["by"] == owner && !KNOWN_STATES.iter().any(|s| e["state"] == *s))
+        {
+            return Err(format!("queue entry {} has an unknown state; not enqueuing over it", e["id"]).into());
+        }
+        let id = match adoptable(&listed) {
             Some(id) => id,
             None => {
                 if STOP.load(Ordering::Relaxed) {

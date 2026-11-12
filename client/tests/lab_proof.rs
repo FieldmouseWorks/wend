@@ -548,3 +548,30 @@ fn every_ownership_read_is_strict_and_unknown_states_stay_owned() {
     assert_eq!(g.queue().len(), 3);
     assert_eq!(fs::read_to_string(g.dir.join("enqueues")).unwrap().len(), 3);
 }
+
+#[test]
+fn malformed_entries_block_a_fresh_enqueue() {
+    let f = Fixture::new();
+    assert!(f.invoke().status.success());
+    let mut q = f.queue();
+    // Our own first replay, in a state nobody can interpret.
+    q[0]["state"] = json!("mystery");
+    fs::write(f.dir.join("queue.json"), serde_json::to_string(&q).unwrap()).unwrap();
+    let out = f.invoke();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unknown state"));
+    assert_eq!(f.queue().len(), 3, "nothing enqueued over it");
+    // An entry whose owner or id has the wrong type could be ours.
+    for bad in [
+        json!({"id": 7, "by": "x", "state": "done"}),
+        json!({"id": "a", "state": "done"}),
+    ] {
+        let g = Fixture::new();
+        let mut q = g.queue();
+        q.push(bad);
+        fs::write(g.dir.join("queue.json"), serde_json::to_string(&q).unwrap()).unwrap();
+        let out = g.invoke();
+        assert_eq!(out.status.code(), Some(1));
+        assert_eq!(g.queue().len(), 1, "nothing enqueued beside an unattributable entry");
+    }
+}
