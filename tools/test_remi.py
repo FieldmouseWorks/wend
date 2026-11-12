@@ -369,6 +369,25 @@ ee = json.load(open(f"{w}/lab/queue/{j1}.json"))
 check(vv["runner_sha"] == me and vv["worker_sha"] == me and ee["worker_sha"] == me and ee["runner_sha"] == me,
       "the worker and the runner record the implementation that ran a job, in the entry and the verdict")
 
+# a file replaced between compiling and hashing never gets its new bytes attributed to the old code
+copy = f"{w}/swap-remi.py"
+orig = open(os.path.join(HERE, "remi.py")).read()
+open(copy, "w").write(orig)
+swap = ("import sys; p=sys.argv[1]; src=open(p).read(); code=compile(src,p,'exec'); "
+        "open(p,'w').write(src.replace('MUSL = ','MUSL2 = ',1)); sys.argv=[p,'queue']; "
+        "exec(code,{'__file__':p,'__name__':'__main__'})")
+p = subprocess.run([sys.executable, "-P", "-c", swap, copy], capture_output=True, text=True, env=ENV)
+check(p.returncode != 0 and "changed while it was starting" in p.stderr,
+      "a file replaced after it was compiled is refused instead of attested")
+
+# a listing that would omit an unreadable entry refuses to be made when strict
+open(f"{w}/lab/queue/20260101-000000-tests-dead.json", "w").write("{not json")
+rc, out = remi("queue", "--json", "--strict")
+check(rc != 0 and "unreadable" in out, "a strict listing refuses to omit an unreadable entry")
+rc, out = remi("queue", "--json")
+check(rc == 0, "the plain listing still skips it")
+os.remove(f"{w}/lab/queue/20260101-000000-tests-dead.json")
+
 # the worker starts as its own user unit (never in the caller's cgroup), on the stable runner, and a failure is reported
 stub = f"{w}/stubbin"
 os.makedirs(stub)

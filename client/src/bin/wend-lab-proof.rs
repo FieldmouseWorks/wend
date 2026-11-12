@@ -456,7 +456,19 @@ impl Lab {
                     continue;
                 }
             };
-            let entry = entries.iter().find(|e| e["id"] == id).ok_or("lab job disappeared")?;
+            // A job missing from a listing is unknown, never finished: only an
+            // explicit terminal state ends our ownership.
+            let Some(entry) = entries.iter().find(|e| e["id"] == id) else {
+                failures += 1;
+                if failures % 30 == 1 {
+                    eprintln!("queue does not list {id}; waiting for it to be confirmed");
+                }
+                if STOP.load(Ordering::Relaxed) || abort.is_some() {
+                    let _ = self.call(&["cancel", &id]);
+                }
+                std::thread::sleep(Duration::from_secs(2));
+                continue;
+            };
             let state = entry["state"].as_str().ok_or("lab job has no state")?;
             if !["queued", "running"].contains(&state) {
                 if let Some(e) = abort {
@@ -499,11 +511,11 @@ impl Lab {
     fn drain(&self, id: &str) {
         loop {
             if let Ok(entries) = self.entries() {
-                if entries
-                    .iter()
-                    .find(|e| e["id"] == id)
-                    .is_none_or(|e| !["queued", "running"].iter().any(|s| e["state"] == *s))
-                {
+                if entries.iter().find(|e| e["id"] == id).is_some_and(|e| {
+                    ["done", "refused", "error", "cancelled"]
+                        .iter()
+                        .any(|s| e["state"] == *s)
+                }) {
                     return;
                 }
                 let _ = self.call(&["cancel", id]);

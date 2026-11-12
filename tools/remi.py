@@ -4,7 +4,7 @@ slot at a time, ending in a full JSON verdict. Nobody types a VM command by hand
   python3 -P tools/remi.py enqueue JOB ARG... --sha SHA [--pr N] --by WHO [--reply-to SESSION] [--after ID]
                                                [--vm-flags "FLAGS"]
   python3 -P tools/remi.py wake                start the queue's worker as an independent user unit (a no-op while one runs)
-  python3 -P tools/remi.py queue [--json]      the queue: running, waiting (and on what), queued, then the last done
+  python3 -P tools/remi.py queue [--json] [--strict]      the queue: running, waiting (and on what), queued, then the last done
   python3 -P tools/remi.py order ID...         put these queued jobs first, in this order (the lab order)
   python3 -P tools/remi.py cancel ID           drop a queued job, or stop a running one (its verdict says cancelled)
   python3 -P tools/remi.py wait ID             block until the job ends; prints its result and verdict path
@@ -69,7 +69,14 @@ import urllib.request
 sys.dont_write_bytecode = True
 # the implementation this process loaded: workers and runners record it in the entries and verdicts they produce, so a
 # proof can tell which version of this file actually ran a job (a worker started before the file advanced says so)
-SELF_SHA = hashlib.sha256(open(os.path.abspath(__file__), "rb").read()).hexdigest()
+# Python compiled the script before this line ran, and a checkout update can replace the file in between: the bytes read
+# here must compile to exactly the code that is executing, or the hash would name a revision this process never ran.
+_me = sys._getframe().f_code
+_src = open(_me.co_filename, "rb").read()
+if compile(_src, _me.co_filename, "exec") != _me:
+    raise SystemExit("remi.py changed while it was starting: start it again")
+SELF_SHA = hashlib.sha256(_src).hexdigest()
+del _me, _src
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 RUNNER = os.path.dirname(TOOLS)
 LAB = os.environ.get("WEND_LAB", "/data/wend-lab")
@@ -219,14 +226,17 @@ def save(e):
     os.replace(p + ".tmp", p)
 
 
-def entries():
+def entries(strict=False):
+    """Every job entry. An unreadable or malformed file is skipped, unless strict: then the listing refuses to be
+    incomplete, because an omitted entry would read as a job that is gone."""
     out = []
     for f in sorted(os.listdir(QUEUE)) if os.path.isdir(QUEUE) else []:
         if f.endswith(".json"):
             try:
                 out.append(json.load(open(os.path.join(QUEUE, f))))
-            except (OSError, ValueError):
-                pass
+            except (OSError, ValueError) as x:
+                if strict:
+                    raise Refused(f"queue entry {f} is unreadable ({x}); the listing would be incomplete")
     return out
 
 
@@ -697,6 +707,7 @@ def run(jid):
             e["ready"] = True
             e["runner_sha"] = SELF_SHA
             save(e)
+            v["worker_sha"] = e.get("worker_sha")  # published by the worker under this same lock, before we got it
         if e.get("cancel"):
             raise KeyboardInterrupt  # cancelled between the worker starting it and the handshake
         v["runner"] = runner_check()
@@ -817,7 +828,7 @@ def file_(args):
 
 
 def queue(args):
-    es = entries()
+    es = entries(strict="--strict" in args)
     if "--json" in args:
         print(json.dumps(es, indent=1))
         return 0

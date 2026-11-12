@@ -66,6 +66,10 @@ if a[0] == 'queue' and control.get('blind_after_enqueue') and (root/'enqueues').
 if a[0] == 'queue' and control.get('flaky'):
     with open(root/'queue-calls', 'a') as w: w.write('x')
     if len((root/'queue-calls').read_text()) % 2: raise SystemExit(3)
+if a[0] == 'queue' and control.get('omit') and (root/'enqueues').exists():
+    with open(root/'omitted', 'a') as w: w.write('x')
+    if len((root/'omitted').read_text()) <= 4:
+        print('[]'); raise SystemExit(0)
 if a[0] == 'queue':
     print(json.dumps(entries))
 elif a[0] == 'wake':
@@ -505,4 +509,20 @@ fn persistent_queue_read_failures_after_enqueue_never_orphan_the_job() {
     let status = child.wait().unwrap();
     assert_eq!(status.code(), Some(126));
     assert_eq!(f.queue()[0]["state"], "cancelled");
+}
+
+#[test]
+fn an_omitted_queue_entry_is_unknown_not_finished() {
+    // Successful listings that omit the job (an unreadable entry file) must
+    // not read as "gone": the adapter waits and still follows its own job.
+    let f = Fixture::new();
+    fs::write(f.dir.join("control.json"), json!({"omit":true}).to_string()).unwrap();
+    let out = f.invoke();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(f.queue().len(), 3);
+    assert_eq!(
+        fs::read_to_string(f.dir.join("enqueues")).unwrap().len(),
+        3,
+        "nothing re-enqueued"
+    );
 }
