@@ -67,6 +67,9 @@ import urllib.error
 import urllib.request
 
 sys.dont_write_bytecode = True
+# the implementation this process loaded: workers and runners record it in the entries and verdicts they produce, so a
+# proof can tell which version of this file actually ran a job (a worker started before the file advanced says so)
+SELF_SHA = hashlib.sha256(open(os.path.abspath(__file__), "rb").read()).hexdigest()
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 RUNNER = os.path.dirname(TOOLS)
 LAB = os.environ.get("WEND_LAB", "/data/wend-lab")
@@ -484,7 +487,7 @@ def worker():
                     k = subprocess.Popen([sys.executable, "-P", "-u", os.path.abspath(__file__), "run", e["id"]],
                                          stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
                 kids.append(k)
-                e.update(state="running", pid=k.pid, waiting=None, started=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+                e.update(state="running", worker_sha=SELF_SHA, pid=k.pid, waiting=None, started=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
                 save(e)
                 running.append(e)
                 ranked = [x for x in ranked if x is not e]
@@ -678,7 +681,8 @@ def run(jid):
     v = {"schema": "wend.remijob/0", **{k: e[k] for k in ("id", "job", "args", "vm_flags", "sha", "pr", "by",
                                                          "reply_to", "enqueued")},
          "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "host": os.uname().nodename, "log_dir": None,
-         "commands": [], "runs": [], "reasons": [], "result": None}
+         "commands": [], "runs": [], "reasons": [], "result": None, "runner_sha": SELF_SHA,
+         "worker_sha": e.get("worker_sha")}
     v["log_dir"] = os.path.dirname(verdict_path(e))
     os.makedirs(v["log_dir"], exist_ok=True)
     t0 = time.time()
@@ -691,6 +695,7 @@ def run(jid):
                 print(f"{jid} isn't recorded as run by pid {os.getpid()}; leaving it to the queue", flush=True)
                 return 0
             e["ready"] = True
+            e["runner_sha"] = SELF_SHA
             save(e)
         if e.get("cancel"):
             raise KeyboardInterrupt  # cancelled between the worker starting it and the handshake

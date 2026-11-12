@@ -203,7 +203,13 @@ fn plan(root: &Path) -> Result<Vec<Replay>> {
     Ok(plan.into_iter().collect())
 }
 
-fn evidence(v: &Value, replay: &Replay, head: &str) -> Result<()> {
+fn evidence(v: &Value, replay: &Replay, head: &str, runner: &str) -> Result<()> {
+    // The queue records which implementation dispatched (worker) and judged
+    // (runner) the job; a worker that loaded an older file than the one on
+    // disk, or an entry from before this record, cannot vouch for it.
+    if v["runner_sha"] != runner || v["worker_sha"] != runner {
+        return Err("the verdict was not produced by the trusted queue implementation".into());
+    }
     if v["sha"] != head
         || v["job"] != "replay"
         || v["args"] != serde_json::json!([replay.route, replay.box_id])
@@ -243,6 +249,7 @@ fn evidence(v: &Value, replay: &Replay, head: &str) -> Result<()> {
 struct Lab {
     runner: PathBuf,
     identity: String,
+    runner_sha: String,
 }
 impl Lab {
     fn call(&self, args: &[&str]) -> Result<String> {
@@ -392,14 +399,22 @@ impl Lab {
                     .split_whitespace()
                     .find_map(|w| w.strip_suffix(':').filter(|id| id.matches('-').count() >= 3))
                     .map(str::to_owned);
-                let fresh: Vec<String> = self
-                    .entries()?
+                // The job is persisted by now (or may be): never give up on
+                // reading the queue until its ID is known, or it is orphaned.
+                let after = if named.is_some() && failure.is_none() {
+                    self.entries().unwrap_or_default()
+                } else {
+                    self.entries_forever()
+                };
+                let fresh: Vec<String> = after
                     .iter()
                     .filter(|e| e["by"] == owner)
                     .filter_map(|e| e["id"].as_str().map(str::to_owned))
                     .filter(|id| !known.contains(id))
                     .collect();
-                let id = named.filter(|id| fresh.contains(id)).or_else(|| fresh.first().cloned());
+                let id = named
+                    .filter(|id| fresh.contains(id) || failure.is_none())
+                    .or_else(|| fresh.first().cloned());
                 match (id, failure) {
                     (Some(id), None) => id,
                     (Some(id), Some(e)) => {
@@ -428,9 +443,11 @@ impl Lab {
                     entries
                 }
                 Err(e) => {
+                    // Only the queue can say the VM is over: keep asking.
+                    // (burrow-proof's own timeout is the backstop.)
                     failures += 1;
-                    if failures > 150 {
-                        return Err(format!("queue unreadable while {id} is active: {e}").into());
+                    if failures % 30 == 1 {
+                        eprintln!("queue unreadable while {id} is active: {e}");
                     }
                     if STOP.load(Ordering::Relaxed) || abort.is_some() {
                         let _ = self.call(&["cancel", &id]);
@@ -470,9 +487,17 @@ impl Lab {
             std::thread::sleep(Duration::from_secs(2));
         }
     }
+    fn entries_forever(&self) -> Vec<Value> {
+        loop {
+            if let Ok(entries) = self.entries() {
+                return entries;
+            }
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
     /// Wait until the queue says job `id` is over (or stays unreadable).
     fn drain(&self, id: &str) {
-        for _ in 0..150 {
+        loop {
             if let Ok(entries) = self.entries() {
                 if entries
                     .iter()
@@ -553,6 +578,10 @@ fn run(args: &[String]) -> Result<()> {
     identity.update(&worker_bytes);
     let lab = Lab {
         runner,
+        runner_sha: Sha256::digest(&worker_bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
         identity: identity.finalize().iter().map(|b| format!("{b:02x}")).collect(),
     };
     let mut note = format!(
@@ -567,7 +596,7 @@ fn run(args: &[String]) -> Result<()> {
         println!("replay {} {} at {head}", replay.route, replay.box_id);
         let result = lab.replay(replay, &head, &number);
         let checked = match &result {
-            Ok((v, _)) => evidence(v, replay, &head),
+            Ok((v, _)) => evidence(v, replay, &head, &lab.runner_sha),
             Err(e) => Err(e.to_string().into()),
         };
         note += &format!(
@@ -649,12 +678,14 @@ mod tests {
             hops: vec!["new".into()],
         };
         let valid = json!({"sha":"head", "job":"replay", "args":[replay.route,replay.box_id],
-            "vm_flags":[], "result":"pass", "reasons":[], "commands":[{"rc":0}],
+            "vm_flags":[], "result":"pass", "runner_sha":"r", "worker_sha":"r", "reasons":[], "commands":[{"rc":0}],
             "runs":[{"run_json":{"head":{"commit":"head","dirty":false},"result":"pass",
             "box":"f/b","firmware":"bios","hops":[{"to":"new","ok":true}]}}]});
-        assert!(evidence(&valid, &replay, "head").is_ok());
+        assert!(evidence(&valid, &replay, "head", "r").is_ok());
         for (path, bad) in [
             ("/sha", json!("old")),
+            ("/worker_sha", json!("older")),
+            ("/runner_sha", Value::Null),
             ("/result", json!("fail")),
             ("/commands/0/rc", json!(1)),
             ("/commands", json!([])),
@@ -671,10 +702,10 @@ mod tests {
         ] {
             let mut v = valid.clone();
             *v.pointer_mut(path).unwrap() = bad;
-            assert!(evidence(&v, &replay, "head").is_err(), "{path}");
+            assert!(evidence(&v, &replay, "head", "r").is_err(), "{path}");
         }
         let mut v = valid.clone();
         v["runs"][0]["run_json"]["resumed"] = json!({});
-        assert!(evidence(&v, &replay, "head").is_err());
+        assert!(evidence(&v, &replay, "head", "r").is_err());
     }
 }

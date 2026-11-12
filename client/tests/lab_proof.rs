@@ -56,11 +56,13 @@ impl Fixture {
         fs::write(
             dir.join("remi.py"),
             r#"
-import json, pathlib, sys, time
+import json, pathlib, sys, time, hashlib
+SELF = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()
 root = pathlib.Path(__file__).parent
 entries = json.loads((root/'queue.json').read_text())
 control = json.loads((root/'control.json').read_text())
 a = sys.argv[1:]
+if a[0] == 'queue' and control.get('blind_after_enqueue') and (root/'enqueues').exists(): raise SystemExit(4)
 if a[0] == 'queue' and control.get('flaky'):
     with open(root/'queue-calls', 'a') as w: w.write('x')
     if len((root/'queue-calls').read_text()) % 2: raise SystemExit(3)
@@ -88,7 +90,7 @@ elif a[0] == 'enqueue':
     if bad == 'dirty': run['head']['dirty'] = True
     if bad == 'partial': run['result'] = 'partial-pass'
     if bad == 'empty': run['hops'] = []
-    verdict = {'sha':sha,'job':'replay','args':[route,box],'vm_flags':flags, 'result':'pass',
+    verdict = {'runner_sha':SELF,'worker_sha':'old' if control.get('old_worker') else SELF,'sha':sha,'job':'replay','args':[route,box],'vm_flags':flags, 'result':'pass',
                'reasons':[], 'commands':[{'rc':0}], 'runs':[{'run_json':run}]}
     if bad == 'fail': verdict['result'] = 'fail'; verdict['commands'][0]['rc'] = 1
     path = root/('verdict-'+i+'.json')
@@ -460,4 +462,47 @@ fn transient_queue_helper_failures_do_not_abandon_a_job() {
     let out = f.invoke();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert_eq!(f.queue().len(), 3);
+}
+
+#[test]
+fn a_verdict_from_an_older_worker_implementation_is_refused() {
+    let f = Fixture::new();
+    fs::write(f.dir.join("control.json"), json!({"old_worker":true}).to_string()).unwrap();
+    let out = f.invoke();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(fs::read_to_string(f.dir.join("summary.md"))
+        .unwrap()
+        .contains("not produced by the trusted queue implementation"));
+}
+
+#[test]
+fn persistent_queue_read_failures_after_enqueue_never_orphan_the_job() {
+    // The queue becomes unreadable right after the enqueue persists a held
+    // job; the adapter keeps ownership, and when SIGTERM arrives and the
+    // queue recovers it cancels the job and exits only once it is over.
+    let f = Fixture::new();
+    fs::write(
+        f.dir.join("control.json"),
+        json!({"hold":true,"blind_after_enqueue":true}).to_string(),
+    )
+    .unwrap();
+    let mut child = spawn(&f);
+    wait_for(f.dir.join("enqueues"));
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "the adapter must not give up while the queue is unreadable"
+    );
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "still owned: the queue cannot confirm it is over"
+    );
+    fs::write(f.dir.join("control.json"), json!({"hold":true}).to_string()).unwrap();
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(126));
+    assert_eq!(f.queue()[0]["state"], "cancelled");
 }

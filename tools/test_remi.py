@@ -362,6 +362,13 @@ for i in (1, 2):
     raw += p.stdout.split(b"\n", 1)[1]
 check(raw == b"a" * 47999 + "é".encode() + b"z" * 10, "file parts join back byte for byte across a split character")
 
+import hashlib
+me = hashlib.sha256(open(os.path.join(HERE, "remi.py"), "rb").read()).hexdigest()
+vv = verdict(j11)
+ee = json.load(open(f"{w}/lab/queue/{j11}.json"))
+check(vv["runner_sha"] == me and vv["worker_sha"] == me and ee["worker_sha"] == me and ee["runner_sha"] == me,
+      "the worker and the runner record the implementation that ran a job, in the entry and the verdict")
+
 # the worker starts as its own user unit (never in the caller's cgroup), on the stable runner, and a failure is reported
 stub = f"{w}/stubbin"
 os.makedirs(stub)
