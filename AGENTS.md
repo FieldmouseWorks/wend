@@ -20,6 +20,10 @@ they're more specific.
   When you replace something, delete the old path in the same change.
 - One fact, one home. Each rule or fact lives in one place; link to it
   instead of restating it.
+- Pipeline options live in the settings source: change them through its
+  door, read them with `proj settings show`, and link the
+  [settings reference](https://github.com/FieldmouseWorks/burrow/blob/main/docs/settings-reference.md)
+  rather than restate a value or where one is kept.
 - Before you edit, say what done looks like and how it will be checked.
 - Report only the checks you ran and what they said. Skipped, unavailable
   or "should pass" is never a pass. Keep local and CI results apart.
