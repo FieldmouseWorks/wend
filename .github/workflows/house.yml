@@ -15,8 +15,17 @@ jobs:
       pull-requests: read
       statuses: write
     steps:
-      - uses: FieldmouseWorks/burrow/.github/actions/house@c9b0c066c245a3f5276e2e7c66fd478d72d8d99e # main
+      - uses: FieldmouseWorks/burrow/.github/actions/house@4e2a4d8fecf20ee66b14fbdabd1aec207d10fd71 # main
         with:
           # wend's fixes record the model that wrote them (meta.author), and
           # its docs name models to run, so a PR naming one needs no reason.
           model-names: false
+          rust-first-allow: |
+            tools/** # existing Python reference engine and lab tooling
+          file-size-allow: |
+            tools/vm.py # existing Python VM runner
+            tools/archive.py # existing Python archive tooling
+            client/src/hardware.rs # pre-existing large client module
+            client/src/upgrade.rs # pre-existing large client module
+            client/src/check.rs # pre-existing large client module
+            client/src/backend.rs # pre-existing large client module
