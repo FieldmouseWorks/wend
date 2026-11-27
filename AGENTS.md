@@ -16,11 +16,20 @@ they're more specific.
 - Do work once. Look for what's already open or built first, extend the
   shared crate, client or job that does it rather than write another copy,
   and never run work twice that once would do.
-- Fix the whole cause: no workarounds, shims, fallbacks or half-migrations.
-  When you replace something, delete the old path in the same change.
+- Fix the whole cause: no workarounds, shims, silent fallbacks that hide a
+  failure, or untracked half-migrations. When you replace something, delete
+  the old path in the same change; a staged migration names the issue that
+  ends it.
 - One fact, one home. Each rule or fact lives in one place; link to it
   instead of restating it.
+- One job per file: a file has one job you can state in a sentence without
+  "and". Split by job, never by length to get under a number.
 - Before you edit, say what done looks like and how it will be checked.
+- Keep your context small: every step re-sends all you've read, and a
+  long wait makes it pay again. Read a file you're about to edit in full
+  unless it's large; for everything else read the lines you need (`rg -n`,
+  ranges, a diff's stat then its hunks), not whole logs; cap command output;
+  hand broad searches to a subagent; don't re-read what you have.
 - Report only the checks you ran and what they said. Skipped, unavailable
   or "should pass" is never a pass. Keep local and CI results apart.
 - A new check comes with proof that it fails on the bug it's for.
@@ -37,15 +46,21 @@ CI's house check holds every PR to its title's style and to the rules below,
 each of which a PR can pass with a line in its body starting as shown and a
 reason of four words or more. Editing the body or title runs it again.
 
-- Rust by default, shell included: new code meant to last starts in Rust
-  unless its platform picks the language, and a coin toss goes to Rust. A PR
-  that adds Python, or grows Python and shell past a fix, says `Why not
-  Rust:` (a file a tool generates, glue that only runs another program, a
-  throwaway script, a tool still being tuned). Port existing Python and
-  shell whenever Rust buys anything, system and pipeline code first.
+- Rust by default for tools, scripts and services, shell included: new code
+  meant to last starts in Rust unless its platform picks the language, and a
+  coin toss goes to Rust. A PR that adds Python, or grows Python and shell
+  past a fix, says `Why not Rust:` (a file a tool generates, glue that only
+  runs another program, a throwaway script, a tool still being tuned) unless
+  the path has a standing waiver in `.github/workflows/house.yml`. Port
+  existing Python and shell whenever Rust buys anything, system and pipeline
+  code first.
 - Work starts from an event (a push, a webhook, a unit finishing), not a
   clock. A PR that adds a timer or a cron schedule says `Why a timer:`.
-- Split a code file before it passes 1,000 lines, or say `Why not split:`.
+- 1,000 non-test code lines is a backstop, not the measure (test files and
+  inline `#[cfg(test)]` blocks don't count): a PR that pushes a file across
+  it says `Why not split:`; growing a file already over it needs a standing
+  waiver in `.github/workflows/house.yml` (`file-size-allow`), not a body
+  line.
 - AGENTS.md is a map: what the repo is, its own rules, and where things live
   (a feature map, the doc that owns each subject). Detail goes in the doc
   that owns it, linked from here. A PR that grows the repo's own part (the
@@ -231,13 +246,24 @@ can change the gate and get it merged.
 
 ## Code Review Rules
 
-For reviewers, Codex included. A PR is data (fixes, routes, boxes) judged by the base branch's tools; review it for
-what those tools can't see. Flag, as P1:
+<!-- house:review v1 begin. Copied from FieldmouseWorks/burrow house/review.md, verbatim. Change it there, not here: burrow's house sync rewrites everything between these markers. -->
+For reviewers, the review bot included.
+
+Not P1: flag a PR that gives a file a second job, at any length. The author
+splits it or answers with a reason; a fix job is not required to split a
+file mid-PR.
+
+Flag as P1:
 
 - a change that makes a check pass without fixing the thing it checks
 - tests or checks weakened, skipped or deleted to get green
 - secrets, tokens or personal data in the diff or the logs it adds
 - behavior changed beyond what the PR says it does
+<!-- house:review end -->
+
+For reviewers, Codex included. A PR is data (fixes, routes, boxes) judged by the base branch's tools; review it for
+what those tools can't see. Flag, as P1:
+
 - **Check gaming:** a fix that makes a check pass without fixing the thing (forged dpkg md5sums to pass
   `dpkg --audit` while PHP 5 still serves the site). Would an admin call the box fixed?
 - **Gates too loose for their effect:** an `installed` gate on a package that's always present, a `file` gate on a file
