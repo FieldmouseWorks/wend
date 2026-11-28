@@ -17,6 +17,29 @@ proven run (`--run`) fetches the exact bytes that run used, by sha256, from your
 archive (https://archive.fieldmouseworks.com, [docs/archive.md](docs/archive.md)) or your distro's mirrors, and
 refuses anything that doesn't match. A `--live` walk takes today's mirrors unverified, and its run says so.
 
+## Try it on your server
+
+Got an old CentOS, Debian or Ubuntu machine (x86_64)? One line, on the server, as any user:
+
+```
+curl -fsSL https://github.com/FieldmouseWorks/wend/releases/latest/download/try.sh | sh
+```
+
+It downloads the [latest release](https://github.com/FieldmouseWorks/wend/releases/latest), checks it against its
+`SHA256SUMS`, unpacks it into `./wend-x86_64-linux`, and tells you the one command to run next:
+`cd wend-x86_64-linux && sudo ./wend`. It starts nothing itself.
+
+That first step only reads. wend walks you through it: it says what it is about to do and waits for you, then tells
+you what the machine is, whether one of the routes below would get it to the end, and where it would stop if not. It
+changes nothing and sends nothing. It writes one file, a report with the hostname, users and addresses scrubbed,
+which is yours to share or not. That report is what we're asking for: the routes were proven on test boxes we built,
+and what real machines look like is the part we don't know yet.
+
+[docs/try-it.md](docs/try-it.md) has the rest: what it reads, what it scrubs, and what to do on a server too old to
+reach GitHub.
+
+## The routes
+
 Six routes so far. Every box below has passed its route from scratch, with no model. Runs says where each box's newest
 filed run came from, and "earlier version" marks a route that has changed since:
 
@@ -115,29 +138,28 @@ tools/
   port_oldlinux.py   one-off import of the dep-lab Debian results, with a lossless round-trip proof
   test_*.py          the tools' own tests; test_check.py holds the broken fixes the gate must refuse
 docs/validation/     the first end-to-end test: verify on both boxes, and a model refilling a deleted fix
-docs/try-it.md       for a machine's owner: get the client, run `wend share` (read-only), post the report
+docs/try-it.md       for a machine's owner: one line to get the client, `sudo ./wend` (a read-only check), and
+                     sharing the report
 docs/archive.md      design: the wend archive (wend#19), every byte proven routes reference, by sha256
 docs/rebuild-and-carry.md  design: moving a machine whose filesystem a later kernel can't mount (old-XFS CentOS 7)
 client/              the Rust client (client/README.md): reads, checks and compiles the atlas exactly as tools/
                      does (client/parity.py proves it), walks a route on a root filesystem, and runs hardware and
-                     runtime preflight. Fetching by digest is the current slice. It doesn't walk the running
-                     system yet: that needs a snapshot backend. No AI.
+                     runtime preflight. Fetching by digest is the current slice. Where it stands on a running
+                     machine: SPEC "Upgrading a running machine". No AI.
+  try.sh             the one line a machine's owner pastes: fetches the release, checks it, unpacks it
 .github/
   workflows/gate.yml the PR gate: dco, schema, plan, replay, decoys
   workflows/client.yml the Rust client: build, test, parity with tools/
   workflows/gaps.yml the gap loop: dedupe reports, triaged gap -> wanted.toml PR, ping the reporter on close
-  workflows/release.yml on a version tag: the static client and the atlas it reads, as a release download
+  workflows/release.yml on a version tag: the static client and the atlas it reads, as a release download, and
+                     try.sh beside it
   workflows/remi-proof.yml the remi-proof status: holds PRs a chroot can't judge until remi passes their head
   pull_request_template.md, ISSUE_TEMPLATE/route-gap.yml, ISSUE_TEMPLATE/box-report.yml,
   ISSUE_TEMPLATE/wanted.md, dependabot.yml
 ```
 
-## Try it on your server
-
-Got an old CentOS, Debian or Ubuntu machine? `sudo ./wend share`, from the
-[latest release](https://github.com/FieldmouseWorks/wend/releases/latest), reads it without changing anything, says
-whether its release's route would get it to the end, and writes a report with the hostname, users and addresses
-scrubbed, plus a prefilled issue link. [docs/try-it.md](docs/try-it.md) says what it reads and what it scrubs.
+What the client does on a running machine, and what of that is built, is SPEC.md's
+[Upgrading a running machine](SPEC.md#upgrading-a-running-machine-draft-design-only).
 
 ## Try the map
 
