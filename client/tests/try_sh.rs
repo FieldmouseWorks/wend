@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 const NAME: &str = "wend-x86_64-linux";
 const TARBALL: &str = "wend-x86_64-linux.tar.gz";
 /// What the script runs on every machine, beside sha256sum and a downloader.
-const BASE: &[&str] = &["mkdir", "rm", "mktemp", "tar", "gzip"];
+const BASE: &[&str] = &["mkdir", "rm", "mktemp", "tar", "gzip", "chmod"];
 /// A made-up release's files. Its wend leaves a file behind if anything starts it.
 const RELEASE: &[(&str, &str)] = &[
     ("wend-x86_64-linux/wend", "#!/bin/sh\n: > \"${0%/*}/started\"\n"),
@@ -87,9 +87,11 @@ impl Machine {
         machine
     }
 
-    /// A program of this machine that only says what the test needs it to.
+    /// A program of this machine that only says what the test needs it to, in place of the real one if it had it.
     fn stand_in(&self, name: &str, body: &str) {
         let path = self.0.join("bin").join(name);
+        // the link to this test's own machine's program goes, not the program
+        let _ = fs::remove_file(&path);
         fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     }
@@ -540,12 +542,22 @@ fn a_tarball_that_is_not_a_wend_release_is_refused() {
 
 #[test]
 fn a_wend_that_cannot_be_run_from_here_is_not_left_behind() {
-    // what a folder mounted noexec does to it (/tmp, often); a wend without its executable bit asks the same question
+    // a wend without its executable bit
     let machine = Machine::new(&["sha256sum"]);
     fs::write(machine.0.join("here").join(TARBALL), machine.pack_with(RELEASE, 0o644)).unwrap();
     let errors = machine.refused(&machine.unpack(TARBALL), "can't be run from this folder", &[TARBALL]);
-    assert!(errors.contains("noexec"), "{errors}");
     assert!(!errors.contains("not a wend release"), "{errors}");
+    // a folder nothing can be started from, as one mounted noexec is (/tmp, often): the kernel refuses to start
+    // the script's own probe there, as it does here when chmod has left the probe without its executable bit
+    let machine = Machine::new(&["sha256sum"]);
+    machine.stand_in("chmod", ":");
+    machine.copy_here(&[TARBALL, "SHA256SUMS"]);
+    let errors = machine.refused(
+        &machine.unpack(TARBALL),
+        "can't be run from this folder",
+        &["SHA256SUMS", TARBALL],
+    );
+    assert!(errors.contains("noexec"), "{errors}");
 }
 
 #[test]

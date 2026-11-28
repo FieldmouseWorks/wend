@@ -40,6 +40,16 @@ have() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Can a program be started from the folder it unpacked into? Asked by starting one of its own there, never wend:
+# `test -x` reads the file's mode, and not every shell's knows a noexec mount (busybox ash as root says yes).
+starts_here() {
+    probe=$name/.try
+    printf '#!/bin/sh\nexit 0\n' >"$probe" && chmod +x "$probe" && "$probe" </dev/null 2>/dev/null
+    started=$?
+    rm -f "$probe"
+    return "$started"
+}
+
 # For a machine that can't download: where the files are, and how to bring them here.
 elsewhere() {
     say "On a machine that can reach GitHub, download these three files:" \
@@ -190,10 +200,11 @@ main() {
     tar xzof - "$name" <"$tarball" && [ -f "$name/wend" ] ||
         fail "try.sh: $shown" \
             "did not unpack into a wend: it is not a wend release, or it is damaged."
-    # asked of the file, never by starting it
-    [ -x "$name/wend" ] || fail "try.sh: wend unpacked, but it can't be run from this folder, so it was removed." \
-        "A folder on a filesystem mounted noexec does that, and /tmp often is one." \
-        "Run this again from another folder, such as your home."
+    if ! [ -x "$name/wend" ] || ! starts_here; then
+        fail "try.sh: wend unpacked, but it can't be run from this folder, so it was removed." \
+            "A folder on a filesystem mounted noexec does that, and /tmp often is one." \
+            "Run this again from another folder, such as your home."
+    fi
     unpacking=
 
     say "wend is unpacked in ./$name, and nothing has been started." \
