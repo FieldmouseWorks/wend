@@ -238,15 +238,26 @@ fn main() -> ExitCode {
 /// Where the atlas is when --atlas doesn't say: here, if this folder holds one, else beside the binary. A release
 /// unpacks both into one folder, and its owner may start it from anywhere (`sudo /opt/wend/wend`).
 fn default_atlas() -> PathBuf {
-    let here = PathBuf::from(".");
-    if here.join("adapters").is_dir() {
-        return here;
-    }
-    std::env::current_exe()
+    let beside = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(PathBuf::from))
-        .filter(|dir| dir.join("adapters").is_dir())
-        .unwrap_or(here)
+        .and_then(|exe| exe.parent().map(PathBuf::from));
+    // "holds one" means it loads: a folder that merely has an `adapters/` of somebody else's must not be taken for
+    // the atlas, or the verdict the release came with is lost without a word
+    pick_atlas(std::path::Path::new("."), beside.as_deref(), &|dir| {
+        Atlas::load(dir).is_ok()
+    })
+}
+
+/// Of the folder wend was started in and the one its binary is in, the one that holds an atlas (`holds` says).
+fn pick_atlas(
+    here: &std::path::Path,
+    beside: Option<&std::path::Path>,
+    holds: &dyn Fn(&std::path::Path) -> bool,
+) -> PathBuf {
+    if holds(here) {
+        return here.to_path_buf();
+    }
+    beside.filter(|dir| holds(dir)).unwrap_or(here).to_path_buf()
 }
 
 /// The atlas a box report is judged against. None is not an error (the report then has the facts and no verdict),
@@ -880,54 +891,4 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<Walked, String> 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::RootUmask;
-
-    #[test]
-    fn a_root_partway_along_a_route_walks_the_rest_of_it() {
-        let atlas = super::Atlas::load(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..")).unwrap();
-        let el = &atlas.adapters["el"];
-        let (_, c5) = atlas.route("centos5-to-alma10").unwrap();
-        let (_, c7) = atlas.route("centos7-to-alma10").unwrap();
-        let at = |r, rel: &str| super::joins_at(el, r, Some(&rel.to_string()));
-        assert_eq!(super::joins_at(el, c5, None), Ok(None));
-        assert_eq!(at(c5, "centos5"), Ok(None));
-        assert_eq!(at(c5, "centos6"), Ok(Some("centos6".into())));
-        assert_eq!(at(c5, "alma9"), Ok(Some("alma9".into())));
-        assert_eq!(at(c7, "sl7"), Ok(None));
-        for (r, rel) in [(c7, "centos6"), (c5, "alma10"), (c5, "centos8")] {
-            let e = at(r, rel).unwrap_err();
-            assert!(e.contains("doesn't pass through"), "{e}");
-        }
-    }
-
-    fn mask_now() -> libc::mode_t {
-        // SAFETY: reads the mask by setting it and putting it straight back.
-        unsafe {
-            let m = libc::umask(0o077);
-            libc::umask(m);
-            m
-        }
-    }
-
-    /// The only test that touches the process umask: 022 while the guard lives, the caller's mask after, also when
-    /// the walk panics.
-    #[test]
-    fn root_umask_is_022_inside_and_restores_the_callers_mask() {
-        // SAFETY: as above.
-        let saved = unsafe { libc::umask(0o077) };
-        let g = RootUmask::set();
-        assert_eq!(mask_now(), 0o022);
-        drop(g);
-        assert_eq!(mask_now(), 0o077);
-        let r = std::panic::catch_unwind(|| {
-            let _g = RootUmask::set();
-            assert_eq!(mask_now(), 0o022);
-            panic!("walk failed");
-        });
-        assert!(r.is_err());
-        assert_eq!(mask_now(), 0o077);
-        // SAFETY: as above.
-        unsafe { libc::umask(saved) };
-    }
-}
+mod tests;

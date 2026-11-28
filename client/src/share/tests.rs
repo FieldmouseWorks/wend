@@ -378,3 +378,26 @@ fn a_report_cannot_carry_a_terminal_escape() {
         "/srv/x\\u{1b}[2J\\u{7}/app.py runs on Python 2.7\n(cron, /etc/crontab)"
     );
 }
+
+#[test]
+fn scrubs_a_quoted_secret_with_a_quote_inside_it_or_no_end() {
+    for (text, want) in [
+        // an escaped quote inside the value is part of it, not its end
+        (r#"password="first\"second" next"#, r#"password="<redacted>" next"#),
+        (r#"secret='it\'s here' z"#, r#"secret='<redacted>' z"#),
+        (r#""token": "a\\b\"c", "n": 1"#, r#""token": "<redacted>", "n": 1"#),
+        // a value whose closing quote never comes (a line cut short) goes to the end of the word
+        (r#"password="hunter2"#, r#"password="<redacted>"#),
+        ("auth='abc def", "auth='<redacted> def"),
+    ] {
+        assert_eq!(scrub(text, &[]), want, "{text}");
+    }
+    // inside a JSON string, where every quote and backslash is escaped once more
+    let cmd = r#"run --password="first\"second" --name="kept" now"#;
+    let json = serde_json::to_string(&serde_json::json!({"cmd": cmd, "n": 1})).unwrap();
+    let s = scrub(&json, &[]);
+    assert!(!s.contains("first") && !s.contains("second"), "{s}");
+    let v: Value = serde_json::from_str(&s).unwrap_or_else(|e| panic!("{e}: {s}"));
+    assert_eq!(v["cmd"], r#"run --password="<redacted>" --name="kept" now"#);
+    assert_eq!(v["n"], 1);
+}

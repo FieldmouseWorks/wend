@@ -222,20 +222,34 @@ pub fn scrub(text: &str, words: &[String]) -> String {
     for (rx, rep) in rules {
         s = Regex::new(rx).unwrap().replace_all(&s, *rep).into_owned();
     }
-    // a name with one of these words anywhere in it (DB_PASSWORD, api-key, mytoken), and its value: all of what is
-    // between quotes when it is quoted (escaped quotes too, as inside a JSON string), else up to a space. The quotes
-    // go back where they were, so the JSON around it still parses
-    s = Regex::new(
-        r#"(?i)([A-Za-z0-9_.-]*(?:pass(?:word|wd)?|secret|token|api[_-]?key|auth)[A-Za-z0-9_]*(?:\\?["'])?\s*[:=]\s*)(\\?"[^"]*?\\?"|\\?'[^']*?\\?'|[^\s"'\\,;)]+)"#,
-    )
+    // a name with one of these words anywhere in it (DB_PASSWORD, api-key, mytoken), and its value. A quoted value
+    // goes whole, an escaped quote inside it being part of it and not its end; a quote with no end (a line cut
+    // short) goes to the end of the word; an unquoted one goes up to a space. The quotes go back where they were,
+    // so the JSON around it still parses. The ways a value is quoted, in the order tried:
+    //   \"...\"   inside a JSON string, where the value's own quotes and backslashes are escaped once more
+    //   "..."     and '...', with \" or \' inside
+    //   "...      or '... or \"..., never closed
+    s = Regex::new(concat!(
+        r#"(?i)([A-Za-z0-9_.-]*(?:pass(?:word|wd)?|secret|token|api[_-]?key|auth)[A-Za-z0-9_]*(?:\\?["'])?\s*[:=]\s*)"#,
+        r#"(\\"(?:[^"\\]|\\\\\\"|\\\\\\\\|\\\\[^"\\])*\\""#,
+        r#"|"(?:[^"\\]|\\.)*""#,
+        r#"|'(?:[^'\\]|\\.)*'"#,
+        r#"|\\?["'][^\s"'\\]*"#,
+        r#"|[^\s"'\\,;)]+)"#,
+    ))
     .unwrap()
     .replace_all(&s, |c: &regex::Captures| {
         let value = &c[2];
-        let quote = ["\\\"", "\"", "\\'", "'"]
+        let open = ["\\\"", "\"", "'"]
             .into_iter()
-            .find(|q| value.len() >= 2 * q.len() && value.starts_with(q) && value.ends_with(q))
+            .find(|q| value.starts_with(q))
             .unwrap_or("");
-        format!("{}{quote}<redacted>{quote}", &c[1])
+        let close = if value.len() >= 2 * open.len() && value.ends_with(open) {
+            open
+        } else {
+            ""
+        };
+        format!("{}{open}<redacted>{close}", &c[1])
     })
     .into_owned();
     // a systemd unit with an instance is shaped like an address (getty@tty1.service). It is spared only where the
