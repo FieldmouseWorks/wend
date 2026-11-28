@@ -41,11 +41,7 @@ pub fn release_name(family: &str, id: &str) -> String {
 }
 
 /// The releases a path passes, in order, wrapped at the arrows.
-fn path_line(family: &str, from: &str, hops: &[String]) -> String {
-    let names: Vec<String> = std::iter::once(from)
-        .chain(hops.iter().map(String::as_str))
-        .map(|r| release_name(family, r))
-        .collect();
+fn path_line(names: &[String]) -> String {
     let mut out = String::new();
     let mut line = String::new();
     for (i, n) in names.iter().enumerate() {
@@ -109,8 +105,8 @@ fn reach(v: &Value) -> Option<(&str, bool)> {
 }
 
 /// What preflight found for one path, as an answer to "can wend upgrade it?". `starts` are the releases the
-/// routes through this machine's release begin at, when it joins them partway.
-fn answer(j: &Judged, starts: &[&str]) -> String {
+/// routes through this machine's release begin at, when it joins them partway; `here` is the machine's own release.
+fn answer(j: &Judged, starts: &[&str], here: Option<&(String, String)>) -> String {
     let (v, fam) = (&j.verdict, j.family.as_str());
     let name = |r: &str| release_name(fam, r);
     let (from, to) = (v["from"].as_str().unwrap_or("?"), v["to"].as_str().unwrap_or("?"));
@@ -120,10 +116,19 @@ fn answer(j: &Judged, starts: &[&str]) -> String {
         .flatten()
         .filter_map(|h| h["to"].as_str().map(String::from))
         .collect();
+    // the path starts where the machine is: a rebuild that takes another's route from its start (Scientific Linux 7
+    // on the CentOS 7 route) is shown under its own name, not the route's
+    let mut names: Vec<String> = std::iter::once(from)
+        .chain(hops.iter().map(String::as_str))
+        .map(name)
+        .collect();
+    if let Some((f, rel)) = here.filter(|(f, rel)| f == fam && j.joins.is_none() && rel != from) {
+        names[0] = release_name(f, rel);
+    }
     let path = format!(
         "  wend has an upgrade path from here to {}:\n\n{}\n",
         name(to),
-        path_line(fam, from, &hops)
+        path_line(&names)
     );
     let mut s = String::new();
     let mut programs = false;
@@ -358,7 +363,7 @@ pub fn verdict(sys: &System, judged: &[Judged], paths: Option<&[String]>) -> Str
         if i > 0 {
             s.push('\n');
         }
-        s += &answer(j, starts);
+        s += &answer(j, starts, sys.release.as_ref());
     }
     s
 }
@@ -750,6 +755,14 @@ mod tests {
         );
         let (_, s, _) = said("ubuntu", "bionic");
         assert!(s.contains("      Ubuntu 18.04 (bionic) -> Ubuntu 20.04 (focal)"), "{s}");
+        // Scientific Linux 7 takes the CentOS 7 route from its start: the path is shown from Scientific Linux 7
+        let (routes, s, _) = said("el", "sl7");
+        assert_eq!(routes, 1);
+        assert!(
+            s.contains("      Scientific Linux 7 -> AlmaLinux 9 -> AlmaLinux 10\n"),
+            "{s}"
+        );
+        assert!(!s.contains("CentOS 7") && !s.contains("partway"), "{s}");
         // a machine at a route's start joins nothing
         let (routes, s, _) = said("el", "centos7");
         assert_eq!(routes, 1);
@@ -767,7 +780,11 @@ mod tests {
         .iter()
         .map(|h| h.to_string())
         .collect();
-        let p = path_line("debian", "etch", &hops);
+        let names: Vec<String> = std::iter::once("etch".to_string())
+            .chain(hops)
+            .map(|r| release_name("debian", &r))
+            .collect();
+        let p = path_line(&names);
         fits_an_old_terminal(&p);
         assert!(p.lines().count() > 1, "{p}");
         assert!(p.starts_with("      Debian 4 (etch) -> Debian 5 (lenny)"), "{p}");
