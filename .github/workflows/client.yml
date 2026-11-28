@@ -41,6 +41,22 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
+      - name: try.sh run by root leaves every file root's (cargo test isn't root, so this step is)
+        working-directory: .
+        run: |
+          # a release packed by another account, as v0.1.0 was (uid 1001): a root that unpacked it as recorded would
+          # hand that account the binary root is about to run
+          t=$(mktemp -d)
+          mkdir -p "$t/pack/wend-x86_64-linux/routes" "$t/here"
+          printf '#!/bin/sh\n' > "$t/pack/wend-x86_64-linux/wend"
+          chmod +x "$t/pack/wend-x86_64-linux/wend"
+          tar czf "$t/here/wend-x86_64-linux.tar.gz" --owner=1234 --group=1234 -C "$t/pack" wend-x86_64-linux
+          tar tvzf "$t/here/wend-x86_64-linux.tar.gz" --numeric-owner | grep -q ' 1234/1234 .*/wend$'
+          (cd "$t/here" && sudo sh "$GITHUB_WORKSPACE/client/try.sh" wend-x86_64-linux.tar.gz)
+          owners=$(sudo find "$t/here/wend-x86_64-linux" -printf '%U:%G\n' | sort -u)
+          echo "owners of what it unpacked: $owners"
+          test "$owners" = 0:0
+          sudo rm -rf "$t"
       - name: static binary
         run: cargo build --release --locked --target x86_64-unknown-linux-musl
       - name: parity with the Python engine
