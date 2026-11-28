@@ -2202,7 +2202,7 @@ filesystems,
 UEFI (the same stub on the ESP), a GRUB reinstall onto the new root (so the old `/boot` can go; until then commit keeps
 it), the client's preflight verdict, `wend commit` and `wend rollback`.
 
-## Upgrading a running machine (draft: design only)
+## Upgrading a running machine (draft: part built)
 
 Everything that has upgraded a real machine so far is the VM tier: `tools/vm.py` on remi, driving a guest from
 outside over ssh, with a qcow2 overlay per hop to fall back on. The client a machine's owner runs reports (`share`,
