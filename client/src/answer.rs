@@ -108,8 +108,9 @@ fn reach(v: &Value) -> Option<(&str, bool)> {
     }
 }
 
-/// What preflight found for one path, as an answer to "can wend upgrade it?".
-fn answer(j: &Judged) -> String {
+/// What preflight found for one path, as an answer to "can wend upgrade it?". `starts` are the releases the
+/// routes through this machine's release begin at, when it joins them partway.
+fn answer(j: &Judged, starts: &[&str]) -> String {
     let (v, fam) = (&j.verdict, j.family.as_str());
     let name = |r: &str| release_name(fam, r);
     let (from, to) = (v["from"].as_str().unwrap_or("?"), v["to"].as_str().unwrap_or("?"));
@@ -134,8 +135,6 @@ fn answer(j: &Judged) -> String {
              disk space and drivers all fit.",
             "  ",
         );
-        s.push('\n');
-        s += &wrap("This was only a check. What can come next is in wend's README.", "  ");
     } else {
         let stops = match reach(v) {
             Some((r, own)) if r != from => {
@@ -209,14 +208,15 @@ fn answer(j: &Judged) -> String {
             "  ",
         );
     }
-    if let Some((rung, start)) = &j.joins {
+    if let Some((rung, _)) = &j.joins {
+        let from: Vec<String> = starts.iter().map(|r| name(r)).collect();
         s.push('\n');
         s += &wrap(
             &format!(
                 "This machine joins the path partway, at {}. Those steps were proven on machines that started at {}, \
                  not yet on one installed as {}.",
                 name(rung),
-                name(start),
+                from.join(" or "),
                 name(rung)
             ),
             "  ",
@@ -233,6 +233,11 @@ fn answer(j: &Judged) -> String {
         for n in notes {
             s += &item(n);
         }
+    }
+    if v["ok"] == true {
+        // a yes is not an invitation to upgrade
+        s.push('\n');
+        s += &wrap("This was only a check. What can come next is in wend's README.", "  ");
     }
     s
 }
@@ -324,11 +329,24 @@ pub fn verdict(sys: &System, judged: &[Judged], paths: Option<&[String]>) -> Str
             );
         }
     }
-    for (i, j) in judged.iter().enumerate() {
+    // several routes can pass through one release, and the way on from it is the same on each: one answer, with
+    // every start those steps were proven from
+    let mut answers: Vec<(&Judged, Vec<&str>)> = vec![];
+    for j in judged {
+        let start = j.joins.as_ref().map(|(_, start)| start.as_str());
+        match answers
+            .iter_mut()
+            .find(|(k, _)| k.family == j.family && k.verdict == j.verdict)
+        {
+            Some((_, starts)) => starts.extend(start),
+            None => answers.push((j, start.into_iter().collect())),
+        }
+    }
+    for (i, (j, starts)) in answers.iter().enumerate() {
         if i > 0 {
             s.push('\n');
         }
-        s += &answer(j);
+        s += &answer(j, starts);
     }
     s
 }
@@ -627,6 +645,77 @@ mod tests {
         assert!(
             !bare.contains("Not yet.") && !bare.contains("The paths it has today"),
             "{bare}"
+        );
+    }
+
+    #[test]
+    fn a_machine_on_several_routes_gets_one_answer_from_where_it_is() {
+        // the real atlas: CentOS 6 is on the CentOS 4 and CentOS 5 routes, AlmaLinux 9 on four, and the way on is the
+        // same on each
+        let a = Atlas::load(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..")).unwrap();
+        let f = json!({"schema": "wend.hardware/4", "arch": "x86_64", "userland_bits": 64,
+            "cpu": {"model": "test", "features": ["cx16", "lahf_lm", "popcnt", "sse4_1", "sse4_2", "ssse3", "sse3"],
+                    "hypervisor": true},
+            "boot": "bios", "ram_mib": 4096, "free_mib": 40000,
+            "boot_dir": {"separate": false, "total_mib": 40000, "free_mib": 40000, "kernels": []},
+            "blacklisted": [], "pci": [], "runtimes": [], "python2_modules": [], "native": [], "kernel_owner": "kernel",
+            "repo_packages": [], "mounts": []});
+        let said = |fam: &str, rel: &str| {
+            let sys = System {
+                pretty: rel.into(),
+                release: Some((fam.into(), rel.into())),
+            };
+            let judged = crate::share::judge(Some(&a), None, &sys, &f).unwrap();
+            let s = verdict(&sys, &judged, Some(&[]));
+            fits_an_old_terminal(&s);
+            (
+                judged.len(),
+                s.clone(),
+                s.split_whitespace().collect::<Vec<_>>().join(" "),
+            )
+        };
+        let (routes, s, flat) = said("el", "centos6");
+        assert_eq!(routes, 2);
+        assert_eq!(s.matches("wend has an upgrade path from here").count(), 1, "{s}");
+        // the path starts where the machine is, not where the route does
+        assert!(
+            s.contains("      CentOS 6 -> CentOS 7 -> AlmaLinux 9 -> AlmaLinux 10\n"),
+            "{s}"
+        );
+        assert!(
+            flat.contains(
+                "joins the path partway, at CentOS 6. Those steps were proven on machines that started at CentOS 4 \
+                 or CentOS 5, not yet on one installed as CentOS 6."
+            ),
+            "{s}"
+        );
+        let (routes, s, flat) = said("el", "alma9");
+        assert_eq!(routes, 4);
+        assert_eq!(s.matches("wend has an upgrade path from here").count(), 1, "{s}");
+        assert!(s.contains("      AlmaLinux 9 -> AlmaLinux 10\n"), "{s}");
+        assert!(
+            flat.contains("started at CentOS 4 or CentOS 5 or CentOS 7 or CentOS 8, not yet"),
+            "{s}"
+        );
+        let (_, s, flat) = said("debian", "buster");
+        assert!(
+            s.contains(
+                "      Debian 10 (buster) -> Debian 11 (bullseye) -> Debian 12 (bookworm)\n        -> Debian 13"
+            ),
+            "{s}"
+        );
+        assert!(
+            flat.contains("started at Debian 4 (etch), not yet on one installed as Debian 10 (buster)."),
+            "{s}"
+        );
+        let (_, s, _) = said("ubuntu", "bionic");
+        assert!(s.contains("      Ubuntu 18.04 (bionic) -> Ubuntu 20.04 (focal)"), "{s}");
+        // a machine at a route's start joins nothing
+        let (routes, s, _) = said("el", "centos7");
+        assert_eq!(routes, 1);
+        assert!(
+            s.contains("      CentOS 7 -> AlmaLinux 9 -> AlmaLinux 10\n") && !s.contains("partway"),
+            "{s}"
         );
     }
 
