@@ -216,7 +216,9 @@ pub fn scrub(text: &str, words: &[String]) -> String {
             "/dev/mapper/<local>--vg-",
         ),
     ];
-    let mut s = text.to_string();
+    // first of all, no control character: the report is printed on a terminal and posted, and a path on the
+    // machine is whatever its owner named it
+    let mut s = crate::term::printable(text);
     for (rx, rep) in rules {
         s = Regex::new(rx).unwrap().replace_all(&s, *rep).into_owned();
     }

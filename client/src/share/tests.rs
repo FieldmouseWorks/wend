@@ -368,3 +368,13 @@ fn a_report_made_without_the_atlas_says_so() {
         "{full}"
     );
 }
+
+#[test]
+fn a_report_cannot_carry_a_terminal_escape() {
+    // a program's path is the machine owner's to name, and the report is printed on a terminal and posted
+    let s = scrub("/srv/x\x1b[2J\x07/app.py runs on Python 2.7\n(cron, /etc/crontab)", &[]);
+    assert_eq!(
+        s,
+        "/srv/x\\u{1b}[2J\\u{7}/app.py runs on Python 2.7\n(cron, /etc/crontab)"
+    );
+}

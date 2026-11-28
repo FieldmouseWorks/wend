@@ -228,6 +228,12 @@ pub fn brief(again: &str, prog: &str) -> String {
     )
 }
 
+/// Print something the first run has to say. All of it goes through here: much of it is the machine's own text
+/// (a folder's name, a program's path, an error), which must not reach the terminal as control characters.
+fn say(text: &str) {
+    print!("{}", crate::term::printable(text));
+}
+
 fn ask(prompt: &str) -> Option<String> {
     print!("{prompt}");
     let _ = std::io::stdout().flush();
@@ -253,7 +259,7 @@ fn read_report(file: &str, text: &str) {
     // SAFETY: before is the disposition signal returned above.
     unsafe { libc::signal(libc::SIGINT, before) };
     if !shown {
-        println!("{text}");
+        say(&format!("{text}\n"));
     }
 }
 
@@ -318,7 +324,7 @@ pub fn start(
     // SAFETY: isatty and geteuid have no preconditions.
     let (terminal, root) = unsafe { (libc::isatty(0) == 1 && libc::isatty(1) == 1, libc::geteuid() == 0) };
     if !terminal {
-        print!("{}", brief(&again, prog));
+        say(&brief(&again, prog));
         return 2;
     }
     if !root {
@@ -326,54 +332,60 @@ pub fn start(
         let full = std::env::current_exe()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| prog.to_string());
-        print!("{}", needs_root(&again, &format!("{full}{asked}")));
+        say(&needs_root(&again, &format!("{full}{asked}")));
         return 1;
     }
     let caps = crate::term::caps(&|k| std::env::var(k).ok(), true).filter(|_| !plain && crate::screens::fits());
     if let Some((caps, raw)) = caps.and_then(|c| Some((c, crate::term::Raw::enter()?))) {
         return match crate::screens::run(raw, caps, || check(atlas(), redact, prog)) {
             Ended::Made(c) => {
-                print!("{}", afterwards(&c));
+                say(&afterwards(&c));
                 0
             }
             Ended::Failed(e) => {
-                eprintln!("wend: the check could not finish: {e}\nNothing on this machine was changed.");
+                say(&format!(
+                    "wend: the check could not finish: {e}\nNothing on this machine was changed.\n"
+                ));
                 1
             }
             Ended::NotAsked => {
-                println!("{NAME}: no check was made. Nothing on this machine was read or changed.");
+                say(&format!(
+                    "{NAME}: no check was made. Nothing on this machine was read or changed.\n"
+                ));
                 1
             }
         };
     }
     // the plain run: on whatever terminal this is, at its width
     fit(crate::term::size().0);
-    print!("{}", intro());
+    say(&intro());
     // Enter goes on; the end of input, or an answer that starts like "no" or "quit", stops
     let answer = ask("Press Enter to check this machine, or type n and Enter to stop: ");
     if answer.as_deref().is_none_or(|a| a.starts_with(['n', 'q'])) {
-        println!("\nStopped. Nothing was read or changed.");
+        say("\nStopped. Nothing was read or changed.\n");
         return 1;
     }
-    println!("\nChecking...");
+    say("\nChecking...\n");
     let c = match check(atlas(), redact, prog) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("wend: the check could not finish: {e}\nNothing on this machine was changed.");
+            say(&format!(
+                "wend: the check could not finish: {e}\nNothing on this machine was changed.\n"
+            ));
             return 1;
         }
     };
     let r = &c.report;
-    print!(
+    say(&format!(
         "\n{}",
         result(&r.sys, &r.facts, &r.judged, c.paths.as_deref(), &c.file, &c.link, prog)
-    );
+    ));
     while ask("\nType r and press Enter to read the report now, or just press Enter to finish: ").as_deref()
         == Some("r")
     {
         read_report(&r.file, &r.full);
     }
-    println!("\nDone. wend does nothing more until you start it again.");
+    say("\nDone. wend does nothing more until you start it again.\n");
     0
 }
 

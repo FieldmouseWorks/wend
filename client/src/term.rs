@@ -105,6 +105,21 @@ pub fn discard_input() {
     unsafe { libc::tcflush(0, libc::TCIFLUSH) };
 }
 
+/// Text taken from the machine (a path, a name, an error), made safe to print on a terminal: a control character
+/// in it is written out as what it is (an escape as `\u{1b}`), not sent for the terminal to obey. A folder can be
+/// named with an escape sequence by anyone who can make a folder, and this runs as root. Newlines stay.
+pub fn printable(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c.is_control() && c != '\n' {
+            out.extend(c.escape_default());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 pub fn put(s: &str) {
     let mut out = std::io::stdout().lock();
     let _ = out.write_all(s.as_bytes());
@@ -478,6 +493,19 @@ mod tests {
         );
         // a mouse report that makes no sense is dropped, not left to block everything after it
         assert_eq!(decode(b"\x1b[<x;yMq"), (vec![], 8));
+    }
+
+    #[test]
+    fn text_from_the_machine_cannot_drive_the_terminal() {
+        // a folder can be named with an escape sequence in it, by anyone who can make a folder
+        let s = printable("/tmp/evil\x1b[2J\x07dir/wend-box-0123.md\nnext\tline\r");
+        assert_eq!(s, "/tmp/evil\\u{1b}[2J\\u{7}dir/wend-box-0123.md\nnext\\tline\\r");
+        assert!(s.chars().all(|c| c == '\n' || !c.is_control()));
+        // what has none comes through as it is
+        assert_eq!(
+            printable("plain text, 100% \u{2192} ok\n"),
+            "plain text, 100% \u{2192} ok\n"
+        );
     }
 
     #[test]
