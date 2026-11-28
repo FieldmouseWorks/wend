@@ -1,7 +1,8 @@
 # Releases: the client a machine's owner downloads. A maintainer pushes a tag (v0.1.0), publishes a release with a new
 # tag in GitHub's web UI, or runs this workflow on main with a version; this builds the static binary from that commit, packs it with the atlas it reads (adapters, their driver tables and library tables, fixes, routes, runs), checks
-# the pack loads and passes its own check, and publishes both files on the tag's release. The asset names carry no
-# version, so releases/latest/download/wend-x86_64-linux.tar.gz always names the newest one.
+# the pack loads and passes its own check, and publishes it on the tag's release with its SHA256SUMS and try.sh
+# (client/try.sh), the script a newcomer pipes to sh to fetch, check and unpack it (docs/try-it.md). The asset names
+# carry no version, so releases/latest/download/wend-x86_64-linux.tar.gz always names the newest one.
 name: release
 
 on:
@@ -62,9 +63,19 @@ jobs:
           cp -r fixes routes runs LICENSE-MIT LICENSE-APACHE "$d/"
           cp docs/try-it.md "$d/README.md"
           (cd "$d" && ./wend check)
-          tar czf "$d.tar.gz" "$d"
+          # root's files, whoever packs them: a root that unpacks a tarball keeps the owners it records, and this
+          # runner's uid is somebody else's account on the machine that then runs the binary as root
+          tar czf "$d.tar.gz" --owner=0 --group=0 --numeric-owner "$d"
+          if tar tvzf "$d.tar.gz" --numeric-owner | grep -v ' 0/0 '; then echo "packed for another owner"; exit 1; fi
+          # the tarball alone: try.sh and docs/try-it.md's `sha256sum -c SHA256SUMS` both read this file
           sha256sum "$d.tar.gz" > SHA256SUMS
           cat SHA256SUMS
+      - name: the one line a newcomer pastes, against these files
+        # try.sh as it is published and run (down a pipe) has to fetch, check and unpack exactly what this run made
+        run: |
+          mkdir tried
+          (cd tried && WEND_TRY_URL="file://$GITHUB_WORKSPACE" sh < ../client/try.sh)
+          cmp wend-x86_64-linux/wend tried/wend-x86_64-linux/wend
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -75,10 +86,10 @@ jobs:
             # only a pushed tag's run attaches to a release that exists: a dispatched run claimed a new tag, so a
             # release there now is someone else's
             [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || { echo "release $TAG appeared during this run"; exit 1; }
-            gh release upload "$TAG" wend-x86_64-linux.tar.gz SHA256SUMS --clobber
+            gh release upload "$TAG" wend-x86_64-linux.tar.gz SHA256SUMS client/try.sh --clobber
           else
-            gh release create "$TAG" wend-x86_64-linux.tar.gz SHA256SUMS --verify-tag --title "wend $TAG" \
-              --notes "The client and the atlas it reads, built from $GITHUB_SHA. What to run, and what it does and doesn't touch: README.md inside, or docs/try-it.md."
+            gh release create "$TAG" wend-x86_64-linux.tar.gz SHA256SUMS client/try.sh --verify-tag --title "wend $TAG" \
+              --notes "The client and the atlas it reads, built from $GITHUB_SHA. To put it on a server, checked and unpacked (it starts nothing): curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/latest/download/try.sh | sh. What to run next, and what it does and doesn't touch: README.md inside, or docs/try-it.md."
           fi
       - name: give back a claimed tag the run couldn't release
         if: failure() && env.CLAIMED == '1'
