@@ -112,14 +112,12 @@ pub fn local_words(root: &Path, nodename: &str, extra: &[String]) -> Vec<String>
         words.push(short.to_string());
         // CentOS 6's installer names the volume group after the host with its dashes dropped (vg_web01 for web-01)
         words.push(short.replace('-', ""));
-        // the domain alone names the place as well as the host does: each level of it that is more than a suffix,
-        // and the name before the suffix by itself
+        // the domain alone names the place as well as the host does: each level of it that is more than its last
+        // part, and every part of it long enough to be a name and not one of the words all domains are made of
         for from in 1..labels.len().saturating_sub(1) {
             words.push(labels[from..].join("."));
         }
-        if labels.len() >= 3 {
-            words.push(labels[labels.len() - 2].to_string());
-        }
+        words.extend(labels[1..].iter().filter(|l| l.len() >= 4).map(|l| l.to_string()));
         words.push(h);
     }
     // EL 5 and 6 start login accounts at 500; login.defs says where this machine does
@@ -157,9 +155,16 @@ pub fn local_words(root: &Path, nodename: &str, extra: &[String]) -> Vec<String>
         "linux",
         "local",
         "internal",
+        "intranet",
         "example",
         "corp",
         "home",
+        "cloud",
+        "prod",
+        "test",
+        "info",
+        "name",
+        "arpa",
         "lan",
         "com",
         "net",
@@ -825,6 +830,47 @@ mod tests {
         // the accounts every machine has are not names of this one
         assert!(s.ends_with("; nobody ; nfsnobody"), "{s}");
         assert!(!words.iter().any(|w| w == "example" || w == "corp"), "{words:?}");
+    }
+
+    #[test]
+    fn scrubs_the_domain_whatever_its_shape() {
+        for (host, text, gone) in [
+            // a name with no public suffix at all
+            (
+                "web01.acmecorp",
+                "/srv/acmecorp/app.py /srv/web01/x",
+                vec!["acmecorp", "web01"],
+            ),
+            // a suffix of two parts: the name before it stands alone too
+            (
+                "web01.acme.co.uk",
+                "/srv/acme/app.py /srv/acme.co.uk/x mail.acme.co.uk",
+                vec!["acme"],
+            ),
+            (
+                "db.internal.zylko.example",
+                "/srv/zylko/a /srv/internal.zylko.example/b",
+                vec!["zylko"],
+            ),
+        ] {
+            let root = tree(&[("etc/hostname", &format!("{host}\n")[..])]);
+            let words = local_words(&root, host, &[]);
+            let s = scrub(text, &words);
+            for g in gone {
+                assert!(!s.contains(g), "{host}: {g} survived: {s} (words {words:?})");
+            }
+            // the words every name is made of are nobody's
+            for kept in ["co", "uk", "internal", "example", "local", "com"] {
+                assert!(!words.iter().any(|w| w == kept), "{host}: {kept} is a word: {words:?}");
+            }
+        }
+        // a suffix word in a path is left alone
+        let root = tree(&[("etc/hostname", "web01.example.com\n")]);
+        let words = local_words(&root, "web01.example.com", &[]);
+        assert_eq!(
+            scrub("/usr/local/com/internal/example", &words),
+            "/usr/local/com/internal/example"
+        );
     }
 
     #[test]

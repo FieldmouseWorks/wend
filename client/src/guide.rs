@@ -214,10 +214,11 @@ pub fn needs_root(prog: &str, full: &str) -> String {
     )
 }
 
-/// What `wend` says when nobody is at a terminal to be guided (a pipe, a script, `ssh host wend`).
-pub fn brief(prog: &str) -> String {
+/// What `wend` says when nobody is at a terminal to be guided (a pipe, a script, `ssh host wend`). `again` is the
+/// command that was run, `prog` the program alone.
+pub fn brief(again: &str, prog: &str) -> String {
     format!(
-        "{}\nStart here, at a terminal, as root:\n\n    sudo {prog}\n\n{}\nEvery command: {prog} help\n",
+        "{}\nStart here, at a terminal, as root:\n\n    sudo {again}\n\n{}\nEvery command: {prog} help\n",
         wrap(TITLE, ""),
         wrap(
             "It explains each step and waits for you before it does anything. The first step is a read-only check \
@@ -306,10 +307,18 @@ pub fn start(
     redact: &[String],
     plain: bool,
 ) -> u8 {
+    // the command that starts this run again, with what was asked of it: someone sent back to sudo must not lose
+    // the word they asked to have replaced
+    let asked: String = redact
+        .iter()
+        .map(|w| format!(" --redact {w}"))
+        .chain(plain.then(|| " --plain".to_string()))
+        .collect();
+    let again = format!("{prog}{asked}");
     // SAFETY: isatty and geteuid have no preconditions.
     let (terminal, root) = unsafe { (libc::isatty(0) == 1 && libc::isatty(1) == 1, libc::geteuid() == 0) };
     if !terminal {
-        print!("{}", brief(prog));
+        print!("{}", brief(&again, prog));
         return 2;
     }
     if !root {
@@ -317,7 +326,7 @@ pub fn start(
         let full = std::env::current_exe()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| prog.to_string());
-        print!("{}", needs_root(prog, &full));
+        print!("{}", needs_root(&again, &format!("{full}{asked}")));
         return 1;
     }
     let caps = crate::term::caps(&|k| std::env::var(k).ok(), true).filter(|_| !plain && crate::screens::fits());
@@ -439,7 +448,7 @@ mod tests {
 
     #[test]
     fn the_screens_before_the_check_name_the_command_to_run() {
-        for s in [intro(), needs_root("./wend", "/root/w/wend"), brief("./wend")] {
+        for s in [intro(), needs_root("./wend", "/root/w/wend"), brief("./wend", "./wend")] {
             fits_an_old_terminal(&s);
             assert!(s.starts_with(TITLE), "{s}");
         }
@@ -452,8 +461,15 @@ mod tests {
         );
         // the command to redact with is the one that started it
         assert!(sharing("/root/w.md", "/opt/wend/wend").contains("(/opt/wend/wend --redact acme)"));
-        assert!(brief("/opt/wend/wend").contains("\n    sudo /opt/wend/wend\n"));
-        assert!(brief("wend").contains("Every command: wend help\n"));
+        assert!(brief("/opt/wend/wend", "/opt/wend/wend").contains("\n    sudo /opt/wend/wend\n"));
+        // what was asked for goes with the command: a word to redact isn't lost on the way through sudo
+        let asked = needs_root("./wend --redact acme", "/root/w/wend --redact acme");
+        assert!(
+            asked.contains("\n    sudo ./wend --redact acme\n")
+                && asked.ends_with("\n    /root/w/wend --redact acme\n")
+        );
+        assert!(brief("./wend --redact acme", "./wend").contains("\n    sudo ./wend --redact acme\n"));
+        assert!(brief("wend --plain", "wend").contains("Every command: wend help\n"));
         assert!(intro().contains("It changes nothing on this machine."));
     }
 }
