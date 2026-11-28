@@ -67,6 +67,12 @@ waits for you before it reads anything. Then it makes the check and tells you, i
 
 and it offers to show you the report there and then.
 
+On a terminal of 80 columns by 24 rows or more it does this full-screen: a frame, the answer set apart, and buttons
+you choose with the arrow keys, Tab and Enter, or by clicking, where your terminal program passes the mouse through
+(nearly all do). On a smaller terminal or a bare console it asks and tells in plain text instead, and
+`sudo ./wend --plain` asks for that anywhere. Both say the same things. Leaving the full-screen run prints where the
+report is and the link to share it, on the ordinary screen, to copy from.
+
 It needs root because it reads every process and every crontab, and a normal user can't see other users'. Started
 without root, it only tells you to start it with `sudo`. No sudo on the machine? Become root first (`su -`) and run
 `./wend` from that folder. It also needs a terminal, since it waits for you: over ssh that means logging in, or
@@ -110,7 +116,9 @@ and anything shaped like a password, token or private key.
 What stays: the release and kernel, CPU model and features, RAM and disk sizes, mount points and filesystem types,
 PCI vendor and device IDs with their drivers, and the paths and unit names of any Python 2 programs it found. If a
 path or service name says whose machine this is (`/srv/acmecorp/billing.py`), make the report again with that word
-replaced too, `sudo ./wend share --redact acmecorp`, as many times as you need.
+replaced too: `sudo ./wend --redact acmecorp` walks you through it again, and `sudo ./wend share --redact acmecorp`
+does it without the walk-through. `--redact` can be given as many times as you need. Each run writes a new file, so
+delete the earlier one.
 
 ## Got a spare VM or a snapshot?
 

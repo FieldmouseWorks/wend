@@ -461,7 +461,11 @@ pub fn prepare(atlas: Option<&Atlas>, route: Option<&str>, extra: &[String]) -> 
         .map(|b| format!("{b:02x}"))
         .collect();
     let file = format!("wend-box-{key}.md");
-    fs::write(&file, &full).map_err(|e| format!("{file}: {e}"))?;
+    fs::write(&file, &full).map_err(|e| {
+        format!(
+            "the report could not be saved in this folder ({file}: {e}). Start wend from a folder you can write to."
+        )
+    })?;
     Ok(Shared {
         sys_line: scrub(&sys.pretty, &words),
         routes: if routes.is_empty() { "none".into() } else { routes },

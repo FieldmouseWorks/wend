@@ -29,8 +29,8 @@ It downloads the [latest release](https://github.com/FieldmouseWorks/wend/releas
 `SHA256SUMS`, unpacks it into `./wend-x86_64-linux`, and tells you the one command to run next:
 `cd wend-x86_64-linux && sudo ./wend`. It starts nothing itself.
 
-That first step only reads. wend walks you through it: it says what it is about to do and waits for you, then tells
-you what the machine is, whether one of the routes below would get it to the end, and where it would stop if not. It
+That first step only reads. wend walks you through it, full-screen with buttons where the terminal allows and in
+plain text where it doesn't: it says what it is about to do and waits for you, then tells you what the machine is, whether one of the routes below would get it to the end, and where it would stop if not. It
 changes nothing and sends nothing. It writes one file, a report with the hostname, users and addresses scrubbed,
 which is yours to share or not. That report is what we're asking for: the routes were proven on test boxes we built,
 and what real machines look like is the part we don't know yet.

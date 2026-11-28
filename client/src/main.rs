@@ -3,6 +3,7 @@
 //! It reads and checks the atlas, compiles fixes and hops into the exact commands CI proved, and walks a route on
 //! a root filesystem: snapshot, apply, check, roll back on red.
 
+mod answer;
 mod atlas;
 mod backend;
 mod canon;
@@ -18,8 +19,10 @@ mod rehearse;
 mod report;
 mod runtime;
 mod sandbox;
+mod screens;
 mod selftest;
 mod share;
+mod term;
 mod upgrade;
 mod walk;
 
@@ -33,7 +36,8 @@ const USAGE: &str = "\
 wend: walk a proven upgrade route on a machine. No model, no network beyond your distro's mirrors.
 
 New here? Run `wend` with nothing after it, at a terminal, as root: it explains each step and waits for you, and
-its first step is a read-only check of the machine.
+its first step is a read-only check of the machine. `wend --plain` does the same with prompts and plain text, for a
+terminal the full-screen version doesn't suit.
 
   wend check                        check every adapter, fix, route and run in the atlas (the gate's rules)
   wend ids                          every fix's and route's content id
@@ -139,6 +143,7 @@ fn main() -> ExitCode {
         facts: facts.clone(),
     };
     let redact: Vec<String> = std::iter::from_fn(|| opt(&mut args, "--redact")).collect();
+    let plain = flag(&mut args, "--plain");
     let upgrade_opts = upgrade::UpgradeOpts {
         new_root_disk: opt(&mut args, "--new-root-disk"),
         status: flag(&mut args, "--status"),
@@ -147,7 +152,7 @@ fn main() -> ExitCode {
     let Some(cmd) = args.first().cloned() else {
         // nothing asked for: the guided first run (or, with nobody at a terminal, where to start)
         let prog = std::env::args().next().unwrap_or_else(|| "wend".into());
-        return ExitCode::from(guide::start(&prog, || report_atlas(&root), &redact));
+        return ExitCode::from(guide::start(&prog, || report_atlas(&root), &redact, plain));
     };
     if matches!(cmd.as_str(), "-h" | "--help" | "help") {
         println!("{USAGE}");

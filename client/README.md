@@ -58,11 +58,23 @@ secret, prints the whole report, saves it as `wend-box-<id>.md`, and prints a pr
 It sends nothing and, like `facts`, touches nothing. Without an atlas beside it, the report has the facts and no
 verdict.
 
-`wend` with nothing after it, at a terminal, as root, is that check as a guided first run (`src/guide.rs`), and where
-a newcomer starts: it says what it is about to do and waits, makes the check, and then says in plain words what the
-machine is, whether a route would take it and how far, which file it wrote and how to share it, in place of printing
-the whole report (it offers to show it). Not root, it names the one command to run; with nobody at a terminal, it
-points there and at `wend help`, which lists every command.
+`wend` with nothing after it, at a terminal, as root, is that check as a guided first run, and where a newcomer
+starts: it says what it is about to do and waits, makes the check, and then says in plain words what the machine is,
+whether a route would take it and how far, which file it wrote and how to share it, in place of printing the whole
+report (it offers to show it). Not root, it names the one command to run; with nobody at a terminal, it points there
+and at `wend help`, which lists every command. `wend --redact WORD` is the same run with that word scrubbed too.
+
+It runs full-screen on a terminal of 80 by 24 or more (TERM set and not `dumb`): a frame, buttons chosen by arrow
+keys, Tab, Enter, a button's first letter or a click, a scrolling view of the report, and the link left on the
+ordinary screen on the way out. Anywhere else, and with `--plain` or `WEND_PLAIN` set, it is prompts and plain text.
+The words are the same either way. Where each part lives:
+
+| file | what it holds |
+| --- | --- |
+| `src/guide.rs` | the flow, the plain run, and the words around the answer |
+| `src/answer.rs` | the answer itself: how far the machine could go, what stops it, releases by the names people use |
+| `src/screens.rs` | the full-screen run: what each screen draws and what a key or click does, as pure functions |
+| `src/term.rs` | the terminal: raw mode, keys and mouse decoded, a grid of styled cells; no terminfo, no dependency |
 
 The [release](https://github.com/FieldmouseWorks/wend/releases/latest) packs the static binary with the atlas it reads
 (`.github/workflows/release.yml`, on a `v*` tag), so a machine's owner needs no checkout. `try.sh`, published beside
@@ -173,9 +185,8 @@ package counts) except timing, the runner line and `log_sha256`, which hashes co
 
 ## Known limits
 
-- Rust's standard library supports Linux 3.2 and later. CentOS 5 runs 2.6.18 and CentOS 6 runs 2.6.32, so on those
-  kernels the binary is untested (it may still run). The routes already need real reboots into newer kernels on
-  the way up (wend#13), which is where this gets settled.
+- Rust's standard library supports Linux 3.2 and later, and CentOS 5 (2.6.18) and CentOS 6 (2.6.32) are older.
+  What has been tried there, and when, is in [docs/try-it.md](../docs/try-it.md).
 - The checker is stricter than tools/check.py in one direction only: it refuses wrong-type fields (a `pre` that
   isn't a list of tables, a `packages` that is a string, an adapter op without an `args` table, floats and dates
   anywhere in a fix or route), several of which Python accepts or crashes on. Parity requires Rust to refuse

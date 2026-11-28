@@ -2,61 +2,58 @@
 //! makes the read-only check `wend share` makes, and says what it found and what to do with the report, in plain
 //! words. Everything it shows comes from `share::prepare`: the same facts, the same verdict, the same saved report.
 //!
-//! Written for 80 columns, plain ASCII and no colour: the terminals old servers get reached through.
+//! This file is what it says, and the plain way of saying it: prompts and text, 80 columns, ASCII, no colour, for a
+//! console that can do no more (or `--plain`). `screens` shows the same words full-screen where the terminal can.
 
-use crate::atlas::{str_of, Atlas};
-use crate::share::{self, Judged, System, DEBIAN_CODENAMES};
+use crate::answer::{machine, paths, verdict};
+use crate::atlas::Atlas;
+use crate::screens::Ended;
+use crate::share::{self, Judged, Shared, System};
 use serde_json::Value;
 use std::io::{BufRead, Write};
 
-const WIDTH: usize = 76;
+/// The widest a line of text gets: what fits inside a frame on an 80-column terminal.
+pub const WIDTH: usize = 76;
+/// The width text is wrapped to: WIDTH, or less once the plain run has found a narrower terminal (a phone's, say).
+static WRAP_AT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(WIDTH);
+
+/// The width text is being wrapped to.
+pub fn width() -> usize {
+    WRAP_AT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The width to wrap at on a terminal `columns` wide: no wider than text is written for, and no narrower than
+/// words can stand.
+fn fitted(columns: usize) -> usize {
+    columns.saturating_sub(2).clamp(30, WIDTH)
+}
+
+/// Wrap to a terminal `columns` wide from here on, when that is narrower than text is written for.
+fn fit(columns: usize) {
+    WRAP_AT.store(fitted(columns), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub const NAME: &str = concat!("wend ", env!("CARGO_PKG_VERSION"));
+
+pub const TAGLINE: &str = "proven upgrade paths for old Linux servers";
+
 const TITLE: &str = concat!(
     "wend ",
     env!("CARGO_PKG_VERSION"),
     ": proven upgrade paths for old Linux servers"
 );
 
-/// A release id as people say it: centos7 is "CentOS 7", trixie is "Debian 13 (trixie)". An id it doesn't know
-/// prints as it is.
-pub fn release_name(family: &str, id: &str) -> String {
-    const UBUNTU: &[(&str, &str)] = &[
-        ("trusty", "14.04"),
-        ("xenial", "16.04"),
-        ("bionic", "18.04"),
-        ("focal", "20.04"),
-        ("jammy", "22.04"),
-        ("noble", "24.04"),
-        ("resolute", "26.04"),
-    ];
-    let numbered = |prefix: &str, name: &str| {
-        id.strip_prefix(prefix)
-            .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-            .map(|n| format!("{name} {n}"))
-    };
-    let known = match family {
-        "el" => numbered("centos", "CentOS")
-            .or_else(|| numbered("alma", "AlmaLinux"))
-            .or_else(|| numbered("sl", "Scientific Linux")),
-        "debian" => DEBIAN_CODENAMES
-            .iter()
-            .position(|c| !c.is_empty() && *c == id)
-            .map(|n| format!("Debian {n} ({id})")),
-        "ubuntu" => UBUNTU
-            .iter()
-            .find(|(c, _)| *c == id)
-            .map(|(_, v)| format!("Ubuntu {v} ({id})")),
-        _ => None,
-    };
-    known.unwrap_or_else(|| id.to_string())
+/// `text` wrapped to the screen, every line behind `indent`.
+pub fn wrap(text: &str, indent: &str) -> String {
+    wrap_to(text, indent, width())
 }
 
-/// `text` wrapped to the screen, every line behind `indent`.
-fn wrap(text: &str, indent: &str) -> String {
+fn wrap_to(text: &str, indent: &str, width: usize) -> String {
     let mut out = String::new();
     for para in text.split('\n') {
         let mut line = String::new();
         for word in para.split_whitespace() {
-            if !line.is_empty() && indent.len() + line.len() + 1 + word.len() > WIDTH {
+            if !line.is_empty() && indent.len() + line.len() + 1 + word.len() > width {
                 out += &format!("{indent}{line}\n");
                 line.clear();
             }
@@ -71,7 +68,7 @@ fn wrap(text: &str, indent: &str) -> String {
 }
 
 /// One thing in a list, wrapped, its later lines under its first word.
-fn item(text: &str) -> String {
+pub fn item(text: &str) -> String {
     let body = wrap(text, "      ");
     format!("    - {}", &body[6.min(body.len())..])
 }
@@ -82,148 +79,80 @@ fn step(n: usize, text: &str) -> String {
     format!("  {n}. {}", &body[5.min(body.len())..])
 }
 
-/// The releases a path passes, in order, wrapped at the arrows.
-fn path_line(family: &str, from: &str, hops: &[String]) -> String {
-    let names: Vec<String> = std::iter::once(from)
-        .chain(hops.iter().map(String::as_str))
-        .map(|r| release_name(family, r))
-        .collect();
-    let mut out = String::new();
-    let mut line = String::new();
-    for (i, n) in names.iter().enumerate() {
-        let piece = if i == 0 { n.clone() } else { format!(" -> {n}") };
-        if !line.is_empty() && 6 + line.len() + piece.len() > WIDTH {
-            out += &format!("      {line}\n");
-            line = format!("  {}", piece.trim_start());
-        } else {
-            line += &piece;
-        }
+/// What the check did to the machine: nothing, but for the one file at `file`.
+pub fn written(file: &str) -> String {
+    format!(
+        "  Nothing on this machine was changed, and nothing was sent anywhere.\n  One file was written:\n\n      \
+         {file}\n\n{}",
+        wrap(
+            "It is the full report of this check. Before it was saved, the hostname, user names, home directories, \
+             network addresses and anything that looked like a password or key were replaced.",
+            "  ",
+        )
+    )
+}
+
+/// Why to share the report at `file` and how, down to the link, which the caller shows after it (a link can't be
+/// wrapped).
+pub fn sharing(file: &str) -> String {
+    // a path has no spaces to wrap at: it is cut to the screen, after a slash where there is one, so none of it is
+    // lost off the edge
+    let mut path = String::new();
+    let mut rest: Vec<char> = file.chars().collect();
+    while !rest.is_empty() {
+        let fits = rest.len().min(width() - 7);
+        let cut = match rest[..fits].iter().rposition(|c| *c == '/') {
+            Some(slash) if fits < rest.len() && slash > 0 => slash + 1,
+            _ => fits,
+        };
+        path += &format!("       {}\n", rest.drain(..cut).collect::<String>());
     }
-    out + &format!("      {line}\n")
+    wrap(
+        "wend's upgrade paths were proven on test servers the project built. A report from a real machine is how it \
+         learns what one looks like, and how a path for a machine like yours gets made or fixed. To share it:",
+        "  ",
+    ) + "\n"
+        + &step(
+            1,
+            "Read it first. If it names anything private, start wend again with --redact and the word after it \
+             (wend --redact acme): the new report has that word replaced too. Then delete this one.",
+        )
+        + &step(2, "Copy the file to a computer with a web browser:")
+        + &path
+        + &step(
+            3,
+            "Open this link there (it needs a GitHub account), drag the file into the box marked Report, and submit:",
+        )
 }
 
-/// Every path the atlas has, start to end, for the screens that have to say "not this machine, yet".
-pub fn paths(atlas: &Atlas) -> Vec<String> {
-    let mut all: Vec<String> = atlas
-        .routes
-        .values()
-        .filter_map(|d| {
-            let fam = str_of(d, "family").ok()?;
-            Some(format!(
-                "{} to {}",
-                release_name(fam, str_of(d, "from").ok()?),
-                release_name(fam, str_of(d, "to").ok()?)
-            ))
-        })
-        .collect();
-    all.sort();
-    all
-}
-
-fn strings(v: &Value) -> Vec<&str> {
-    v.as_array().into_iter().flatten().filter_map(Value::as_str).collect()
-}
-
-/// What preflight found for one path, as an answer to "can wend upgrade it?".
-fn answer(j: &Judged) -> String {
-    let (v, fam) = (&j.verdict, j.family.as_str());
-    let name = |r: &str| release_name(fam, r);
-    let (from, to) = (v["from"].as_str().unwrap_or("?"), v["to"].as_str().unwrap_or("?"));
-    let hops: Vec<String> = strings(&v["hops"].as_array().map_or(Value::Null, |h| {
-        Value::Array(h.iter().map(|x| x["to"].clone()).collect())
-    }))
-    .into_iter()
-    .map(String::from)
-    .collect();
-    let path = format!(
-        "  wend has an upgrade path from here to {}:\n\n{}\n",
-        name(to),
-        path_line(fam, from, &hops)
+/// What the check reads, for someone deciding whether to let it (docs/try-it.md says the same at more length).
+pub fn reads() -> String {
+    let mut s = String::from("  To judge this machine, wend reads:\n\n");
+    for what in [
+        "/proc, /sys and /boot: the processor, memory, disks, drivers and kernels",
+        "the release files under /etc, to know what the machine runs",
+        "/etc/passwd and /etc/hostname, to know which names to take out",
+        "the running programs and every crontab, to find programs of your own",
+        "the first bytes of each mounted filesystem, to tell which kind it is",
+        "the package database, to tell your programs from the distribution's",
+    ] {
+        s += &item(what);
+    }
+    s.push('\n');
+    s += &wrap(
+        "It needs root because a normal user can't see other users' programs and crontabs.",
+        "  ",
     );
-    let mut s = String::new();
-    let refused = strings(&v["machine"]);
-    let lands = v["lands_on"].as_str();
-    if v["ok"] == true {
-        s += "  Yes, as far as this check can tell.\n\n";
-        s += &path;
-        s += &wrap(
-            "It was proven on test servers, and nothing found on this machine would stop it: its processor, memory, \
-             disk space and drivers all fit.",
-            "  ",
-        );
-    } else if !refused.is_empty() || lands.is_none() || lands == Some(from) {
-        s += "  Not as it stands.\n\n";
-        s += &path;
-        s += "  This machine could not take the first step of it. What stands in the way:\n\n";
-        for p in &refused {
-            s += &item(p);
-        }
-    } else {
-        s += "  Part of the way.\n\n";
-        s += &path;
-        s += &wrap(
-            &format!(
-                "This machine could follow it as far as {}. What stops it after that:",
-                name(lands.unwrap_or("?"))
-            ),
-            "  ",
-        );
-        s.push('\n');
-    }
-    for h in v["hops"].as_array().into_iter().flatten() {
-        let found: Vec<&str> = strings(&h["problems"])
-            .into_iter()
-            .chain(strings(&h["runtime_problems"]))
-            .collect();
-        if found.is_empty() {
-            continue;
-        }
-        s += &format!("    At {}:\n", name(h["to"].as_str().unwrap_or("?")));
-        for p in found {
-            s += &item(p);
-        }
-    }
-    if v["ok"] != true {
-        s += "\n  None of that was changed or attempted. The report has the detail.\n";
-    }
-    if let Some((rung, start)) = &j.joins {
-        s.push('\n');
-        s += &wrap(
-            &format!(
-                "This machine joins the path partway, at {}. Those steps were proven on machines that started at {}, \
-                 not yet on one installed as {}.",
-                name(rung),
-                name(start),
-                name(rung)
-            ),
-            "  ",
-        );
-    }
-    let notes: Vec<&str> = v["hops"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .flat_map(|h| strings(&h["notes"]))
-        .collect();
-    if !notes.is_empty() {
-        s += "\n  Worth knowing:\n\n";
-        for n in notes {
-            s += &item(n);
-        }
-    }
+    s.push('\n');
+    s += &wrap(
+        "It writes one file, the report, in the folder you started it from. It opens no network connection, and it \
+         installs, upgrades, starts and stops nothing.",
+        "  ",
+    );
     s
 }
 
-fn memory(mib: u64) -> String {
-    if mib < 1000 {
-        format!("{mib} MB")
-    } else {
-        format!("{:.1} GB", mib as f64 / 1024.0)
-    }
-}
-
-/// The screen after the check: the machine, the answer, what was written, and how to share it.
-/// `paths` is every path the atlas has, or None when wend was started without its atlas.
+/// The plain screen after the check: the machine, the answer, what was written, and how to share it.
 pub fn result(
     sys: &System,
     facts: &Value,
@@ -232,115 +161,49 @@ pub fn result(
     file: &str,
     link: &str,
 ) -> String {
-    let f = facts;
-    let mut s = String::from("THIS MACHINE\n");
-    s += &wrap(&sys.pretty, "  ");
-    s += &wrap(
-        &format!(
-            "{}, {} of memory, {} firmware{}",
-            match f["arch"].as_str() {
-                Some("x86_64") => "64-bit (x86_64)",
-                Some(a) => a,
-                None => "unknown processor type",
-            },
-            memory(f["ram_mib"].as_u64().unwrap_or(0)),
-            match f["boot"].as_str() {
-                Some("uefi") => "UEFI",
-                Some("bios") => "BIOS",
-                _ => "unknown",
-            },
-            if f["cpu"]["hypervisor"] == true {
-                ", a virtual machine"
-            } else {
-                ""
-            }
-        ),
-        "  ",
-    );
-    s += "\nCAN WEND UPGRADE IT?\n";
-    if judged.is_empty() {
-        s += &wrap(
-            &match (paths, &sys.release) {
-                (None, _) => "wend can't say: it was started without the folder of upgrade paths it came with. Start \
-                              it from the folder it was unpacked into. The report below still describes the machine."
-                    .to_string(),
-                (Some(_), Some((fam, rel))) => format!(
-                    "Not yet. wend has no upgrade path that starts at {} or passes through it.",
-                    release_name(fam, rel)
-                ),
-                (Some(_), None) => "Not yet. wend doesn't recognize the system this machine runs.".to_string(),
-            },
-            "  ",
-        );
-        if let Some(all) = paths {
-            s += "\n  The paths it has today:\n\n";
-            for p in all {
-                s += &item(p);
-            }
-            s.push('\n');
-            s += &wrap(
-                "A report from a machine like this one is still worth sending: it is how the next path gets chosen.",
-                "  ",
-            );
-        }
-    }
-    for (i, j) in judged.iter().enumerate() {
-        if i > 0 {
-            s.push('\n');
-        }
-        s += &answer(j);
-    }
-    s += "\nWHAT HAPPENED\n";
-    s += "  Nothing on this machine was changed, and nothing was sent anywhere.\n  One file was written:\n\n";
-    s += &format!("      {file}\n\n");
-    s += &wrap(
-        "It is the full report of this check. Before it was saved, the hostname, user names, home directories, \
-         network addresses and anything that looked like a password or key were replaced.",
-        "  ",
-    );
-    s += "\nSHARING IT (your choice)\n";
-    s += &wrap(
-        "wend's upgrade paths were proven on test servers the project built. What it doesn't know yet is what real \
-         machines look like, and a report from yours is how it finds out. That is also how a path for a machine \
-         like yours gets made or fixed. To share it:",
-        "  ",
-    );
-    s.push('\n');
-    s += &step(
-        1,
-        "Read it first. If it names anything private, run \"wend share --redact WORD\" to make a report with that \
-         word replaced too.",
-    );
-    s += &step(2, "Copy the file to a computer with a web browser.");
-    s += &step(
-        3,
-        "Open this link there (it needs a GitHub account), drag the file into the box marked Report, and submit:",
-    );
-    s += &format!("\n{link}\n");
-    s
+    format!(
+        "THIS MACHINE\n{}\nCAN WEND UPGRADE IT?\n{}\nWHAT HAPPENED\n{}\nSHARING IT (your choice)\n{}\n{link}\n",
+        machine(sys, facts),
+        verdict(sys, judged, paths),
+        written(file),
+        sharing(file)
+    )
 }
+
+/// The three promises the first step makes, said before it reads anything.
+pub const PROMISES: [&str; 3] = [
+    "It changes nothing on this machine.",
+    "It sends nothing anywhere and opens no network connection.",
+    "It writes one file in this folder: a report for you to read.",
+];
+
+pub const FIRST_STEP: &str = "This first step only looks. It works out which release this machine runs, whether wend \
+                              has an upgrade path for it, and whether the machine could take that path.";
 
 /// What `wend` says before it reads anything.
 pub fn intro() -> String {
-    format!(
-        "{TITLE}\n\n{}\n  - It changes nothing on this machine.\n  - It sends nothing anywhere and opens no network \
-         connection.\n  - It writes one file in this folder: a report for you to read.\n\n",
-        wrap(
-            "This first step only looks. It works out which release this machine runs, whether wend has an upgrade \
-             path for it, and whether the machine could take that path.",
-            ""
-        )
-    )
+    let promises: String = PROMISES
+        .iter()
+        .map(|p| {
+            let body = wrap(p, "    ");
+            format!("  - {}", &body[4.min(body.len())..])
+        })
+        .collect();
+    format!("{}\n{}\n{promises}\n", wrap(TITLE, ""), wrap(FIRST_STEP, ""))
 }
 
 /// What `wend` says to someone who isn't root: the one command to run instead.
 pub fn needs_root(prog: &str) -> String {
     format!(
-        "{TITLE}\n\n{}\nStart it again as root:\n\n    sudo {prog}\n\nIf this machine has no sudo, become root first \
-         (su -) and run it from there.\n",
+        "{}\n{}\nStart it again as root:\n\n    sudo {prog}\n\n{}",
+        wrap(TITLE, ""),
         wrap(
             "The first step is a read-only check of this machine, and it has to run as root: only root can see \
              every program and scheduled job on it.",
+            ""
+        ),
+        wrap(
+            "If this machine has no sudo, become root first (su -) and run it from there.",
             ""
         )
     )
@@ -349,7 +212,8 @@ pub fn needs_root(prog: &str) -> String {
 /// What `wend` says when nobody is at a terminal to be guided (a pipe, a script, `ssh host wend`).
 pub fn brief(prog: &str) -> String {
     format!(
-        "{TITLE}\n\nStart here, at a terminal, as root:\n\n    sudo {prog}\n\n{}\nEvery command: {prog} help\n",
+        "{}\nStart here, at a terminal, as root:\n\n    sudo {prog}\n\n{}\nEvery command: {prog} help\n",
+        wrap(TITLE, ""),
         wrap(
             "It explains each step and waits for you before it does anything. The first step is a read-only check \
              of this machine.",
@@ -382,9 +246,53 @@ fn read_report(file: &str, text: &str) {
     println!("{text}");
 }
 
-/// `wend`, with nothing after it. `atlas` loads the atlas a report is judged against (none is not an error).
-/// Exit codes: 0 the check was made (whatever it found), 1 it couldn't be, 2 nobody was at a terminal.
-pub fn start(prog: &str, atlas: impl FnOnce() -> Result<Option<Atlas>, String>, redact: &[String]) -> u8 {
+/// A check made: the report, the paths there are, where the file is, and the link that shares it.
+pub struct Checked {
+    pub report: Shared,
+    /// Every path the atlas has, or None when wend was started without its atlas.
+    pub paths: Option<Vec<String>>,
+    /// The report file, as a full path.
+    pub file: String,
+    pub link: String,
+}
+
+fn check(atlas: Result<Option<Atlas>, String>, redact: &[String]) -> Result<Checked, String> {
+    let atlas = atlas?;
+    let report = share::prepare(atlas.as_ref(), None, redact)?;
+    Ok(Checked {
+        paths: atlas.as_ref().map(paths),
+        file: std::env::current_dir()
+            .map(|d| d.join(&report.file).display().to_string())
+            .unwrap_or_else(|_| report.file.clone()),
+        link: share::attach_url(&report.title, &report.sys_line, &report.routes, &report.file),
+        report,
+    })
+}
+
+/// What is left on the terminal once the full screen is gone: where the report is and how to share it, to copy
+/// from at leisure.
+pub fn afterwards(c: &Checked) -> String {
+    format!(
+        "{NAME}: nothing on this machine was changed, and nothing was sent.\n\nThe report is here:\n\n    {}\n\n{}\n{}\n",
+        c.file,
+        wrap(
+            "To share it (your choice): copy that file to a computer with a web browser, open this link there (it \
+             needs a GitHub account), drag the file into the box marked Report, and submit.",
+            ""
+        ),
+        c.link
+    )
+}
+
+/// `wend`, with nothing after it. `atlas` loads the atlas a report is judged against (none is not an error);
+/// `plain` asks for prompts and text even where the terminal could do more.
+/// Exit codes: 0 the check was made (whatever it found), 1 it wasn't, 2 nobody was at a terminal.
+pub fn start(
+    prog: &str,
+    atlas: impl FnOnce() -> Result<Option<Atlas>, String> + Send,
+    redact: &[String],
+    plain: bool,
+) -> u8 {
     // SAFETY: isatty and geteuid have no preconditions.
     let (terminal, root) = unsafe { (libc::isatty(0) == 1 && libc::isatty(1) == 1, libc::geteuid() == 0) };
     if !terminal {
@@ -392,33 +300,46 @@ pub fn start(prog: &str, atlas: impl FnOnce() -> Result<Option<Atlas>, String>, 
         return 2;
     }
     if !root {
+        fit(crate::term::size().0);
         print!("{}", needs_root(prog));
         return 1;
     }
+    let caps = crate::term::caps(&|k| std::env::var(k).ok(), true).filter(|_| !plain && crate::screens::fits());
+    if let Some((caps, raw)) = caps.and_then(|c| Some((c, crate::term::Raw::enter()?))) {
+        return match crate::screens::run(raw, caps, || check(atlas(), redact)) {
+            Ended::Made(c) => {
+                print!("{}", afterwards(&c));
+                0
+            }
+            Ended::Failed(e) => {
+                eprintln!("wend: the check could not finish: {e}\nNothing on this machine was changed.");
+                1
+            }
+            Ended::NotAsked => {
+                println!("{NAME}: no check was made. Nothing on this machine was read or changed.");
+                1
+            }
+        };
+    }
+    // the plain run: on whatever terminal this is, at its width
+    fit(crate::term::size().0);
     print!("{}", intro());
     if ask("Press Enter to check this machine, or Ctrl-C to stop: ").is_none() {
         println!("\nStopped. Nothing was read or changed.");
         return 1;
     }
     println!("\nChecking...");
-    let made = atlas().and_then(|a| {
-        let r = share::prepare(a.as_ref(), None, redact)?;
-        Ok((a.as_ref().map(paths), r))
-    });
-    let (all, r) = match made {
-        Ok(m) => m,
+    let c = match check(atlas(), redact) {
+        Ok(c) => c,
         Err(e) => {
             eprintln!("wend: the check could not finish: {e}\nNothing on this machine was changed.");
             return 1;
         }
     };
-    let file = std::env::current_dir()
-        .map(|d| d.join(&r.file).display().to_string())
-        .unwrap_or_else(|_| r.file.clone());
-    let link = share::attach_url(&r.title, &r.sys_line, &r.routes, &r.file);
+    let r = &c.report;
     print!(
         "\n{}",
-        result(&r.sys, &r.facts, &r.judged, all.as_deref(), &file, &link)
+        result(&r.sys, &r.facts, &r.judged, c.paths.as_deref(), &c.file, &c.link)
     );
     while ask("\nType r and press Enter to read the report now, or just press Enter to finish: ").as_deref()
         == Some("r")
@@ -432,30 +353,6 @@ pub fn start(prog: &str, atlas: impl FnOnce() -> Result<Option<Atlas>, String>, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    const LINK: &str = "https://github.com/FieldmouseWorks/wend/issues/new?template=box-report.yml&title=x";
-
-    fn machine(pretty: &str, release: Option<(&str, &str)>) -> System {
-        System {
-            pretty: pretty.into(),
-            release: release.map(|(f, r)| (f.to_string(), r.to_string())),
-        }
-    }
-
-    fn facts() -> Value {
-        json!({"arch": "x86_64", "ram_mib": 3936, "boot": "bios", "cpu": {"hypervisor": true}})
-    }
-
-    fn judged(family: &str, joins: Option<(&str, &str)>, verdict: Value) -> Judged {
-        Judged {
-            name: "a-route".into(),
-            family: family.into(),
-            joins: joins.map(|(r, s)| (r.to_string(), s.to_string())),
-            hops: vec![],
-            verdict,
-        }
-    }
 
     /// What every screen has to hold to: 80 columns (a link can't be wrapped), plain ASCII, no tabs.
     fn fits_an_old_terminal(screen: &str) {
@@ -470,196 +367,56 @@ mod tests {
     }
 
     #[test]
-    fn names_releases_the_way_people_do() {
-        assert_eq!(release_name("el", "centos7"), "CentOS 7");
-        assert_eq!(release_name("el", "alma10"), "AlmaLinux 10");
-        assert_eq!(release_name("el", "sl7"), "Scientific Linux 7");
-        assert_eq!(release_name("debian", "etch"), "Debian 4 (etch)");
-        assert_eq!(release_name("debian", "trixie"), "Debian 13 (trixie)");
-        assert_eq!(release_name("ubuntu", "trusty"), "Ubuntu 14.04 (trusty)");
-        // an id it has no name for prints as it is, and so does a family it doesn't know
-        assert_eq!(release_name("el", "rocky9"), "rocky9");
-        assert_eq!(release_name("debian", ""), "");
-        assert_eq!(release_name("suse", "leap15"), "leap15");
-    }
-
-    #[test]
-    fn a_machine_that_can_take_the_whole_path_is_told_yes() {
-        let v = json!({"ok": true, "from": "centos7", "to": "alma10", "lands_on": "alma10", "machine": [],
-            "hops": [{"to": "alma9", "problems": [], "runtime_problems": [], "notes": []},
-                     {"to": "alma10", "problems": [], "runtime_problems": [],
-                      "notes": ["the running kernel belongs to no package"]}]});
-        let s = result(
-            &machine("CentOS Linux release 7.9.2009 (Core)", Some(("el", "centos7"))),
-            &facts(),
-            &[judged("el", None, v)],
-            Some(&[]),
-            "/root/wend/wend-box-0123456789ab.md",
-            LINK,
-        );
+    fn a_long_file_path_is_cut_to_the_screen_not_lost_off_its_edge() {
+        let file = format!("/srv/{}/wend-box-0123456789ab.md", "a-long-folder-name/".repeat(6));
+        let s = sharing(&file);
         fits_an_old_terminal(&s);
+        let shown: String = s
+            .lines()
+            .skip_while(|l| !l.contains("2. Copy the file"))
+            .skip(1)
+            .take_while(|l| !l.contains("3. Open this link"))
+            .map(str::trim)
+            .collect();
+        assert_eq!(shown, file);
+        assert!(sharing("/root/w.md")
+            .contains("  2. Copy the file to a computer with a web browser:\n       /root/w.md\n  3."));
+        // it is cut after a slash, so a file name stays in one piece where it can
+        let cut = sharing(&file);
+        let lines: Vec<&str> = cut
+            .lines()
+            .filter(|l| l.contains("a-long-folder-name") || l.contains("wend-box"))
+            .collect();
         assert!(
-            s.contains("  64-bit (x86_64), 3.8 GB of memory, BIOS firmware, a virtual machine\n"),
-            "{s}"
+            lines.len() > 1 && lines[..lines.len() - 1].iter().all(|l| l.ends_with('/')),
+            "{cut}"
         );
-        assert!(s.contains("  Yes, as far as this check can tell.\n"), "{s}");
-        assert!(s.contains("      CentOS 7 -> AlmaLinux 9 -> AlmaLinux 10\n"), "{s}");
-        assert!(s.contains("Worth knowing:"), "{s}");
-        assert!(s.contains("    - the running kernel belongs to no package\n"), "{s}");
-        assert!(!s.contains("What stops it") && !s.contains("stands in the way"), "{s}");
-        // where the report is, that nothing was sent, and the link, whatever the answer
-        assert!(s.contains("      /root/wend/wend-box-0123456789ab.md\n"), "{s}");
         assert!(
-            s.contains("Nothing on this machine was changed, and nothing was sent anywhere."),
-            "{s}"
+            lines.last().unwrap().trim_start().ends_with("wend-box-0123456789ab.md"),
+            "{cut}"
         );
-        assert!(s.ends_with(&format!("\n{LINK}\n")), "{s}");
     }
 
     #[test]
-    fn a_machine_that_stops_partway_is_told_where_and_why() {
-        let v = json!({"ok": false, "from": "centos5", "to": "alma10", "lands_on": "centos7", "machine": [],
-            "hops": [{"to": "centos6", "problems": [], "runtime_problems": [], "notes": []},
-                     {"to": "centos7", "problems": [], "runtime_problems": [], "notes": []},
-                     {"to": "alma9", "problems": ["alma9 needs 1536 MiB of memory; this machine has 1024"],
-                      "runtime_problems": ["/opt/app/run.py runs on Python 2, which alma9 doesn't ship"],
-                      "notes": []},
-                     {"to": "alma10", "problems": ["alma10 needs x86-64 level 3; this processor is level 2"],
-                      "runtime_problems": [], "notes": []}]});
-        let s = result(
-            &machine("CentOS release 6.10 (Final)", Some(("el", "centos6"))),
-            &facts(),
-            &[judged("el", Some(("centos6", "centos5")), v)],
-            Some(&[]),
-            "wend-box-0123456789ab.md",
-            LINK,
-        );
-        fits_an_old_terminal(&s);
-        assert!(s.contains("  Part of the way.\n"), "{s}");
-        assert!(s.contains("as far as CentOS 7. What stops it after that:"), "{s}");
+    fn text_wraps_to_a_narrow_terminal_and_only_a_word_longer_than_it_runs_over() {
+        let s = wrap_to(FIRST_STEP, "  ", 30);
         assert!(
-            s.contains("    At AlmaLinux 9:\n    - alma9 needs 1536 MiB of memory; this machine has 1024\n"),
+            s.lines().count() > 4 && s.lines().all(|l| l.len() <= 30 && l.starts_with("  ")),
             "{s}"
         );
-        assert!(
-            s.contains("    - /opt/app/run.py runs on Python 2, which alma9 doesn't ship\n"),
-            "{s}"
+        assert_eq!(
+            s.split_whitespace().collect::<Vec<_>>(),
+            FIRST_STEP.split_whitespace().collect::<Vec<_>>()
         );
-        assert!(s.contains("    At AlmaLinux 10:\n"), "{s}");
-        assert!(s.contains("None of that was changed or attempted."), "{s}");
-        assert!(s.contains("joins the path partway, at CentOS 6."), "{s}");
-        assert!(s.contains("started at CentOS 5"), "{s}");
-        assert!(!s.contains("Yes, as far"), "{s}");
-    }
-
-    #[test]
-    fn a_machine_that_cannot_start_is_told_what_stands_in_the_way() {
-        let refused = json!({"ok": false, "from": "centos7", "to": "alma10", "lands_on": null,
-            "machine": ["this is a 32-bit userland, and the route's releases are 64-bit only"], "hops": []});
-        let first_hop = json!({"ok": false, "from": "trusty", "to": "resolute", "lands_on": "trusty",
-            "machine": [], "hops": [{"to": "xenial", "problems": ["/boot has 12 MiB free; the hop needs 180"],
-                                     "runtime_problems": [], "notes": []}]});
-        for (v, fam, why) in [
-            (
-                refused,
-                "el",
-                "    - this is a 32-bit userland, and the route's releases are 64-bit only\n",
-            ),
-            (
-                first_hop,
-                "ubuntu",
-                "    At Ubuntu 16.04 (xenial):\n    - /boot has 12 MiB free; the hop needs 180\n",
-            ),
-        ] {
-            let s = result(
-                &machine("x", None),
-                &facts(),
-                &[judged(fam, None, v)],
-                Some(&[]),
-                "f.md",
-                LINK,
-            );
-            fits_an_old_terminal(&s);
-            assert!(s.contains("  Not as it stands.\n"), "{s}");
-            assert!(
-                s.contains("could not take the first step of it. What stands in the way:"),
-                "{s}"
-            );
-            assert!(s.contains(why), "{s}");
+        // a word wider than the terminal is left whole on a line of its own
+        assert_eq!(
+            wrap_to("see /a/very/long/path/that/has/no/spaces here", "", 12),
+            "see\n/a/very/long/path/that/has/no/spaces\nhere\n"
+        );
+        // a terminal narrower than text is written for is fitted, with a floor; a wider one changes nothing
+        for (columns, want) in [(52, 50), (20, 30), (80, WIDTH), (200, WIDTH)] {
+            assert_eq!(fitted(columns), want, "{columns} columns");
         }
-    }
-
-    #[test]
-    fn a_machine_with_no_path_is_told_which_paths_there_are() {
-        let all = vec![
-            "CentOS 7 to AlmaLinux 10".to_string(),
-            "Debian 4 (etch) to Debian 13 (trixie)".to_string(),
-        ];
-        let known = result(
-            &machine("AlmaLinux release 10.0 (Purple Lion)", Some(("el", "alma10"))),
-            &facts(),
-            &[],
-            Some(&all),
-            "f.md",
-            LINK,
-        );
-        fits_an_old_terminal(&known);
-        assert!(
-            known.contains("Not yet. wend has no upgrade path that starts at AlmaLinux 10 or passes"),
-            "{known}"
-        );
-        assert!(
-            known.contains("    - CentOS 7 to AlmaLinux 10\n    - Debian 4 (etch) to Debian 13 (trixie)\n"),
-            "{known}"
-        );
-        assert!(known.contains("still worth sending"), "{known}");
-        let unknown = result(
-            &machine("Rocky Linux 9.4 (Blue Onyx)", None),
-            &facts(),
-            &[],
-            Some(&all),
-            "f.md",
-            LINK,
-        );
-        fits_an_old_terminal(&unknown);
-        assert!(
-            unknown.contains("Not yet. wend doesn't recognize the system this machine runs."),
-            "{unknown}"
-        );
-        // started without its atlas, it says so instead of saying there is no path
-        let bare = result(
-            &machine("CentOS Linux release 7.9.2009 (Core)", Some(("el", "centos7"))),
-            &facts(),
-            &[],
-            None,
-            "f.md",
-            LINK,
-        );
-        fits_an_old_terminal(&bare);
-        assert!(
-            bare.contains("wend can't say: it was started without the folder of upgrade paths"),
-            "{bare}"
-        );
-        assert!(
-            !bare.contains("Not yet.") && !bare.contains("The paths it has today"),
-            "{bare}"
-        );
-    }
-
-    #[test]
-    fn a_long_path_wraps_at_its_arrows() {
-        let hops: Vec<String> = [
-            "lenny", "squeeze", "wheezy", "jessie", "stretch", "buster", "bullseye", "bookworm", "trixie",
-        ]
-        .iter()
-        .map(|h| h.to_string())
-        .collect();
-        let p = path_line("debian", "etch", &hops);
-        fits_an_old_terminal(&p);
-        assert!(p.lines().count() > 1, "{p}");
-        assert!(p.starts_with("      Debian 4 (etch) -> Debian 5 (lenny)"), "{p}");
-        assert!(p.lines().skip(1).all(|l| l.starts_with("        -> Debian ")), "{p}");
-        assert!(p.trim_end().ends_with("-> Debian 13 (trixie)"), "{p}");
     }
 
     #[test]
