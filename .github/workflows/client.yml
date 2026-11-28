@@ -1,15 +1,16 @@
 # The Rust client (client/): build it, test it, and hold it to the Python engine byte for byte (client/parity.py).
 # Not a required check. It runs on changes to the atlas and the tools too: a spec change the client hasn't caught up
 # with (a new op, a changed reference command) turns this red instead of shipping a client that runs something CI
-# never proved.
+# never proved. Two of its tests run another workflow's own shell (gate.yml's dco job, release.yml's publish step), so
+# it runs on changes to those too.
 name: client
 
 on:
   pull_request:
-    paths: ["client/**", "tools/**", "adapters/**", "fixes/**", "routes/**", "runs/**", ".github/workflows/client.yml", ".github/workflows/gate.yml"]
+    paths: ["client/**", "tools/**", "adapters/**", "fixes/**", "routes/**", "runs/**", ".github/workflows/client.yml", ".github/workflows/gate.yml", ".github/workflows/release.yml"]
   push:
     branches: [main]
-    paths: ["client/**", "tools/**", "adapters/**", "fixes/**", "routes/**", "runs/**", ".github/workflows/client.yml", ".github/workflows/gate.yml"]
+    paths: ["client/**", "tools/**", "adapters/**", "fixes/**", "routes/**", "runs/**", ".github/workflows/client.yml", ".github/workflows/gate.yml", ".github/workflows/release.yml"]
 
 permissions:
   contents: read
