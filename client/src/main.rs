@@ -10,6 +10,7 @@ mod check;
 mod fetch;
 mod fsx;
 mod generated;
+mod guide;
 mod hardware;
 mod hop;
 mod native;
@@ -30,6 +31,9 @@ use std::process::ExitCode;
 
 const USAGE: &str = "\
 wend: walk a proven upgrade route on a machine. No model, no network beyond your distro's mirrors.
+
+New here? Run `wend` with nothing after it, at a terminal, as root: it explains each step and waits for you, and
+its first step is a read-only check of the machine.
 
   wend check                        check every adapter, fix, route and run in the atlas (the gate's rules)
   wend ids                          every fix's and route's content id
@@ -76,7 +80,8 @@ wend: walk a proven upgrade route on a machine. No model, no network beyond your
   wend --version
   wend parity INPUT.json            machine output for client/parity.py (the Python engine must agree)
 
-Options: --atlas DIR (default: the current directory, laid out like the wend repo).
+Options: --atlas DIR (default: the current directory if it is laid out like the wend repo, else the folder the
+wend binary is in, which is where a release unpacks its atlas).
 ROUTE is routes/<family>/<from>-to-<to>.toml or just <from>-to-<to>.";
 
 fn opt(args: &mut Vec<String>, name: &str) -> Option<String> {
@@ -101,7 +106,7 @@ fn flag(args: &mut Vec<String>, name: &str) -> bool {
 
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let root = PathBuf::from(opt(&mut args, "--atlas").unwrap_or_else(|| ".".into()));
+    let root = opt(&mut args, "--atlas").map_or_else(default_atlas, PathBuf::from);
     let fired = opt(&mut args, "--fired");
     let facts = opt(&mut args, "--facts");
     let as_json = match args.iter().position(|a| a == "--json") {
@@ -140,8 +145,9 @@ fn main() -> ExitCode {
         work: flag(&mut args, "--work"),
     };
     let Some(cmd) = args.first().cloned() else {
-        println!("{USAGE}");
-        return ExitCode::from(2);
+        // nothing asked for: the guided first run (or, with nobody at a terminal, where to start)
+        let prog = std::env::args().next().unwrap_or_else(|| "wend".into());
+        return ExitCode::from(guide::start(&prog, || report_atlas(&root), &redact));
     };
     if matches!(cmd.as_str(), "-h" | "--help" | "help") {
         println!("{USAGE}");
@@ -176,14 +182,13 @@ fn main() -> ExitCode {
         _ => {}
     }
     if cmd == "share" && args.len() <= 2 {
-        // the atlas is optional: without one the report has the facts and no verdict
-        let atlas = Atlas::load(&root).ok();
-        if let Some(a) = &atlas {
-            if let Err(e) = preflight(a) {
+        let atlas = match report_atlas(&root) {
+            Ok(a) => a,
+            Err(e) => {
                 eprintln!("wend: {e}");
                 return ExitCode::FAILURE;
             }
-        }
+        };
         return match share::cmd_share(atlas.as_ref(), args.get(1).map(String::as_str), &redact) {
             Ok(_) => ExitCode::SUCCESS,
             Err(e) => {
@@ -225,6 +230,30 @@ fn main() -> ExitCode {
 
 /// Nothing compiles from an atlas that fails the gate's rules: an adapter or fix CI would refuse never becomes a
 /// command here, whatever mirror or cache the atlas came from.
+/// Where the atlas is when --atlas doesn't say: here, if this folder holds one, else beside the binary. A release
+/// unpacks both into one folder, and its owner may start it from anywhere (`sudo /opt/wend/wend`).
+fn default_atlas() -> PathBuf {
+    let here = PathBuf::from(".");
+    if here.join("adapters").is_dir() {
+        return here;
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(PathBuf::from))
+        .filter(|dir| dir.join("adapters").is_dir())
+        .unwrap_or(here)
+}
+
+/// The atlas a box report is judged against. None is not an error (the report then has the facts and no verdict),
+/// but one that is there has to pass its own check.
+fn report_atlas(root: &std::path::Path) -> Result<Option<Atlas>, String> {
+    let atlas = Atlas::load(root).ok();
+    if let Some(a) = &atlas {
+        preflight(a)?;
+    }
+    Ok(atlas)
+}
+
 fn preflight(atlas: &Atlas) -> Result<(), String> {
     let errs = check::check_atlas(atlas);
     if errs.is_empty() {
