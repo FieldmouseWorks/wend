@@ -45,6 +45,7 @@ can't speak the vault's TLS), as the Python harness does; `walk` checks it is up
 ### Box reports (`wend share`)
 
 ```
+sudo wend                                        # the same check as a guided first run, at a terminal
 sudo wend share                                  # this machine's release, facts and preflight, scrubbed, as a report
 sudo wend share centos7-to-alma10 --redact acme  # against a route you name; --redact scrubs a word of your own too
 ```
@@ -57,8 +58,17 @@ secret, prints the whole report, saves it as `wend-box-<id>.md`, and prints a pr
 It sends nothing and, like `facts`, touches nothing. Without an atlas beside it, the report has the facts and no
 verdict.
 
+`wend` with nothing after it, at a terminal, as root, is that check as a guided first run (`src/guide.rs`), and where
+a newcomer starts: it says what it is about to do and waits, makes the check, and then says in plain words what the
+machine is, whether a route would take it and how far, which file it wrote and how to share it, in place of printing
+the whole report (it offers to show it). Not root, it names the one command to run; with nobody at a terminal, it
+points there and at `wend help`, which lists every command.
+
 The [release](https://github.com/FieldmouseWorks/wend/releases/latest) packs the static binary with the atlas it reads
-(`.github/workflows/release.yml`, on a `v*` tag), so a machine's owner needs no checkout.
+(`.github/workflows/release.yml`, on a `v*` tag), so a machine's owner needs no checkout. `try.sh`, published beside
+it, is their one line: it downloads the release (or takes a tarball copied over), checks it against `SHA256SUMS`,
+unpacks it and names the command that starts the guided run, starting nothing itself (`tests/try_sh.rs` runs it;
+[docs/try-it.md](../docs/try-it.md) is what the owner reads).
 
 ### Hardware preflight
 
