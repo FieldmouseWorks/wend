@@ -143,7 +143,9 @@ pub enum Event {
 }
 
 /// What the bytes a terminal sent mean, and how many of them that used up. Bytes that begin a sequence the rest of
-/// which hasn't arrived stay unused; a lone ESC at the end is the Esc key, since nothing follows it within a read.
+/// which hasn't arrived stay unused, a lone ESC at the end among them: over a slow link an arrow key's ESC can
+/// arrive a read ahead of the rest, and `settle` makes it the Esc key only once a read's wait has passed with
+/// nothing after it.
 pub fn decode(b: &[u8]) -> (Vec<Event>, usize) {
     let mut out = vec![];
     let mut i = 0;
@@ -182,7 +184,7 @@ pub fn decode(b: &[u8]) -> (Vec<Event>, usize) {
                 };
                 (key.map(Event::Key), 2 + n + 1)
             }
-            [0x1b] => (Some(Event::Key(Key::Esc)), 1),
+            [0x1b] => break,
             // ESC and then a key is Alt with it: the key alone
             [0x1b, ..] => (None, 1),
             [b'\r' | b'\n', ..] => (Some(Event::Key(Key::Enter)), 1),
@@ -215,6 +217,16 @@ fn button(btn: u32, x: usize, y: usize, pressed: bool) -> Option<Event> {
     }
 }
 
+/// What is still waiting when a read's wait passes with nothing new: an ESC that began nothing was the Esc key, and
+/// so is a sequence that never finished, which would otherwise hold up every key after it.
+fn settle(pending: &mut Vec<u8>) -> Vec<Event> {
+    if pending.first() != Some(&0x1b) {
+        return vec![];
+    }
+    pending.clear();
+    vec![Event::Key(Key::Esc)]
+}
+
 /// Read what the terminal sent since the last call, waiting up to 0.2 s for something. None when it has gone away.
 pub fn events(pending: &mut Vec<u8>) -> Option<Vec<Event>> {
     let mut buf = [0u8; 256];
@@ -223,6 +235,9 @@ pub fn events(pending: &mut Vec<u8>) -> Option<Vec<Event>> {
     if n < 0 {
         let interrupted = std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted;
         return interrupted.then(Vec::new);
+    }
+    if n == 0 {
+        return Some(settle(pending));
     }
     pending.extend_from_slice(&buf[..n as usize]);
     let (evs, used) = decode(pending);
@@ -398,7 +413,8 @@ mod tests {
             [k(Tab), k(BackTab), k(Enter), k(Enter), k(Char('q')), k(Char(' '))]
         );
         assert_eq!(keys(b"\x03\x04"), [k(Stop), k(Stop)]);
-        assert_eq!(keys(b"\x1b"), [k(Esc)]);
+        // an ESC with nothing after it yet is not a key yet (an_escape_waits_to_see_whether_it_begins_a_key)
+        assert_eq!(keys(b"\x1b"), []);
         // a function key it has no use for is swallowed whole, not typed as its letters
         assert_eq!(keys(b"\x1b[15~x"), [k(Char('x'))]);
         assert_eq!(keys(b"\x7f\x00"), []);
@@ -420,6 +436,28 @@ mod tests {
         assert_eq!(decode(b"\x1b[M\x60\x21\x21").0, [Event::Wheel(-3)]);
         // bytes too small to be a cell are nothing, and are used up
         assert_eq!(decode(b"\x1b[M\x20\x05\x05q"), (vec![Event::Key(Key::Char('q'))], 7));
+    }
+
+    #[test]
+    fn an_escape_waits_to_see_whether_it_begins_a_key() {
+        // over a slow link an arrow key can arrive as ESC in one read and the rest in the next: the ESC alone is
+        // not yet the Esc key
+        let mut pending = b"\x1b".to_vec();
+        assert_eq!(decode(&pending), (vec![], 0));
+        pending.extend_from_slice(b"[A");
+        assert_eq!(decode(&pending), (vec![Event::Key(Key::Up)], 3));
+        // nothing more came within a read's wait: it was the Esc key, and it is used up
+        let mut pending = b"\x1b".to_vec();
+        assert_eq!(settle(&mut pending), [Event::Key(Key::Esc)]);
+        assert!(pending.is_empty());
+        // half a sequence that never finished is the Esc key too, not a key that hangs every one after it
+        let mut pending = b"\x1b[<0;12".to_vec();
+        assert_eq!(settle(&mut pending), [Event::Key(Key::Esc)]);
+        assert!(pending.is_empty());
+        // with nothing waiting, a quiet read is nothing
+        assert_eq!(settle(&mut vec![]), []);
+        // keys typed before the ESC are not held back by it
+        assert_eq!(decode(b"q\x1b"), (vec![Event::Key(Key::Char('q'))], 1));
     }
 
     #[test]
