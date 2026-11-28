@@ -190,12 +190,6 @@ pub fn scrub(text: &str, words: &[String]) -> String {
             r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",
             "<token>",
         ),
-        // a name with one of these words anywhere in it (DB_PASSWORD, api-key, mytoken), then its value up to a
-        // space or a closing quote, so the JSON around it still parses
-        (
-            r#"(?i)([A-Za-z0-9_.-]*(?:pass(?:word|wd)?|secret|token|api[_-]?key|auth)[A-Za-z0-9_]*)\s*[:=]\s*[^\s"',;)]+"#,
-            "$1=<redacted>",
-        ),
         (
             r"\b(?:sk|ghp|gho|github_pat|xox[bpa]|AKIA)[-_A-Za-z0-9]{12,}",
             "<token>",
@@ -226,15 +220,40 @@ pub fn scrub(text: &str, words: &[String]) -> String {
     for (rx, rep) in rules {
         s = Regex::new(rx).unwrap().replace_all(&s, *rep).into_owned();
     }
-    // an address, unless it is a systemd unit with an instance (getty@tty1.service, openvpn@server.service)
-    const UNITS: &[&str] = &[
-        ".service", ".socket", ".timer", ".mount", ".target", ".path", ".slice", ".scope", ".device", ".swap",
-    ];
+    // a name with one of these words anywhere in it (DB_PASSWORD, api-key, mytoken), and its value: all of what is
+    // between quotes when it is quoted (escaped quotes too, as inside a JSON string), else up to a space. The quotes
+    // go back where they were, so the JSON around it still parses
+    s = Regex::new(
+        r#"(?i)([A-Za-z0-9_.-]*(?:pass(?:word|wd)?|secret|token|api[_-]?key|auth)[A-Za-z0-9_]*(?:\\?["'])?\s*[:=]\s*)(\\?"[^"]*?\\?"|\\?'[^']*?\\?'|[^\s"'\\,;)]+)"#,
+    )
+    .unwrap()
+    .replace_all(&s, |c: &regex::Captures| {
+        let value = &c[2];
+        let quote = ["\\\"", "\"", "\\'", "'"]
+            .into_iter()
+            .find(|q| value.len() >= 2 * q.len() && value.starts_with(q) && value.ends_with(q))
+            .unwrap_or("");
+        format!("{}{quote}<redacted>{quote}", &c[1])
+    })
+    .into_owned();
+    // a systemd unit with an instance is shaped like an address (getty@tty1.service). It is spared only where the
+    // report puts a unit: in brackets after the program it runs (runtime::describe), and as the facts' "where".
+    // Anywhere else, in a path say, something shaped like an address is taken for one
+    let unit =
+        r"[A-Za-z0-9:_.\\-]+@[A-Za-z0-9:_.\\-]*\.(?:service|socket|timer|mount|target|path|slice|scope|device|swap)";
+    let units: Vec<std::ops::Range<usize>> = Regex::new(&format!(
+        r#"(?:Python [0-9.]+(?: loaded)?(?:, installed by [^()\n]*(?:\([^()\n]*\))?)? \(|"where":\s*")({unit})[)"]"#
+    ))
+    .unwrap()
+    .captures_iter(&s)
+    .filter_map(|c| c.get(1).map(|m| m.range()))
+    .collect();
     s = Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
         .unwrap()
         .replace_all(&s, |c: &regex::Captures| {
-            if UNITS.iter().any(|u| c[0].ends_with(u)) {
-                c[0].to_string()
+            let m = c.get(0).unwrap();
+            if units.iter().any(|u| u.start <= m.start() && m.end() <= u.end) {
+                m.as_str().to_string()
             } else {
                 "<email>".to_string()
             }
@@ -887,18 +906,49 @@ mod tests {
     }
 
     #[test]
-    fn a_unit_with_an_at_sign_is_not_an_email() {
+    fn a_unit_with_an_at_sign_is_not_an_email_where_a_unit_stands() {
+        // where the report puts a unit: in brackets after the program it runs, and as the facts' "where"
+        let kept = "/opt/a.py runs on Python 2.7 (serial-getty@ttyS0.service); \
+                    /opt/b.py has Python 2.7 loaded (openvpn@server.service); \
+                    /opt/c.py runs on Python 2.6, installed by conary (mint:python) (postgresql@12-main.service) \
+                    \"where\": \"backup@nightly.timer\"";
+        assert_eq!(scrub(kept, &[]), kept);
+        // anywhere else, something shaped like an address is one, whatever it ends in
         let s = scrub(
-            "(serial-getty@ttyS0.service) (openvpn@server.service) (postgresql@12-main.service) a@b.timer ops@acme.example",
+            "/srv/ops@acme.service/run.py runs on Python 2.7 (cron, /etc/crontab); mail ops@acme.example; \
+             (ops@acme.service) \"program\": \"/home/x/ops@acme.timer\"",
             &[],
         );
-        assert!(
-            s.starts_with(
-                "(serial-getty@ttyS0.service) (openvpn@server.service) (postgresql@12-main.service) a@b.timer "
+        assert!(!s.contains("ops@"), "{s}");
+        assert_eq!(s.matches("<email>").count(), 4, "{s}");
+    }
+
+    #[test]
+    fn scrubs_a_secret_inside_quotes_and_keeps_the_quotes() {
+        for (text, want) in [
+            (r#"password="hunter2""#, r#"password="<redacted>""#),
+            (r#""password":"hunter2""#, r#""password":"<redacted>""#),
+            (
+                r#""db_password": "hunter2", "port": 5432"#,
+                r#""db_password": "<redacted>", "port": 5432"#,
             ),
-            "{s}"
+            // a value in quotes can have spaces in it: all of it goes
+            (r#"secret = 'two words here' next"#, r#"secret = '<redacted>' next"#),
+            (r#"api_key: "a b"; x"#, r#"api_key: "<redacted>"; x"#),
+            // unquoted, as before
+            ("password=hunter2 next", "password=<redacted> next"),
+            ("token: abc123,", "token: <redacted>,"),
+        ] {
+            assert_eq!(scrub(text, &[]), want, "{text}");
+        }
+        // inside a JSON string the quotes are escaped: the value goes, and what is left is still JSON
+        let s = scrub(
+            r#"{"cmd": "run --password=\"hunter two\" --name=\"kept\" now", "n": 1}"#,
+            &[],
         );
-        assert!(s.ends_with(" <email>"), "{s}");
+        assert!(!s.contains("hunter"), "{s}");
+        let v: Value = serde_json::from_str(&s).unwrap_or_else(|e| panic!("{e}: {s}"));
+        assert_eq!(v["cmd"], "run --password=\"<redacted>\" --name=\"kept\" now");
     }
 
     #[test]
