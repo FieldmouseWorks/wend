@@ -83,11 +83,18 @@ impl Raw {
     }
 }
 
-impl Drop for Raw {
-    fn drop(&mut self) {
+impl Raw {
+    /// Give the terminal back as it was. Done on drop; done by hand before leaving the process another way.
+    pub fn restore(&self) {
         put(LEAVE);
         // SAFETY: saved is the termios this terminal had.
         unsafe { libc::tcsetattr(0, libc::TCSAFLUSH, &self.saved) };
+    }
+}
+
+impl Drop for Raw {
+    fn drop(&mut self) {
+        self.restore();
     }
 }
 
@@ -149,10 +156,10 @@ pub fn decode(b: &[u8]) -> (Vec<Event>, usize) {
                 None => break,
             },
             [0x1b, b'[', b'M', tail @ ..] => match tail {
-                [btn, x, y, ..] => (
-                    button(btn.wrapping_sub(32) as u32, *x as usize - 32, *y as usize - 32, true),
-                    6,
-                ),
+                [btn, x, y, ..] => {
+                    let cell = |v: &u8| (*v as usize).saturating_sub(32);
+                    (button(cell(btn) as u32, cell(x), cell(y), true), 6)
+                }
                 _ => break,
             },
             [0x1b, b'[' | b'O', tail @ ..] => {
@@ -411,6 +418,8 @@ mod tests {
         // the older form: three bytes, each 32 more than its value
         assert_eq!(decode(b"\x1b[M\x20\x2c\x25").0, [click(11, 4)]);
         assert_eq!(decode(b"\x1b[M\x60\x21\x21").0, [Event::Wheel(-3)]);
+        // bytes too small to be a cell are nothing, and are used up
+        assert_eq!(decode(b"\x1b[M\x20\x05\x05q"), (vec![Event::Key(Key::Char('q'))], 7));
     }
 
     #[test]

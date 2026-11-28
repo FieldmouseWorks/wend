@@ -3,6 +3,7 @@
 //! It reads and checks the atlas, compiles fixes and hops into the exact commands CI proved, and walks a route on
 //! a root filesystem: snapshot, apply, check, roll back on red.
 
+mod answer;
 mod atlas;
 mod backend;
 mod canon;

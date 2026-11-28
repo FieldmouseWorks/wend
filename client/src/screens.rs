@@ -3,7 +3,8 @@
 //! is nearly all of them. `draw` is the whole of what is shown and `step` the whole of what a key or click does, so
 //! both are tested without a terminal.
 
-use crate::guide::{self, Checked, Outcome};
+use crate::answer::{self, Outcome};
+use crate::guide::{self, Checked};
 use crate::term::{self, Canvas, Caps, Event, Key, Raw, Style};
 
 /// The smallest terminal it draws on: the size every terminal starts at.
@@ -47,6 +48,8 @@ pub struct Ui {
     pub focus: usize,
     /// How many lines of the text are scrolled off the top.
     pub scroll: usize,
+    /// How long the check has been running, in fifths of a second, while it runs.
+    pub ticks: usize,
 }
 
 impl Ui {
@@ -56,6 +59,7 @@ impl Ui {
             back: Screen::Welcome,
             focus: 0,
             scroll: 0,
+            ticks: 0,
         }
     }
 
@@ -118,7 +122,13 @@ fn plain(text: &str) -> impl Iterator<Item = (String, Style)> + '_ {
 }
 
 /// The lines a screen shows, each with how it is set apart.
-fn lines(screen: Screen, made: Option<&Checked>, error: Option<&str>, caps: Caps) -> Vec<(String, Style)> {
+fn lines(
+    screen: Screen,
+    ticks: usize,
+    made: Option<&Checked>,
+    error: Option<&str>,
+    caps: Caps,
+) -> Vec<(String, Style)> {
     let mut out = vec![];
     match (screen, made) {
         (Screen::Welcome, _) => {
@@ -144,28 +154,34 @@ fn lines(screen: Screen, made: Option<&Checked>, error: Option<&str>, caps: Caps
             out.extend(plain(&guide::reads()));
         }
         (Screen::Checking, _) => {
-            out.push(heading("Checking this machine..."));
+            // a mark that moves and a count that grows: on a busy machine this takes a while, and it should not
+            // look stuck
+            let mark = ["|", "/", "-", "\\"][ticks % 4];
+            out.push(heading(&format!("Checking this machine  {mark}")));
             out.push((String::new(), Style::Plain));
             out.push(("  Reading only. Nothing is being changed.".to_string(), Style::Plain));
             out.push((String::new(), Style::Plain));
             out.push((
-                "  This can take up to a minute on a busy machine.".to_string(),
+                format!(
+                    "  {} s so far. It can take up to a minute on a busy machine.",
+                    ticks / 5
+                ),
                 Style::Plain,
             ));
         }
         (Screen::Result, Some(c)) => {
             let r = &c.report;
             out.push(heading("THIS MACHINE"));
-            out.extend(plain(&guide::machine(&r.sys, &r.facts)));
+            out.extend(plain(&answer::machine(&r.sys, &r.facts)));
             out.push((String::new(), Style::Plain));
             out.push(heading("CAN WEND UPGRADE IT?"));
-            let answer = match guide::outcome(&r.judged) {
+            let answer = match answer::outcome(&r.judged) {
                 Outcome::Yes => Style::Good,
                 Outcome::Partway => Style::Warn,
                 Outcome::No => Style::Bad,
                 Outcome::NoPath => Style::Bold,
             };
-            for (i, l) in guide::verdict(&r.sys, &r.judged, c.paths.as_deref())
+            for (i, l) in answer::verdict(&r.sys, &r.judged, c.paths.as_deref())
                 .lines()
                 .enumerate()
             {
@@ -226,7 +242,7 @@ fn lines(screen: Screen, made: Option<&Checked>, error: Option<&str>, caps: Caps
 /// The line of help under the frame. Each fits an 80-column terminal.
 fn hint(screen: Screen, scrolls: bool) -> &'static str {
     match (screen, scrolls) {
-        (Screen::Checking, _) => "",
+        (Screen::Checking, _) => "Ctrl-C: stop",
         (Screen::Share, _) => "Drag over the link to copy it. It is printed again when you quit.  Enter: back",
         (Screen::Reads | Screen::Report, true) => "Up, Down, PgUp, PgDn or the wheel: scroll    Enter or Esc: back",
         (Screen::Reads | Screen::Report, false) => "Enter or Esc: back",
@@ -272,7 +288,7 @@ pub fn draw(ui: &Ui, made: Option<&Checked>, error: Option<&str>, w: usize, h: u
     // rows: the title, the text, a rule, the buttons, the bottom, and under the frame a line of help
     let (rule, button_row, bottom, help) = (h - 4, h - 3, h - 2, h - 1);
     let (first, mut page) = (2, rule - 2);
-    let text = lines(ui.screen, made, error, caps);
+    let text = lines(ui.screen, ui.ticks, made, error, caps);
     // the link goes under the frame's text with no frame beside it, for the terminal to wrap and a selection to
     // take whole
     let link = match (ui.screen, made) {
@@ -413,9 +429,49 @@ fn show(frame: &Frame, caps: Caps) {
     term::put(&s);
 }
 
+/// How a full-screen run ended.
+pub enum Ended {
+    Made(Box<Checked>),
+    /// The check was asked for and could not finish: why.
+    Failed(String),
+    /// The person left without asking for the check.
+    NotAsked,
+}
+
+/// Make the check on a thread of its own while this one keeps the screen alive: a mark that moves, the seconds, and
+/// Ctrl-C, which a terminal held raw would otherwise swallow for as long as the check takes.
+fn checking(
+    raw: &Raw,
+    caps: Caps,
+    ui: &mut Ui,
+    check: impl FnOnce() -> Result<Checked, String> + Send,
+) -> Result<Checked, String> {
+    std::thread::scope(|scope| {
+        let work = scope.spawn(check);
+        let mut pending = vec![];
+        while !work.is_finished() {
+            let (w, h) = term::size();
+            show(&draw(ui, None, None, w, h, caps), caps);
+            // a read that waits 0.2 s is the clock
+            let stop = match term::events(&mut pending) {
+                Some(evs) => evs.contains(&Event::Key(Key::Stop)),
+                None => true,
+            };
+            if stop {
+                // the check only reads, so there is nothing to undo: give the terminal back and go
+                raw.restore();
+                println!("{}: stopped. Nothing on this machine was changed.", guide::NAME);
+                std::process::exit(130);
+            }
+            ui.ticks += 1;
+        }
+        work.join()
+            .unwrap_or_else(|_| Err("it stopped unexpectedly (a bug in wend: please report it)".into()))
+    })
+}
+
 /// Run the first run full-screen on a terminal already held. `check` makes the check when the person asks for it.
-/// Returns the check, if one was made.
-pub fn run(raw: Raw, caps: Caps, check: impl FnOnce() -> Result<Checked, String>) -> Option<Checked> {
+pub fn run(raw: Raw, caps: Caps, check: impl FnOnce() -> Result<Checked, String> + Send) -> Ended {
     let mut ui = Ui::new();
     let mut check = Some(check);
     let (mut made, mut error): (Option<Checked>, Option<String>) = (None, None);
@@ -436,7 +492,7 @@ pub fn run(raw: Raw, caps: Caps, check: impl FnOnce() -> Result<Checked, String>
         };
         for ev in events {
             // a window too small has no buttons: q still leaves
-            let small = frame.hits.is_empty() && ui.screen != Screen::Checking;
+            let small = frame.hits.is_empty();
             let action = match ev {
                 Event::Key(Key::Char('q' | 'Q') | Key::Esc) if small => Some(Action::Quit),
                 _ => step(&mut ui, ev, &frame),
@@ -445,19 +501,23 @@ pub fn run(raw: Raw, caps: Caps, check: impl FnOnce() -> Result<Checked, String>
             match action {
                 Some(Action::Quit) => {
                     drop(raw);
-                    return made;
+                    return match (made, error) {
+                        (Some(c), _) => Ended::Made(Box::new(c)),
+                        (None, Some(e)) => Ended::Failed(e),
+                        (None, None) => Ended::NotAsked,
+                    };
                 }
                 Some(Action::Check) => {
-                    ui.go(Screen::Checking);
-                    let (w, h) = term::size();
-                    show(&draw(&ui, None, None, w, h, caps), caps);
-                    match check.take().map(|f| f()) {
-                        Some(Ok(c)) => made = Some(c),
-                        Some(Err(e)) => error = Some(e),
-                        None => {}
+                    if let Some(f) = check.take() {
+                        ui.go(Screen::Checking);
+                        match checking(&raw, caps, &mut ui, f) {
+                            Ok(c) => made = Some(c),
+                            Err(e) => error = Some(e),
+                        }
+                        // keys pressed while it worked aren't meant for the screen that follows
+                        term::discard_input();
+                        pending.clear();
                     }
-                    term::discard_input();
-                    pending.clear();
                     ui.go(if made.is_some() { Screen::Result } else { Screen::Failed });
                 }
                 Some(Action::Reads) => ui.go(Screen::Reads),
@@ -475,8 +535,13 @@ pub fn run(raw: Raw, caps: Caps, check: impl FnOnce() -> Result<Checked, String>
             }
         }
     }
+    // the terminal went away
     drop(raw);
-    made
+    match (made, error) {
+        (Some(c), _) => Ended::Made(Box::new(c)),
+        (None, Some(e)) => Ended::Failed(e),
+        (None, None) => Ended::NotAsked,
+    }
 }
 
 #[cfg(test)]
@@ -547,6 +612,7 @@ mod tests {
             back: Screen::Result,
             focus: 0,
             scroll: 0,
+            ticks: 0,
         }
     }
 
@@ -651,6 +717,8 @@ mod tests {
             r[row("The report:")].contains("/root/wend-x86_64-linux/wend-box-0123456789ab.md"),
             "{r:#?}"
         );
+        // on the smallest terminal a yes shows whole: nothing to scroll for
+        assert_eq!(f.max_scroll, 0, "{r:#?}");
         let labels: Vec<Action> = f.hits.iter().map(|h| h.action).collect();
         assert_eq!(labels, [Action::Report, Action::Share, Action::Reads, Action::Quit]);
         // without the characters, the arrows it was written with
@@ -851,10 +919,15 @@ mod tests {
                 "{screen:?}"
             );
         }
-        // while it checks there is nothing to choose, and Ctrl-C still gets out
+        // while it checks there is nothing to choose; the screen shows it is alive and how to stop it
         let mut ui = at(Screen::Checking);
+        ui.ticks = 37;
         let f = draw(&ui, None, None, 80, 24, ASCII);
-        assert!(f.hits.is_empty() && rows(&f)[2].contains("Checking this machine..."));
+        let r = rows(&f);
+        assert!(f.hits.is_empty());
+        assert!(r[2].contains("Checking this machine  /"), "{r:#?}");
+        assert!(r.iter().any(|l| l.contains("7 s so far.")), "{r:#?}");
+        assert_eq!(r[23].trim(), "Ctrl-C: stop");
         assert_eq!(step(&mut ui, Event::Key(Key::Enter), &f), None);
         assert_eq!(step(&mut ui, Event::Key(Key::Stop), &f), Some(Action::Quit));
     }
