@@ -14,6 +14,24 @@ use std::io::{BufRead, Write};
 
 /// The widest a line of text gets: what fits inside a frame on an 80-column terminal.
 pub const WIDTH: usize = 76;
+/// The width text is wrapped to: WIDTH, or less once the plain run has found a narrower terminal (a phone's, say).
+static WRAP_AT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(WIDTH);
+
+/// The width text is being wrapped to.
+pub fn width() -> usize {
+    WRAP_AT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The width to wrap at on a terminal `columns` wide: no wider than text is written for, and no narrower than
+/// words can stand.
+fn fitted(columns: usize) -> usize {
+    columns.saturating_sub(2).clamp(30, WIDTH)
+}
+
+/// Wrap to a terminal `columns` wide from here on, when that is narrower than text is written for.
+fn fit(columns: usize) {
+    WRAP_AT.store(fitted(columns), std::sync::atomic::Ordering::Relaxed);
+}
 
 pub const NAME: &str = concat!("wend ", env!("CARGO_PKG_VERSION"));
 
@@ -27,11 +45,15 @@ const TITLE: &str = concat!(
 
 /// `text` wrapped to the screen, every line behind `indent`.
 pub fn wrap(text: &str, indent: &str) -> String {
+    wrap_to(text, indent, width())
+}
+
+fn wrap_to(text: &str, indent: &str, width: usize) -> String {
     let mut out = String::new();
     for para in text.split('\n') {
         let mut line = String::new();
         for word in para.split_whitespace() {
-            if !line.is_empty() && indent.len() + line.len() + 1 + word.len() > WIDTH {
+            if !line.is_empty() && indent.len() + line.len() + 1 + word.len() > width {
                 out += &format!("{indent}{line}\n");
                 line.clear();
             }
@@ -78,7 +100,7 @@ pub fn sharing(file: &str) -> String {
     let mut path = String::new();
     let mut rest: Vec<char> = file.chars().collect();
     while !rest.is_empty() {
-        let fits = rest.len().min(WIDTH - 7);
+        let fits = rest.len().min(width() - 7);
         let cut = match rest[..fits].iter().rposition(|c| *c == '/') {
             Some(slash) if fits < rest.len() && slash > 0 => slash + 1,
             _ => fits,
@@ -160,18 +182,28 @@ pub const FIRST_STEP: &str = "This first step only looks. It works out which rel
 
 /// What `wend` says before it reads anything.
 pub fn intro() -> String {
-    let promises: String = PROMISES.iter().map(|p| format!("  - {p}\n")).collect();
-    format!("{TITLE}\n\n{}\n{promises}\n", wrap(FIRST_STEP, ""))
+    let promises: String = PROMISES
+        .iter()
+        .map(|p| {
+            let body = wrap(p, "    ");
+            format!("  - {}", &body[4.min(body.len())..])
+        })
+        .collect();
+    format!("{}\n{}\n{promises}\n", wrap(TITLE, ""), wrap(FIRST_STEP, ""))
 }
 
 /// What `wend` says to someone who isn't root: the one command to run instead.
 pub fn needs_root(prog: &str) -> String {
     format!(
-        "{TITLE}\n\n{}\nStart it again as root:\n\n    sudo {prog}\n\nIf this machine has no sudo, become root first \
-         (su -) and run it from there.\n",
+        "{}\n{}\nStart it again as root:\n\n    sudo {prog}\n\n{}",
+        wrap(TITLE, ""),
         wrap(
             "The first step is a read-only check of this machine, and it has to run as root: only root can see \
              every program and scheduled job on it.",
+            ""
+        ),
+        wrap(
+            "If this machine has no sudo, become root first (su -) and run it from there.",
             ""
         )
     )
@@ -180,7 +212,8 @@ pub fn needs_root(prog: &str) -> String {
 /// What `wend` says when nobody is at a terminal to be guided (a pipe, a script, `ssh host wend`).
 pub fn brief(prog: &str) -> String {
     format!(
-        "{TITLE}\n\nStart here, at a terminal, as root:\n\n    sudo {prog}\n\n{}\nEvery command: {prog} help\n",
+        "{}\nStart here, at a terminal, as root:\n\n    sudo {prog}\n\n{}\nEvery command: {prog} help\n",
+        wrap(TITLE, ""),
         wrap(
             "It explains each step and waits for you before it does anything. The first step is a read-only check \
              of this machine.",
@@ -267,6 +300,7 @@ pub fn start(
         return 2;
     }
     if !root {
+        fit(crate::term::size().0);
         print!("{}", needs_root(prog));
         return 1;
     }
@@ -287,6 +321,8 @@ pub fn start(
             }
         };
     }
+    // the plain run: on whatever terminal this is, at its width
+    fit(crate::term::size().0);
     print!("{}", intro());
     if ask("Press Enter to check this machine, or Ctrl-C to stop: ").is_none() {
         println!("\nStopped. Nothing was read or changed.");
@@ -359,6 +395,28 @@ mod tests {
             lines.last().unwrap().trim_start().ends_with("wend-box-0123456789ab.md"),
             "{cut}"
         );
+    }
+
+    #[test]
+    fn text_wraps_to_a_narrow_terminal_and_only_a_word_longer_than_it_runs_over() {
+        let s = wrap_to(FIRST_STEP, "  ", 30);
+        assert!(
+            s.lines().count() > 4 && s.lines().all(|l| l.len() <= 30 && l.starts_with("  ")),
+            "{s}"
+        );
+        assert_eq!(
+            s.split_whitespace().collect::<Vec<_>>(),
+            FIRST_STEP.split_whitespace().collect::<Vec<_>>()
+        );
+        // a word wider than the terminal is left whole on a line of its own
+        assert_eq!(
+            wrap_to("see /a/very/long/path/that/has/no/spaces here", "", 12),
+            "see\n/a/very/long/path/that/has/no/spaces\nhere\n"
+        );
+        // a terminal narrower than text is written for is fitted, with a floor; a wider one changes nothing
+        for (columns, want) in [(52, 50), (20, 30), (80, WIDTH), (200, WIDTH)] {
+            assert_eq!(fitted(columns), want, "{columns} columns");
+        }
     }
 
     #[test]

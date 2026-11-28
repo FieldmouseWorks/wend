@@ -2,7 +2,7 @@
 //! would say it. How far the machine could go, what stops it there, and the releases by the names people use.
 
 use crate::atlas::{str_of, Atlas};
-use crate::guide::{item, wrap, WIDTH};
+use crate::guide::{item, width, wrap};
 use crate::share::{Judged, System, DEBIAN_CODENAMES};
 use serde_json::Value;
 
@@ -50,7 +50,7 @@ fn path_line(family: &str, from: &str, hops: &[String]) -> String {
     let mut line = String::new();
     for (i, n) in names.iter().enumerate() {
         let piece = if i == 0 { n.clone() } else { format!(" -> {n}") };
-        if !line.is_empty() && 6 + line.len() + piece.len() > WIDTH {
+        if !line.is_empty() && 6 + line.len() + piece.len() > width() {
             out += &format!("      {line}\n");
             line = format!("  {}", piece.trim_start());
         } else {
