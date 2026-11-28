@@ -304,20 +304,32 @@ pub fn machine(sys: &System, facts: &Value) -> String {
 pub fn verdict(sys: &System, judged: &[Judged], paths: Option<&[String]>) -> String {
     let mut s = String::new();
     if judged.is_empty() {
+        // where a path ends there is nothing to do, which is not the same as there being no path
+        let arrived = match (paths, &sys.release) {
+            (Some(all), Some((fam, rel))) => {
+                let here = release_name(fam, rel);
+                all.iter().any(|p| p.ends_with(&format!(" to {here}"))).then_some(here)
+            }
+            _ => None,
+        };
         s += &wrap(
-            &match (paths, &sys.release) {
-                (None, _) => "wend can't say: it was started without the folder of upgrade paths it came with. Start \
-                              it from the folder it was unpacked into. The report still describes the machine."
+            &match (paths, &sys.release, &arrived) {
+                (None, _, _) => "wend can't say: it was started without the folder of upgrade paths it came with. \
+                                 Start it from the folder it was unpacked into. The report still describes the \
+                                 machine."
                     .to_string(),
-                (Some(_), Some((fam, rel))) => format!(
+                (_, _, Some(here)) => {
+                    format!("There is nothing to upgrade: this machine already runs {here}, where wend's paths end.")
+                }
+                (Some(_), Some((fam, rel)), None) => format!(
                     "Not yet. wend has no upgrade path that starts at {} or passes through it.",
                     release_name(fam, rel)
                 ),
-                (Some(_), None) => "Not yet. wend doesn't recognize the system this machine runs.".to_string(),
+                (Some(_), None, None) => "Not yet. wend doesn't recognize the system this machine runs.".to_string(),
             },
             "  ",
         );
-        if let Some(all) = paths {
+        if let (Some(all), None) = (paths, &arrived) {
             s += "\n  The paths it has today:\n\n";
             for p in all {
                 s += &item(p);
@@ -419,6 +431,7 @@ mod tests {
             Some(&[]),
             "/root/wend/wend-box-0123456789ab.md",
             LINK,
+            "./wend",
         );
         fits_an_old_terminal(&s);
         assert!(
@@ -461,6 +474,7 @@ mod tests {
             Some(&[]),
             "wend-box-0123456789ab.md",
             LINK,
+            "./wend",
         );
         fits_an_old_terminal(&s);
         assert!(s.contains("  Part of the way.\n"), "{s}");
@@ -580,6 +594,7 @@ mod tests {
                 Some(&[]),
                 "f.md",
                 LINK,
+                "./wend",
             );
             fits_an_old_terminal(&s);
             assert!(s.contains("  Not as it stands.\n"), "{s}");
@@ -598,16 +613,17 @@ mod tests {
             "Debian 4 (etch) to Debian 13 (trixie)".to_string(),
         ];
         let known = result(
-            &machine("AlmaLinux release 10.0 (Purple Lion)", Some(("el", "alma10"))),
+            &machine("AlmaLinux release 8.10 (Cerulean Leopard)", Some(("el", "alma8"))),
             &facts(),
             &[],
             Some(&all),
             "f.md",
             LINK,
+            "./wend",
         );
         fits_an_old_terminal(&known);
         assert!(
-            known.contains("Not yet. wend has no upgrade path that starts at AlmaLinux 10 or passes"),
+            known.contains("Not yet. wend has no upgrade path that starts at AlmaLinux 8 or passes"),
             "{known}"
         );
         assert!(
@@ -615,6 +631,28 @@ mod tests {
             "{known}"
         );
         assert!(known.contains("still worth sending"), "{known}");
+        // a machine already where a path ends is not told a path is missing
+        let arrived = result(
+            &machine("AlmaLinux release 10.0 (Purple Lion)", Some(("el", "alma10"))),
+            &facts(),
+            &[],
+            Some(&all),
+            "f.md",
+            LINK,
+            "./wend",
+        );
+        fits_an_old_terminal(&arrived);
+        let said = arrived.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            said.contains(
+                "There is nothing to upgrade: this machine already runs AlmaLinux 10, where wend's paths end."
+            ),
+            "{arrived}"
+        );
+        assert!(
+            !arrived.contains("Not yet") && !arrived.contains("The paths it has today"),
+            "{arrived}"
+        );
         let unknown = result(
             &machine("Rocky Linux 9.4 (Blue Onyx)", None),
             &facts(),
@@ -622,6 +660,7 @@ mod tests {
             Some(&all),
             "f.md",
             LINK,
+            "./wend",
         );
         fits_an_old_terminal(&unknown);
         assert!(
@@ -636,6 +675,7 @@ mod tests {
             None,
             "f.md",
             LINK,
+            "./wend",
         );
         fits_an_old_terminal(&bare);
         assert!(

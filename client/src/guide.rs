@@ -93,8 +93,8 @@ pub fn written(file: &str) -> String {
 }
 
 /// Why to share the report at `file` and how, down to the link, which the caller shows after it (a link can't be
-/// wrapped).
-pub fn sharing(file: &str) -> String {
+/// wrapped). `prog` is how wend was started, for the command that makes the report again.
+pub fn sharing(file: &str, prog: &str) -> String {
     // a path has no spaces to wrap at: it is cut to the screen, after a slash where there is one, so none of it is
     // lost off the edge
     let mut path = String::new();
@@ -114,8 +114,11 @@ pub fn sharing(file: &str) -> String {
     ) + "\n"
         + &step(
             1,
-            "Read it first. If it names anything private, start wend again with --redact and the word after it \
-             (wend --redact acme): the new report has that word replaced too. Then delete this one.",
+            &format!(
+                "Read it first. If it names anything private, start wend again the same way with --redact and the \
+                 word after it ({prog} --redact acme): the new report has that word replaced too. Then delete this \
+                 one."
+            ),
         )
         + &step(2, "Copy the file to a computer with a web browser:")
         + &path
@@ -160,13 +163,14 @@ pub fn result(
     paths: Option<&[String]>,
     file: &str,
     link: &str,
+    prog: &str,
 ) -> String {
     format!(
         "THIS MACHINE\n{}\nCAN WEND UPGRADE IT?\n{}\nWHAT HAPPENED\n{}\nSHARING IT (your choice)\n{}\n{link}\n",
         machine(sys, facts),
         verdict(sys, judged, paths),
         written(file),
-        sharing(file)
+        sharing(file, prog)
     )
 }
 
@@ -192,10 +196,11 @@ pub fn intro() -> String {
     format!("{}\n{}\n{promises}\n", wrap(TITLE, ""), wrap(FIRST_STEP, ""))
 }
 
-/// What `wend` says to someone who isn't root: the one command to run instead.
-pub fn needs_root(prog: &str) -> String {
+/// What `wend` says to someone who isn't root: the one command to run instead. `full` is where the program is, for
+/// a machine with no sudo: `su -` lands in root's home, and `./wend` isn't there.
+pub fn needs_root(prog: &str, full: &str) -> String {
     format!(
-        "{}\n{}\nStart it again as root:\n\n    sudo {prog}\n\n{}",
+        "{}\n{}\nStart it again as root:\n\n    sudo {prog}\n\n{}\n    {full}\n",
         wrap(TITLE, ""),
         wrap(
             "The first step is a read-only check of this machine, and it has to run as root: only root can see \
@@ -203,7 +208,7 @@ pub fn needs_root(prog: &str) -> String {
             ""
         ),
         wrap(
-            "If this machine has no sudo, become root first (su -) and run it from there.",
+            "No sudo here? Become root first (su -), then start it by its full path:",
             ""
         )
     )
@@ -234,16 +239,21 @@ fn ask(prompt: &str) -> Option<String> {
 
 /// Show the saved report a screen at a time, or all at once where no pager is installed.
 fn read_report(file: &str, text: &str) {
-    for pager in ["less", "more"] {
-        if std::process::Command::new(pager)
+    // Ctrl-C goes to everything at the terminal. The pager shrugs it off, and wend would die under it and leave it
+    // running with nobody to return to: while a pager is up, wend ignores it too.
+    // SAFETY: signal takes a signal number and a disposition, and returns the one before.
+    let before = unsafe { libc::signal(libc::SIGINT, libc::SIG_IGN) };
+    let shown = ["less", "more"].iter().any(|pager| {
+        std::process::Command::new(pager)
             .arg(file)
             .status()
             .is_ok_and(|s| s.success())
-        {
-            return;
-        }
+    });
+    // SAFETY: before is the disposition signal returned above.
+    unsafe { libc::signal(libc::SIGINT, before) };
+    if !shown {
+        println!("{text}");
     }
-    println!("{text}");
 }
 
 /// A check made: the report, the paths there are, where the file is, and the link that shares it.
@@ -254,9 +264,11 @@ pub struct Checked {
     /// The report file, as a full path.
     pub file: String,
     pub link: String,
+    /// How wend was started (`./wend`), for the command that makes the report again.
+    pub prog: String,
 }
 
-fn check(atlas: Result<Option<Atlas>, String>, redact: &[String]) -> Result<Checked, String> {
+fn check(atlas: Result<Option<Atlas>, String>, redact: &[String], prog: &str) -> Result<Checked, String> {
     let atlas = atlas?;
     let report = share::prepare(atlas.as_ref(), None, redact)?;
     Ok(Checked {
@@ -266,6 +278,7 @@ fn check(atlas: Result<Option<Atlas>, String>, redact: &[String]) -> Result<Chec
             .unwrap_or_else(|_| report.file.clone()),
         link: share::attach_url(&report.title, &report.sys_line, &report.routes, &report.file),
         report,
+        prog: prog.to_string(),
     })
 }
 
@@ -301,12 +314,15 @@ pub fn start(
     }
     if !root {
         fit(crate::term::size().0);
-        print!("{}", needs_root(prog));
+        let full = std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| prog.to_string());
+        print!("{}", needs_root(prog, &full));
         return 1;
     }
     let caps = crate::term::caps(&|k| std::env::var(k).ok(), true).filter(|_| !plain && crate::screens::fits());
     if let Some((caps, raw)) = caps.and_then(|c| Some((c, crate::term::Raw::enter()?))) {
-        return match crate::screens::run(raw, caps, || check(atlas(), redact)) {
+        return match crate::screens::run(raw, caps, || check(atlas(), redact, prog)) {
             Ended::Made(c) => {
                 print!("{}", afterwards(&c));
                 0
@@ -324,12 +340,14 @@ pub fn start(
     // the plain run: on whatever terminal this is, at its width
     fit(crate::term::size().0);
     print!("{}", intro());
-    if ask("Press Enter to check this machine, or Ctrl-C to stop: ").is_none() {
+    // Enter goes on; the end of input, or an answer that starts like "no" or "quit", stops
+    let answer = ask("Press Enter to check this machine, or type n and Enter to stop: ");
+    if answer.as_deref().is_none_or(|a| a.starts_with(['n', 'q'])) {
         println!("\nStopped. Nothing was read or changed.");
         return 1;
     }
     println!("\nChecking...");
-    let c = match check(atlas(), redact) {
+    let c = match check(atlas(), redact, prog) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("wend: the check could not finish: {e}\nNothing on this machine was changed.");
@@ -339,7 +357,7 @@ pub fn start(
     let r = &c.report;
     print!(
         "\n{}",
-        result(&r.sys, &r.facts, &r.judged, c.paths.as_deref(), &c.file, &c.link)
+        result(&r.sys, &r.facts, &r.judged, c.paths.as_deref(), &c.file, &c.link, prog)
     );
     while ask("\nType r and press Enter to read the report now, or just press Enter to finish: ").as_deref()
         == Some("r")
@@ -369,7 +387,7 @@ mod tests {
     #[test]
     fn a_long_file_path_is_cut_to_the_screen_not_lost_off_its_edge() {
         let file = format!("/srv/{}/wend-box-0123456789ab.md", "a-long-folder-name/".repeat(6));
-        let s = sharing(&file);
+        let s = sharing(&file, "./wend");
         fits_an_old_terminal(&s);
         let shown: String = s
             .lines()
@@ -379,10 +397,10 @@ mod tests {
             .map(str::trim)
             .collect();
         assert_eq!(shown, file);
-        assert!(sharing("/root/w.md")
+        assert!(sharing("/root/w.md", "./wend")
             .contains("  2. Copy the file to a computer with a web browser:\n       /root/w.md\n  3."));
         // it is cut after a slash, so a file name stays in one piece where it can
-        let cut = sharing(&file);
+        let cut = sharing(&file, "./wend");
         let lines: Vec<&str> = cut
             .lines()
             .filter(|l| l.contains("a-long-folder-name") || l.contains("wend-box"))
@@ -421,11 +439,19 @@ mod tests {
 
     #[test]
     fn the_screens_before_the_check_name_the_command_to_run() {
-        for s in [intro(), needs_root("./wend"), brief("./wend")] {
+        for s in [intro(), needs_root("./wend", "/root/w/wend"), brief("./wend")] {
             fits_an_old_terminal(&s);
             assert!(s.starts_with(TITLE), "{s}");
         }
-        assert!(needs_root("./wend").contains("\n    sudo ./wend\n"));
+        let no_root = needs_root("./wend", "/root/wend-x86_64-linux/wend");
+        assert!(no_root.contains("\n    sudo ./wend\n"));
+        // su - lands in root's home: the way back to the program is its full path
+        assert!(
+            no_root.ends_with("then start it by its full path:\n\n    /root/wend-x86_64-linux/wend\n"),
+            "{no_root}"
+        );
+        // the command to redact with is the one that started it
+        assert!(sharing("/root/w.md", "/opt/wend/wend").contains("(/opt/wend/wend --redact acme)"));
         assert!(brief("/opt/wend/wend").contains("\n    sudo /opt/wend/wend\n"));
         assert!(brief("wend").contains("Every command: wend help\n"));
         assert!(intro().contains("It changes nothing on this machine."));

@@ -48,14 +48,27 @@ pub fn system(root: &Path) -> System {
     let lsb = read(root, "etc/lsb-release");
     let deb = read(root, "etc/debian_version");
     let first = |s: &str| s.lines().next().unwrap_or("").trim().to_string();
+    // Oracle Linux's redhat-release says Red Hat, for the programs that look there: oracle-release says what it is
+    let oracle = read(root, "etc/oracle-release");
+    if !oracle.trim().is_empty() {
+        return System {
+            pretty: first(&oracle),
+            release: None,
+        };
+    }
     if !rh.trim().is_empty() {
         // CentOS Linux 5 to 8 and AlmaLinux 8 and up are the EL ladder's rungs (a machine on one joins a route
-        // partway); Stream, RHEL and the other rebuilds aren't
-        let release = Regex::new(r"^(CentOS|AlmaLinux) (?:Linux )?release (\d+)")
+        // partway), and Scientific Linux joins at the rung its packages match; Stream, RHEL and the other rebuilds
+        // aren't on it
+        let release = Regex::new(r"^(CentOS|AlmaLinux|Scientific) (?:Linux )?release (\d+)")
             .unwrap()
             .captures(rh.trim())
             .map(|c| {
-                let vendor = if &c[1] == "CentOS" { "centos" } else { "alma" };
+                let vendor = match &c[1] {
+                    "CentOS" => "centos",
+                    "AlmaLinux" => "alma",
+                    _ => "sl",
+                };
                 ("el".to_string(), format!("{vendor}{}", &c[2]))
             });
         return System {
@@ -88,12 +101,25 @@ pub fn system(root: &Path) -> System {
     }
 }
 
-/// Words only this machine knows: its hostname (and its short form), and every login account (UID_MIN to 65533).
-/// Anything the person adds with --redact too. Longest first, so a hostname goes before a user named like part of it.
+/// Words only this machine knows: its hostname, the ways an installer writes that name elsewhere, the domain it is
+/// in, and every login account (UID_MIN and up). Anything the person adds with --redact too. Longest first, so a
+/// hostname goes before a user named like part of it.
 pub fn local_words(root: &Path, nodename: &str, extra: &[String]) -> Vec<String> {
     let mut words: Vec<String> = extra.to_vec();
     for h in [nodename.to_string(), read(root, "etc/hostname").trim().to_string()] {
-        words.push(h.split('.').next().unwrap_or("").to_string());
+        let labels: Vec<&str> = h.split('.').collect();
+        let short = labels[0];
+        words.push(short.to_string());
+        // CentOS 6's installer names the volume group after the host with its dashes dropped (vg_web01 for web-01)
+        words.push(short.replace('-', ""));
+        // the domain alone names the place as well as the host does: each level of it that is more than a suffix,
+        // and the name before the suffix by itself
+        for from in 1..labels.len().saturating_sub(1) {
+            words.push(labels[from..].join("."));
+        }
+        if labels.len() >= 3 {
+            words.push(labels[labels.len() - 2].to_string());
+        }
         words.push(h);
     }
     // EL 5 and 6 start login accounts at 500; login.defs says where this machine does
@@ -102,19 +128,21 @@ pub fn local_words(root: &Path, nodename: &str, extra: &[String]) -> Vec<String>
         .find_map(|l| {
             l.trim()
                 .strip_prefix("UID_MIN")
-                .and_then(|v| v.trim().parse::<u32>().ok())
+                .and_then(|v| v.trim().parse::<u64>().ok())
         })
         .unwrap_or(500);
     for l in read(root, "etc/passwd").lines() {
         let f: Vec<&str> = l.split(':').collect();
-        if let (Some(name), Some(uid)) = (f.first(), f.get(2).and_then(|u| u.parse::<u32>().ok())) {
-            if (uid_min..65534).contains(&uid) {
+        if let (Some(name), Some(uid)) = (f.first(), f.get(2).and_then(|u| u.parse::<u64>().ok())) {
+            // no upper bound: directory services hand out numbers far above 65534. The two "nobody" numbers aren't
+            // anybody
+            if uid >= uid_min && uid != 65534 && uid != 4294967294 {
                 words.push(name.to_string());
             }
         }
     }
     // a cloud image's login is named after its distro (ubuntu, centos, debian): scrubbing those would scrub the
-    // release itself, and they say nothing about whose machine it is
+    // release itself, and they say nothing about whose machine it is. Nor do the words every domain is made of
     const COMMON: &[&str] = &[
         "localhost",
         "localdomain",
@@ -127,31 +155,46 @@ pub fn local_words(root: &Path, nodename: &str, extra: &[String]) -> Vec<String>
         "admin",
         "user",
         "linux",
+        "local",
+        "internal",
+        "example",
+        "corp",
+        "home",
+        "lan",
+        "com",
+        "net",
+        "org",
     ];
-    words.retain(|w| w.len() > 2 && !COMMON.contains(&w.to_ascii_lowercase().as_str()));
+    words.retain(|w| w.len() >= 2 && !COMMON.contains(&w.to_ascii_lowercase().as_str()));
     words.sort_by(|a, b| b.len().cmp(&a.len()).then(a.cmp(b)));
     words.dedup();
     words
 }
 
-/// Replace secrets, addresses, home and cron spool names, then each local word. A word matches between any two
-/// non-alphanumerics, `_` included, so it's caught inside LVM names (`/dev/mapper/centos_web01-root`), where device
-/// mapper also doubles any `-` in it.
+/// Replace secrets, addresses, home and cron names and installer-made volume group names, then each local word. A
+/// word matches between any two non-alphanumerics, `_` included, so it's caught inside LVM names
+/// (`/dev/mapper/centos_web01-root`), where device mapper also doubles any `-` in it.
 pub fn scrub(text: &str, words: &[String]) -> String {
     let rules: &[(&str, &str)] = &[
         (
             r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
             "<private key>",
         ),
+        // a signed token: three runs of base64 with dots between, the first always starting the same way
         (
-            r"(?i)\b(pass(?:word|wd)?|secret|token|api[_-]?key|auth)\b\s*[:=]\s*\S+",
+            r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",
+            "<token>",
+        ),
+        // a name with one of these words anywhere in it (DB_PASSWORD, api-key, mytoken), then its value up to a
+        // space or a closing quote, so the JSON around it still parses
+        (
+            r#"(?i)([A-Za-z0-9_.-]*(?:pass(?:word|wd)?|secret|token|api[_-]?key|auth)[A-Za-z0-9_]*)\s*[:=]\s*[^\s"',;)]+"#,
             "$1=<redacted>",
         ),
         (
             r"\b(?:sk|ghp|gho|github_pat|xox[bpa]|AKIA)[-_A-Za-z0-9]{12,}",
             "<token>",
         ),
-        (r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", "<email>"),
         (r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "<ip>"),
         (r"(?i)\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b", "<mac>"),
         (
@@ -161,11 +204,37 @@ pub fn scrub(text: &str, words: &[String]) -> String {
         (r"(?i)\b(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}\b", "<ip6>"),
         (r"/home/[^/\s\x22]+", "/home/<user>"),
         (r"/var/spool/cron/(crontabs/)?[^/\s\x22]+", "/var/spool/cron/$1<user>"),
+        // a file in cron.d is named by whoever put it there
+        (r"/etc/cron\.d/[^/\s\x22),;]+", "/etc/cron.d/<file>"),
+        // an installer names the volume group after the hostname of the day it ran, which may not be today's:
+        // centos_web01, vg_web01, web01-vg (device mapper doubles each dash inside a name)
+        (
+            r"(/dev/mapper/(?:centos|rhel|cl|almalinux|rl|ol|fedora|vg)_)[A-Za-z0-9]+(?:--[A-Za-z0-9]+)*-",
+            "${1}<local>-",
+        ),
+        (
+            r"/dev/mapper/[A-Za-z0-9]+(?:--[A-Za-z0-9]+)*--vg-",
+            "/dev/mapper/<local>--vg-",
+        ),
     ];
     let mut s = text.to_string();
     for (rx, rep) in rules {
         s = Regex::new(rx).unwrap().replace_all(&s, *rep).into_owned();
     }
+    // an address, unless it is a systemd unit with an instance (getty@tty1.service, openvpn@server.service)
+    const UNITS: &[&str] = &[
+        ".service", ".socket", ".timer", ".mount", ".target", ".path", ".slice", ".scope", ".device", ".swap",
+    ];
+    s = Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+        .unwrap()
+        .replace_all(&s, |c: &regex::Captures| {
+            if UNITS.iter().any(|u| c[0].ends_with(u)) {
+                c[0].to_string()
+            } else {
+                "<email>".to_string()
+            }
+        })
+        .into_owned();
     for w in words {
         for form in [w.clone(), w.replace('-', "--")] {
             let rx = Regex::new(&format!(
@@ -311,6 +380,7 @@ pub fn render(
     facts: &Value,
     judged: &[Judged],
     words: &[String],
+    atlas: bool,
 ) -> (String, String, String, String) {
     let f = facts;
     let level = crate::hardware::cpu_level(&crate::atlas::strings(&f["cpu"]["features"]).unwrap_or_default());
@@ -403,6 +473,9 @@ pub fn render(
     }
     if judged.is_empty() {
         md.push(match &sys.release {
+            _ if !atlas => "wend was started without its atlas (the folder of routes it came with), so this report \
+                            has the machine's facts and no verdict."
+                .into(),
             Some((fam, rel)) => format!(
                 "No route starts at or passes through {fam} {rel} yet. This report still says what's out there."
             ),
@@ -422,6 +495,24 @@ pub fn render(
     );
     let title = scrub(&format!("box: {}", sys.pretty), words);
     (summary, full, title, route_names.join(", "))
+}
+
+/// Scrub the sentences in a verdict that name things on the machine: what refuses it, and each hop's problems and
+/// notes. The release ids beside them are left alone: they are the atlas's words, not the machine's.
+fn scrub_findings(verdict: &mut Value, words: &[String]) {
+    let clean = |list: &mut Value| {
+        for item in list.as_array_mut().into_iter().flatten() {
+            if let Some(text) = item.as_str() {
+                *item = Value::String(scrub(text, words));
+            }
+        }
+    };
+    clean(&mut verdict["machine"]);
+    for hop in verdict["hops"].as_array_mut().into_iter().flatten() {
+        for key in ["problems", "runtime_problems", "notes"] {
+            clean(&mut hop[key]);
+        }
+    }
 }
 
 /// A report made and saved: what `wend share` prints, and what the guided first run (`guide`) explains.
@@ -454,8 +545,12 @@ pub fn prepare(atlas: Option<&Atlas>, route: Option<&str>, extra: &[String]) -> 
         (String::new(), "?".into())
     };
     let words = local_words(root, &node, extra);
-    let judged = judge(atlas, route, &sys, &facts)?;
-    let (summary, full, title, routes) = render(&sys, &kernel, &facts, &judged, &words);
+    let mut judged = judge(atlas, route, &sys, &facts)?;
+    // what preflight found is shown on screen as well as written in the report: both get it scrubbed
+    for j in &mut judged {
+        scrub_findings(&mut j.verdict, &words);
+    }
+    let (summary, full, title, routes) = render(&sys, &kernel, &facts, &judged, &words, atlas.is_some());
     let key: String = Sha256::digest(full.as_bytes())[..6]
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -468,7 +563,11 @@ pub fn prepare(atlas: Option<&Atlas>, route: Option<&str>, extra: &[String]) -> 
     })?;
     Ok(Shared {
         sys_line: scrub(&sys.pretty, &words),
-        routes: if routes.is_empty() { "none".into() } else { routes },
+        routes: match (routes.is_empty(), atlas.is_some()) {
+            (false, _) => routes,
+            (true, true) => "none".into(),
+            (true, false) => "not judged (no atlas)".into(),
+        },
         sys,
         facts,
         judged,
@@ -511,7 +610,14 @@ mod tests {
         facts: &Value,
         words: &[String],
     ) -> Result<(String, String, String, String), String> {
-        Ok(render(sys, kernel, facts, &judge(atlas, route, sys, facts)?, words))
+        Ok(render(
+            sys,
+            kernel,
+            facts,
+            &judge(atlas, route, sys, facts)?,
+            words,
+            atlas.is_some(),
+        ))
     }
 
     fn tree(files: &[(&str, &str)]) -> std::path::PathBuf {
@@ -674,5 +780,120 @@ mod tests {
         assert!(u.contains("wend-box-0123456789ab.md"), "{u}");
         // short enough to copy out of a terminal by hand: a few wrapped lines, not a screenful
         assert!(u.len() < 400, "{} characters", u.len());
+    }
+
+    #[test]
+    fn scrubs_the_names_a_first_stranger_test_found_surviving() {
+        let root = tree(&[
+            (
+                "etc/passwd",
+                "root:x:0:0::/root:/bin/bash\nldapgandalf:x:120001:120001::/data/ldapusers/ldapgandalf:/bin/bash\n\
+                 zx:x:1001:1001::/srv/people/zx:/bin/bash\nnobody:x:65534:65534::/:/sbin/nologin\n\
+                 nfsnobody:x:4294967294:4294967294::/:/sbin/nologin\n",
+            ),
+            ("etc/hostname", "strangelove-db01.corp.zylkodomain.example\n"),
+        ]);
+        let words = local_words(&root, "strangelove-db01.corp.zylkodomain.example", &[]);
+        let s = scrub(
+            "/data/ldapusers/ldapgandalf/app.py ; /srv/people/zx/tool.py ; /dev/mapper/vg_strangelovedb01-lv_app ; \
+             /srv/corp.zylkodomain.example/sync.py ; /srv/zylkodomain.example/x ; /srv/zylkodomain/y ; \
+             /dev/mapper/centos_oldhost--mx7-home ; /dev/mapper/oldbox--vg-root ; \
+             (cron, /etc/cron.d/zylkocron-billing) ; nobody ; nfsnobody",
+            &words,
+        );
+        for gone in [
+            // a login account above 65534 (LDAP ranges start there), and a two-letter one
+            "ldapgandalf",
+            "/zx/",
+            // the hostname as an installer writes it into a volume group: dashes dropped
+            "strangelovedb01",
+            // the domain alone, at each level
+            "zylkodomain",
+            // a volume group named after a hostname the machine no longer has
+            "oldhost",
+            "mx7",
+            "oldbox",
+            // a cron.d file is named by whoever wrote it
+            "zylkocron",
+        ] {
+            assert!(!s.contains(gone), "{gone} survived: {s}");
+        }
+        assert!(s.contains("/dev/mapper/vg_<local>-lv_app"), "{s}");
+        assert!(s.contains("/dev/mapper/centos_<local>-home"), "{s}");
+        assert!(s.contains("/dev/mapper/<local>--vg-root"), "{s}");
+        assert!(s.contains("(cron, /etc/cron.d/<file>)"), "{s}");
+        // the accounts every machine has are not names of this one
+        assert!(s.ends_with("; nobody ; nfsnobody"), "{s}");
+        assert!(!words.iter().any(|w| w == "example" || w == "corp"), "{words:?}");
+    }
+
+    #[test]
+    fn scrubs_secrets_however_they_are_named_and_leaves_what_follows_them() {
+        let s = scrub(
+            r#"{"a": "/srv/x/DB_PASSWORD=EnvPathPl4nted/run.py", "b": "password=EqPathPl4nted", "c": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U", "d": "mytoken: abc123"}"#,
+            &[],
+        );
+        for gone in ["EnvPathPl4nted", "EqPathPl4nted", "eyJhbGci", "abc123"] {
+            assert!(!s.contains(gone), "{gone} survived: {s}");
+        }
+        // a value ends at its closing quote: the report's facts are still JSON
+        assert!(serde_json::from_str::<Value>(&s).is_ok(), "{s}");
+    }
+
+    #[test]
+    fn a_unit_with_an_at_sign_is_not_an_email() {
+        let s = scrub(
+            "(serial-getty@ttyS0.service) (openvpn@server.service) (postgresql@12-main.service) a@b.timer ops@acme.example",
+            &[],
+        );
+        assert!(
+            s.starts_with(
+                "(serial-getty@ttyS0.service) (openvpn@server.service) (postgresql@12-main.service) a@b.timer "
+            ),
+            "{s}"
+        );
+        assert!(s.ends_with(" <email>"), "{s}");
+    }
+
+    #[test]
+    fn names_rebuilds_that_are_not_centos() {
+        let sl7 = tree(&[("etc/redhat-release", "Scientific Linux release 7.9 (Nitrogen)\n")]);
+        assert_eq!(system(&sl7).release, Some(("el".into(), "sl7".into())));
+        // Oracle Linux's redhat-release says Red Hat, for the programs that look there; oracle-release says what it is
+        let ol7 = tree(&[
+            (
+                "etc/redhat-release",
+                "Red Hat Enterprise Linux Server release 7.9 (Maipo)\n",
+            ),
+            ("etc/oracle-release", "Oracle Linux Server release 7.9\n"),
+        ]);
+        let s = system(&ol7);
+        assert_eq!(
+            (s.pretty.as_str(), s.release),
+            ("Oracle Linux Server release 7.9", None)
+        );
+    }
+
+    #[test]
+    fn a_report_made_without_the_atlas_says_so() {
+        let sys = System {
+            pretty: "CentOS Linux release 7.9.2009 (Core)".into(),
+            release: Some(("el".into(), "centos7".into())),
+        };
+        let f = serde_json::json!({"arch": "x86_64", "cpu": {"model": "test", "features": []}, "boot": "bios",
+            "ram_mib": 4096, "free_mib": 40000, "boot_dir": {"separate": false, "total_mib": 1, "free_mib": 1, "kernels": []},
+            "mounts": [], "runtimes": [], "native": [], "python2_modules": []});
+        let (summary, full, _, _) = render(&sys, "k", &f, &[], &[], false);
+        assert!(full.contains("wend was started without its atlas"), "{full}");
+        assert!(
+            !full.contains("No route starts") && !summary.contains("No route starts"),
+            "{full}"
+        );
+        // with the atlas and no route, it still says there is none
+        let (_, full, _, _) = render(&sys, "k", &f, &[], &[], true);
+        assert!(
+            full.contains("No route starts at or passes through el centos7 yet"),
+            "{full}"
+        );
     }
 }

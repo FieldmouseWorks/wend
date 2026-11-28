@@ -109,16 +109,23 @@ long for a link, the issue opens with the summary and asks you to drag the `.md`
 
 Read it first.
 
-What's replaced: the hostname (also inside LVM names like `/dev/mapper/centos_web01-root`), every login account
-(`UID_MIN` and up, 500 on CentOS 5 and 6), home directories, cron spool names, IPv4 and IPv6 addresses, MACs, emails,
-and anything shaped like a password, token or private key.
+What's replaced: the hostname and the domain it is in (also inside a volume group an installer named after a
+hostname, like `/dev/mapper/centos_web01-root` or `vg_web01`, even one the machine no longer has), every login
+account in `/etc/passwd` (`UID_MIN` and up, 500 on CentOS 5 and 6), directories under `/home`, cron spool names and
+the names of files in `/etc/cron.d`, IPv4 and IPv6 addresses, MACs, emails, and anything shaped like a password,
+token or private key.
 
 What stays: the release and kernel, CPU model and features, RAM and disk sizes, mount points and filesystem types,
-PCI vendor and device IDs with their drivers, and the paths and unit names of any Python 2 programs it found. If a
-path or service name says whose machine this is (`/srv/acmecorp/billing.py`), make the report again with that word
-replaced too: `sudo ./wend --redact acmecorp` walks you through it again, and `sudo ./wend share --redact acmecorp`
-does it without the walk-through. `--redact` can be given as many times as you need. Each run writes a new file, so
-delete the earlier one.
+PCI vendor and device IDs with their drivers, and, for the programs of your own it found (Python 2 programs, and
+programs and libraries no package owns, under places like `/opt`, `/srv` and `/usr/local`), their paths, module
+names and unit names.
+
+Those last are where a name that says whose machine this is can be, and wend can't tell which ones do: a company or
+a customer in a folder name (`/srv/acmecorp/billing.py`), an account that isn't in `/etc/passwd` (LDAP, NIS) or sits
+below `UID_MIN`, a name that is part of a longer word. So read the report before you share it. To take a word out,
+make the report again with that word replaced too: `sudo ./wend --redact acmecorp` walks you through it again, and
+`sudo ./wend share --redact acmecorp` does it without the walk-through. `--redact` can be given as many times as you
+need. Each run writes a new file, so delete the earlier one.
 
 ## Got a spare VM or a snapshot?
 

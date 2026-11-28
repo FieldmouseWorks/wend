@@ -42,6 +42,7 @@ fn checked(verdict: Value) -> Checked {
         paths: Some(vec![]),
         file: "/root/wend-x86_64-linux/wend-box-0123456789ab.md".into(),
         link: LINK.into(),
+        prog: "./wend".into(),
     }
 }
 

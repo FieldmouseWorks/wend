@@ -226,7 +226,7 @@ fn lines(
         }
         (Screen::Share, Some(c)) => {
             out.push(heading("SHARING IT (your choice)"));
-            out.extend(plain(&guide::sharing(&c.file)));
+            out.extend(plain(&guide::sharing(&c.file, &c.prog)));
         }
         _ => {
             out.push(("The check could not finish.".to_string(), Style::Bad));
