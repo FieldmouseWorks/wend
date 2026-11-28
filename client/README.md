@@ -26,7 +26,8 @@ cargo build --release --manifest-path client/Cargo.toml --target x86_64-unknown-
 
 ## Use
 
-Run it from a checkout of this repo (or pass `--atlas DIR`):
+Run it from a checkout of this repo, or from the folder a release unpacked into. The atlas it reads is the current
+folder's; when that holds none, the one beside the binary; `--atlas DIR` names another:
 
 ```
 wend check                                       # the gate's schema rules over the whole atlas
