@@ -3,6 +3,7 @@
 //! It reads and checks the atlas, compiles fixes and hops into the exact commands CI proved, and walks a route on
 //! a root filesystem: snapshot, apply, check, roll back on red.
 
+mod answer;
 mod atlas;
 mod backend;
 mod canon;
@@ -10,6 +11,7 @@ mod check;
 mod fetch;
 mod fsx;
 mod generated;
+mod guide;
 mod hardware;
 mod hop;
 mod native;
@@ -17,8 +19,10 @@ mod rehearse;
 mod report;
 mod runtime;
 mod sandbox;
+mod screens;
 mod selftest;
 mod share;
+mod term;
 mod upgrade;
 mod walk;
 
@@ -30,6 +34,10 @@ use std::process::ExitCode;
 
 const USAGE: &str = "\
 wend: walk a proven upgrade route on a machine. No model, no network beyond your distro's mirrors.
+
+New here? Run `wend` with nothing after it, at a terminal, as root: it explains each step and waits for you, and
+its first step is a read-only check of the machine. `wend --plain` does the same with prompts and plain text, for a
+terminal the full-screen version doesn't suit.
 
   wend check                        check every adapter, fix, route and run in the atlas (the gate's rules)
   wend ids                          every fix's and route's content id
@@ -76,7 +84,8 @@ wend: walk a proven upgrade route on a machine. No model, no network beyond your
   wend --version
   wend parity INPUT.json            machine output for client/parity.py (the Python engine must agree)
 
-Options: --atlas DIR (default: the current directory, laid out like the wend repo).
+Options: --atlas DIR (default: the current directory if it is laid out like the wend repo, else the folder the
+wend binary is in, which is where a release unpacks its atlas).
 ROUTE is routes/<family>/<from>-to-<to>.toml or just <from>-to-<to>.";
 
 fn opt(args: &mut Vec<String>, name: &str) -> Option<String> {
@@ -101,7 +110,7 @@ fn flag(args: &mut Vec<String>, name: &str) -> bool {
 
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let root = PathBuf::from(opt(&mut args, "--atlas").unwrap_or_else(|| ".".into()));
+    let root = opt(&mut args, "--atlas").map_or_else(default_atlas, PathBuf::from);
     let fired = opt(&mut args, "--fired");
     let facts = opt(&mut args, "--facts");
     let as_json = match args.iter().position(|a| a == "--json") {
@@ -134,14 +143,16 @@ fn main() -> ExitCode {
         facts: facts.clone(),
     };
     let redact: Vec<String> = std::iter::from_fn(|| opt(&mut args, "--redact")).collect();
+    let plain = flag(&mut args, "--plain");
     let upgrade_opts = upgrade::UpgradeOpts {
         new_root_disk: opt(&mut args, "--new-root-disk"),
         status: flag(&mut args, "--status"),
         work: flag(&mut args, "--work"),
     };
     let Some(cmd) = args.first().cloned() else {
-        println!("{USAGE}");
-        return ExitCode::from(2);
+        // nothing asked for: the guided first run (or, with nobody at a terminal, where to start)
+        let prog = std::env::args().next().unwrap_or_else(|| "wend".into());
+        return ExitCode::from(guide::start(&prog, || report_atlas(&root), &redact, plain));
     };
     if matches!(cmd.as_str(), "-h" | "--help" | "help") {
         println!("{USAGE}");
@@ -176,14 +187,13 @@ fn main() -> ExitCode {
         _ => {}
     }
     if cmd == "share" && args.len() <= 2 {
-        // the atlas is optional: without one the report has the facts and no verdict
-        let atlas = Atlas::load(&root).ok();
-        if let Some(a) = &atlas {
-            if let Err(e) = preflight(a) {
+        let atlas = match report_atlas(&root) {
+            Ok(a) => a,
+            Err(e) => {
                 eprintln!("wend: {e}");
                 return ExitCode::FAILURE;
             }
-        }
+        };
         return match share::cmd_share(atlas.as_ref(), args.get(1).map(String::as_str), &redact) {
             Ok(_) => ExitCode::SUCCESS,
             Err(e) => {
@@ -225,6 +235,41 @@ fn main() -> ExitCode {
 
 /// Nothing compiles from an atlas that fails the gate's rules: an adapter or fix CI would refuse never becomes a
 /// command here, whatever mirror or cache the atlas came from.
+/// Where the atlas is when --atlas doesn't say: here, if this folder holds one, else beside the binary. A release
+/// unpacks both into one folder, and its owner may start it from anywhere (`sudo /opt/wend/wend`).
+fn default_atlas() -> PathBuf {
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(PathBuf::from));
+    // "holds one" means it loads: a folder that merely has an `adapters/` of somebody else's must not be taken for
+    // the atlas, or the verdict the release came with is lost without a word
+    pick_atlas(std::path::Path::new("."), beside.as_deref(), &|dir| {
+        Atlas::load(dir).is_ok()
+    })
+}
+
+/// Of the folder wend was started in and the one its binary is in, the one that holds an atlas (`holds` says).
+fn pick_atlas(
+    here: &std::path::Path,
+    beside: Option<&std::path::Path>,
+    holds: &dyn Fn(&std::path::Path) -> bool,
+) -> PathBuf {
+    if holds(here) {
+        return here.to_path_buf();
+    }
+    beside.filter(|dir| holds(dir)).unwrap_or(here).to_path_buf()
+}
+
+/// The atlas a box report is judged against. None is not an error (the report then has the facts and no verdict),
+/// but one that is there has to pass its own check.
+fn report_atlas(root: &std::path::Path) -> Result<Option<Atlas>, String> {
+    let atlas = Atlas::load(root).ok();
+    if let Some(a) = &atlas {
+        preflight(a)?;
+    }
+    Ok(atlas)
+}
+
 fn preflight(atlas: &Atlas) -> Result<(), String> {
     let errs = check::check_atlas(atlas);
     if errs.is_empty() {
@@ -846,54 +891,4 @@ fn cmd_walk(atlas: &Atlas, route: &str, o: &WalkOpts) -> Result<Walked, String> 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::RootUmask;
-
-    #[test]
-    fn a_root_partway_along_a_route_walks_the_rest_of_it() {
-        let atlas = super::Atlas::load(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..")).unwrap();
-        let el = &atlas.adapters["el"];
-        let (_, c5) = atlas.route("centos5-to-alma10").unwrap();
-        let (_, c7) = atlas.route("centos7-to-alma10").unwrap();
-        let at = |r, rel: &str| super::joins_at(el, r, Some(&rel.to_string()));
-        assert_eq!(super::joins_at(el, c5, None), Ok(None));
-        assert_eq!(at(c5, "centos5"), Ok(None));
-        assert_eq!(at(c5, "centos6"), Ok(Some("centos6".into())));
-        assert_eq!(at(c5, "alma9"), Ok(Some("alma9".into())));
-        assert_eq!(at(c7, "sl7"), Ok(None));
-        for (r, rel) in [(c7, "centos6"), (c5, "alma10"), (c5, "centos8")] {
-            let e = at(r, rel).unwrap_err();
-            assert!(e.contains("doesn't pass through"), "{e}");
-        }
-    }
-
-    fn mask_now() -> libc::mode_t {
-        // SAFETY: reads the mask by setting it and putting it straight back.
-        unsafe {
-            let m = libc::umask(0o077);
-            libc::umask(m);
-            m
-        }
-    }
-
-    /// The only test that touches the process umask: 022 while the guard lives, the caller's mask after, also when
-    /// the walk panics.
-    #[test]
-    fn root_umask_is_022_inside_and_restores_the_callers_mask() {
-        // SAFETY: as above.
-        let saved = unsafe { libc::umask(0o077) };
-        let g = RootUmask::set();
-        assert_eq!(mask_now(), 0o022);
-        drop(g);
-        assert_eq!(mask_now(), 0o077);
-        let r = std::panic::catch_unwind(|| {
-            let _g = RootUmask::set();
-            assert_eq!(mask_now(), 0o022);
-            panic!("walk failed");
-        });
-        assert!(r.is_err());
-        assert_eq!(mask_now(), 0o077);
-        // SAFETY: as above.
-        unsafe { libc::umask(saved) };
-    }
-}
+mod tests;

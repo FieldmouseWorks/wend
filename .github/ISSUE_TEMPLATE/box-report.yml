@@ -1,5 +1,5 @@
 name: Box report
-description: What wend's preflight says about a real machine of yours. `wend share` fills this in for you.
+description: What wend's check says about a real machine of yours. wend gives you a link that fills this in for you.
 title: "box: <release>"
 labels: [box-report]
 body:
@@ -7,18 +7,18 @@ body:
     attributes:
       value: |
         Thanks. This tells us what real machines look like, which no test box can. Nothing here changed your machine.
-        If you got here without `wend share`, see docs/try-it.md: it fills in every field and scrubs the hostname,
+        If you got here without wend's link, see docs/try-it.md: wend fills in these fields and scrubs the hostname,
         users, home directories and addresses. Read the report before you submit it.
   - type: input
     id: system
-    attributes: { label: Release, description: "From `wend share`.", placeholder: "CentOS Linux release 7.9.2009 (Core)" }
+    attributes: { label: Release, description: "wend fills this in.", placeholder: "CentOS Linux release 7.9.2009 (Core)" }
     validations: { required: true }
   - type: input
     id: route
-    attributes: { label: Route it was judged against, description: "From `wend share`; none if no route starts there.", placeholder: centos7-to-alma10 }
+    attributes: { label: Route it was judged against, description: "wend fills this in; none if no route starts there.", placeholder: centos7-to-alma10 }
   - type: textarea
     id: details
-    attributes: { label: Report, description: "From `wend share`. Attach wend-box-<id>.md if it says to." }
+    attributes: { label: Report, description: "Drag wend-box-<id>.md, the file wend wrote, into this box (or paste the report it printed)." }
     validations: { required: true }
   - type: textarea
     id: server
