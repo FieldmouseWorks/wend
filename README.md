@@ -12,10 +12,12 @@ This repo is **the map**: small, reviewed fixes for the places where a plain rel
 pin those fixes into release-to-release paths. Each route carries evidence (runs) that it was replayed from scratch on
 real test boxes and every health check stayed green. A client (a static Rust binary, being built in `client/`)
 fingerprints your machine, picks a route, and walks it. At each hop it applies the fixes whose preconditions hold on
-*your* box, takes a snapshot first, and rolls back if a check fails. The client uses no model. A walk pinned to a
-proven run (`--run`) fetches the exact bytes that run used, by sha256, from your own cache, wend's public package
-archive (https://archive.fieldmouseworks.com, [docs/archive.md](docs/archive.md)) or your distro's mirrors, and
-refuses anything that doesn't match. A `--live` walk takes today's mirrors unverified, and its run says so.
+*your* box, takes a snapshot first, and rolls back if a check fails. Today it reports on a running machine and walks a
+copy of one; how far walking the machine itself has got is [SPEC.md](SPEC.md), "Upgrading a running machine". The
+client uses no model. A walk pinned to a proven run (`--run`) fetches the exact bytes that run used, by sha256, from
+your own cache, wend's public package archive (https://archive.fieldmouseworks.com,
+[docs/archive.md](docs/archive.md)) or your distro's mirrors, and refuses anything that doesn't match. A `--live` walk
+takes today's mirrors unverified, and its run says so.
 
 ## Try it on your server
 
@@ -157,9 +159,6 @@ client/              the Rust client (client/README.md): reads, checks and compi
   pull_request_template.md, ISSUE_TEMPLATE/route-gap.yml, ISSUE_TEMPLATE/box-report.yml,
   ISSUE_TEMPLATE/wanted.md, dependabot.yml
 ```
-
-What the client does on a running machine, and what of that is built, is SPEC.md's
-[Upgrading a running machine](SPEC.md#upgrading-a-running-machine-draft-design-only).
 
 ## Try the map
 
