@@ -11,7 +11,8 @@ scrubbed. That check is all this page asks you to run.
 
 ## 1. Get it
 
-One line, on the server, as any user, from a folder you can write to:
+One line, on the server, as any user, from a folder you can write to and run programs from. Your home directory is
+one. `/tmp` often isn't: many servers mount it so that nothing in it can run, and the script says so if yours does.
 
 ```
 curl -fsSL https://github.com/FieldmouseWorks/wend/releases/latest/download/try.sh | sh
@@ -23,10 +24,10 @@ No curl there? Debian and Ubuntu often have wget instead:
 wget -qO- https://github.com/FieldmouseWorks/wend/releases/latest/download/try.sh | sh
 ```
 
-That script ([client/try.sh](../client/try.sh), short enough to read first) downloads the latest release and its
-`SHA256SUMS`, refuses a download whose checksum doesn't match, and unpacks it into `./wend-x86_64-linux`. It needs no
-root, starts nothing (not wend, not sudo), and leaves only that folder behind. It ends by telling you the command in
-step 2.
+That script ([client/try.sh](https://github.com/FieldmouseWorks/wend/blob/main/client/try.sh), short enough to read
+first) downloads the latest release and its `SHA256SUMS`, refuses a download whose checksum doesn't match, and unpacks
+it into `./wend-x86_64-linux`. It needs no root, starts nothing (not wend, not sudo), and leaves only that folder
+behind. It ends by telling you the command in step 2.
 
 If you're reading this as the `README.md` inside that folder, you have it already: go to step 2.
 
@@ -48,7 +49,8 @@ sh try.sh wend-x86_64-linux.tar.gz
 ```
 
 It checks the tarball against the `SHA256SUMS` beside it and unpacks it, as the one line does, without touching the
-network.
+network. A server with no `sha256sum` of its own can't make that check (CentOS 4's coreutils has none): the script
+says so, and how to make it on the machine you downloaded with instead.
 
 ## 2. Run it
 
@@ -120,10 +122,10 @@ replaced too: `sudo ./wend --redact acmecorp` walks you through it again, and `s
 does it without the walk-through. `--redact` can be given as many times as you need. Each run writes a new file, so
 delete the earlier one.
 
-## Got a spare VM or a snapshot?
+## What this page doesn't ask for
 
-The check above is the whole of what this page asks for. The step after it is a real walk: `wend walk` takes a copy
-of a machine's root filesystem on a scratch host through every hop, snapshotting before each one and rolling back
-when a check fails. `wend walk` never walks the running system. That's the contributor path for now, from a checkout
-of the repo: [client/README.md](../client/README.md) has the commands, and [AGENTS.md](../AGENTS.md) has what to do
-when a hop breaks. Never point it at production.
+The check above is all of it. Nothing on this page upgrades a machine. Walking a route with `wend walk` is contributor
+work for now: from a checkout of the repository, on a copy of a machine's root filesystem on a scratch host, never the
+running system. [client/README.md](https://github.com/FieldmouseWorks/wend/blob/main/client/README.md) has the
+commands, and [AGENTS.md](https://github.com/FieldmouseWorks/wend/blob/main/AGENTS.md) has what to do when a hop
+breaks.
