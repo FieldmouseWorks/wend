@@ -73,12 +73,18 @@ pub fn written(file: &str) -> String {
 /// Why to share the report at `file` and how, down to the link, which the caller shows after it (a link can't be
 /// wrapped).
 pub fn sharing(file: &str) -> String {
-    // a path has no spaces to wrap at: it is cut to the screen instead, so none of it is lost off the edge
-    let chars: Vec<char> = file.chars().collect();
-    let path: String = chars
-        .chunks(WIDTH - 7)
-        .map(|piece| format!("       {}\n", piece.iter().collect::<String>()))
-        .collect();
+    // a path has no spaces to wrap at: it is cut to the screen, after a slash where there is one, so none of it is
+    // lost off the edge
+    let mut path = String::new();
+    let mut rest: Vec<char> = file.chars().collect();
+    while !rest.is_empty() {
+        let fits = rest.len().min(WIDTH - 7);
+        let cut = match rest[..fits].iter().rposition(|c| *c == '/') {
+            Some(slash) if fits < rest.len() && slash > 0 => slash + 1,
+            _ => fits,
+        };
+        path += &format!("       {}\n", rest.drain(..cut).collect::<String>());
+    }
     wrap(
         "wend's upgrade paths were proven on test servers the project built. A report from a real machine is how it \
          learns what one looks like, and how a path for a machine like yours gets made or fixed. To share it:",
@@ -339,6 +345,20 @@ mod tests {
         assert_eq!(shown, file);
         assert!(sharing("/root/w.md")
             .contains("  2. Copy the file to a computer with a web browser:\n       /root/w.md\n  3."));
+        // it is cut after a slash, so a file name stays in one piece where it can
+        let cut = sharing(&file);
+        let lines: Vec<&str> = cut
+            .lines()
+            .filter(|l| l.contains("a-long-folder-name") || l.contains("wend-box"))
+            .collect();
+        assert!(
+            lines.len() > 1 && lines[..lines.len() - 1].iter().all(|l| l.ends_with('/')),
+            "{cut}"
+        );
+        assert!(
+            lines.last().unwrap().trim_start().ends_with("wend-box-0123456789ab.md"),
+            "{cut}"
+        );
     }
 
     #[test]
